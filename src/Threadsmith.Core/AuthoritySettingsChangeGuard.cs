@@ -7,23 +7,13 @@ using System.Text.Json;
 public static class AuthoritySettingsChangeGuard
 {
     /// <summary>Gets the authority fields; mixed ordinary trees are intentionally not included.</summary>
-    public static ImmutableArray<string> Keys { get; } =
-    [
-        "tools:allowedExecutables", "tools:allowedNetworkHosts", "tools:allow", "tools:deny", "tools:requireApproval",
-        "tools:writeFile:allowedFolders", "tools:runProcess:requireApproval", "tools:runProcess:defaultTimeoutSeconds", "tools:runProcess:maxTimeoutSeconds",
-        "tools:runtime:defaults", "tools:runtime:byTool", "tools:parallel:enabled", "tools:parallel:maximumConcurrency",
-        "tools:config:csharp_script", "editableRoots", "prohibitedPaths", "scratchpad:path", "mutation:approvalPolicy", "mutation:largeDiffThreshold",
-        "mcp:profiles", "mcp:limits", "mcp:maximumConcurrentConnections", "mcp:defaultDrainKillTimeoutSeconds",
-        "webFetch", "webSearch:provider", "nuget:advisorySources", "hooks:handlers", "hooks:managedGrants", "hooks:limits",
-        "skills:trustedSigners", "skills:allowlistedPackages", "skills:enabledSelectors", "skills:revokedDigests", "skills:deniedSkillIds",
-        "skills:deniedPublishers", "skills:revokedSigners", "skills:organizationCatalogPath", "repository:configurationBytes",
-        "secretResolution:limits", "limits:policyStores", "context:deployedPrompts:limits", "agents:delegation", "agents:queueCapacity",
-        "agents:maxActiveGlobal", "agents:maxActivePerParent", "agents:maxActiveImplementers", "agents:shutdownTimeoutSeconds",
-    ];
+    public static ImmutableArray<string> Keys => ConfigurationPermissionCatalog.Paths;
 
     /// <summary>Allows only exact fields owned by the caller's existing reviewed settings operation.</summary>
     public static void Validate(ReadOnlyMemory<byte> before, ReadOnlyMemory<byte> after, ImmutableArray<string> authorizedKeys)
     {
+        _ = ConfigurationDocument.Parse(before, validatePermissionParents: false);
+        _ = ConfigurationDocument.Parse(after, validatePermissionParents: false);
         using var original = JsonDocument.Parse(WithoutBom(before), RepositorySettingsCoordinator.DocumentOptions);
         using var replacement = JsonDocument.Parse(WithoutBom(after), RepositorySettingsCoordinator.DocumentOptions);
         foreach (var key in Keys)

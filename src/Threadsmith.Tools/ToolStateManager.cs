@@ -134,11 +134,7 @@ public sealed class ToolStateManager : IToolStateManager
         var repositoryHasEnabledAllowList = false;
         if (File.Exists(_repositoryConfigurationPath))
         {
-            var repositoryConfiguration = JsonNode.Parse(
-                File.ReadAllText(_repositoryConfigurationPath),
-                new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-                documentOptions: RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-                ?? throw new InvalidOperationException("Repository configuration must contain a JSON object.");
+            var repositoryConfiguration = ConfigurationDocument.ReadObject(_repositoryConfigurationPath);
             repositoryHasEnabledAllowList = repositoryConfiguration["tools"] is JsonObject tools
                 && tools.ContainsKey("enabled");
         }
@@ -177,21 +173,12 @@ public sealed class ToolStateManager : IToolStateManager
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            var document = ConfigurationDocument.Read(configurationPath);
             var configuration = new ConfigurationBuilder()
-                .AddJsonFile(configurationPath, optional: true)
+                .AddInMemoryCollection(ConfigurationDocument.Flatten(document, projectPreferencesOnly: true))
                 .Build();
             var enabledSection = configuration.GetSection("tools:enabled");
-            var hasEnabledAllowList = false;
-            if (File.Exists(configurationPath))
-            {
-                var repositoryConfiguration = JsonNode.Parse(
-                    await File.ReadAllTextAsync(configurationPath, cancellationToken),
-                    new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-                    documentOptions: RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-                    ?? throw new InvalidOperationException("Repository configuration must contain a JSON object.");
-                hasEnabledAllowList = repositoryConfiguration["tools"] is JsonObject tools
-                    && tools.ContainsKey("enabled");
-            }
+            var hasEnabledAllowList = document.ContainsKey("tools:enabled");
 
             _writeFileConfiguration?.BindRepository(repositoryRoot, configuration);
 
@@ -542,15 +529,10 @@ public sealed class ToolStateManager : IToolStateManager
         var configurationPath = _repositoryConfigurationPath;
         await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
-            async token =>
+            token =>
             {
-                var root = File.Exists(configurationPath)
-                    ? JsonNode.Parse(
-                        await File.ReadAllTextAsync(configurationPath, token),
-                        documentOptions: RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-                        ?? throw new InvalidOperationException(
-                            "Repository configuration must contain a JSON object.")
-                    : [];
+                token.ThrowIfCancellationRequested();
+                var root = ConfigurationDocument.ReadObject(configurationPath);
                 var tools = root["tools"] as JsonObject ?? [];
                 root["tools"] = tools;
                 if (_hasEnabledAllowList)
@@ -578,7 +560,7 @@ public sealed class ToolStateManager : IToolStateManager
                     tools.Remove("defaultEnabledOverrides");
                 }
 
-                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine));
+                return Task.FromResult<RepositorySettingsUpdate?>(new(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine)));
             },
             cancellationToken: cancellationToken);
     }

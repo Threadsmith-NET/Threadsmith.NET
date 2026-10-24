@@ -226,7 +226,10 @@ Trust controls what the host may inspect or execute. It is separate from model c
 
 Use `/trust` for the selector or `/trust inspect`, `/trust read`, `/trust build`, `/trust mutation`, or `/trust automation` in the interactive terminal. `/trust FullyTrustedAutomation` is also accepted. Automation is the highest repository trust; it does not enable optional tools or bypass invocation policy.
 
-Persisted higher trust can be reused from the per-user repository-facts database. Trust is monotonic during repository use: requesting a lower level does not silently erase a persisted higher grant.
+Permission choices are stored under `~/.threadsmith/repositories/<name>-<path-hash>/permissions.json`. See [Repository permissions](operations/repository-permissions.md) for defaults, enforced restrictions, one-time migration, revocation and reload behavior. Checked-in configuration cannot authorize itself.
+
+
+Persisted higher trust is read from the user-owned repository permission file. Trust is monotonic during repository use: requesting a lower level does not silently erase a persisted higher grant. To revoke or lower it, edit that local permission and reopen the repository; discovery-facts updates cannot restore the older value.
 
 Grant `TrustedBuild` or above only to repositories whose build scripts, analyzers, generators, and tests you trust.
 
@@ -571,18 +574,18 @@ See [conversation flow](operations/conversation-loop.md), [recovery](operations/
 
 ### Mutation approval policies
 
-`/policy` opens a numbered selector; `/policy current` reports the active choice, and `/policy <name>` selects directly. Every choice except `TrustSession` is saved only in repository configuration:
+`/policy` opens a numbered selector; `/policy current` reports requested and effective modes, and `/policy <name>` selects directly. Every choice except `TrustSession` is remembered for this repository on this computer in the user-owned repository permission file, outside the checkout. Choose once; restarts and ordinary source commits do not require another automation approval. `/policy ReviewAll` revokes that local automation choice.
 
 | Policy | Behavior |
 |---|---|
 | `ReviewAll` | Default. Prompt for every staged mutation set. |
 | `ReviewRisky` | Auto-apply ordinary edits; prompt for moves, deletions, configuration or dependency changes, diffs over `mutation:largeDiffThreshold`, and invalid/outside-repository targets. |
-| `TrustSession` | Auto-apply valid in-repository mutations until the process session ends. Leaves the saved repository policy untouched. |
-| `AlwaysTrustRepo` | Auto-apply valid in-repository mutations and save `mutation.approvalPolicy` only in this repository. |
+| `TrustSession` | Auto-apply valid in-repository mutations until switching repositories or process exit (same-repository reload preserves it). Leaves remembered local consent untouched. |
+| `AlwaysTrustRepo` | Auto-apply valid in-repository mutations using remembered local consent for this repository. |
 
 Trust-based choices print a warning. Every policy still requires `TrustedMutation`, preserves the exact diff in events/projections, validates baseline hashes and approved roots, rejects prohibited/secret-bearing paths and `.git` metadata, and never commits, pushes, resets, cleans, or otherwise performs destructive Git operations. Build and test validation runs only when the model or user invokes the corresponding tools.
 
-A saved auto-apply choice remains effective when no independent trusted mutation restriction is configured. Explicit trusted `ReviewAll` or `ReviewRisky` restrictions still apply. Required reviews open the normal Apply/Discard selection modal; F2 shows the staged diff and Escape declines the edit without applying it.
+Without local consent or an explicit trusted-source opt-in, the effective default is `ReviewAll`. A repository `mutation.approvalPolicy` requests a mode; it cannot authorize automation. Existing repository-only automation requests receive a one-time local choice on interactive opening. Choosing Review All or the requested automation mode is remembered; deferring leaves Review All active. Headless opening never invents consent. Explicit trusted `ReviewAll` or `ReviewRisky` restrictions still apply, and `/policy current` shows the resulting effective mode. A persisted `trustSession` setting does not grant session trust; select it interactively. Required reviews open the normal Apply/Discard selection modal; F2 shows the staged diff and Escape declines the edit without applying it.
 
 Optional Git-worktree isolation may be used by configured workflows, but Threadsmith does not treat Git as a transaction mechanism and does not perform destructive Git operations.
 
@@ -1340,7 +1343,7 @@ Important sections include:
 
 Threadsmith combines compiled, machine, user, repository, session, CLI, and ordinary environment layers using Microsoft.Extensions.Configuration semantics. Static secret stores and the normalized `THREADSMITH_secrets__...` environment subtree are deliberately excluded from that graph and are consulted only by `ISecretResolver` at an explicit privileged boundary. Malformed JSON stops startup with exit code `2` and a concise standard-error message identifying the affected file and parser location rather than an unhandled stack trace.
 
-Set `scratchpad.path` to a repository-relative or absolute directory when models need disposable working files or intermediate test results. The default is `null`, so no scratchpad path is sent to the model. Repository and session configuration may select only a directory strictly inside the active repository; machine, user, command-line, and environment configuration may select an existing external directory. `./.threadsmith/.scratchpad` is supported for keeping temporary files under Threadsmith's repository directory; other `.threadsmith` paths remain protected. Threadsmith creates a missing in-repository directory, warns when it is not covered by a repository `.gitignore`, and disables a missing external directory for that session without creating it.
+Set `scratchpad.path` to a repository-relative or absolute directory when models need disposable working files or intermediate test results. The default is `null`, so no scratchpad path is sent to the model. Setting the path designates the directory for scratchpad use; no second folder grant or approval is required, including for repository settings. Repository and session settings must resolve strictly inside the active repository; other ordinary configuration sources can select an existing external directory. Relative paths resolve from the repository root. `./.threadsmith/.scratchpad` is supported for keeping temporary files under Threadsmith's repository directory; other `.threadsmith` paths remain protected. Threadsmith creates a missing in-repository directory, warns when it is not covered by a repository `.gitignore`, and disables a missing external directory for that session without creating it.
 
 An active scratchpad is advertised as session-scoped transient storage and is available only to the built-in `search`, `read_file`, and `write_file` tools. Only `write_file` can modify it, and scratchpad writes need no approval at any repository trust level. Ordinary writer size, text-extension, overwrite, reserved-name, link, and atomic-write checks still apply. If `write_file` is unavailable, Threadsmith keeps the setting but disables all scratchpad access for that session. Every child entry is deleted at startup, graceful shutdown, and before `/new` activates the next session; the scratchpad directory itself remains. Do not store anything there that must survive a session boundary.
 
@@ -1991,7 +1994,7 @@ Configure the folder list in machine, user, or repository `config.json`:
 }
 ```
 
-The default list is `[".inbox"]`. Higher-precedence lists replace lower lists completely; `[]` or `null` permits no writes. Relative entries resolve under the active repository; outside folders must be absolute. Entries are literal folders, include descendants, and do not accept globs or relative `..` escapes. Absolute paths may identify folders elsewhere on the machine. Repository settings can grant these destinations as requested by the operator; an allowlisted folder is direct file-write authority. Restart after configuration edits. Opening another repository rebinds its folder grants without inheriting the former repository's overrides.
+The default list is `[".inbox"]`. Higher-precedence lists replace lower lists completely; `[]` permits no external export writes; malformed or null authority lists are rejected. Relative entries resolve under the active repository; outside folders must be absolute. Entries are literal folders, include descendants, and do not accept globs or relative `..` escapes. Absolute paths may identify folders elsewhere on the machine. Only trusted defaults or user-owned repository permission settings can grant these destinations; checked-in repository configuration cannot self-authorize them. An allowlisted folder is direct file-write authority. Restart after configuration edits. Opening another repository rebinds its folder grants without inheriting the former repository's overrides.
 
 Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. Git metadata, `.threadsmith` settings, `AGENTS.md`, prohibited paths, and symlink/junction traversal are rejected even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
 

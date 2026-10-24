@@ -4,6 +4,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.App;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -11,6 +12,131 @@ using Xunit;
 /// <summary>Checks destructive scratchpad lifecycle boundaries with real filesystem state.</summary>
 public sealed class ScratchpadLifecycleTests
 {
+    /// <summary>The managed location works from existing project settings without folder grants or a permission file.</summary>
+    [Theory]
+    [InlineData(".scratch", ".scratch")]
+    [InlineData("temp/work", "temp/work")]
+    [InlineData("temp/../scratch", "scratch")]
+    [InlineData(".threadsmith/.scratchpad/nested", ".threadsmith/.scratchpad/nested")]
+    [InlineData(".threadsmith/.scratchpad", ".threadsmith/.scratchpad")]
+    [InlineData("./.threadsmith/.scratchpad", ".threadsmith/.scratchpad")]
+    [MemberData(nameof(NativeScratchpadPath))]
+    public async Task ManagedScratchpad_ProjectPreferenceNeedsNoPermissionSetup(string configuredPath, string advertisedPath)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await Fixture.CreateAsync(configuredPath, userConfigured: false);
+        var adjacent = Path.Combine(fixture.Repository, ".threadsmith", "keep.txt");
+        await File.WriteAllTextAsync(adjacent, "keep", ct);
+        _ = await fixture.Lifecycle.StartAsync(ct);
+        Assert.True(fixture.Lifecycle.Current.IsActive);
+        Assert.Equal(advertisedPath, fixture.Lifecycle.Current.ModelPath);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "configuration", "user", "repositories")));
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([fixture.Tool]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+        var invocation = new ToolInvocationContext
+        {
+            RepositoryPath = fixture.Repository,
+            TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+            RequestedBy = "model",
+            Scratchpad = fixture.Lifecycle.Current,
+        };
+        var result = await pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "write_file",
+                ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new WriteFileInput(fixture.Lifecycle.Current.ModelPath + "/temporary.txt", "temporary")),
+                Context = invocation,
+            },
+            ct);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("temporary", await File.ReadAllTextAsync(Path.Combine(fixture.Lifecycle.Current.RootPath!, "temporary.txt"), ct));
+        _ = await fixture.Lifecycle.BeginNewSessionAsync(ct);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(fixture.Lifecycle.Current.RootPath!));
+        Assert.Equal("keep", await File.ReadAllTextAsync(adjacent, ct));
+    }
+
+    /// <summary>Exercises native separators on every platform, not a Windows spelling interpreted as a Unix filename.</summary>
+    public static TheoryData<string, string> NativeScratchpadPath => new()
+    {
+        { Path.Combine("temp", "native", "scratch"), "temp/native/scratch" },
+    };
+
+    /// <summary>The existing optional null default remains disabled without creating state.</summary>
+    [Fact]
+    public async Task ManagedScratchpad_NullDefaultRemainsOptional()
+    {
+        await using var fixture = await Fixture.CreateAsync(null, userConfigured: false);
+        _ = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ScratchpadDisabledReason.NotConfigured, fixture.Lifecycle.Current.DisabledReason);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Repository, ".threadsmith", ".scratchpad")));
+    }
+
+    /// <summary>A link at the managed root cannot redirect cleanup to other files.</summary>
+    [Fact]
+    public async Task ManagedScratchpad_LinkCannotExpandCleanup()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await Fixture.CreateAsync(".threadsmith/.scratchpad", userConfigured: false);
+        var external = Directory.CreateDirectory(Path.Combine(fixture.Root, "external")).FullName;
+        var keep = Path.Combine(external, "keep.txt");
+        await File.WriteAllTextAsync(keep, "keep", ct);
+        var link = Path.Combine(fixture.Repository, ".threadsmith", ".scratchpad");
+        await CreateDirectoryLinkAsync(link, external);
+        try
+        {
+            _ = await fixture.Lifecycle.StartAsync(ct);
+            Assert.False(fixture.Lifecycle.Current.IsActive);
+            Assert.Equal("keep", await File.ReadAllTextAsync(keep, ct));
+        }
+        finally
+        {
+            Directory.Delete(link);
+        }
+    }
+
+    /// <summary>Common providers retain ordinary source precedence and explicit null disabling.</summary>
+    [Theory]
+    [InlineData("repository", ".selected")]
+    [InlineData("session", ".session")]
+    [InlineData("session-null", null)]
+    [InlineData("cli", ".cli")]
+    [InlineData("absolute", ".selected")]
+    public async Task ConfiguredScratchpad_PreservesSourcePrecedence(string source, string? expected)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await Fixture.CreateAsync(
+            ".unselected",
+            userConfigured: true,
+            arguments: source == "cli" ? ["--set:scratchpad:path=.cli"] : []);
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Repository, ".threadsmith", "config.json"),
+            System.Text.Json.JsonSerializer.Serialize(new { scratchpad = new { path = source == "absolute" ? Path.Combine(fixture.Repository, ".selected") : ".selected" } }),
+            ct);
+        if (source.StartsWith("session", StringComparison.Ordinal))
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Repository, ".threadsmith", "session.json"),
+                System.Text.Json.JsonSerializer.Serialize(new { scratchpad = new { path = expected } }),
+                ct);
+        }
+
+        var preserved = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".unselected")).FullName;
+        var keep = Path.Combine(preserved, "keep.txt");
+        await File.WriteAllTextAsync(keep, "keep", ct);
+        _ = await fixture.Lifecycle.StartAsync(ct);
+        Assert.Equal(expected is not null, fixture.Lifecycle.Current.IsActive);
+        Assert.Equal(expected, fixture.Lifecycle.Current.ModelPath);
+        Assert.Equal("keep", await File.ReadAllTextAsync(keep, ct));
+    }
+
     /// <summary>Startup creates an in-repository root, clears every existing child, and warns when unignored.</summary>
     [Fact]
     public async Task Startup_CreatesClearsAndWarnsForUnignoredRepositoryScratchpad()
@@ -147,7 +273,7 @@ public sealed class ScratchpadLifecycleTests
         }
     }
 
-    /// <summary>Repository configuration cannot target an external directory, even when it already exists.</summary>
+    /// <summary>Repository configuration cannot authorize cleanup of any directory.</summary>
     [Fact]
     public async Task RepositoryConfiguration_RejectsExternalDirectory()
     {
@@ -156,6 +282,10 @@ public sealed class ScratchpadLifecycleTests
         try
         {
             await using var fixture = await Fixture.CreateAsync(external);
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Repository, ".threadsmith", "config.json"),
+                System.Text.Json.JsonSerializer.Serialize(new { scratchpad = new { path = external } }),
+                TestContext.Current.CancellationToken);
 
             var warnings = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
 
@@ -243,11 +373,12 @@ public sealed class ScratchpadLifecycleTests
 
     private sealed class Fixture : IAsyncDisposable
     {
-        private Fixture(string root, string repository, ScratchpadLifecycle lifecycle)
+        private Fixture(string root, string repository, ScratchpadLifecycle lifecycle, WriteFileTool tool)
         {
             Root = root;
             Repository = repository;
             Lifecycle = lifecycle;
+            Tool = tool;
         }
 
         public string Root { get; }
@@ -256,10 +387,13 @@ public sealed class ScratchpadLifecycleTests
 
         public ScratchpadLifecycle Lifecycle { get; }
 
+        public WriteFileTool Tool { get; }
+
         public static async Task<Fixture> CreateAsync(
-            string configuredPath,
+            string? configuredPath,
             bool requireWriteApproval = false,
-            bool userConfigured = false)
+            bool userConfigured = false,
+            string[]? arguments = null)
         {
             var root = Directory.CreateDirectory(Path.Combine(
                 PhysicalTemporaryPath(),
@@ -269,6 +403,7 @@ public sealed class ScratchpadLifecycleTests
             var machine = Directory.CreateDirectory(Path.Combine(root, "configuration", "machine")).FullName;
             var user = Directory.CreateDirectory(Path.Combine(root, "configuration", "user")).FullName;
             var repositoryConfiguration = Path.Combine(threadsmith, "config.json");
+            await File.WriteAllTextAsync(repositoryConfiguration, "{}", TestContext.Current.CancellationToken);
             var configuredFile = userConfigured
                 ? Path.Combine(user, "config.json")
                 : repositoryConfiguration;
@@ -293,7 +428,7 @@ public sealed class ScratchpadLifecycleTests
                 SessionConfiguration = Path.Combine(threadsmith, "session.json"),
                 SecretsConfiguration = Path.Combine(threadsmith, "secrets", "config.json"),
             };
-            var configuration = ConfigurationBootstrap.Build([], paths);
+            var configuration = ConfigurationBootstrap.Build(arguments ?? [], paths);
             var writeConfiguration = new WriteFileConfiguration(configuration, configuration, repository);
             var write = new WriteFileTool(
                 writeConfiguration,
@@ -309,14 +444,14 @@ public sealed class ScratchpadLifecycleTests
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
             var lifecycle = new ScratchpadLifecycle(
-                [],
+                arguments ?? [],
                 configuration,
                 paths,
                 processes,
                 state,
                 registry,
                 NullLogger<ScratchpadLifecycle>.Instance);
-            return new Fixture(root, repository, lifecycle);
+            return new Fixture(root, repository, lifecycle, write);
         }
 
         public async ValueTask DisposeAsync()

@@ -187,6 +187,26 @@ public interface IRepositoryFactsStore
 
     /// <summary>Inserts or updates durable repository facts.</summary>
     Task UpsertAsync(RepositoryFacts facts, CancellationToken cancellationToken = default);
+
+    /// <summary>Persists an explicit trust choice; ordinary discovery updates must not change permissions.</summary>
+    Task SetTrustAsync(RepositoryTrustState trust, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This host does not support remembered trust choices.");
+
+    /// <summary>Reads remembered trust independently of discovery facts.</summary>
+    async Task<RepositoryTrustState?> GetTrustAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        => (await GetAsync(repositoryPath, cancellationToken))?.Trust;
+
+    /// <summary>Reads the user's persistent mutation choice for this local repository, never from repository files.</summary>
+    Task<MutationApprovalPolicy?> GetMutationPolicyAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        => Task.FromResult<MutationApprovalPolicy?>(null);
+
+    /// <summary>Persists an explicit local user choice independently of discovery fact updates.</summary>
+    Task SetMutationPolicyAsync(string repositoryPath, MutationApprovalPolicy policy, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This host does not support remembered mutation consent.");
+
+    /// <summary>Records the user's explicit compatibility decision without changing their global configuration.</summary>
+    Task SetLegacyPermissionDecisionAsync(string repositoryPath, bool useDefaults, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This host does not support permission migration decisions.");
 }
 
 /// <summary>Gets durable trust for a repository before an interactive surface prompts the user.</summary>

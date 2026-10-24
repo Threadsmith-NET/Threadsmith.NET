@@ -140,21 +140,22 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Empty(restricted.NetworkHostRestriction);
     }
 
-    /// <summary>Saved automatic application survives absent ceilings, while explicit trusted restrictions remain enforced.</summary>
+    /// <summary>Repository requests cannot supply consent; explicit trusted ceilings remain authoritative.</summary>
     [Fact]
     public void MutationPreferenceCannotRaiseTrustedCeilingOrThreshold()
     {
         File.WriteAllText(_paths.RepositoryConfiguration, """{"mutation":{"approvalPolicy":"alwaysTrustRepo","largeDiffThreshold":10000}}""");
         var policy = Load();
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.MutationCeiling);
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.MutationCeiling);
+        Assert.False(policy.HasExplicitMutationCeiling);
         Assert.Equal(500, policy.LargeDiffThreshold);
         var binding = new SessionPolicyBinding();
         binding.Publish(policy);
         Assert.True(new MutationApprovalPolicyService(policyBinding: binding).RequiresApproval(new MutationRiskAssessment()));
         var preference = new ConfigurationBuilder().AddJsonFile(_paths.RepositoryConfiguration).Build();
         var approval = new MutationApprovalPolicyService(preference, policyBinding: binding);
-        Assert.False(approval.RequiresApproval(new MutationRiskAssessment()));
-        Assert.False(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
         File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewAll"}}""");
         binding.Publish(Load());
         Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));

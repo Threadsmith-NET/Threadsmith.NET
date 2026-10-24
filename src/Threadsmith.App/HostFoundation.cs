@@ -400,7 +400,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 "Threadsmith");
             Directory.CreateDirectory(factsDirectory);
             var repositoryFacts = new SqliteRepositoryFactsStore(
-                $"Data Source={Path.Combine(factsDirectory, "repository-facts.db")}");
+                $"Data Source={Path.Combine(factsDirectory, "repository-facts.db")}",
+                paths.UserConfiguration);
             await repositoryFacts.InitializeAsync();
             persistenceSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved

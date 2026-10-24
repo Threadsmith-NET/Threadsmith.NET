@@ -182,7 +182,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(
             firstRepository.RootPath,
             useExternalDatabase: true);
-        var policy = new MutationApprovalPolicyService();
+        var policy = new MutationApprovalPolicyService(facts: harness.Facts);
         var lifecycle = new RepositoryLifecycle(
             harness.Events,
             harness.Facts,
@@ -194,7 +194,10 @@ public static class RepositoryLifecycleTests
             sessionId,
             firstRepository.RootPath,
             RepositoryTrustLevel.UntrustedInspection));
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.CurrentPolicy);
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.CurrentPolicy);
+        // This lower-level fixture has no host policy loader; project files cannot
+        // independently establish an automation request or grant.
+        Assert.False(policy.NeedsLocalConsent);
 
         _ = await lifecycle.HandleAsync(new OpenRepositoryCommand(
             sessionId,
@@ -210,9 +213,8 @@ public static class RepositoryLifecycleTests
         Assert.Equal(
             "alwaysTrustRepo",
             firstConfig.RootElement.GetProperty("mutation").GetProperty("approvalPolicy").GetString());
-        Assert.Equal(
-            "alwaysTrustRepo",
-            secondConfig.RootElement.GetProperty("mutation").GetProperty("approvalPolicy").GetString());
+        Assert.False(secondConfig.RootElement.TryGetProperty("mutation", out _));
+        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, await harness.Facts.GetMutationPolicyAsync(secondRepository.RootPath));
     }
 
     /// <summary>Persistent policy refuses a linked repository configuration directory.</summary>
@@ -1632,6 +1634,10 @@ public static class RepositoryLifecycleTests
 
     private sealed class GatedFactsStore(bool failLookup) : IRepositoryFactsStore
     {
+        public Task<RepositoryTrustState?> GetTrustAsync(string repositoryPath, CancellationToken cancellationToken = default) => Task.FromResult<RepositoryTrustState?>(null);
+
+        public Task SetTrustAsync(RepositoryTrustState trust, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

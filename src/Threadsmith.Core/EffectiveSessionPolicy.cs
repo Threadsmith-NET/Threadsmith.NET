@@ -65,14 +65,35 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets exact authority-control paths protected from generic mutations.</summary>
     public ImmutableArray<string> ControlPaths { get; init; } = [];
 
+    /// <summary>Gets protected directory trees, including future descendants and containing-directory replacement.</summary>
+    public ImmutableArray<string> ControlDirectories { get; init; } = [];
+
     /// <summary>Gets whether shell execution requires the existing user approval.</summary>
     public bool RequireShellApproval { get; init; } = true;
 
     /// <summary>Gets whether independent tool calls may execute concurrently.</summary>
     public bool ParallelToolsEnabled { get; init; } = true;
 
-    /// <summary>Gets an explicit trusted automatic-application restriction; absence preserves the selected policy.</summary>
-    public MutationApprovalPolicy MutationCeiling { get; init; } = MutationApprovalPolicy.AlwaysTrustRepo;
+    /// <summary>Gets the trusted automatic-application ceiling, defaulting to exact review.</summary>
+    public MutationApprovalPolicy MutationCeiling { get; init; } = MutationApprovalPolicy.ReviewAll;
+
+    /// <summary>Distinguishes an explicit trusted restriction from the default requiring local consent.</summary>
+    public bool HasExplicitMutationCeiling { get; init; }
+
+    /// <summary>Gets the user-owned default mutation choice before a repository-specific choice.</summary>
+    public MutationApprovalPolicy MutationDefault { get; init; } = MutationApprovalPolicy.ReviewAll;
+
+    /// <summary>Gets an untrusted legacy repository request used only for a migration prompt.</summary>
+    public MutationApprovalPolicy? LegacyRepositoryMutationRequest { get; init; }
+
+    /// <summary>Gets whether an unresolved legacy user configuration still constrains local choices.</summary>
+    public bool HasLegacyUserRestrictions { get; init; }
+
+    /// <summary>Gets whether compatibility interpretation still needs a one-time local user decision.</summary>
+    public bool NeedsPermissionMigrationDecision { get; init; }
+
+    /// <summary>Identifies the local mutation consent captured by a staged diff.</summary>
+    public long MutationConsentRevision { get; init; }
 
     /// <summary>Gets the effective large-diff risk threshold.</summary>
     public int LargeDiffThreshold { get; init; } = 500;

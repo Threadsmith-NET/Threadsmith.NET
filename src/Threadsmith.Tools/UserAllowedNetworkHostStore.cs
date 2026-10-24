@@ -23,8 +23,19 @@ public sealed class UserAllowedNetworkHostStore
     /// <summary>Reads the current exact hostname grants so manual removals take effect without restart.</summary>
     public IReadOnlySet<string> ReadHosts()
     {
-        var root = ReadRoot();
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        JsonObject root;
+        try
+        {
+            root = ReadRoot();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable grant store cannot authorize a host. An explicit save still
+            // reports its failure through the existing approval operation.
+            return result;
+        }
+
         if (root["tools"] is JsonObject tools && tools["allowedNetworkHosts"] is JsonArray hosts)
         {
             foreach (var node in hosts)
@@ -98,21 +109,6 @@ public sealed class UserAllowedNetworkHostStore
     private JsonObject ReadRoot()
     {
         RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(_configurationPath);
-        if (!File.Exists(_configurationPath))
-        {
-            return new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
-        }
-
-        using var stream = new FileStream(_configurationPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        if (stream.Length > _maximumConfigurationBytes)
-        {
-            throw new InvalidOperationException("The user configuration exceeds the supported size.");
-        }
-
-        return JsonNode.Parse(
-            stream,
-            new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-            RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-            ?? throw new InvalidOperationException("User configuration must contain a JSON object.");
+        return ConfigurationDocument.ReadObject(_configurationPath, _maximumConfigurationBytes);
     }
 }

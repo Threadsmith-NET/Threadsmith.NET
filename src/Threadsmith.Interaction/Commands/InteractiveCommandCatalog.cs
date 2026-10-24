@@ -37,7 +37,7 @@ public static class InteractiveCommandCatalog
         new("/models", "/models [status|refresh <provider-id>]", "Select a model or maintain discovery metadata"),
         new("/new", "/new", "Start a fresh independent session"),
         new("/open", "/open [path]", "Open a repository and choose trust"),
-        new("/policy", "/policy [name|current]", "Select or report mutation approval policy"),
+        new("/policy", "/policy [name|current]", "Choose local repository mutation permission or report requested/effective policy"),
         new("/quit", "/quit", "End the interactive session"),
         new("/reasoning", "/reasoning [level]", "Set reasoning effort using the active model's configured levels"),
         new("/resume", "/resume [id]", "Resume a durable repository session"),
@@ -47,7 +47,7 @@ public static class InteractiveCommandCatalog
         new("/thinking", "/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
         new("/tips", "/tips", "Show all tips locally without adding them to model context"),
         new("/tools", "/tools", "Browse and toggle repository tool availability"),
-        new("/trust", "/trust [inspect|read|build|mutation|automation]", "Set or upgrade repository trust"),
+        new("/trust", "/trust [inspect|read|build|mutation|automation]", "Remember repository trust upgrades in user-owned permissions"),
     ];
 
     private static readonly FrozenDictionary<string, InteractiveCommandDescriptor> ByName = Entries

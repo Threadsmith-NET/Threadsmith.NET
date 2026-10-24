@@ -16,7 +16,8 @@ internal static class SecurityPolicyConfigurationLoader
     internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths)
     {
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in new[] { ReadFile(paths.MachineConfiguration, "Machine", []), ReadFile(paths.UserConfiguration, "User", []) })
+        var trustedSources = ReadTrustedSources(paths, []);
+        foreach (var source in trustedSources.Where(source => source.Kind != "Environment"))
         {
             foreach (var (key, node) in source.Values.Where(item => item.Value.ValueKind == JsonValueKind.Array))
             {
@@ -28,6 +29,21 @@ internal static class SecurityPolicyConfigurationLoader
             {
                 RemoveSubtree(key);
                 Flatten(node, key);
+            }
+        }
+
+        // Preserve legacy adapter restrictions before explicit launch overrides, as before migration.
+        var user = trustedSources.Single(source => source.Kind == "User");
+        var local = new RepositoryPermissionStore(paths.UserConfiguration).Read(paths.RepositoryRoot);
+        if (!IsModernConfiguration(user) && !local.LegacyUserSettingsAreDefaults)
+        {
+            foreach (var property in ConfigurationPermissionCatalog.Properties.Where(property => property.AdapterOwned))
+            {
+                if (user.Values.TryGetValue(property.Path, out var value))
+                {
+                    RemoveSubtree(property.Path);
+                    Flatten(value, property.Path);
+                }
             }
         }
 
@@ -45,7 +61,28 @@ internal static class SecurityPolicyConfigurationLoader
 
         foreach (var (key, value) in environmentValues)
         {
+            if (!ConfigurationPermissionCatalog.Allows(key, PermissionConfigurationSources.Launch))
+            {
+                throw new InvalidDataException($"Permission '{key}' cannot be defined by the launch environment.");
+            }
+
             merged[key] = value;
+        }
+
+        var machine = trustedSources.Single(source => source.Kind == "Machine");
+        if (machine.Values.TryGetValue("enforced", out var enforced))
+        {
+            var values = ConfigurationDocument.Parse(Encoding.UTF8.GetBytes(enforced.GetRawText()));
+            foreach (var (key, value) in values.Where(pair => pair.Value.ValueKind != JsonValueKind.Object))
+            {
+                if (!ConfigurationPermissionCatalog.IsPermission(key) || !ConfigurationPermissionCatalog.Allows(key, PermissionConfigurationSources.Machine))
+                {
+                    throw new InvalidDataException($"Machine enforced property '{key}' is not a declared permission.");
+                }
+
+                RemoveSubtree(key);
+                Flatten(value, key);
+            }
         }
 
         return new ConfigurationBuilder().AddInMemoryCollection(merged).Build();
@@ -60,101 +97,49 @@ internal static class SecurityPolicyConfigurationLoader
 
         void Flatten(JsonElement node, string key)
         {
-            if (node.ValueKind == JsonValueKind.Array)
+            // The common parser already retains object descendants. Reuse its flattener
+            // for a selected subtree too, rather than giving adapters another JSON dialect.
+            var values = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            Add(node, key);
+            foreach (var item in ConfigurationDocument.Flatten(values))
             {
-                var index = 0;
-                merged[key] = null;
-                foreach (var item in node.EnumerateArray())
-                {
-                    Flatten(item, key + ":" + (index++).ToString(CultureInfo.InvariantCulture));
-                }
+                merged[item.Key] = item.Value;
             }
-            else if (node.ValueKind == JsonValueKind.Object)
+
+            void Add(JsonElement value, string path)
             {
-                foreach (var property in node.EnumerateObject())
+                values[path] = value;
+                if (value.ValueKind == JsonValueKind.Object)
                 {
-                    Flatten(property.Value, key + ":" + property.Name);
+                    foreach (var property in value.EnumerateObject())
+                    {
+                        Add(property.Value, path + ":" + property.Name);
+                    }
                 }
-            }
-            else
-            {
-                merged[key] = node.ValueKind == JsonValueKind.Null ? null : node.ToString();
             }
         }
     }
 
     private static readonly string[] ListKeys =
-    [
-        "tools:allowedExecutables", "tools:allowedNetworkHosts", "tools:allow", "tools:deny",
-        "tools:requireApproval", "tools:writeFile:allowedFolders", "editableRoots", "prohibitedPaths",
-    ];
+[.. ConfigurationPermissionCatalog.Properties
+        .Where(property => property.Shape == PermissionInputShape.List).Select(property => property.Path)];
 
-    private static readonly string[] BooleanKeys =
-    [
-        "tools:runProcess:requireApproval", "tools:parallel:enabled",
-    ];
+    private static readonly string[] BooleanKeys = [.. ConfigurationPermissionCatalog.Properties
+        .Where(property => property.Shape == PermissionInputShape.Boolean).Select(property => property.Path)];
 
-    private static readonly string[] ScalarKeys =
-    [
-        .. BooleanKeys,
-        "mutation:approvalPolicy", "mutation:largeDiffThreshold",
-        "tools:config:csharp_script:allowed_assemblies",
-        "repository:configurationBytes",
-    ];
+    private static readonly string[] ScalarKeys = [.. ConfigurationPermissionCatalog.Properties
+        .Where(property => property.Shape is PermissionInputShape.Scalar or PermissionInputShape.Boolean).Select(property => property.Path)];
 
-    private static readonly string[] TrustedOnlyKeys =
-    [
-        "repository:configurationBytes", "secretResolution:limits", "limits:policyStores", "context:deployedPrompts:limits",
-        "mcp:profiles", "mcp:limits", "mcp:maximumConcurrentConnections", "mcp:defaultDrainKillTimeoutSeconds",
-        "webSearch:provider", "nuget:advisorySources", "hooks:handlers", "hooks:managedGrants", "hooks:limits",
-        "skills:trustedSigners", "skills:allowlistedPackages", "skills:enabledSelectors", "skills:revokedDigests",
-        "skills:deniedSkillIds", "skills:deniedPublishers", "skills:revokedSigners", "skills:organizationCatalogPath",
-        "agents:delegation", "agents:queueCapacity", "agents:maxActiveGlobal", "agents:maxActivePerParent",
-        "agents:maxActiveImplementers", "agents:shutdownTimeoutSeconds", "agents:delegateAgents",
-    ];
-
-    private static readonly Dictionary<string, int> ResourceDefaults = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["tools:runProcess:defaultTimeoutSeconds"] = 30,
-        ["tools:runProcess:maxTimeoutSeconds"] = 60,
-        ["tools:config:csharp_script:timeout_ms"] = 5000,
-        ["tools:config:csharp_script:max_output_bytes"] = 65536,
-        ["tools:config:csharp_script:max_code_characters"] = 65536,
-        ["tools:config:csharp_script:max_assemblies"] = 32,
-        ["tools:config:csharp_script:max_assembly_name_characters"] = 128,
-        ["tools:config:csharp_script:max_assembly_setting_characters"] = 4096,
-        ["tools:runtime:defaults:timeoutMilliseconds"] = -1,
-        ["tools:runtime:defaults:maximumOutputBytes"] = int.MaxValue,
-        ["tools:runtime:defaults:maximumSourceConcurrency"] = int.MaxValue,
-        ["tools:parallel:maximumConcurrency"] = 4,
-        ["webFetch:maximumUrlCharacters"] = 2048,
-        ["webFetch:maximumRedirects"] = 3,
-        ["webFetch:timeoutSeconds"] = 15,
-        ["webFetch:maximumCompressedBytes"] = 1048576,
-        ["webFetch:maximumDecodedBytes"] = 2097152,
-        ["webFetch:maximumExtractedCharacters"] = 131072,
-        ["webFetch:maximumHtmlTokens"] = 100000,
-        ["webFetch:maximumHtmlDepth"] = 128,
-        ["webFetch:maximumJsonTokens"] = 100000,
-        ["webFetch:maximumJsonDepth"] = 64,
-        ["webFetch:maximumStringCharacters"] = 131072,
-        ["webFetch:maximumScannedUserCharacters"] = 32768,
-        ["webFetch:maximumUserUrlCandidates"] = 8,
-        ["webFetch:maximumReferences"] = 100,
-        ["webFetch:referenceLifetimeSeconds"] = 600,
-    };
+    private static readonly Dictionary<string, int> ResourceDefaults = ConfigurationPermissionCatalog.Properties
+        .Where(property => property.DefaultLimit.HasValue)
+        .ToDictionary(property => property.Path, property => property.DefaultLimit.GetValueOrDefault(), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Resolves a detached candidate without changing any live authority or settings.</summary>
     internal static EffectiveSessionPolicy Load(ConfigurationPaths paths, Guid bindingId, long generation)
     {
         var sources = new List<PolicyInputSource>();
         var diagnostics = new List<string>();
-        var trusted = new[]
-        {
-            ReadFile(paths.MachineConfiguration, "Machine", sources),
-            ReadFile(paths.UserConfiguration, "User", sources),
-            ReadEnvironment(sources),
-        };
+        var trusted = ReadTrustedSources(paths, sources);
         var maximumConfigurationBytes = 1024L * 1024;
         foreach (var source in trusted)
         {
@@ -167,17 +152,63 @@ internal static class SecurityPolicyConfigurationLoader
             }
         }
 
-        var restrictions = new[]
+        var projectSources = new[]
         {
             ReadFile(paths.RepositoryConfiguration, "Repository", sources, maximumConfigurationBytes),
             ReadFile(paths.SessionConfiguration, "RepositorySession", sources, maximumConfigurationBytes),
         };
-        foreach (var source in restrictions)
+        foreach (var source in projectSources)
         {
-            foreach (var key in TrustedOnlyKeys.Where(source.Values.ContainsKey))
+            foreach (var key in ConfigurationPermissionCatalog.Paths.Where(source.Values.ContainsKey))
             {
-                diagnostics.Add($"PolicySourceNotAllowed: {key}, {source.Kind} '{source.Location}', generation {generation}: ignored; this setting accepts only designated trusted configuration. Review the user configuration manually if this authority is intended.");
+                diagnostics.Add($"PolicySourceNotAllowed: {key}, {source.Kind} '{source.Location}', generation {generation}: cannot grant authority. Legacy restrictions may remain until the local ownership decision; use /policy and reopen, or configure the user-owned repository permission file.");
             }
+        }
+
+        var localPermissions = new RepositoryPermissionStore(paths.UserConfiguration).Read(paths.RepositoryRoot);
+        var user = trusted.Single(source => source.Kind == "User");
+        var legacyUser = !IsModernConfiguration(user) && !localPermissions.LegacyUserSettingsAreDefaults
+            && user.Values.Keys.Any(ConfigurationPermissionCatalog.IsPermission);
+        var machine = trusted.Single(source => source.Kind == "Machine");
+        var restrictions = new List<Source>();
+        if (legacyUser)
+        {
+            var launch = trusted.Single(source => source.Kind == "Environment");
+            restrictions.Add(user with
+            {
+                Kind = "LegacyUserRestriction",
+                Values = user.Values.Where(pair => !launch.Values.ContainsKey(pair.Key))
+                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
+            });
+        }
+
+        // A bounded compatibility adapter preserves old restrictions, never grants, until reviewed locally.
+        var legacyProjectRestrictions = !localPermissions.LegacyUserSettingsAreDefaults
+            && projectSources.Any(source => source.Values.Keys.Any(ConfigurationPermissionCatalog.IsPermission));
+        if (legacyProjectRestrictions)
+        {
+            restrictions.AddRange(projectSources.Select(source => source with { Kind = "LegacyRepositoryRestriction" }));
+        }
+
+        if (machine.Values.TryGetValue("enforced", out var enforcement))
+        {
+            var values = ConfigurationDocument.Parse(Encoding.UTF8.GetBytes(enforcement.GetRawText()));
+            if (values.Any(pair => !ConfigurationPermissionCatalog.Allows(pair.Key, PermissionConfigurationSources.Machine)
+                || (!ConfigurationPermissionCatalog.IsPermission(pair.Key)
+                && !(pair.Value.ValueKind == JsonValueKind.Object && ConfigurationPermissionCatalog.Paths.Any(key => key.StartsWith(pair.Key + ":", StringComparison.OrdinalIgnoreCase))))))
+            {
+                throw new InvalidDataException("Machine enforced settings must contain declared permission properties only.");
+            }
+
+            restrictions.Add(new Source("Enforced", paths.MachineConfiguration, values.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase)));
+        }
+
+        MutationApprovalPolicy? legacyRequest = null;
+        if (projectSources[0].Values.TryGetValue("mutation:approvalPolicy", out var legacyRequestedValue)
+            && legacyRequestedValue.ValueKind == JsonValueKind.String && Enum.TryParse<MutationApprovalPolicy>(legacyRequestedValue.GetString(), true, out var requestedPolicy)
+            && requestedPolicy is MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo)
+        {
+            legacyRequest = requestedPolicy;
         }
 
         var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(paths.RepositoryRoot));
@@ -199,14 +230,14 @@ internal static class SecurityPolicyConfigurationLoader
                     throw Invalid(source, key);
                 }
 
-                ceiling = source.Kind is "Repository" or "RepositorySession" ? Narrow(ceiling, parsed) : parsed;
+                ceiling = IsRestriction(source) ? Narrow(ceiling, parsed) : parsed;
             }
 
             limits[key] = ceiling;
         }
 
         limits["tools:runProcess:defaultTimeoutSeconds"] = Math.Min(limits["tools:runProcess:defaultTimeoutSeconds"], limits["tools:runProcess:maxTimeoutSeconds"]);
-        ResolveRuntimeOverrides(trusted, restrictions, limits, sources);
+        ResolveRuntimeOverrides(trusted, [.. restrictions], limits, sources);
         string[] assemblies = ["System.Linq", "System.Collections", "System.Collections.Generic"];
         foreach (var source in trusted.Concat(restrictions))
         {
@@ -227,7 +258,7 @@ internal static class SecurityPolicyConfigurationLoader
                 throw Invalid(source, key);
             }
 
-            assemblies = source.Kind is "Repository" or "RepositorySession"
+            assemblies = IsRestriction(source)
                 ? [.. assemblies.Intersect(requested, StringComparer.OrdinalIgnoreCase)] : requested;
         }
 
@@ -285,9 +316,20 @@ internal static class SecurityPolicyConfigurationLoader
             }
         }
 
-        ImmutableArray<string> Union(string key, StringComparer comparer) =>
-            [.. trusted.Concat(restrictions).SelectMany(source => ReadList(source, key) ?? [])
+        ImmutableArray<string> Union(string key, StringComparer comparer)
+        {
+            string[] defaults = [];
+            foreach (var source in trusted)
+            {
+                defaults = ReadList(source, key) ?? defaults;
+            }
+
+            // Versioned defaults replace, including explicit empty arrays. Preserve the
+            // historical additive machine restrictions until the machine owner versions them.
+            var legacyMachine = IsModernConfiguration(machine) ? [] : ReadList(machine, key) ?? [];
+            return [.. defaults.Concat(legacyMachine).Concat(restrictions.SelectMany(source => ReadList(source, key) ?? []))
                 .Distinct(comparer).Order(comparer)];
+        }
 
         var executables = ResolveList("tools:allowedExecutables", [OperatingSystem.IsWindows() ? "powershell" : "bash", "dotnet", "git"]);
         if (executables.Any(name => name.IndexOfAny(['/', '\\', '*', '?', ':']) >= 0 || name.Any(char.IsWhiteSpace)))
@@ -298,9 +340,9 @@ internal static class SecurityPolicyConfigurationLoader
         var requireShellApproval = true;
         var parallelEnabled = true;
 
-        // ReviewAll remains the ordinary preference default. An absent independent
-        // ceiling must not silently override a saved or interactive auto-apply choice.
         var mutationCeiling = MutationApprovalPolicy.AlwaysTrustRepo;
+        var mutationDefault = MutationApprovalPolicy.ReviewAll;
+        var hasExplicitMutationCeiling = false;
         var threshold = 500;
         foreach (var source in trusted)
         {
@@ -316,15 +358,21 @@ internal static class SecurityPolicyConfigurationLoader
 
             if (source.Values.TryGetValue("mutation:approvalPolicy", out var mode))
             {
-                if (mode.ValueKind != JsonValueKind.String || !Enum.TryParse(mode.GetString(), true, out mutationCeiling)
-                    || !Enum.IsDefined(mutationCeiling))
+                if (mode.ValueKind != JsonValueKind.String || !Enum.TryParse(mode.GetString(), true, out mutationDefault)
+                    || !Enum.IsDefined(mutationDefault))
                 {
                     throw Invalid(source, "mutation:approvalPolicy");
                 }
 
-                if (mutationCeiling == MutationApprovalPolicy.TrustPlan)
+                if (mutationDefault is MutationApprovalPolicy.TrustPlan or MutationApprovalPolicy.TrustSession)
                 {
-                    mutationCeiling = MutationApprovalPolicy.ReviewAll;
+                    mutationDefault = MutationApprovalPolicy.ReviewAll;
+                }
+
+                if (source.Kind == "Environment" || (source.Kind == "Machine" && !IsModernConfiguration(source)))
+                {
+                    mutationCeiling = RestrictMutation(mutationCeiling, mutationDefault);
+                    hasExplicitMutationCeiling = true;
                 }
             }
 
@@ -333,6 +381,20 @@ internal static class SecurityPolicyConfigurationLoader
 
         foreach (var source in restrictions)
         {
+            if (source.Values.TryGetValue("mutation:approvalPolicy", out var mode))
+            {
+                if (mode.ValueKind != JsonValueKind.String || !Enum.TryParse<MutationApprovalPolicy>(mode.GetString(), true, out var restriction) || !Enum.IsDefined(restriction))
+                {
+                    throw Invalid(source, "mutation:approvalPolicy");
+                }
+
+                if (source.Kind != "LegacyRepositoryRestriction" || restriction != MutationApprovalPolicy.AlwaysTrustRepo)
+                {
+                    mutationCeiling = RestrictMutation(mutationCeiling, restriction);
+                    hasExplicitMutationCeiling = true;
+                }
+            }
+
             if (source.Values.TryGetValue("tools:parallel:enabled", out var parallel))
             {
                 parallelEnabled &= ReadBoolean(parallel, source, "tools:parallel:enabled");
@@ -368,26 +430,36 @@ internal static class SecurityPolicyConfigurationLoader
         }
 
         var editableRoots = ResolveList("editableRoots", ["."], pathsAreRoots: true);
+        if (!hasExplicitMutationCeiling)
+        {
+            mutationCeiling = MutationApprovalPolicy.ReviewAll;
+        }
+
         var policy = new EffectiveSessionPolicy
         {
             BindingId = bindingId,
             Generation = generation,
             RepositoryPath = repository,
             Fingerprint = string.Empty,
-            StartupAuthorityFingerprint = CaptureStartupAuthority(paths, restrictions),
+            StartupAuthorityFingerprint = CaptureStartupAuthority(paths, projectSources),
             AllowedExecutables = executables,
             AllowedTools = ResolveList("tools:allow", null),
             DeniedTools = Union("tools:deny", StringComparer.OrdinalIgnoreCase),
             ReviewTools = Union("tools:requireApproval", StringComparer.OrdinalIgnoreCase),
             WriteFolders = ResolveList("tools:writeFile:allowedFolders", [".inbox"], pathsAreRoots: true),
             EditableRoots = editableRoots,
-            MutationRoots = editableRoots,
+            MutationRoots = [repository],
             ProhibitedPaths = Union("prohibitedPaths", StringComparer.Ordinal),
             AllowedNetworkHosts = [.. hosts.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
             NetworkHostRestriction = hostFilter is null ? default : [.. hostFilter.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
             RequireShellApproval = requireShellApproval,
             ParallelToolsEnabled = parallelEnabled,
             MutationCeiling = mutationCeiling,
+            HasExplicitMutationCeiling = hasExplicitMutationCeiling,
+            MutationDefault = mutationDefault,
+            LegacyRepositoryMutationRequest = legacyRequest,
+            HasLegacyUserRestrictions = legacyUser,
+            NeedsPermissionMigrationDecision = !localPermissions.HasMigrationDecision && (legacyUser || legacyProjectRestrictions),
             LargeDiffThreshold = threshold,
             ResourceLimits = limits.ToImmutable(),
             ScriptAssemblies = [.. assemblies.Order(StringComparer.OrdinalIgnoreCase)],
@@ -400,7 +472,9 @@ internal static class SecurityPolicyConfigurationLoader
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "outbound-consent.json"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db"),
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-wal"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-shm")],
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-shm"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-journal")],
+            ControlDirectories = [new RepositoryPermissionStore(paths.UserConfiguration).DirectoryPath],
             Sources = [.. sources],
             Diagnostics = [.. diagnostics.Distinct(StringComparer.Ordinal)],
         };
@@ -413,7 +487,8 @@ internal static class SecurityPolicyConfigurationLoader
             string.Join('|', policy.WriteFolders), string.Join('|', policy.EditableRoots), string.Join('|', policy.MutationRoots),
             string.Join('|', policy.ProhibitedPaths), string.Join('|', policy.AllowedNetworkHosts),
             policy.NetworkHostRestriction.IsDefault ? "unrestricted" : string.Join('|', policy.NetworkHostRestriction),
-            requireShellApproval.ToString(), parallelEnabled.ToString(), mutationCeiling.ToString(), threshold.ToString(CultureInfo.InvariantCulture),
+            requireShellApproval.ToString(), parallelEnabled.ToString(), mutationCeiling.ToString(), mutationDefault.ToString(), hasExplicitMutationCeiling.ToString(), legacyUser.ToString(), threshold.ToString(CultureInfo.InvariantCulture),
+            localPermissions.Revision.ToString(CultureInfo.InvariantCulture), localPermissions.LegacyUserSettingsAreDefaults.ToString(),
             string.Join('|', policy.ScriptAssemblies),
             string.Join('|', policy.ResourceLimits.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value.ToString(CultureInfo.InvariantCulture))),
         });
@@ -427,11 +502,7 @@ internal static class SecurityPolicyConfigurationLoader
         // and live revocation stores. Their immutable definitions are rebuilt only at restart.
         var trusted = BuildTrusted(paths);
         using var lifetime = trusted as IDisposable;
-        var keys = TrustedOnlyKeys.Concat(new[]
-        {
-            "tools:jira:providers", "tools:pr:providers",
-            "tools:runtime:defaults", "tools:runtime:byTool", "tools:parallel:enabled", "tools:parallel:maximumConcurrency",
-        }).ToArray();
+        var keys = ConfigurationPermissionCatalog.Properties.Where(property => property.StartupBound).Select(property => property.Path).ToArray();
         var entries = trusted.AsEnumerable()
             .Where(pair => keys.Any(key => pair.Key.Equals(key, StringComparison.OrdinalIgnoreCase)
                 || pair.Key.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase)))
@@ -452,73 +523,61 @@ internal static class SecurityPolicyConfigurationLoader
 
     private static Source ReadFile(string path, string kind, List<PolicyInputSource> provenance, long maximumBytes = int.MaxValue)
     {
-        var values = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-        byte[] content;
-        try
+        var values = ConfigurationDocument.Read(path, maximumBytes).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        var allowedSource = kind == "Machine" ? PermissionConfigurationSources.Machine : PermissionConfigurationSources.User;
+        if (kind is "Machine" or "User" && values.Keys.Any(key => !ConfigurationPermissionCatalog.Allows(key, allowedSource)))
         {
-            using var stream = File.OpenRead(path);
-            if (stream.Length > maximumBytes || stream.Length > int.MaxValue)
-            {
-                throw new InvalidDataException($"PolicyValueInvalid: '{path}' exceeds its configuration byte limit.");
-            }
-
-            content = new byte[(int)stream.Length];
-            stream.ReadExactly(content);
-            if (stream.ReadByte() != -1)
-            {
-                throw new InvalidDataException($"PolicyValueInvalid: '{path}' changed during policy loading; retry after the settings write completes.");
-            }
-        }
-        catch (FileNotFoundException)
-        {
-            return new Source(kind, path, values);
-        }
-        catch (DirectoryNotFoundException)
-        {
-            return new Source(kind, path, values);
+            throw new InvalidDataException($"Configuration '{path}' contains a permission property forbidden in {kind} scope.");
         }
 
-        var json = content.AsMemory();
-        if (json.Span.StartsWith(new byte[] { 0xef, 0xbb, 0xbf }))
-        {
-            json = json[3..];
-        }
-
-        using var document = JsonDocument.Parse(json, RepositorySettingsCoordinator.DocumentOptions);
-        void Visit(JsonElement node, string prefix)
-        {
-            if (node.ValueKind != JsonValueKind.Object)
-            {
-                throw new InvalidDataException($"PolicyValueInvalid: '{path}' must contain configuration objects.");
-            }
-
-            foreach (var property in node.EnumerateObject())
-            {
-                var key = prefix.Length == 0 ? property.Name : prefix + ":" + property.Name;
-                if (!values.TryAdd(key, property.Value))
-                {
-                    throw new InvalidDataException($"PolicyValueInvalid: duplicate key '{key}' in '{path}'.");
-                }
-
-                if (property.Value.ValueKind == JsonValueKind.Object)
-                {
-                    Visit(property.Value, key);
-                }
-                else if (ListKeys.Concat(ScalarKeys).Concat(ResourceDefaults.Keys).Any(known => known.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase)))
-                {
-                    throw new InvalidDataException($"PolicyValueInvalid: '{key}' in '{path}' must be an object containing policy settings.");
-                }
-            }
-        }
-
-        Visit(document.RootElement.Clone(), string.Empty);
-        foreach (var key in ListKeys.Concat(ScalarKeys).Concat(ResourceDefaults.Keys).Concat(TrustedOnlyKeys).Distinct(StringComparer.OrdinalIgnoreCase).Where(values.ContainsKey))
+        foreach (var key in ConfigurationPermissionCatalog.Paths.Where(values.ContainsKey))
         {
             provenance.Add(new PolicyInputSource(key, kind, path));
         }
 
         return new Source(kind, path, values);
     }
+
+    private static Source[] ReadTrustedSources(ConfigurationPaths paths, List<PolicyInputSource> provenance)
+    {
+        var store = new RepositoryPermissionStore(paths.UserConfiguration);
+        var local = store.Read(paths.RepositoryRoot);
+        foreach (var key in ConfigurationPermissionCatalog.Paths.Where(local.Settings.ContainsKey))
+        {
+            provenance.Add(new(key, "UserRepository", store.GetPath(paths.RepositoryRoot)));
+        }
+
+        return
+        [
+            ReadFile(paths.MachineConfiguration, "Machine", provenance),
+            ReadFile(paths.UserConfiguration, "User", provenance),
+            new Source("UserRepository", store.GetPath(paths.RepositoryRoot), local.Settings.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase)),
+            ReadEnvironment(provenance),
+        ];
+    }
+
+    private static bool IsModernConfiguration(Source source)
+    {
+        if (!source.Values.TryGetValue("configurationOwnershipVersion", out var version))
+        {
+            return false;
+        }
+
+        if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var value) || value != 1)
+        {
+            throw Invalid(source, "configurationOwnershipVersion");
+        }
+
+        return true;
+    }
+
+    private static bool IsRestriction(Source source) => source.Kind is "Enforced" or "LegacyUserRestriction" or "LegacyRepositoryRestriction";
+
+    private static MutationApprovalPolicy RestrictMutation(MutationApprovalPolicy left, MutationApprovalPolicy right)
+        => left is MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.TrustPlan or MutationApprovalPolicy.TrustSession
+            || right is MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.TrustPlan or MutationApprovalPolicy.TrustSession
+            ? MutationApprovalPolicy.ReviewAll : left == MutationApprovalPolicy.ReviewRisky || right == MutationApprovalPolicy.ReviewRisky
+                ? MutationApprovalPolicy.ReviewRisky : MutationApprovalPolicy.AlwaysTrustRepo;
 
     private static Source ReadEnvironment(List<PolicyInputSource> provenance)
     {
@@ -554,6 +613,11 @@ internal static class SecurityPolicyConfigurationLoader
             else
             {
                 continue;
+            }
+
+            if (!ConfigurationPermissionCatalog.Allows(key, PermissionConfigurationSources.Launch))
+            {
+                throw new InvalidDataException($"Permission '{key}' cannot be defined by the launch environment.");
             }
 
             provenance.Add(new PolicyInputSource(key, "Environment", "THREADSMITH_ launch environment"));
@@ -614,7 +678,7 @@ internal static class SecurityPolicyConfigurationLoader
                 throw Invalid(source, key);
             }
 
-            var isRestriction = source.Kind is "Repository" or "RepositorySession";
+            var isRestriction = IsRestriction(source);
             if (!isRestriction)
             {
                 foreach (var previous in limits.Keys.Where(name => name.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase)).ToArray())

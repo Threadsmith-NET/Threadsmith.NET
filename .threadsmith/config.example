@@ -1,11 +1,14 @@
-// Threadsmith.NET repository configuration example (strategy §21.2)
+// Threadsmith.NET configuration reference: ordinary preferences and trusted defaults.
+// Do not copy this entire example into repository configuration.
+// Permission properties are valid only in their declared host-owned scopes.
+// See docs/operations/repository-permissions.md for the local permissions.json
+// envelope, versioned defaults, enforced machine restrictions and migration.
+// First-run scaffolding removes permission examples automatically.
+// Only JSON is supported by the built-in common configuration loader.
 //
-// Copy to .threadsmith/config.json (or .toml/.yaml per your configuration provider)
-// and edit. Every key listed here is a documented Threadsmith.NET repository-
-// configuration option. Repo config is DATA, not code — it is never executed.
-//
-// Ordinary configuration precedence (§21.1, lowest to highest):
-//   compiled defaults  <  machine  <  user  <  repo  <  session  <  CLI  <  env
+// Ordinary preference precedence: compiled < machine < user < repo < session < CLI < env.
+// Permission defaults: machine < user < user-owned repository < supported launch inputs;
+// explicit machine enforced restrictions and preserved legacy restrictions still win.
 // Higher layers override lower layers. Static secret values never enter this
 // configuration graph. Typed `secrets:` references resolve separately at final
 // privileged boundaries through environment -> eligible repository -> user providers.
@@ -27,6 +30,9 @@
 // provider supports.
 
 {
+  // Host-owned default semantics. Do not add this marker to old personal settings
+  // without reviewing their restrictions; /policy offers a local migration decision.
+  "configurationOwnershipVersion": 1,
   // Application-owned limits; omitted values retain defaults. See resource-limits.example.
   "limits": {
     "workspace": { "maximumBaselineContentBytes": 268435456, "maximumMutations": 100 },
@@ -221,8 +227,8 @@
   },
 
   // ── Editable roots (§21.2) ─────────────────────────────────────────────
-  // Source-edit authority: omitted defaults to the repository; [] denies edits.
-  // Trusted arrays replace inherited roots; repository arrays only narrow them.
+  // Legacy discovery preference, not a source-mutation permission boundary.
+  // Source mutations stay within the repository and explicit child assignment.
   // Protected control files, secret stores and prohibitedPaths remain blocked.
   "editableRoots": [ "src/" ],
 
@@ -347,9 +353,10 @@
   // Per-tool operational limits below override the compiled defaults; see the
   // ── Execution limits section for the execution subsystem limits.
   // Optional session-scoped transient storage. Null disables it (the default).
-  // Relative paths resolve from the repository root. Repository/session config
-  // must stay inside the repository; trusted user/machine, CLI, or environment
-  // configuration may name an existing absolute external directory. Threadsmith
+  // Setting a valid path grants scratchpad use without a second permission.
+  // Repository/session paths must stay inside the repository; other ordinary
+  // sources may select an existing external directory. Relative paths resolve
+  // from the repository root. Threadsmith
   // clears every child at startup, shutdown, and /new, but keeps the folder.
   // In-repo folders should be covered by a repository .gitignore rule.
   // ./.threadsmith/.scratchpad is
@@ -396,7 +403,7 @@
       "defaultEntries": 200,
       "maxEntries": 2000
     },
-    // Direct output: trusted machine < user < environment arrays replace whole arrays.
+    // Direct output: machine < user < user-owned repository < launch defaults; enforced restrictions narrow.
     // Repository/session arrays only narrow these grants; they cannot add destinations.
     // Relative folders are under the active repo. Absolute folders may be anywhere
     // on the machine (for example "C:/Reports"). No globs; [] disables all writes.
@@ -663,11 +670,10 @@
 
 
   // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────
-  // /policy saves reviewAll (default), reviewRisky, and alwaysTrustRepo
-  // only in this repo config. TrustSession applies only to the running session
-  // and leaves the saved policy unchanged.
-  // An explicitly configured trusted mutation:approvalPolicy may restrict these
-  // choices. An absent trusted setting preserves the selected repository policy.
+  // Repository modes request behavior, not consent. /policy remembers the user's
+  // choice in host-owned local trust state for this repository. Default: Review All.
+  // TrustSession is selected interactively and expires on repository change or process exit.
+  // Versioned user settings are defaults. Explicit machine enforced settings restrict local choices.
   "mutation": {
     "approvalPolicy": "reviewAll",
     // ReviewRisky pauses when the exact preview exceeds this many changed lines.

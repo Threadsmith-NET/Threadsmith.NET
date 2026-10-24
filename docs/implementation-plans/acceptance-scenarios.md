@@ -21,7 +21,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 1. Ask for a repository change that requires reading two supporting files outside the write set.
 2. Confirm one ordinary conversation inspects the evidence and invokes `edit_source` with related ordered operations.
-   With absent root configuration, include targets beneath `container/source/`, `tests/`, `docs/` and `.inbox/`. Explicit trusted `editableRoots: ["src/"]` limits edits to `src/`, and `[]` denies edits; protected configuration, policy and secret stores remain blocked.
+   With legacy `editableRoots: ["src/"]` in disposable trusted configuration, include targets beneath `container/source/`, `tests/`, `docs/` and `.inbox/`. Mutation roots remain repository-contained, with child assignment narrowing; protected configuration, policy and secret stores remain blocked.
 3. With no trusted mutation restriction, confirm saved `AlwaysTrustRepo` or locally selected `TrustSession` applies eligible edits without an approval prompt. With `ReviewAll` or an explicit trusted review restriction, inspect the exact diff and approve the intended operations in the Apply/Discard selection modal. Escape declines without writing.
 4. Confirm committed bytes, applied receipt and versioned advisory diagnostics reach the conversation.
 5. Complete related repairs and confirm the final cumulative diff reflects actual disk effects. Verify edit-only completion launches no build/test work; explicitly invoke checks and report their actual results when validation is requested.
@@ -599,7 +599,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario AL — Exact Authorization and Retired Configuration
 
-1. Configure supported mutation approval policies and verify exact-diff review/auto-authorization follows the documented policy.
+1. With repository `alwaysTrustRepo` and no trusted ceiling or local consent, verify effective Review All. Select `/policy AlwaysTrustRepo` once; verify local consent survives restart and ordinary commits without another prompt, copied repository settings grant nothing, and `/policy ReviewAll` revokes automation. Explicit trusted restrictions still win, and `TrustSession` expires.
 2. Load legacy planning approval, tranche and plan-only limit settings beside unrelated valid configuration.
 3. Confirm writable known obsolete properties are migrated idempotently, read-only values are ignored with a bounded warning, and unrelated bytes/settings are preserved.
 4. Confirm legacy planning trust grants no source-write authority and removed commands/tools cannot reactivate the old workflow.

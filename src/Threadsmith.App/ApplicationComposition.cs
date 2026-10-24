@@ -285,7 +285,8 @@ internal static class ApplicationComposition
             tools.ProcessManager,
             tools.ToolStateManager,
             tools.ToolRegistry,
-            host.LoggerFactory.CreateLogger<ScratchpadLifecycle>());
+            host.LoggerFactory.CreateLogger<ScratchpadLifecycle>(),
+            host.PolicyBinding);
         startupDisplayWarnings = startupDisplayWarnings.Concat(
             await scratchpad.StartAsync()).ToArray();
 
@@ -352,7 +353,8 @@ internal static class ApplicationComposition
         var approvalPolicy = new MutationApprovalPolicyService(
             host.Configuration,
             host.Paths.RepositoryConfiguration,
-            host.PolicyBinding);
+            host.PolicyBinding,
+            persistence.RepositoryFacts);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
         var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
         var userQuestions = new UserQuestionCoordinator(host.Events, runSteering, host.PolicyBinding, host.Sanitizer, host.ExecutionLimits);

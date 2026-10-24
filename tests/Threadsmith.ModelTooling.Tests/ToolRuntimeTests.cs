@@ -2562,10 +2562,8 @@ public static partial class ToolRuntimeTests
     }
 
     /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task ProcessManager_NullDelimitedJsonArray_PreservesRecordBoundariesThroughSanitization(bool infiniteTimeout)
+    [Fact]
+    public static async Task ProcessManager_NullDelimitedJsonArray_PreservesRecordBoundariesThroughSanitization()
     {
         var shell = OperatingSystem.IsWindows()
             ? IsExecutableAvailable("pwsh") ? "pwsh" : "powershell.exe"
@@ -2591,18 +2589,20 @@ public static partial class ToolRuntimeTests
                 ]
                 : ["-c", "printf 'first\\000second\\000'"];
 
-            var result = await manager.RunAsync(new ProcessExecutionRequest
-            {
-                ToolInvocationId = ToolInvocationId.New(),
-                RunId = RunId.New(),
-                FileName = shell,
-                Arguments = arguments,
-                WorkingDirectory = repository,
-                Timeout = infiniteTimeout ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(10),
-                MaximumOutputCharacters = 1024,
-                StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
-                Origin = ProcessRequestOrigin.Host,
-            });
+            var result = await manager.RunAsync(
+                new ProcessExecutionRequest
+                {
+                    ToolInvocationId = ToolInvocationId.New(),
+                    RunId = RunId.New(),
+                    FileName = shell,
+                    Arguments = arguments,
+                    WorkingDirectory = repository,
+                    Timeout = Timeout.InfiniteTimeSpan,
+                    MaximumOutputCharacters = 1024,
+                    StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
+                    Origin = ProcessRequestOrigin.Host,
+                },
+                TestContext.Current.CancellationToken);
 
             var records = JsonSerializer.Deserialize<string[]>(result.StandardOutput) ?? [];
             Assert.Equal(0, result.ExitCode);

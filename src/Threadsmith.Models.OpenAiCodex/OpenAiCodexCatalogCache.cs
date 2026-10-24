@@ -14,7 +14,7 @@ public sealed class OpenAiCodexCatalogCache
     public OpenAiCodexCatalogCache(string? path = null)
     {
         _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".threadsmith",
             "openai-codex-models.json");
     }

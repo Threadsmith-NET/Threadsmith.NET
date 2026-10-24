@@ -2,7 +2,7 @@
 
 All registered tools use the same Tools checkbox and repository preference store (`tools.enabled`, `tools.disabled`, `tools.defaultEnabledOverrides`). The checkbox records your choice; readiness, source connection, child restrictions, consent and security policy still apply. A checked tool excluded by `tools.allow` or `tools.deny` shows that reason. Changing a checkbox never edits trusted policy.
 
-If every tool disappears after upgrading, check for an explicit `tools.allow: []`. Older releases treated this as unrestricted; source-aware security treats it as deny-all. Startup reports `PolicyMigrationRequired`. If the empty filter is obsolete, deliberately remove only `tools.allow` from the identified configuration to restore inheritance, then reopen the repository or restart. Keep it if deny-all is intended. No automatic policy rewrite occurs.
+An explicit trusted `tools.allow: []` denies all model tools. Omit the key to inherit the normal filter. Repository permission keys are ignored silently; tool toggles do not change trusted grants.
 
 Intelligence/archeology checkboxes control their individual tool preferences. Their shared service lifecycle remains under `/intelligence enable` and `/intelligence disable`; tool toggles do not start or stop that service. Model-driven history reads also honor common Git-tool preferences, so enable the required history readers explicitly. MCP capability consent/version approval and extension connection/loading remain separate prerequisites.
 
@@ -94,7 +94,7 @@ Configure grants in designated machine or user `config.json`; repository/session
 }
 ```
 
-The default list is `[".inbox"]`. Trusted arrays replace lower trusted arrays; repository and session arrays intersect that ceiling. `[]` permits no writes; null is invalid. Relative folders resolve under the active repository. External folders require deliberate trusted absolute grants. Reopen the repository or restart after policy edits. See [Configuration authority](security-policy.md) for migration and reload boundaries.
+The default list is `[".inbox"]`. Trusted arrays replace lower trusted arrays; explicit machine enforcement restricts the result. Repository and session permission arrays are ignored. `[]` permits no writes; null is invalid. Relative folders resolve under the active repository. External folders require deliberate trusted absolute grants. Reopen the repository or restart after policy edits. See [Configuration authority](security-policy.md) for ownership and reload boundaries.
 
 Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. Git metadata, `.threadsmith` settings, `AGENTS.md`, prohibited paths, and symlink/junction traversal are rejected even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
 

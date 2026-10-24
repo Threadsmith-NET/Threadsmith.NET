@@ -18,48 +18,12 @@ public sealed partial class SecurityPolicyConfigurationTests
     [Fact]
     public void Ownership_ManagedScratchpadDoesNotGrantUnrelatedPermissions()
     {
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"scratchpad":{"path":"./.threadsmith/.scratchpad"}}""");
-        Assert.False(Load().NeedsPermissionMigrationDecision);
-        Assert.Equal("./.threadsmith/.scratchpad", ConfigurationBootstrap.Build([], _paths)["scratchpad:path"]);
+        File.WriteAllText(_paths.RepositoryConfiguration, """{"scratchpad":{"enabled":true}}""");
+        Assert.Equal("True", ConfigurationBootstrap.Build([], _paths)["scratchpad:enabled"]);
         Assert.False(new RepositoryPermissionStore(_paths.UserConfiguration).Read(_paths.RepositoryRoot).Exists);
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"deny":["run_process"]}}""");
         Assert.False(Load().AllowsTool("run_process"));
         Assert.Equal(MutationApprovalPolicy.ReviewAll, Load().MutationDefault);
-    }
-
-    /// <summary>A resumed migration verifies captured identity before publishing any grants.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Ownership_PendingMigrationChecksIdentityOnResume(bool mismatchedIdentity)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var connection = $"Data Source={Path.Combine(_root, "pending.db")};Pooling=False";
-        var facts = new SqliteRepositoryFactsStore(connection, _paths.UserConfiguration);
-        await facts.InitializeAsync(ct);
-        await using (var db = new SqliteConnection(connection))
-        {
-            await db.OpenAsync(ct);
-            await using var command = db.CreateCommand();
-            command.CommandText = "INSERT INTO repository_permission_migration(repository_key, completed, snapshot_json) VALUES($key, 0, $snapshot);";
-            command.Parameters.AddWithValue("$key", OperatingSystem.IsWindows() ? _paths.RepositoryRoot.ToUpperInvariant() : _paths.RepositoryRoot);
-            command.Parameters.AddWithValue("$snapshot", JsonSerializer.Serialize(new
-            {
-                RepositoryIdentity = RepositoryPermissionStore.GetRepositoryIdentity(mismatchedIdentity ? Path.Combine(_root, "other") : _paths.RepositoryRoot),
-                Grants = new Dictionary<string, string> { ["mutation:approvalPolicy"] = "AlwaysTrustRepo" },
-            }));
-            await command.ExecuteNonQueryAsync(ct);
-        }
-
-        if (mismatchedIdentity)
-        {
-            await Assert.ThrowsAsync<InvalidDataException>(() => facts.GetMutationPolicyAsync(_paths.RepositoryRoot, ct));
-            Assert.False(new RepositoryPermissionStore(_paths.UserConfiguration).Read(_paths.RepositoryRoot).Exists);
-        }
-        else
-        {
-            Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, await facts.GetMutationPolicyAsync(_paths.RepositoryRoot, ct));
-        }
     }
 
     /// <summary>Fact refreshes cannot restore a user-revoked grant.</summary>
@@ -84,12 +48,80 @@ public sealed partial class SecurityPolicyConfigurationTests
         Assert.Null(await store.GetTrustAsync(_paths.RepositoryRoot, ct));
     }
 
-    /// <summary>Local empty arrays override versioned defaults but not enforced denials.</summary>
+    /// <summary>Legacy SQLite trust cannot reject discovery facts or override current file permissions.</summary>
+    [Theory]
+    [InlineData(999, "2020-01-01T00:00:00Z", false)]
+    [InlineData(999, "2020-01-01T00:00:00Z", true)]
+    [InlineData(3, "invalid-timestamp", false)]
+    [InlineData(3, "invalid-timestamp", true)]
+    [InlineData(3, "2020-01-01T00:00:00Z", false)]
+    [InlineData(3, "2020-01-01T00:00:00Z", true)]
+    public async Task Ownership_DiscoveryIgnoresLegacySqliteTrust(int legacyLevel, string legacyTimestamp, bool hasPermission)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var connectionString = $"Data Source={Path.Combine(_root, "discovery.db")};Pooling=False";
+        var store = new SqliteRepositoryFactsStore(connectionString, _paths.UserConfiguration);
+        await store.InitializeAsync(ct);
+        var staleTrust = new RepositoryTrustState(_paths.RepositoryRoot, RepositoryTrustLevel.TrustedMutation, DateTimeOffset.UnixEpoch);
+        var environment = new MsBuildEnvironmentSnapshot("dotnet", "10.0.401", null, null, null, "Debug", "AnyCPU", RepositoryRestoreState.Succeeded, new Dictionary<string, string>());
+        var expected = new RepositoryFacts(WorkspaceId.New(), _paths.RepositoryRoot, staleTrust, "project.sln", ["net10.0"], environment);
+        await store.UpsertAsync(expected, ct);
+        var currentTrust = staleTrust with { Level = RepositoryTrustLevel.TrustedRead, GrantedAt = DateTimeOffset.UnixEpoch.AddDays(1) };
+        if (hasPermission)
+        {
+            await store.SetTrustAsync(currentTrust, ct);
+        }
+
+        await using (var db = new SqliteConnection(connectionString))
+        {
+            await db.OpenAsync(ct);
+            await using var command = db.CreateCommand();
+            command.CommandText = "UPDATE repository_facts SET trust_level = $level, trust_granted_at = $timestamp;";
+            command.Parameters.AddWithValue("$level", legacyLevel);
+            command.Parameters.AddWithValue("$timestamp", legacyTimestamp);
+            await command.ExecuteNonQueryAsync(ct);
+        }
+
+        var actual = await store.GetAsync(_paths.RepositoryRoot, ct);
+
+        Assert.NotNull(actual);
+        Assert.Equal(expected.WorkspaceId, actual.WorkspaceId);
+        Assert.Equal(expected.RepositoryPath, actual.RepositoryPath);
+        Assert.Equal(expected.SolutionPath, actual.SolutionPath);
+        Assert.Equal(expected.TargetFrameworks, actual.TargetFrameworks);
+        Assert.Equivalent(environment, actual.Environment);
+        Assert.Equal(hasPermission ? RepositoryTrustLevel.TrustedRead : RepositoryTrustLevel.UntrustedInspection, actual.Trust.Level);
+        var permissions = new RepositoryPermissionStore(_paths.UserConfiguration);
+        Assert.Equal(hasPermission, permissions.Read(_paths.RepositoryRoot).Exists);
+        if (hasPermission)
+        {
+            Assert.Equal(currentTrust, actual.Trust);
+        }
+
+        // Refresh discovery without restoring the stale trust carried by the input DTO.
+        await store.UpsertAsync(expected with { SolutionPath = null, Environment = null }, ct);
+        var refreshed = await store.GetAsync(_paths.RepositoryRoot, ct);
+        Assert.NotNull(refreshed);
+        Assert.Null(refreshed.SolutionPath);
+        Assert.Null(refreshed.Environment);
+        Assert.Equal(actual.Trust.Level, refreshed.Trust.Level);
+
+        if (hasPermission)
+        {
+            var permissionPath = permissions.GetPath(_paths.RepositoryRoot);
+            var document = JsonNode.Parse(await File.ReadAllTextAsync(permissionPath, ct))!;
+            document["settings"]!["repository"]!["trust"] = "invalid";
+            await File.WriteAllTextAsync(permissionPath, document.ToJsonString(), ct);
+            await Assert.ThrowsAsync<InvalidDataException>(() => store.GetAsync(_paths.RepositoryRoot, ct));
+        }
+    }
+
+    /// <summary>Local empty arrays override defaults but not enforced denials.</summary>
     [Fact]
     public async Task Ownership_DefaultsAndEnforcementRemainDistinct()
     {
         var ct = TestContext.Current.CancellationToken;
-        await File.WriteAllTextAsync(_paths.UserConfiguration, """{"configurationOwnershipVersion":1,"tools":{"deny":["run_process"]}}""", ct);
+        await File.WriteAllTextAsync(_paths.UserConfiguration, """{"tools":{"deny":["run_process"]}}""", ct);
         var store = new RepositoryPermissionStore(_paths.UserConfiguration);
         await store.SetAsync(_paths.RepositoryRoot, "tools:deny", new JsonArray(), ct);
         Assert.Empty(Load().DeniedTools);
@@ -137,10 +169,10 @@ public sealed partial class SecurityPolicyConfigurationTests
 
     /// <summary>The real loader distinguishes overridable defaults from enforced restrictions.</summary>
     [Fact]
-    public async Task Ownership_LocalFileOverridesVersionedDefaultsButNotMachineEnforcement()
+    public async Task Ownership_LocalFileOverridesDefaultsButNotMachineEnforcement()
     {
         var ct = TestContext.Current.CancellationToken;
-        const string user = """{"configurationOwnershipVersion":1,"mutation":{"approvalPolicy":"reviewAll"}}""";
+        const string user = """{"mutation":{"approvalPolicy":"reviewAll"}}""";
         await File.WriteAllTextAsync(_paths.UserConfiguration, user, ct);
         var store = new RepositoryPermissionStore(_paths.UserConfiguration);
         await store.SetAsync(_paths.RepositoryRoot, "mutation:approvalPolicy", JsonValue.Create("AlwaysTrustRepo"), ct);
@@ -155,26 +187,23 @@ public sealed partial class SecurityPolicyConfigurationTests
         await service.BindRepositoryAsync(_paths.RepositoryRoot, ct);
         Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
 
-        await File.WriteAllTextAsync(_paths.MachineConfiguration, """{"configurationOwnershipVersion":1,"enforced":{"mutation":{"approvalPolicy":"reviewAll"}}}""", ct);
+        await File.WriteAllTextAsync(_paths.MachineConfiguration, """{"enforced":{"mutation":{"approvalPolicy":"reviewAll"}}}""", ct);
         binding.Publish(SecurityPolicyConfigurationLoader.Load(_paths, policy.BindingId, policy.Generation + 1));
         Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
         Assert.Equal(user, await File.ReadAllTextAsync(_paths.UserConfiguration, ct));
     }
 
-    /// <summary>Legacy user intent is preserved until an explicit local decision.</summary>
+    /// <summary>User settings are defaults without a separate ownership decision.</summary>
     [Fact]
-    public async Task Ownership_LegacyUserRestrictionRequiresExplicitDecision()
+    public async Task Ownership_UnversionedUserDefaultsCanBeOverridden()
     {
         var ct = TestContext.Current.CancellationToken;
         const string user = """{"mutation":{"approvalPolicy":"reviewAll"}}""";
         await File.WriteAllTextAsync(_paths.UserConfiguration, user, ct);
         var store = new RepositoryPermissionStore(_paths.UserConfiguration);
         await store.SetAsync(_paths.RepositoryRoot, "mutation:approvalPolicy", JsonValue.Create("AlwaysTrustRepo"), ct);
-        Assert.True(Load().HasExplicitMutationCeiling);
-        Assert.True(Load().NeedsPermissionMigrationDecision);
-        await store.SetLegacyDefaultsDecisionAsync(_paths.RepositoryRoot, true, ct);
         Assert.False(Load().HasExplicitMutationCeiling);
-        Assert.False(Load().NeedsPermissionMigrationDecision);
+        Assert.False(Load().HasExplicitMutationCeiling);
         Assert.Equal(user, await File.ReadAllTextAsync(_paths.UserConfiguration, ct));
     }
 
@@ -205,9 +234,9 @@ public sealed partial class SecurityPolicyConfigurationTests
         Assert.Throws<InvalidDataException>(() => store.Read(_paths.RepositoryRoot));
     }
 
-    /// <summary>A durable migration marker prevents resurrection after local revocation.</summary>
+    /// <summary>Old SQLite choices are not imported and reads never create permission files.</summary>
     [Fact]
-    public async Task Ownership_LegacySqliteGrantMigratesOnceAndCannotResurrect()
+    public async Task Ownership_OldSqliteGrantIsIgnoredWithoutCreatingPermissionFile()
     {
         var ct = TestContext.Current.CancellationToken;
         var connectionString = $"Data Source={Path.Combine(_root, "legacy.db")};Pooling=False";
@@ -223,10 +252,9 @@ public sealed partial class SecurityPolicyConfigurationTests
             await command.ExecuteNonQueryAsync(ct);
         }
 
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, await facts.GetMutationPolicyAsync(_paths.RepositoryRoot, ct));
+        Assert.Null(await facts.GetMutationPolicyAsync(_paths.RepositoryRoot, ct));
         var permissions = new RepositoryPermissionStore(_paths.UserConfiguration);
-        Assert.True(permissions.Read(_paths.RepositoryRoot).Exists);
-        File.Delete(permissions.GetPath(_paths.RepositoryRoot));
+        Assert.False(permissions.Read(_paths.RepositoryRoot).Exists);
         Assert.Null(await facts.GetMutationPolicyAsync(_paths.RepositoryRoot, ct));
     }
 

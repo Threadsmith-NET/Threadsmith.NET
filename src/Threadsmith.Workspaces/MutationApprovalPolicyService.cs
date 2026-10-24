@@ -104,7 +104,6 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     private MutationApprovalPolicy _currentPolicy;
     private ConsentState _consent = new(null, 0);
     private int _largeDiffThreshold;
-    private bool _migrationDecisionMade;
 
     /// <summary>Initializes a new instance of the <see cref="MutationApprovalPolicyService"/> class.</summary>
     /// <param name="configuration">Effective layered configuration.</param>
@@ -144,36 +143,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
 
     /// <inheritdoc />
     public MutationApprovalPolicy RequestedPolicy => Volatile.Read(ref _consent).Choice
-        ?? _policyBinding?.Current.LegacyRepositoryMutationRequest ?? _policyBinding?.Current.MutationDefault ?? _currentPolicy;
-
-    /// <inheritdoc />
-    public bool NeedsLocalConsent => Volatile.Read(ref _consent).Choice is null && RequestedPolicy != MutationApprovalPolicy.ReviewAll
-        && CurrentPolicy == MutationApprovalPolicy.ReviewAll
-        && _policyBinding?.Current.HasExplicitMutationCeiling != true;
-
-    /// <inheritdoc />
-    public bool NeedsPermissionMigrationDecision => !_migrationDecisionMade && _policyBinding?.Current.NeedsPermissionMigrationDecision == true;
-
-    /// <inheritdoc />
-    public async Task SetPermissionMigrationDecisionAsync(bool useDefaults, CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken);
-        try
-        {
-            var root = _repositoryConfigurationPath is null ? null : Path.GetDirectoryName(Path.GetDirectoryName(_repositoryConfigurationPath));
-            if (root is null || _facts is null)
-            {
-                throw new InvalidOperationException("The host has no active repository permission store.");
-            }
-
-            await _facts.SetLegacyPermissionDecisionAsync(root, useDefaults, cancellationToken);
-            _migrationDecisionMade = true;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+        ?? _policyBinding?.Current.MutationDefault ?? _currentPolicy;
 
     /// <inheritdoc />
     public EffectiveSessionPolicy? SecurityPolicy => _policyBinding is null ? null
@@ -212,12 +182,13 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
 
             var keepSessionChoice = string.Equals(configurationPath, _repositoryConfigurationPath, PathComparison)
                 && Volatile.Read(ref _consent).Choice == MutationApprovalPolicy.TrustSession;
-            _migrationDecisionMade = false;
 
             // Fail closed before reading another repository or an unavailable/corrupt store.
             SetLocalChoice(MutationApprovalPolicy.ReviewAll);
             _currentPolicy = MutationApprovalPolicy.ReviewAll;
-            _currentPolicy = _policyBinding?.Current.MutationDefault ?? MutationApprovalPolicy.ReviewAll;
+
+            // Repository binding keeps authority invalid until every scoped service is ready.
+            // CurrentPolicy applies the published authority after that transaction completes.
             var choice = _facts is null ? null : await _facts.GetMutationPolicyAsync(normalizedRoot, cancellationToken);
             if (choice is not (null or MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo))
             {

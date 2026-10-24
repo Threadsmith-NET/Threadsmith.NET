@@ -217,6 +217,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-memory-retrieval-cleanup.md](maintenance-memory-retrieval-cleanup.md) | Baseline retrieval cleanup |
 | Maintenance | [maintenance-memory-intelligence-routing.md](maintenance-memory-intelligence-routing.md) | Independent intelligence routing and situational concept eligibility |
 | Maintenance | [Threadsmith-security-policy-implementation-plan.md](Threadsmith-security-policy-implementation-plan.md) | Source-aware configuration authority and session policy |
+| Maintenance | [maintenance-fixed-repository-scratchpad.md](maintenance-fixed-repository-scratchpad.md) | Fixed repository scratchpad with boolean enablement |
 
 ## Update discipline
 

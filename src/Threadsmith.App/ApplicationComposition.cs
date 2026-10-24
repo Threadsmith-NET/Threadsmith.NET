@@ -629,7 +629,7 @@ internal static class ApplicationComposition
             tools.ToolStateManager.RegisterFeature(archeologyTool.Definition.Id, archeologyTool);
 
             // Skill discovery remains metadata-only until an explicit verify or invoke boundary.
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var userProfile = Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.UserProfile);
             var userSkillRoot = Path.Combine(userProfile, ".threadsmith", "skills");
             var skillSources = new List<SkillCatalogSource>
             {
@@ -645,7 +645,7 @@ internal static class ApplicationComposition
                 new(
                     SkillScope.Machine,
                     Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                        Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                         "Threadsmith",
                         "skills"),
                     "machine:Threadsmith/skills"),
@@ -1186,6 +1186,7 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly RepositoryBoundMemoryStore? _memoryStore;
     private readonly RepositoryMemoryConfiguration? _memoryOptions;
     private readonly Func<string, IConfigurationRoot>? _memoryConfigurationLoader;
+    private readonly Func<string, ConfigurationPaths> _configurationPaths;
     private readonly RepositoryIntelligenceMonitor? _intelligence;
     private readonly RepositoryIntelligenceOperations? _intelligenceOperations;
     private readonly string? _startupAuthorityFingerprint;
@@ -1213,7 +1214,8 @@ internal sealed class RepositoryScopedBindingCoordinator
         Func<string, IConfigurationRoot>? memoryConfigurationLoader = null,
         RepositoryIntelligenceMonitor? intelligence = null,
         RepositoryIntelligenceOperations? intelligenceOperations = null,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        Func<string, ConfigurationPaths>? configurationPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
         ArgumentNullException.ThrowIfNull(toolState);
@@ -1229,6 +1231,7 @@ internal sealed class RepositoryScopedBindingCoordinator
         _memoryStore = memoryStore;
         _memoryOptions = memoryOptions;
         _memoryConfigurationLoader = memoryConfigurationLoader;
+        _configurationPaths = configurationPaths ?? ConfigurationBootstrap.ResolvePaths;
         _intelligence = intelligence;
         _intelligenceOperations = intelligenceOperations;
         _policyBinding = policyBinding;
@@ -1288,10 +1291,10 @@ internal sealed class RepositoryScopedBindingCoordinator
             var scratchpadRebindAttempted = false;
             try
             {
-                var nextPaths = ConfigurationBootstrap.ResolvePaths(nextRepositoryRoot);
+                var nextPaths = _configurationPaths(nextRepositoryRoot);
                 _policyBinding?.Invalidate();
                 var nextConfiguration = (_memoryConfigurationLoader
-                    ?? (root => ConfigurationBootstrap.Build([], ConfigurationBootstrap.ResolvePaths(root))))(nextRepositoryRoot);
+                    ?? (root => ConfigurationBootstrap.Build([], _configurationPaths(root))))(nextRepositoryRoot);
                 using var nextConfigurationLifetime = nextConfiguration as IDisposable;
                 var candidatePolicy = _policyBinding is null ? null : SecurityPolicyConfigurationLoader.Load(nextPaths, _policyBindingId, ++_policyGeneration);
                 if (candidatePolicy is not null && candidatePolicy.StartupAuthorityFingerprint != _startupAuthorityFingerprint)

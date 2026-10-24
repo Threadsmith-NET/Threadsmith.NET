@@ -389,7 +389,7 @@ public sealed class McpOAuthSecretStore : IMcpOAuthTokenStore
         ArgumentNullException.ThrowIfNull(secretStore);
         _secretStore = secretStore;
         _cachePath = cachePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".threadsmith",
             "mcp-oauth-tokens.json");
         _logger = logger ?? NullLogger<McpOAuthSecretStore>.Instance;

@@ -19,14 +19,14 @@ internal static class ConfigurationBootstrap
     {
         var repositoryRoot = Path.GetFullPath(requestedRepository ?? Environment.CurrentDirectory);
         var userDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".threadsmith");
         var repositoryConfigurationDirectory = Path.Combine(repositoryRoot, ".threadsmith");
         return new ConfigurationPaths
         {
             RepositoryRoot = repositoryRoot,
             MachineConfiguration = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 "Threadsmith",
                 "config.json"),
             UserConfiguration = Path.Combine(userDirectory, "config.json"),
@@ -115,20 +115,6 @@ internal static class ConfigurationBootstrap
         return SecurityPolicyConfigurationLoader.BuildTrusted(paths);
     }
 
-    /// <summary>Resolves a scalar and its ownership from the actual configured provider order, including explicit null.</summary>
-    internal static (string? Value, bool RepositoryOwned) ResolveValue(IConfigurationRoot configuration, string key)
-    {
-        foreach (var provider in configuration.Providers.Reverse())
-        {
-            if (provider.TryGet(key, out var value))
-            {
-                return (value, provider is RepositoryConfigurationSource.RepositoryConfigurationProvider);
-            }
-        }
-
-        return (null, false);
-    }
-
     /// <summary>Creates the user configuration from the shipped documented example on first launch.</summary>
     internal static async Task ScaffoldUserConfigurationIfMissingAsync(string userConfigurationPath, CancellationToken cancellationToken = default)
     {
@@ -152,7 +138,6 @@ internal static class ConfigurationBootstrap
                     var root = JsonNode.Parse(content, new JsonNodeOptions { PropertyNameCaseInsensitive = true }, RepositorySettingsCoordinator.DocumentOptions) as JsonObject
                         ?? throw new InvalidDataException("The shipped configuration example must contain an object.");
                     ConfigurationDocument.RemovePermissionProperties(root);
-                    root["configurationOwnershipVersion"] = 1;
                     return new RepositorySettingsUpdate(JsonSerializer.SerializeToUtf8Bytes(root, new JsonSerializerOptions { WriteIndented = true })) { Overwrite = false, IsHostInitialization = true };
                 },
                 cancellationToken: cancellationToken);
@@ -209,7 +194,7 @@ internal static class ConfigurationBootstrap
             ["model:http:maxConnectionsPerServer"] = "16",
             ["mutation:approvalPolicy"] = "reviewAll",
             ["mutation:largeDiffThreshold"] = "500",
-            ["scratchpad:path"] = null,
+            ["scratchpad:enabled"] = "false",
             ["tui:showOperationDurations"] = "true",
             ["tools:listFiles:defaultEntries"] = "200",
             ["tools:listFiles:maxEntries"] = "2000",

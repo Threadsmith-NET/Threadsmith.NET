@@ -32,21 +32,6 @@ internal static class SecurityPolicyConfigurationLoader
             }
         }
 
-        // Preserve legacy adapter restrictions before explicit launch overrides, as before migration.
-        var user = trustedSources.Single(source => source.Kind == "User");
-        var local = new RepositoryPermissionStore(paths.UserConfiguration).Read(paths.RepositoryRoot);
-        if (!IsModernConfiguration(user) && !local.LegacyUserSettingsAreDefaults)
-        {
-            foreach (var property in ConfigurationPermissionCatalog.Properties.Where(property => property.AdapterOwned))
-            {
-                if (user.Values.TryGetValue(property.Path, out var value))
-                {
-                    RemoveSubtree(property.Path);
-                    Flatten(value, property.Path);
-                }
-            }
-        }
-
         var environment = new ConfigurationBuilder().Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_")).Build();
         var environmentValues = environment.AsEnumerable().Where(pair => pair.Value is not null).ToArray();
         foreach (var key in environmentValues.Select(pair => pair.Key))
@@ -157,38 +142,9 @@ internal static class SecurityPolicyConfigurationLoader
             ReadFile(paths.RepositoryConfiguration, "Repository", sources, maximumConfigurationBytes),
             ReadFile(paths.SessionConfiguration, "RepositorySession", sources, maximumConfigurationBytes),
         };
-        foreach (var source in projectSources)
-        {
-            foreach (var key in ConfigurationPermissionCatalog.Paths.Where(source.Values.ContainsKey))
-            {
-                diagnostics.Add($"PolicySourceNotAllowed: {key}, {source.Kind} '{source.Location}', generation {generation}: cannot grant authority. Legacy restrictions may remain until the local ownership decision; use /policy and reopen, or configure the user-owned repository permission file.");
-            }
-        }
-
         var localPermissions = new RepositoryPermissionStore(paths.UserConfiguration).Read(paths.RepositoryRoot);
-        var user = trusted.Single(source => source.Kind == "User");
-        var legacyUser = !IsModernConfiguration(user) && !localPermissions.LegacyUserSettingsAreDefaults
-            && user.Values.Keys.Any(ConfigurationPermissionCatalog.IsPermission);
         var machine = trusted.Single(source => source.Kind == "Machine");
         var restrictions = new List<Source>();
-        if (legacyUser)
-        {
-            var launch = trusted.Single(source => source.Kind == "Environment");
-            restrictions.Add(user with
-            {
-                Kind = "LegacyUserRestriction",
-                Values = user.Values.Where(pair => !launch.Values.ContainsKey(pair.Key))
-                    .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
-            });
-        }
-
-        // A bounded compatibility adapter preserves old restrictions, never grants, until reviewed locally.
-        var legacyProjectRestrictions = !localPermissions.LegacyUserSettingsAreDefaults
-            && projectSources.Any(source => source.Values.Keys.Any(ConfigurationPermissionCatalog.IsPermission));
-        if (legacyProjectRestrictions)
-        {
-            restrictions.AddRange(projectSources.Select(source => source with { Kind = "LegacyRepositoryRestriction" }));
-        }
 
         if (machine.Values.TryGetValue("enforced", out var enforcement))
         {
@@ -201,14 +157,6 @@ internal static class SecurityPolicyConfigurationLoader
             }
 
             restrictions.Add(new Source("Enforced", paths.MachineConfiguration, values.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase)));
-        }
-
-        MutationApprovalPolicy? legacyRequest = null;
-        if (projectSources[0].Values.TryGetValue("mutation:approvalPolicy", out var legacyRequestedValue)
-            && legacyRequestedValue.ValueKind == JsonValueKind.String && Enum.TryParse<MutationApprovalPolicy>(legacyRequestedValue.GetString(), true, out var requestedPolicy)
-            && requestedPolicy is MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo)
-        {
-            legacyRequest = requestedPolicy;
         }
 
         var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(paths.RepositoryRoot));
@@ -269,7 +217,6 @@ internal static class SecurityPolicyConfigurationLoader
             {
                 if (ReadList(source, key) is { } configured)
                 {
-                    WarnEmptyLegacyToolFilter(source, key, configured);
                     value = configured;
                 }
             }
@@ -285,8 +232,6 @@ internal static class SecurityPolicyConfigurationLoader
                 {
                     continue;
                 }
-
-                WarnEmptyLegacyToolFilter(source, key, filter);
 
                 if (pathsAreRoots)
                 {
@@ -308,14 +253,6 @@ internal static class SecurityPolicyConfigurationLoader
             return value is null ? default : [.. value.Distinct(comparer).Order(comparer)];
         }
 
-        void WarnEmptyLegacyToolFilter(Source source, string key, string[] values)
-        {
-            if (key == "tools:allow" && values.Length == 0)
-            {
-                diagnostics.Add($"PolicyMigrationRequired: {key}, {source.Kind} '{source.Location}', generation {generation}: explicit [] denies ALL model tools, even checked Tools preferences. Older versions treated this as unrestricted. If this is an obsolete empty filter, deliberately remove only tools.allow to restore inheritance; otherwise keep the denial. No configuration was changed.");
-            }
-        }
-
         ImmutableArray<string> Union(string key, StringComparer comparer)
         {
             string[] defaults = [];
@@ -324,10 +261,7 @@ internal static class SecurityPolicyConfigurationLoader
                 defaults = ReadList(source, key) ?? defaults;
             }
 
-            // Versioned defaults replace, including explicit empty arrays. Preserve the
-            // historical additive machine restrictions until the machine owner versions them.
-            var legacyMachine = IsModernConfiguration(machine) ? [] : ReadList(machine, key) ?? [];
-            return [.. defaults.Concat(legacyMachine).Concat(restrictions.SelectMany(source => ReadList(source, key) ?? []))
+            return [.. defaults.Concat(restrictions.SelectMany(source => ReadList(source, key) ?? []))
                 .Distinct(comparer).Order(comparer)];
         }
 
@@ -369,7 +303,7 @@ internal static class SecurityPolicyConfigurationLoader
                     mutationDefault = MutationApprovalPolicy.ReviewAll;
                 }
 
-                if (source.Kind == "Environment" || (source.Kind == "Machine" && !IsModernConfiguration(source)))
+                if (source.Kind == "Environment")
                 {
                     mutationCeiling = RestrictMutation(mutationCeiling, mutationDefault);
                     hasExplicitMutationCeiling = true;
@@ -388,11 +322,8 @@ internal static class SecurityPolicyConfigurationLoader
                     throw Invalid(source, "mutation:approvalPolicy");
                 }
 
-                if (source.Kind != "LegacyRepositoryRestriction" || restriction != MutationApprovalPolicy.AlwaysTrustRepo)
-                {
-                    mutationCeiling = RestrictMutation(mutationCeiling, restriction);
-                    hasExplicitMutationCeiling = true;
-                }
+                mutationCeiling = RestrictMutation(mutationCeiling, restriction);
+                hasExplicitMutationCeiling = true;
             }
 
             if (source.Values.TryGetValue("tools:parallel:enabled", out var parallel))
@@ -457,9 +388,6 @@ internal static class SecurityPolicyConfigurationLoader
             MutationCeiling = mutationCeiling,
             HasExplicitMutationCeiling = hasExplicitMutationCeiling,
             MutationDefault = mutationDefault,
-            LegacyRepositoryMutationRequest = legacyRequest,
-            HasLegacyUserRestrictions = legacyUser,
-            NeedsPermissionMigrationDecision = !localPermissions.HasMigrationDecision && (legacyUser || legacyProjectRestrictions),
             LargeDiffThreshold = threshold,
             ResourceLimits = limits.ToImmutable(),
             ScriptAssemblies = [.. assemblies.Order(StringComparer.OrdinalIgnoreCase)],
@@ -469,11 +397,11 @@ internal static class SecurityPolicyConfigurationLoader
                 paths.SecretsConfiguration, paths.UserSecretsConfiguration,
                 Path.Combine(Path.GetDirectoryName(paths.UserConfiguration) ?? repository, "mcp-tool-approvals.json"),
                 Path.Combine(Path.GetDirectoryName(paths.UserConfiguration) ?? repository, "skill-policy.json"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "outbound-consent.json"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-wal"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-shm"),
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-journal")],
+                Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "outbound-consent.json"),
+                Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db"),
+                Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-wal"),
+                Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-shm"),
+                Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-journal")],
             ControlDirectories = [new RepositoryPermissionStore(paths.UserConfiguration).DirectoryPath],
             Sources = [.. sources],
             Diagnostics = [.. diagnostics.Distinct(StringComparer.Ordinal)],
@@ -487,8 +415,8 @@ internal static class SecurityPolicyConfigurationLoader
             string.Join('|', policy.WriteFolders), string.Join('|', policy.EditableRoots), string.Join('|', policy.MutationRoots),
             string.Join('|', policy.ProhibitedPaths), string.Join('|', policy.AllowedNetworkHosts),
             policy.NetworkHostRestriction.IsDefault ? "unrestricted" : string.Join('|', policy.NetworkHostRestriction),
-            requireShellApproval.ToString(), parallelEnabled.ToString(), mutationCeiling.ToString(), mutationDefault.ToString(), hasExplicitMutationCeiling.ToString(), legacyUser.ToString(), threshold.ToString(CultureInfo.InvariantCulture),
-            localPermissions.Revision.ToString(CultureInfo.InvariantCulture), localPermissions.LegacyUserSettingsAreDefaults.ToString(),
+            requireShellApproval.ToString(), parallelEnabled.ToString(), mutationCeiling.ToString(), mutationDefault.ToString(), hasExplicitMutationCeiling.ToString(), threshold.ToString(CultureInfo.InvariantCulture),
+            localPermissions.Revision.ToString(CultureInfo.InvariantCulture),
             string.Join('|', policy.ScriptAssemblies),
             string.Join('|', policy.ResourceLimits.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value.ToString(CultureInfo.InvariantCulture))),
         });
@@ -556,22 +484,7 @@ internal static class SecurityPolicyConfigurationLoader
         ];
     }
 
-    private static bool IsModernConfiguration(Source source)
-    {
-        if (!source.Values.TryGetValue("configurationOwnershipVersion", out var version))
-        {
-            return false;
-        }
-
-        if (version.ValueKind != JsonValueKind.Number || !version.TryGetInt32(out var value) || value != 1)
-        {
-            throw Invalid(source, "configurationOwnershipVersion");
-        }
-
-        return true;
-    }
-
-    private static bool IsRestriction(Source source) => source.Kind is "Enforced" or "LegacyUserRestriction" or "LegacyRepositoryRestriction";
+    private static bool IsRestriction(Source source) => source.Kind == "Enforced";
 
     private static MutationApprovalPolicy RestrictMutation(MutationApprovalPolicy left, MutationApprovalPolicy right)
         => left is MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.TrustPlan or MutationApprovalPolicy.TrustSession

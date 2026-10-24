@@ -1,5 +1,6 @@
 namespace Threadsmith.App;
 
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
@@ -9,7 +10,7 @@ using Threadsmith.Tools;
 internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider, IAsyncDisposable
 {
     /// <summary>Canonical configuration key.</summary>
-    internal const string ConfigurationKey = "scratchpad:path";
+    internal const string ConfigurationKey = "scratchpad:enabled";
     private readonly string[] _arguments;
     private readonly ILogger<ScratchpadLifecycle> _logger;
     private readonly IProcessManager _processes;
@@ -193,11 +194,17 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         bool failOnCleanup = false)
     {
         var warnings = new List<string>();
-        (string? Value, bool RepositoryOwned) configured;
+        bool enabled;
         try
         {
             _fallbackPolicy = _policyBinding is null ? SecurityPolicyConfigurationLoader.Load(_paths, Guid.Empty, 0) : null;
-            configured = ResolveConfiguredValue();
+            _configuration = ConfigurationBootstrap.Build(_arguments, _paths);
+            var value = _configuration[ConfigurationKey];
+            enabled = false;
+            if (value is not null && !bool.TryParse(value, out enabled))
+            {
+                throw new ArgumentException("scratchpad:enabled must be true or false.");
+            }
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
@@ -206,32 +213,22 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
             return warnings;
         }
 
-        if (configured.Value is null)
+        if (!enabled)
         {
             _lifecycleRoot = null;
             _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured);
             return warnings;
         }
 
-        string root;
+        var root = Path.GetFullPath(Path.Combine(_paths.RepositoryRoot, ".threadsmith", ".scratchpad"));
         try
         {
-            ValidateRawValue(configured.Value);
-            root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(configured.Value, _paths.RepositoryRoot));
             ValidateRoot(root);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or UnauthorizedAccessException or IOException)
         {
             _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.InvalidConfiguration);
             warnings.Add($"Scratchpad is disabled: {exception.Message}");
-            return warnings;
-        }
-
-        var insideRepository = IsStrictChild(root, _paths.RepositoryRoot);
-        if (configured.RepositoryOwned && !insideRepository)
-        {
-            _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.InvalidConfiguration);
-            warnings.Add("Scratchpad is disabled: repository and session configuration must select a directory inside the repository.");
             return warnings;
         }
 
@@ -244,13 +241,6 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
 
         if (!Directory.Exists(root))
         {
-            if (!insideRepository)
-            {
-                _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.ExternalDirectoryMissing);
-                warnings.Add($"Scratchpad is disabled for this session because the external directory does not exist: {root}");
-                return warnings;
-            }
-
             try
             {
                 ValidateExistingAncestors(root, _paths.RepositoryRoot);
@@ -266,13 +256,15 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
 
         try
         {
-            ValidateNoReparsePoints(root, insideRepository ? _paths.RepositoryRoot : Path.GetPathRoot(root)!);
-            _lifecycleRoot = root;
-            if (insideRepository && !await IsIgnoredByRepositoryGitIgnoreAsync(root, cancellationToken))
+            ValidateNoReparsePoints(root, _paths.RepositoryRoot);
+            if (!await IsIgnoredByRepositoryGitIgnoreAsync(root, cancellationToken))
             {
-                warnings.Add($"Scratchpad directory is not covered by a repository .gitignore rule: {Path.GetRelativePath(_paths.RepositoryRoot, root).Replace('\\', '/')}");
+                _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.InvalidConfiguration);
+                warnings.Add("Scratchpad is disabled: add .threadsmith/.scratchpad/ to a repository .gitignore file.");
+                return warnings;
             }
 
+            _lifecycleRoot = root;
             if (alreadyClearedRoot is null || !PathEquals(root, alreadyClearedRoot))
             {
                 await ClearAsync(root, cancellationToken);
@@ -302,10 +294,8 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
             IsActive = true,
             DisabledReason = ScratchpadDisabledReason.None,
             RootPath = root,
-            ModelPath = insideRepository
-                ? Path.GetRelativePath(_paths.RepositoryRoot, root).Replace('\\', '/')
-                : root,
-            IsInsideRepository = insideRepository,
+            ModelPath = ".threadsmith/.scratchpad",
+            IsInsideRepository = true,
             RepositoryIdentity = RepositoryIdentity.Create(_paths.RepositoryRoot),
             Generation = Interlocked.Increment(ref _generation),
         };
@@ -352,19 +342,27 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
                     ToolInvocationId = ToolInvocationId.New(),
                     RunId = RunId.New(),
                     FileName = "git",
-                    Arguments = ["check-ignore", "-v", "--no-index", "--", relative],
+                    Arguments = ["check-ignore", "-v", "-z", "--no-index", "--stdin"],
+                    StandardInput = relative + '\0',
+                    StandardOutputFormat = ProcessStandardOutputFormat.NullDelimitedJsonArray,
                     WorkingDirectory = _paths.RepositoryRoot,
                     Timeout = TimeSpan.FromSeconds(5),
                     MaximumOutputCharacters = 4096,
                     Origin = ProcessRequestOrigin.Host,
                 },
                 cancellationToken);
-            if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.StandardOutput))
+            if (result.ExitCode != 0 || result.StandardOutputTruncated || string.IsNullOrWhiteSpace(result.StandardOutput))
             {
                 return false;
             }
 
-            var source = result.StandardOutput.Split(':', 2)[0].Trim();
+            var fields = JsonSerializer.Deserialize<string[]>(result.StandardOutput);
+            if (fields is not { Length: 4 } || fields[2].StartsWith('!'))
+            {
+                return false;
+            }
+
+            var source = fields[0];
             var sourcePath = Path.GetFullPath(source, _paths.RepositoryRoot);
             return Path.GetFileName(sourcePath).Equals(".gitignore", StringComparison.OrdinalIgnoreCase)
                 && IsSameOrChild(sourcePath, _paths.RepositoryRoot)
@@ -380,7 +378,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     private async Task ClearAsync(string root, CancellationToken cancellationToken)
     {
         ValidateRoot(root);
-        ValidateNoReparsePoints(root, IsStrictChild(root, _paths.RepositoryRoot) ? _paths.RepositoryRoot : Path.GetPathRoot(root)!);
+        ValidateNoReparsePoints(root, _paths.RepositoryRoot);
         foreach (var entry in Directory.EnumerateFileSystemEntries(root))
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -432,7 +430,12 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     private void ValidateRoot(string root)
     {
         var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_paths.RepositoryRoot));
-        var filesystemRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetPathRoot(root)!));
+        if (!PathEquals(root, Path.Combine(repository, ".threadsmith", ".scratchpad")))
+        {
+            throw new UnauthorizedAccessException("Scratchpad cleanup is restricted to .threadsmith/.scratchpad in the active repository.");
+        }
+
+        var filesystemRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetPathRoot(root) ?? throw new IOException("Scratchpad has no filesystem root.")));
         if (PathEquals(root, filesystemRoot)
             || IsSameOrChild(repository, root))
         {
@@ -448,8 +451,8 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         foreach (var protectedPath in new[]
         {
             AppContext.BaseDirectory,
-            Path.GetDirectoryName(_paths.MachineConfiguration)!,
-            Path.GetDirectoryName(_paths.UserConfiguration)!,
+            Path.GetDirectoryName(_paths.MachineConfiguration) ?? throw new IOException("Machine configuration has no parent directory."),
+            Path.GetDirectoryName(_paths.UserConfiguration) ?? throw new IOException("User configuration has no parent directory."),
             Path.Combine(repository, ".git"),
             Path.Combine(repository, ".threadsmith"),
         })
@@ -479,7 +482,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     {
         for (var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
              IsSameOrChild(current, Path.TrimEndingDirectorySeparator(Path.GetFullPath(anchor)));
-             current = Path.GetDirectoryName(current)!)
+             current = Path.GetDirectoryName(current) ?? throw new IOException("Scratchpad traversal escaped its anchor."))
         {
             if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
             {
@@ -498,7 +501,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         var normalizedAnchor = Path.TrimEndingDirectorySeparator(Path.GetFullPath(anchor));
         for (var current = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
              IsSameOrChild(current, normalizedAnchor);
-             current = Path.GetDirectoryName(current)!)
+             current = Path.GetDirectoryName(current) ?? throw new IOException("Scratchpad traversal escaped its anchor."))
         {
             if ((File.Exists(current) || Directory.Exists(current))
                 && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
@@ -511,28 +514,6 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
                 break;
             }
         }
-    }
-
-    private static void ValidateRawValue(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Any(char.IsControl)
-            || value.IndexOfAny(['*', '?']) >= 0
-            || value.Contains('%') || value.Contains("${", StringComparison.Ordinal)
-            || value.StartsWith('~'))
-        {
-            throw new ArgumentException("scratchpad:path must be a nonblank literal directory path without wildcards, variables, or home shorthand.");
-        }
-
-        if (Path.IsPathRooted(value) && !Path.IsPathFullyQualified(value))
-        {
-            throw new ArgumentException("scratchpad:path must be repository-relative or fully qualified.");
-        }
-    }
-
-    private (string? Value, bool RepositoryOwned) ResolveConfiguredValue()
-    {
-        _configuration = ConfigurationBootstrap.Build(_arguments, _paths);
-        return ConfigurationBootstrap.ResolveValue(_configuration, ConfigurationKey);
     }
 
     private static bool IsStrictChild(string candidate, string root)

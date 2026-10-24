@@ -195,9 +195,6 @@ public static class RepositoryLifecycleTests
             firstRepository.RootPath,
             RepositoryTrustLevel.UntrustedInspection));
         Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.CurrentPolicy);
-        // This lower-level fixture has no host policy loader; project files cannot
-        // independently establish an automation request or grant.
-        Assert.False(policy.NeedsLocalConsent);
 
         _ = await lifecycle.HandleAsync(new OpenRepositoryCommand(
             sessionId,

@@ -47,7 +47,7 @@ public sealed class OutboundConsentStore
     public OutboundConsentStore(string? path = null)
     {
         _path = path ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Threadsmith",
             "outbound-consent.json");
     }

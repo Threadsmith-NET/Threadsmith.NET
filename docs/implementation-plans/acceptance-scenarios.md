@@ -880,3 +880,13 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 5. Race submission with run completion; text that cannot be admitted returns to the ordinary composer.
 
 **Verifies:** parent-only steering, independent child progress, one-submission delivery, and preservation of undelivered drafts.
+
+## Scenario SCRATCHPAD - Fixed repository transient storage
+
+1. With `scratchpad.enabled` absent or false, observe no scratchpad capability or cleanup. Enable it and verify the sole location is `.threadsmith/.scratchpad` under the active repository.
+2. Without a positive repository `.gitignore` rule, observe disabled access and a warning before startup cleanup. Add the rule and confirm activation; global excludes and negations do not satisfy the requirement.
+3. Set legacy `scratchpad.path` to another directory and verify silent ignoring and preservation of that directory's contents, regardless of enablement.
+4. Restart, start a new session, switch repositories, and shut down with disposable contents; confirm cleanup remains confined to each repository's fixed folder. Links at the folder or its ancestors never redirect creation or cleanup, and links inside it never delete their targets.
+5. Confirm the existing built-in search/read/write capability and writer availability checks apply, with no broader folder or mutation permissions.
+
+**Verifies:** Fixed cleanup ownership, explicit opt-in, repository ignore coverage, lifecycle isolation, and bounded tool authority. See MTP-274.

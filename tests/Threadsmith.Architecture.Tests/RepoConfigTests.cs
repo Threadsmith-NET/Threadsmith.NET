@@ -409,10 +409,9 @@ public static class RepoConfigTests
             Assert.Null(scaffolded["planning:incrementalPlans:targetFiles"]);
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Null(scaffolded["tools:runProcess:maxTimeoutSeconds"]);
-            Assert.Equal(1, scaffolded.GetValue("configurationOwnershipVersion", 0));
             Assert.DoesNotContain(
                 ConfigurationDocument.Read(userConfig).Keys,
-                key => key != "configurationOwnershipVersion" && ConfigurationPermissionCatalog.IsPermission(key));
+                ConfigurationPermissionCatalog.IsPermission);
 
             // The scaffolded file is strict JSON: System.Text.Json rejects comments, so a
             // successful parse proves no // or /* */ comments survived the copy. (Glob values

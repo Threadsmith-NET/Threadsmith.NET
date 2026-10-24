@@ -18,7 +18,6 @@ public sealed class ApprovalPolicyPersistenceTests
         await using var fixture = await Fixture.CreateAsync();
         var service = await fixture.OpenAsync();
         Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
-        Assert.True(service.NeedsLocalConsent);
         await service.SetPolicyAsync(selected, TestContext.Current.CancellationToken);
         Assert.Equal(selected, (await fixture.OpenAsync()).CurrentPolicy);
         Assert.Equal(Fixture.Request, await File.ReadAllTextAsync(fixture.ConfigPath, TestContext.Current.CancellationToken));
@@ -113,7 +112,6 @@ public sealed class ApprovalPolicyPersistenceTests
             binding.Publish(new EffectiveSessionPolicy
             {
                 BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Repository, Fingerprint = "fixture",
-                LegacyRepositoryMutationRequest = MutationApprovalPolicy.AlwaysTrustRepo,
             });
             var service = new MutationApprovalPolicyService(facts: Store, policyBinding: binding);
             await service.BindRepositoryAsync(Repository, TestContext.Current.CancellationToken);

@@ -33,7 +33,7 @@ public sealed class OpenAiCodexOAuthManager : IDisposable
         ArgumentNullException.ThrowIfNull(httpClient);
         _httpClient = httpClient;
         _cachePath = cachePath ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".threadsmith",
             "credentials",
             "openai-codex.json");

@@ -72,16 +72,6 @@ public interface IMutationApprovalPolicy
     /// <summary>Gets the requested mode before local consent and trusted restrictions are applied.</summary>
     MutationApprovalPolicy RequestedPolicy => CurrentPolicy;
 
-    /// <summary>Whether a repository automation request still needs a local user choice.</summary>
-    bool NeedsLocalConsent => false;
-
-    /// <summary>Whether legacy ownership interpretation still needs one explicit local decision.</summary>
-    bool NeedsPermissionMigrationDecision => false;
-
-    /// <summary>Records a migration choice; a subsequent repository reload applies it through the common loader.</summary>
-    Task SetPermissionMigrationDecisionAsync(bool useDefaults, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Permission migration is unavailable in this host.");
-
     /// <summary>Gets the changed-line threshold used to classify a large diff.</summary>
     int LargeDiffThreshold { get; }
 

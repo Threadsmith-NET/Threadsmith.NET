@@ -6,7 +6,7 @@ public enum ScratchpadDisabledReason
     /// <summary>The capability is active.</summary>
     None,
 
-    /// <summary>No path was configured, or a higher layer explicitly disabled it.</summary>
+    /// <summary>Scratchpad was not enabled, or a higher layer explicitly disabled it.</summary>
     NotConfigured,
 
     /// <summary>The configured value or target was unsafe or invalid.</summary>

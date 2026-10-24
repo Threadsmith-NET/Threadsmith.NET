@@ -396,7 +396,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory);
             var eventStore = persistence.EventStore;
             var factsDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "Threadsmith");
             Directory.CreateDirectory(factsDirectory);
             var repositoryFacts = new SqliteRepositoryFactsStore(

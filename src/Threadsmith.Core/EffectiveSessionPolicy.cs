@@ -83,15 +83,6 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets the user-owned default mutation choice before a repository-specific choice.</summary>
     public MutationApprovalPolicy MutationDefault { get; init; } = MutationApprovalPolicy.ReviewAll;
 
-    /// <summary>Gets an untrusted legacy repository request used only for a migration prompt.</summary>
-    public MutationApprovalPolicy? LegacyRepositoryMutationRequest { get; init; }
-
-    /// <summary>Gets whether an unresolved legacy user configuration still constrains local choices.</summary>
-    public bool HasLegacyUserRestrictions { get; init; }
-
-    /// <summary>Gets whether compatibility interpretation still needs a one-time local user decision.</summary>
-    public bool NeedsPermissionMigrationDecision { get; init; }
-
     /// <summary>Identifies the local mutation consent captured by a staged diff.</summary>
     public long MutationConsentRevision { get; init; }
 

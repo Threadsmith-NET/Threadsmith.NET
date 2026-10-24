@@ -56,32 +56,31 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     {
         Assert.True(Load().AllowedTools.IsDefault);
         File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"allow":[]}}""");
-        Assert.False(Load().AllowedTools.IsDefault);
-        Assert.Empty(Load().AllowedTools);
+        Assert.True(Load().AllowedTools.IsDefault);
+        Assert.Empty(Load().Diagnostics);
         File.WriteAllText(_paths.RepositoryConfiguration, "{}");
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":[]}}""");
         var denied = Load();
         Assert.Empty(denied.AllowedTools);
-        Assert.Contains(denied.Diagnostics, diagnostic => diagnostic.Contains("PolicyMigrationRequired", StringComparison.Ordinal)
-            && diagnostic.Contains("ALL model tools", StringComparison.Ordinal)
-            && diagnostic.Contains(_paths.UserConfiguration, StringComparison.Ordinal));
+        Assert.False(denied.AllowedTools.IsDefault);
+        Assert.Empty(denied.Diagnostics);
         File.WriteAllText(_paths.UserConfiguration, "{}");
         Assert.True(Load().AllowedTools.IsDefault);
     }
 
-    /// <summary>Rejects indexed blending and widening across source boundaries.</summary>
+    /// <summary>Trusted arrays replace defaults without accepting repository authority.</summary>
     [Fact]
-    public void TrustedArraysReplaceAndRepositoryArraysIntersectIndependently()
+    public void TrustedArraysReplaceAndRepositoryArraysAreIgnored()
     {
         File.WriteAllText(_paths.MachineConfiguration, """{"tools":{"allowedExecutables":["git","dotnet","powershell"]}}""");
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allowedExecutables":["git","dotnet"]}}""");
         File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"allowedExecutables":["git","curl"]}}""");
         File.WriteAllText(_paths.SessionConfiguration, """{"tools":{"allowedExecutables":["dotnet"]}}""");
-        Assert.Empty(Load().AllowedExecutables);
+        Assert.Equal(["dotnet", "git"], Load().AllowedExecutables);
         File.WriteAllText(_paths.SessionConfiguration, "{}");
         var policy = Load();
-        Assert.Equal(["git"], policy.AllowedExecutables);
-        Assert.Contains(policy.Diagnostics, diagnostic => diagnostic.Contains("PolicyWideningRejected", StringComparison.Ordinal));
+        Assert.Equal(["dotnet", "git"], policy.AllowedExecutables);
+        Assert.Empty(policy.Diagnostics);
         Assert.Contains(policy.Sources, source => source.Kind == "User" && source.Key == "tools:allowedExecutables");
     }
 
@@ -94,7 +93,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     [InlineData("{}")]
     public void InvalidRestrictionsFailClosed(string value)
     {
-        File.WriteAllText(_paths.RepositoryConfiguration, "{\"tools\":{\"allow\":" + value + "}}");
+        File.WriteAllText(_paths.UserConfiguration, "{\"tools\":{\"allow\":" + value + "}}");
         Assert.Throws<InvalidDataException>(Load);
     }
 
@@ -123,7 +122,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     public void PathsIntersectByContainmentWithoutSiblingPrefixGrants()
     {
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"writeFile":{"allowedFolders":["exports"]}}}""");
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"writeFile":{"allowedFolders":["exports/reports","exports-sibling"]}}}""");
+        File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"tools":{"writeFile":{"allowedFolders":["exports/reports","exports-sibling"]}}}}""");
         Assert.Equal([Path.Combine(_paths.RepositoryRoot, "exports", "reports")], Load().WriteFolders);
     }
 
@@ -134,7 +133,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         var baseline = Load();
         Assert.Empty(baseline.AllowedNetworkHosts);
         Assert.True(baseline.NetworkHostRestriction.IsDefault);
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"allowedNetworkHosts":[]}}""");
+        File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"tools":{"allowedNetworkHosts":[]}}}""");
         var restricted = Load();
         Assert.False(restricted.NetworkHostRestriction.IsDefault);
         Assert.Empty(restricted.NetworkHostRestriction);
@@ -160,7 +159,8 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         binding.Publish(Load());
         Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));
         File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewRisky","largeDiffThreshold":200}}""");
-        Assert.Equal(MutationApprovalPolicy.ReviewRisky, Load().MutationCeiling);
+        Assert.Equal(MutationApprovalPolicy.ReviewRisky, Load().MutationDefault);
+        Assert.False(Load().HasExplicitMutationCeiling);
         Assert.Equal(200, Load().LargeDiffThreshold);
         binding.Publish(Load());
         Assert.False(approval.RequiresApproval(new MutationRiskAssessment()));
@@ -172,7 +172,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     public void SnapshotRemainsStableAndGenerationFenceRejectsOldRequests()
     {
         var captured = Load();
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"allow":[]}}""");
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":[]}}""");
         var next = Load() with { BindingId = captured.BindingId, Generation = captured.Generation + 1 };
         Assert.True(captured.AllowedTools.IsDefault);
         Assert.NotEqual(captured.Fingerprint, next.Fingerprint);
@@ -204,7 +204,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         }
     }
 
-    /// <summary>Boolean launch inputs preserve trusted precedence and repository narrowing.</summary>
+    /// <summary>Boolean launch inputs preserve trusted precedence despite repository values.</summary>
     [Theory]
     [InlineData("true", false, true)]
     [InlineData("false", true, false)]
@@ -241,8 +241,8 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
                         _paths.SessionConfiguration,
                         """{"tools":{"parallel":{"enabled":true},"runProcess":{"requireApproval":false}}}""");
                     var narrowed = Load();
-                    Assert.False(narrowed.ParallelToolsEnabled);
-                    Assert.True(narrowed.RequireShellApproval);
+                    Assert.Equal(policy.ParallelToolsEnabled, narrowed.ParallelToolsEnabled);
+                    Assert.Equal(policy.RequireShellApproval, narrowed.RequireShellApproval);
                 }
             }
             finally
@@ -259,7 +259,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     public void CrossSourceCaseDistinctProhibitionsReachReadAndWriteValidators()
     {
         File.WriteAllText(_paths.UserConfiguration, """{"prohibitedPaths":["Private/**"],"tools":{"writeFile":{"allowedFolders":["."]}}}""");
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"prohibitedPaths":["private/**"]}""");
+        File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"prohibitedPaths":["private/**"]}}""");
         var policy = Load();
         Assert.Equal(["Private/**", "private/**"], policy.ProhibitedPaths);
         AssertPathAdmission(policy, "Private/file.txt", false);
@@ -291,14 +291,13 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         }
     }
 
-    /// <summary>Repository authority definitions remain inert and visibly diagnosed.</summary>
+    /// <summary>Repository authority definitions remain inert without migration diagnostics.</summary>
     [Fact]
-    public void RepositoryTrustedOnlySettingsAreIgnoredWithSourceDiagnostics()
+    public void RepositoryTrustedOnlySettingsAreIgnoredSilently()
     {
         File.WriteAllText(_paths.RepositoryConfiguration, """{"repository":{"configurationBytes":1},"mcp":{"profiles":[]}}""");
         var policy = Load();
-        Assert.Contains(policy.Diagnostics, diagnostic => diagnostic.Contains("PolicySourceNotAllowed: repository:configurationBytes", StringComparison.Ordinal));
-        Assert.Contains(policy.Diagnostics, diagnostic => diagnostic.Contains("PolicySourceNotAllowed: mcp:profiles", StringComparison.Ordinal));
+        Assert.Empty(policy.Diagnostics);
     }
 
     /// <inheritdoc />
@@ -319,10 +318,11 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Null(trusted["tools:allowedExecutables:1"]);
     }
 
-    /// <summary>Repository and session restrictions both bound live scheduler and fetch options.</summary>
+    /// <summary>Explicit machine restrictions bound live scheduler and fetch options.</summary>
     [Fact]
-    public void SessionResourceRestrictionsCannotBeOverwrittenByRepositoryOrTrustedValues()
+    public void EnforcedResourceRestrictionsCannotBeOverwrittenByRepositoryOrSessionValues()
     {
+        File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"tools":{"parallel":{"enabled":false,"maximumConcurrency":1}},"webFetch":{"maximumRedirects":0,"maximumDecodedBytes":1024}}}""");
         File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"parallel":{"enabled":false,"maximumConcurrency":2}},"webFetch":{"maximumRedirects":0,"maximumDecodedBytes":1024}}""");
         File.WriteAllText(_paths.SessionConfiguration, """{"tools":{"parallel":{"enabled":true,"maximumConcurrency":1}},"webFetch":{"maximumDecodedBytes":2048}}""");
         var policy = Load();

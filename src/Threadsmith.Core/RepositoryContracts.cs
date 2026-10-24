@@ -203,10 +203,6 @@ public interface IRepositoryFactsStore
     /// <summary>Persists an explicit local user choice independently of discovery fact updates.</summary>
     Task SetMutationPolicyAsync(string repositoryPath, MutationApprovalPolicy policy, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("This host does not support remembered mutation consent.");
-
-    /// <summary>Records the user's explicit compatibility decision without changing their global configuration.</summary>
-    Task SetLegacyPermissionDecisionAsync(string repositoryPath, bool useDefaults, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("This host does not support permission migration decisions.");
 }
 
 /// <summary>Gets durable trust for a repository before an interactive surface prompts the user.</summary>

@@ -10,9 +10,7 @@ using System.Text.Json.Nodes;
 public sealed record RepositoryPermissionSnapshot(
     ImmutableDictionary<string, JsonElement> Settings,
     bool Exists,
-    bool LegacyUserSettingsAreDefaults,
-    long Revision,
-    bool HasMigrationDecision = false);
+    long Revision);
 
 /// <summary>Routes repository permission reads and edits through the shared configuration document and writer.</summary>
 public sealed class RepositoryPermissionStore
@@ -95,38 +93,11 @@ public sealed class RepositoryPermissionStore
             cancellationToken);
     }
 
-    /// <summary>Records a deliberate migration decision; never inferred from repository files or scaffolded values.</summary>
-    public Task SetLegacyDefaultsDecisionAsync(string repositoryPath, bool useDefaults, CancellationToken cancellationToken = default)
-        => UpdateAsync(repositoryPath, root => root["legacyPolicyMigration"] = useDefaults ? "useDefaults" : "preserveRestrictions", cancellationToken);
-
-    /// <summary>Imports a verified host-owned legacy snapshot only when no user-owned document exists.</summary>
-    public Task ImportLegacyAsync(string repositoryPath, IReadOnlyDictionary<string, JsonNode?> settings, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(settings);
-        if (settings.Keys.Any(key => !ConfigurationPermissionCatalog.IsPermission(key)))
-        {
-            throw new InvalidDataException("Legacy migration contains an undeclared permission.");
-        }
-
-        return UpdateAsync(
-            repositoryPath,
-            root =>
-            {
-                var target = root["settings"] as JsonObject ?? throw new InvalidDataException("Permission settings must be an object.");
-                foreach (var (key, value) in settings)
-                {
-                    ConfigurationDocument.Set(target, key, value?.DeepClone());
-                }
-            },
-            cancellationToken,
-            createOnly: true);
-    }
-
     private static RepositoryPermissionSnapshot ParseSnapshot(string repositoryPath, byte[]? content)
     {
         if (content is null)
         {
-            return new(ImmutableDictionary.Create<string, JsonElement>(StringComparer.OrdinalIgnoreCase), false, false, 0);
+            return new(ImmutableDictionary.Create<string, JsonElement>(StringComparer.OrdinalIgnoreCase), false, 0);
         }
 
         var document = ConfigurationDocument.Parse(content);
@@ -172,16 +143,10 @@ public sealed class RepositoryPermissionStore
             }
         }
 
-        var hasDecision = document.TryGetValue("legacyPolicyMigration", out var decision);
-        if (hasDecision && (decision.ValueKind != JsonValueKind.String || decision.GetString() is not ("useDefaults" or "preserveRestrictions")))
-        {
-            throw new InvalidDataException("Legacy permission migration decision is invalid.");
-        }
-
-        return new(values, true, hasDecision && decision.GetString() == "useDefaults", revision, hasDecision);
+        return new(values, true, revision);
     }
 
-    private async Task UpdateAsync(string repositoryPath, Action<JsonObject> edit, CancellationToken cancellationToken, bool createOnly = false)
+    private async Task UpdateAsync(string repositoryPath, Action<JsonObject> edit, CancellationToken cancellationToken)
     {
         var path = GetPath(repositoryPath);
         var published = await RepositorySettingsCoordinator.UpdateAsync(
@@ -192,10 +157,6 @@ public sealed class RepositoryPermissionStore
                 EnsureOwnedPath(path);
                 var previous = ConfigurationDocument.ReadContent(path, MaximumBytes);
                 var snapshot = ParseSnapshot(repositoryPath, previous);
-                if (createOnly && snapshot.Exists)
-                {
-                    return Task.FromResult<RepositorySettingsUpdate?>(null);
-                }
 
                 var root = previous is null
                     ? new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true })
@@ -223,7 +184,7 @@ public sealed class RepositoryPermissionStore
                 });
             },
             cancellationToken: cancellationToken);
-        if (!published && !createOnly)
+        if (!published)
         {
             throw new IOException("Repository permissions changed concurrently; reload and retry the choice.");
         }

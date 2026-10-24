@@ -2924,12 +2924,11 @@ public static partial class Milestone1Tests
             var restarted = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
             await restarted.BindRepositoryAsync(repository, ct);
             Assert.Equal(explicitRestriction ? MutationApprovalPolicy.ReviewAll : MutationApprovalPolicy.AlwaysTrustRepo, restarted.CurrentPolicy);
-            Assert.False(restarted.NeedsLocalConsent);
             Assert.False(File.Exists(Path.Combine(repository, ".threadsmith", "config.json")));
             Assert.Contains(explicitRestriction ? "effective: ReviewAll" : "effective: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
             if (explicitRestriction)
             {
-                Assert.Contains("requires a deliberate edit to trusted configuration", surface.Output, StringComparison.Ordinal);
+                Assert.Contains("change the explicit trusted restriction and reopen", surface.Output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Warning: eligible diffs will apply", surface.Output, StringComparison.Ordinal);
             }
         }

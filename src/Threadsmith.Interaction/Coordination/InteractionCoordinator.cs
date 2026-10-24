@@ -4324,16 +4324,13 @@ public sealed partial class InteractionCoordinator
 
         var restriction = _mutationApprovalPolicy.SecurityPolicy is { HasExplicitMutationCeiling: true } authority
             ? $" Current permission restrictions limit this repository to {authority.MutationCeiling}."
-                + (authority.NeedsPermissionMigrationDecision
-                    ? " Use /policy for the one-time legacy ownership decision, then reopen. Explicit machine enforcement still applies."
-                    : " Per-repository choices cannot raise that limit; changing it requires a deliberate edit to trusted configuration or the recorded legacy ownership decision, then reopening.")
+                + " Per-repository choices cannot raise that limit; change the explicit trusted restriction and reopen."
             : string.Empty;
         var argument = commandText.Length == 7 ? string.Empty : commandText[7..].Trim();
         if (string.Equals(argument, "current", StringComparison.OrdinalIgnoreCase))
         {
             await _surface.WriteAsync(
                 $"Mutation policy requested: {_mutationApprovalPolicy.RequestedPolicy}; effective: {_mutationApprovalPolicy.CurrentPolicy}."
-                    + (_mutationApprovalPolicy.NeedsLocalConsent ? " Choose /policy once to approve automation for this repository on this computer." : string.Empty)
                     + restriction
                     + Environment.NewLine,
                 PresentationTextRole.Status,
@@ -4405,30 +4402,6 @@ public sealed partial class InteractionCoordinator
 
     private async Task<bool> SaveMutationChoiceAsync(MutationApprovalPolicy policy, CancellationToken cancellationToken)
     {
-        if (_mutationApprovalPolicy?.NeedsPermissionMigrationDecision == true)
-        {
-            var migration = await _surface.SelectAsync(
-                "Legacy permission settings need one local ownership decision. Preserve restrictions, or treat legacy user settings as defaults and stop applying repository-owned permission settings? No global files will be changed. Reopen the repository to apply this decision.",
-                ["Preserve existing restrictions", "Use user defaults and user-owned repository permissions", "Cancel policy change"],
-                cancellationToken);
-            if (migration is not (0 or 1))
-            {
-                return false;
-            }
-
-            try
-            {
-                await _mutationApprovalPolicy.SetPermissionMigrationDecisionAsync(migration == 1, cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                await _surface.WriteAsync("Could not save the permission migration decision. Existing restrictions remain active; retry after correcting the permission-store problem.\n", PresentationTextRole.Error, cancellationToken);
-                return false;
-            }
-
-            await _surface.WriteAsync("Permission ownership decision saved. Reopen this repository to apply it; the current effective restrictions remain until then.\n", PresentationTextRole.Status, cancellationToken);
-        }
-
         try
         {
             await (_mutationApprovalPolicy ?? throw new InvalidOperationException("Mutation policy is unavailable."))
@@ -4488,19 +4461,6 @@ public sealed partial class InteractionCoordinator
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        if (_mutationApprovalPolicy?.NeedsLocalConsent == true)
-        {
-            var requested = _mutationApprovalPolicy.RequestedPolicy;
-            var selected = await _surface.SelectAsync(
-                $"This repository requests {requested}. Choose a local mutation policy once; repository files cannot authorize automation.",
-                ["Keep Review All for this repository", $"Allow {requested} for this repository on this computer", "Decide later (Review All for now)"],
-                cancellationToken);
-            if (selected is 0 or 1)
-            {
-                await SaveMutationChoiceAsync(selected == 0 ? MutationApprovalPolicy.ReviewAll : requested, cancellationToken);
-            }
-        }
-
         var repositoryName = SessionStatusAssembler.GetRepositoryDisplayName(repositoryPath);
         repositoryName = new string([.. repositoryName
             .Where(character => !char.IsControl(character))

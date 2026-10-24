@@ -354,7 +354,7 @@ public sealed class Milestone17CompatibilityTests
         // Assert
         Assert.False(result.ReasoningPreserved);
         Assert.Equal(ReasoningLevel.None, result.Selection.ReasoningLevel);
-        Assert.True(result.Persisted);
+        Assert.True(result.Persisted, result.Diagnostic);
         Assert.Contains("\"unrelated\": 42", saved, StringComparison.Ordinal);
         Assert.Contains("\"providerId\": \"provider-b\"", saved, StringComparison.Ordinal);
         Assert.Contains($"\"profileId\": \"{secondId.Value:D}\"", saved, StringComparison.Ordinal);
@@ -509,7 +509,7 @@ public sealed class Milestone17CompatibilityTests
 
         // Assert
         Assert.Equal(secondId, result.Selection.Profile.Id);
-        Assert.True(result.Persisted);
+        Assert.True(result.Persisted, result.Diagnostic);
     }
 
     /// <summary>Opening another repository reloads selection and redirects subsequent persistence.</summary>
@@ -548,6 +548,7 @@ public sealed class Milestone17CompatibilityTests
         // Act
         await service.BindRepositoryAsync(second.Path);
         var result = await service.SelectAsync(firstId);
+        Assert.True(result.Persisted, result.Diagnostic);
         var firstSaved = await File.ReadAllTextAsync(firstConfiguration);
         var secondSaved = await File.ReadAllTextAsync(secondConfiguration);
 
@@ -610,7 +611,7 @@ public sealed class Milestone17CompatibilityTests
         var result = await service.SetReasoningAsync(level);
         var reloaded = new ActiveModelSelectionService(catalog, new SessionModelPreferences(profileId, ReasoningLevel.None), path);
 
-        Assert.True(result.Persisted);
+        Assert.True(result.Persisted, result.Diagnostic);
         Assert.Equal(name, reloaded.Current.ReasoningLevel.Value);
         await reloaded.SetReasoningAsync(ReasoningLevel.None);
         var warning = await reloaded.RestoreSessionSelectionAsync(new SessionModelSelectionRecord

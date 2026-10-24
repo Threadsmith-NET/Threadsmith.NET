@@ -6,11 +6,6 @@ using System.Text.Json.Serialization;
 /// <summary>Permission-bearing configuration properties. Unlisted ordinary preferences remain owned by their existing contracts.</summary>
 public sealed record PermissionConfiguration
 {
-    /// <summary>Explicitly versioned ownership; absence preserves legacy interpretation until consent.</summary>
-    [JsonPropertyName("configurationOwnershipVersion")]
-    [ConfigurationPermission(Shape = PermissionInputShape.Scalar, Sources = PermissionConfigurationSources.Machine | PermissionConfigurationSources.User)]
-    public int? ConfigurationOwnershipVersion { get; init; }
-
     /// <summary>Machine-enforced restrictions, separate from overridable defaults.</summary>
     [JsonPropertyName("enforced")]
     [ConfigurationPermission(Sources = PermissionConfigurationSources.Machine)]

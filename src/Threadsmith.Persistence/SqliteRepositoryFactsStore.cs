@@ -6,7 +6,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
-/// <summary>SQLite discovery facts with user-owned file permissions and bounded legacy migration.</summary>
+/// <summary>SQLite discovery facts with user-owned file permissions.</summary>
 public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
 {
     private readonly string _connectionString;
@@ -40,11 +40,6 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
                 environment_json TEXT NULL,
                 updated_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS repository_permission_migration (
-                repository_key TEXT PRIMARY KEY,
-                completed INTEGER NOT NULL,
-                snapshot_json TEXT NOT NULL
-            );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -54,12 +49,57 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
         string repositoryPath,
         CancellationToken cancellationToken = default)
     {
-        var facts = await ReadLegacyFactsAsync(repositoryPath, cancellationToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         var trust = await GetTrustAsync(repositoryPath, cancellationToken);
-        return facts is null ? null : facts with
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT workspace_id, solution_path,
+                   target_frameworks_json, environment_json, repository_path
+            FROM repository_facts
+            WHERE repository_key = $repository_key;
+            """;
+        command.Parameters.AddWithValue("$repository_key", GetRepositoryKey(repositoryPath));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
         {
-            Trust = trust ?? new RepositoryTrustState(repositoryPath, RepositoryTrustLevel.UntrustedInspection, DateTimeOffset.UtcNow),
-        };
+            return null;
+        }
+
+        if (!string.Equals(
+            RepositoryPermissionStore.GetRepositoryIdentity(reader.GetString(4)),
+            RepositoryPermissionStore.GetRepositoryIdentity(repositoryPath),
+            StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("Stored repository facts have a different canonical identity.");
+        }
+
+        var workspaceText = reader.GetString(0);
+        if (!Guid.TryParse(workspaceText, out var workspaceValue))
+        {
+            throw new InvalidDataException("Stored repository workspace identity is invalid.");
+        }
+
+        var solutionPath = await reader.IsDBNullAsync(1, cancellationToken)
+            ? null
+            : reader.GetString(1);
+        var frameworks = JsonSerializer.Deserialize<string[]>(reader.GetString(2))
+            ?? throw new InvalidDataException("Stored target-framework facts are invalid.");
+        MsBuildEnvironmentSnapshot? environment = null;
+        if (!await reader.IsDBNullAsync(3, cancellationToken))
+        {
+            environment = JsonSerializer.Deserialize<MsBuildEnvironmentSnapshot>(reader.GetString(3))
+                ?? throw new InvalidDataException("Stored MSBuild environment facts are invalid.");
+        }
+
+        return new RepositoryFacts(
+            new WorkspaceId(workspaceValue),
+            repositoryPath,
+            trust ?? new RepositoryTrustState(repositoryPath, RepositoryTrustLevel.UntrustedInspection, DateTimeOffset.UtcNow),
+            solutionPath,
+            frameworks,
+            environment);
     }
 
     /// <inheritdoc />
@@ -68,7 +108,6 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(facts);
-        await MigratePermissionsAsync(facts.RepositoryPath, cancellationToken);
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
@@ -83,8 +122,6 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             ON CONFLICT(repository_key) DO UPDATE SET
                 repository_path = excluded.repository_path,
                 workspace_id = excluded.workspace_id,
-                trust_level = excluded.trust_level,
-                trust_granted_at = excluded.trust_granted_at,
                 solution_path = excluded.solution_path,
                 target_frameworks_json = excluded.target_frameworks_json,
                 environment_json = excluded.environment_json,
@@ -93,10 +130,12 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
         command.Parameters.AddWithValue("$repository_key", GetRepositoryKey(facts.RepositoryPath));
         command.Parameters.AddWithValue("$repository_path", facts.RepositoryPath);
         command.Parameters.AddWithValue("$workspace_id", facts.WorkspaceId.Value.ToString("D"));
-        command.Parameters.AddWithValue("$trust_level", (int)facts.Trust.Level);
+
+        // Legacy NOT NULL columns are retained for schema compatibility, never as a trust store.
+        command.Parameters.AddWithValue("$trust_level", (int)RepositoryTrustLevel.UntrustedInspection);
         command.Parameters.AddWithValue(
             "$trust_granted_at",
-            facts.Trust.GrantedAt.ToString("O", CultureInfo.InvariantCulture));
+            DateTimeOffset.MinValue.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue(
             "$solution_path",
             facts.SolutionPath is null ? DBNull.Value : facts.SolutionPath);
@@ -121,7 +160,6 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             throw new ArgumentException("Trust level is invalid.", nameof(trust));
         }
 
-        await MigratePermissionsAsync(trust.RepositoryPath, cancellationToken);
         await _permissions.SetManyAsync(
             trust.RepositoryPath,
             new Dictionary<string, JsonNode?>
@@ -133,13 +171,13 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
     }
 
     /// <inheritdoc />
-    public async Task<MutationApprovalPolicy?> GetMutationPolicyAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    public Task<MutationApprovalPolicy?> GetMutationPolicyAsync(string repositoryPath, CancellationToken cancellationToken = default)
     {
-        await MigratePermissionsAsync(repositoryPath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var settings = _permissions.Read(repositoryPath).Settings;
         if (!settings.TryGetValue("mutation:approvalPolicy", out var value))
         {
-            return null;
+            return Task.FromResult<MutationApprovalPolicy?>(null);
         }
 
         if (value.ValueKind != JsonValueKind.String || !Enum.TryParse<MutationApprovalPolicy>(value.GetString(), true, out var policy)
@@ -148,17 +186,17 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             throw new InvalidDataException("Stored repository mutation permission is invalid.");
         }
 
-        return policy;
+        return Task.FromResult<MutationApprovalPolicy?>(policy);
     }
 
     /// <inheritdoc />
-    public async Task<RepositoryTrustState?> GetTrustAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    public Task<RepositoryTrustState?> GetTrustAsync(string repositoryPath, CancellationToken cancellationToken = default)
     {
-        await MigratePermissionsAsync(repositoryPath, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
         var settings = _permissions.Read(repositoryPath).Settings;
         if (!settings.TryGetValue("repository:trust", out var value))
         {
-            return null;
+            return Task.FromResult<RepositoryTrustState?>(null);
         }
 
         if (value.ValueKind != JsonValueKind.String || !Enum.TryParse<RepositoryTrustLevel>(value.GetString(), true, out var trust) || !Enum.IsDefined(trust))
@@ -173,7 +211,7 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             throw new InvalidDataException("Stored repository trust timestamp is invalid.");
         }
 
-        return new(repositoryPath, trust, grantedAt);
+        return Task.FromResult<RepositoryTrustState?>(new(repositoryPath, trust, grantedAt));
     }
 
     /// <inheritdoc />
@@ -184,197 +222,13 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
             throw new ArgumentOutOfRangeException(nameof(policy));
         }
 
-        await MigratePermissionsAsync(repositoryPath, cancellationToken);
         await _permissions.SetAsync(repositoryPath, "mutation:approvalPolicy", JsonValue.Create(policy.ToString()), cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public async Task SetLegacyPermissionDecisionAsync(string repositoryPath, bool useDefaults, CancellationToken cancellationToken = default)
-    {
-        await MigratePermissionsAsync(repositoryPath, cancellationToken);
-        await _permissions.SetLegacyDefaultsDecisionAsync(repositoryPath, useDefaults, cancellationToken);
-    }
-
-    private async Task<RepositoryFacts?> ReadLegacyFactsAsync(string repositoryPath, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT workspace_id, trust_level, trust_granted_at, solution_path,
-                   target_frameworks_json, environment_json, repository_path
-            FROM repository_facts
-            WHERE repository_key = $repository_key;
-            """;
-        command.Parameters.AddWithValue("$repository_key", GetRepositoryKey(repositoryPath));
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-        {
-            return null;
-        }
-
-        if (!string.Equals(
-            RepositoryPermissionStore.GetRepositoryIdentity(reader.GetString(6)),
-            RepositoryPermissionStore.GetRepositoryIdentity(repositoryPath),
-            StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("Stored repository facts have a different canonical identity; no permissions were imported.");
-        }
-
-        var workspaceText = reader.GetString(0);
-        if (!Guid.TryParse(workspaceText, out var workspaceValue))
-        {
-            throw new InvalidDataException("Stored repository workspace identity is invalid.");
-        }
-
-        var trustValue = reader.GetInt32(1);
-        if (!Enum.IsDefined(typeof(RepositoryTrustLevel), trustValue))
-        {
-            throw new InvalidDataException("Stored repository trust level is invalid.");
-        }
-
-        var grantedText = reader.GetString(2);
-        if (!DateTimeOffset.TryParse(
-            grantedText,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind,
-            out var grantedAt))
-        {
-            throw new InvalidDataException("Stored repository trust timestamp is invalid.");
-        }
-
-        var solutionPath = await reader.IsDBNullAsync(3, cancellationToken)
-            ? null
-            : reader.GetString(3);
-        var frameworks = JsonSerializer.Deserialize<string[]>(reader.GetString(4))
-            ?? throw new InvalidDataException("Stored target-framework facts are invalid.");
-        MsBuildEnvironmentSnapshot? environment = null;
-        if (!await reader.IsDBNullAsync(5, cancellationToken))
-        {
-            environment = JsonSerializer.Deserialize<MsBuildEnvironmentSnapshot>(reader.GetString(5))
-                ?? throw new InvalidDataException("Stored MSBuild environment facts are invalid.");
-        }
-
-        var trust = new RepositoryTrustState(
-            repositoryPath,
-            (RepositoryTrustLevel)trustValue,
-            grantedAt);
-        return new RepositoryFacts(
-            new WorkspaceId(workspaceValue),
-            repositoryPath,
-            trust,
-            solutionPath,
-            frameworks,
-            environment);
-    }
-
-    private async Task MigratePermissionsAsync(string repositoryPath, CancellationToken cancellationToken)
-    {
-        // Only the host-owned database is a migration source. Repository configuration is never imported.
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT completed, snapshot_json FROM repository_permission_migration WHERE repository_key = $key;";
-        command.Parameters.AddWithValue("$key", GetRepositoryKey(repositoryPath));
-        string? snapshot = null;
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-        {
-            if (await reader.ReadAsync(cancellationToken))
-            {
-                if (reader.GetInt32(0) == 1)
-                {
-                    return;
-                }
-
-                snapshot = reader.GetString(1);
-            }
-        }
-
-        if (snapshot is null)
-        {
-            var grants = new Dictionary<string, string>();
-            var legacy = await ReadLegacyFactsAsync(repositoryPath, cancellationToken);
-            if (legacy is not null)
-            {
-                grants["repository:trust"] = legacy.Trust.Level.ToString();
-                grants["repository:trustGrantedAt"] = legacy.Trust.GrantedAt.ToString("O", CultureInfo.InvariantCulture);
-            }
-
-            command.CommandText = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='repository_mutation_consent';";
-            if (Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) > 0)
-            {
-                command.CommandText = "SELECT policy FROM repository_mutation_consent WHERE repository_key = $key;";
-                var value = await command.ExecuteScalarAsync(cancellationToken);
-                if (value is not null)
-                {
-                    if (OperatingSystem.IsWindows() && !RepositoryPathPolicy.GetPathComparer(repositoryPath).Equals("a", "A") && legacy is null)
-                    {
-                        throw new InvalidDataException("Legacy mutation consent lacks an unambiguous repository identity on this case-sensitive Windows directory; select the local permission explicitly.");
-                    }
-
-                    if (value is not long number || number is < 0 or > int.MaxValue
-                        || (MutationApprovalPolicy)number is not (MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo))
-                    {
-                        throw new InvalidDataException("Legacy host mutation consent is invalid; migration stopped.");
-                    }
-
-                    grants["mutation:approvalPolicy"] = ((MutationApprovalPolicy)number).ToString();
-                }
-            }
-
-            snapshot = JsonSerializer.Serialize(new PermissionMigrationSnapshot(RepositoryPermissionStore.GetRepositoryIdentity(repositoryPath), grants));
-            command.CommandText = "INSERT OR IGNORE INTO repository_permission_migration(repository_key, completed, snapshot_json) VALUES($key, 0, $snapshot);";
-            command.Parameters.AddWithValue("$snapshot", snapshot);
-            await command.ExecuteNonQueryAsync(cancellationToken);
-            command.CommandText = "SELECT snapshot_json FROM repository_permission_migration WHERE repository_key = $key;";
-            snapshot = await command.ExecuteScalarAsync(cancellationToken) as string ?? throw new InvalidDataException("Permission migration snapshot is missing.");
-        }
-
-        if (snapshot.Length > 4096)
-        {
-            throw new InvalidDataException("Permission migration snapshot exceeds its bound.");
-        }
-
-        var pending = JsonSerializer.Deserialize<PermissionMigrationSnapshot>(snapshot)
-            ?? throw new InvalidDataException("Permission migration snapshot is invalid.");
-        if (!string.Equals(pending.RepositoryIdentity, RepositoryPermissionStore.GetRepositoryIdentity(repositoryPath), StringComparison.Ordinal)
-            || pending.Grants is null)
-        {
-            throw new InvalidDataException("Pending permission migration belongs to a different repository identity; no grants were imported.");
-        }
-
-        var imported = pending.Grants;
-        foreach (var (key, value) in imported)
-        {
-            var valid = key switch
-            {
-                "repository:trust" => Enum.TryParse<RepositoryTrustLevel>(value, out var trust) && Enum.IsDefined(trust),
-                "repository:trustGrantedAt" => DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out _),
-                "mutation:approvalPolicy" => Enum.TryParse<MutationApprovalPolicy>(value, out var policy)
-                    && policy is MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo,
-                _ => false,
-            };
-            if (!valid)
-            {
-                throw new InvalidDataException("Permission migration snapshot contains an unsupported legacy grant.");
-            }
-        }
-
-        if (imported.Count > 0)
-        {
-            await _permissions.ImportLegacyAsync(repositoryPath, imported.ToDictionary(pair => pair.Key, pair => (JsonNode?)JsonValue.Create(pair.Value)), cancellationToken);
-        }
-
-        // The durable marker prevents deleting a permissions file from resurrecting old grants.
-        command.CommandText = "UPDATE repository_permission_migration SET completed = 1 WHERE repository_key = $key;";
-        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static string GetRepositoryKey(string repositoryPath)
     {
         // Retain the existing SQLite key contract. This is not permission identity:
-        // imported rows are independently checked against their stored repository path,
+        // fact rows are independently checked against their stored repository path,
         // and active permission files use filesystem-aware canonical identities.
         var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
         if (!OperatingSystem.IsWindows())
@@ -393,6 +247,4 @@ public sealed class SqliteRepositoryFactsStore : IRepositoryFactsStore
 
         return path.ToUpperInvariant();
     }
-
-    private sealed record PermissionMigrationSnapshot(string RepositoryIdentity, Dictionary<string, string> Grants);
 }

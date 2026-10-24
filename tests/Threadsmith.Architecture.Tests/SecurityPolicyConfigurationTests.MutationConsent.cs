@@ -27,7 +27,6 @@ public sealed partial class SecurityPolicyConfigurationTests
         await facts.InitializeAsync(ct);
         var approval = new MutationApprovalPolicyService(policyBinding: binding, facts: facts);
         await approval.BindRepositoryAsync(_paths.RepositoryRoot, ct);
-        Assert.True(approval.NeedsLocalConsent);
         Assert.Equal(MutationApprovalPolicy.ReviewAll, approval.CurrentPolicy);
 
         await using var events = new DomainEventStream();
@@ -71,7 +70,6 @@ public sealed partial class SecurityPolicyConfigurationTests
         }
 
         await approval.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, ct);
-        Assert.False(approval.NeedsLocalConsent);
         foreach (var path in new[] { "container/source/after.txt", "tests/after.txt", "docs/after.txt", ".inbox/after.txt" })
         {
             using var applyCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -91,7 +89,6 @@ public sealed partial class SecurityPolicyConfigurationTests
         var restarted = new MutationApprovalPolicyService(policyBinding: binding, facts: new SqliteRepositoryFactsStore(connection));
         await restarted.BindRepositoryAsync(_paths.RepositoryRoot, ct);
         Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, restarted.CurrentPolicy);
-        Assert.False(restarted.NeedsLocalConsent);
         var captured = restarted.SecurityPolicy;
         await restarted.SetPolicyAsync(MutationApprovalPolicy.ReviewAll, ct);
         Assert.Throws<MutationPolicyException>(() => restarted.ValidatePolicyGeneration(captured));
@@ -104,7 +101,6 @@ public sealed partial class SecurityPolicyConfigurationTests
         await File.WriteAllTextAsync(Path.Combine(copied, ".threadsmith", "config.json"), request, ct);
         await restarted.BindRepositoryAsync(copied, ct);
         Assert.Equal(MutationApprovalPolicy.ReviewAll, restarted.CurrentPolicy);
-        Assert.True(restarted.NeedsLocalConsent);
     }
 
     /// <summary>Local consent never raises an explicit trusted ceiling.</summary>
@@ -116,14 +112,14 @@ public sealed partial class SecurityPolicyConfigurationTests
     public async Task MutationConsent_ExplicitTrustedCeilingWins(string ceiling, MutationApprovalPolicy expected)
     {
         var ct = TestContext.Current.CancellationToken;
-        await File.WriteAllTextAsync(_paths.UserConfiguration, "{\"mutation\":{\"approvalPolicy\":\"" + ceiling + "\"}}", ct);
+        await File.WriteAllTextAsync(_paths.MachineConfiguration, "{\"enforced\":{\"mutation\":{\"approvalPolicy\":\"" + ceiling + "\"}}}", ct);
         var binding = new SessionPolicyBinding();
         binding.Publish(Load());
         var facts = new SqliteRepositoryFactsStore($"Data Source={Path.Combine(_root, "consent.db")};Pooling=False");
         await facts.InitializeAsync(ct);
         var service = new MutationApprovalPolicyService(policyBinding: binding, facts: facts);
         await service.BindRepositoryAsync(_paths.RepositoryRoot, ct);
-        Assert.Equal(expected, service.CurrentPolicy);
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
         await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, ct);
         Assert.Equal(expected, service.CurrentPolicy);
         Assert.Equal(expected != MutationApprovalPolicy.AlwaysTrustRepo, service.RequiresApproval(new MutationRiskAssessment { HasDeletions = true }));

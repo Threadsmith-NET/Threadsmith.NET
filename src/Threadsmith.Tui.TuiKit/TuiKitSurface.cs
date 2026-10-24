@@ -94,6 +94,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private IReadOnlyList<InteractionActivity> _toolActivities = [];
     private ActiveInputLease? _activeInput;
     private string _prompt = DefaultPrompt;
+    private string? _submittedSteering;
     private string _notice = string.Empty;
     private string _statusText = string.Empty;
     private string? _statusSeparator;
@@ -218,7 +219,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
         ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
 
-    private bool CanEdit => ReferenceEquals(_agents.Selected, _agents.Main) && (!_startupBlocked || _activeInput is not null);
+    private bool CanEdit => _questionDraft is null && ReferenceEquals(_agents.Selected, _agents.Main) && (!_startupBlocked || _activeInput is not null);
 
     private bool DiscoveryEnabled => CanEdit && _app.FocusedRegion == "composer" && !_app.Modals.IsActive
         && ModalFrame.Fits(_backend.Size) && !_stop.IsCancellationRequested;
@@ -266,6 +267,21 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             if (request.Purpose != ComposerPurpose.Conversation)
             {
                 _composer.Text = string.Empty;
+            }
+
+            if (_submittedSteering is { } submitted)
+            {
+                if (request.Purpose == ComposerPurpose.Steering)
+                {
+                    _submittedSteering = null;
+                    completion.TrySetResult(new InteractionInput(true, submitted, cancellationToken));
+                }
+                else if (request.Purpose == ComposerPurpose.Conversation)
+                {
+                    // A run that finished before pausing must not lose the submitted draft.
+                    _composer.Text = submitted + _composer.Text;
+                    _submittedSteering = null;
+                }
             }
 
             _composer.OnFocusChanged(true);
@@ -322,39 +338,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     /// <inheritdoc />
     public async Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        if (request.Options.Count == 0 || request.Options.Select(option => option.Id).Distinct(StringComparer.Ordinal).Count() != request.Options.Count)
-        {
-            throw new ArgumentException("Selections require distinct, stable options.", nameof(request));
-        }
-
-        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label)).ToArray(), _limits)
-        {
-            ResolveStyle = ResolveStyle,
-            SelectionMarker = _theme.Ui.SelectionMarker,
-            ToggleMouse = () => _app.ToggleMouseCapture(),
-            CopyRequested = Copy,
-        };
-        modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
-        Task<string?>? result = null;
-        await EnqueueAsync(
-            () =>
-        {
-            ClosePalette();
-            result = _app.ShowAsync<string>(modal);
-        },
-            cancellationToken);
+        await _interactionModalGate.WaitAsync(cancellationToken);
         try
         {
-            var selected = await (result ?? throw new InvalidOperationException("Selection did not open.")).WaitAsync(cancellationToken);
-            return new InteractionSelectionResult(selected, selected is null);
+            return await SelectCoreAsync(request, cancellationToken);
         }
         finally
         {
-            if (!_stop.IsCancellationRequested)
-            {
-                await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
-            }
+            _interactionModalGate.Release();
         }
     }
 
@@ -584,6 +575,44 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         Interlocked.CompareExchange(ref _activeInput, null, lease);
     }
 
+    private async Task<InteractionSelectionResult> SelectCoreAsync(InteractionSelectionRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Options.Count == 0 || request.Options.Select(option => option.Id).Distinct(StringComparer.Ordinal).Count() != request.Options.Count)
+        {
+            throw new ArgumentException("Selections require distinct, stable options.", nameof(request));
+        }
+
+        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label)).ToArray(), _limits, request.Details)
+        {
+            ResolveStyle = ResolveStyle,
+            SelectionMarker = _theme.Ui.SelectionMarker,
+            ToggleMouse = () => _app.ToggleMouseCapture(),
+            CopyRequested = Copy,
+        };
+        modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
+        Task<string?>? result = null;
+        await EnqueueAsync(
+            () =>
+        {
+            ClosePalette();
+            result = _app.ShowAsync<string>(modal);
+        },
+            cancellationToken);
+        try
+        {
+            var selected = await (result ?? throw new InvalidOperationException("Selection did not open.")).WaitAsync(cancellationToken);
+            return new InteractionSelectionResult(selected, selected is null);
+        }
+        finally
+        {
+            if (!_stop.IsCancellationRequested)
+            {
+                await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
+            }
+        }
+    }
+
     private async Task RunLoopAsync(CancellationToken cancellationToken)
     {
         try
@@ -689,7 +718,18 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         if (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == KeyModifiers.Ctrl)
         {
+            if (_questionDraft is not null && lease is not null)
+            {
+                lease.Cancel();
+                return true;
+            }
+
             HandleControlC();
+            return true;
+        }
+
+        if (HandleQuestionKey(key))
+        {
             return true;
         }
 
@@ -873,7 +913,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             case SubmitDecision.Submit:
                 if (_read is null)
                 {
-                    lease?.Steer();
+                    if (lease?.Steer() == true && !string.IsNullOrWhiteSpace(_composer.Text))
+                    {
+                        _submittedSteering = _composer.Text;
+                        CommitComposerInput(_submittedSteering);
+                    }
 
                     return true;
                 }
@@ -1033,6 +1077,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private string ActivityText()
     {
+        if (_questionDraft is not null)
+        {
+            return "Waiting for your answer | Esc cancel | F10 mute bell";
+        }
+
         if (_toolActivities.FirstOrDefault(activity => activity.SemanticWorkspaceId is not null) is { } refresh)
         {
             const string refreshFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";

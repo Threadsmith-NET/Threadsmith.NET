@@ -295,6 +295,10 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public bool IsChildAgent { get; init; }
 
+    /// <summary>Host-owned clarification admission, absent in headless and child invocations.</summary>
+    [JsonIgnore]
+    public IUserQuestionAdmission? UserQuestions { get; init; }
+
     /// <summary>Image references admitted to this immutable child assignment and its own tool results.</summary>
     [JsonIgnore]
     public IReadOnlySet<string> AdmittedImageIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
@@ -456,7 +460,8 @@ public sealed record ToolExecution<TOutput>(
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
     ToolExecutionFailure? Failure = null,
-    IReadOnlyList<ImageArtifact>? Images = null);
+    IReadOnlyList<ImageArtifact>? Images = null,
+    [property: JsonIgnore] UserQuestionRequest? Suspension = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -486,6 +491,10 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
+    /// <summary>Explicit live suspension; never a completed model-visible tool result.</summary>
+    [JsonIgnore]
+    public UserQuestionRequest? Suspension { get; init; }
+
     /// <summary>Admitted image evidence delivered alongside textual tool metadata.</summary>
     public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
 
@@ -522,6 +531,14 @@ public sealed record ToolInvocationResult
 
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
+
+    /// <summary>Captured effective output ceiling for a live continuation.</summary>
+    [JsonIgnore]
+    internal int? SuspensionMaximumOutputBytes { get; init; }
+
+    /// <summary>One live terminal attempt, shared by copies of the suspended result.</summary>
+    [JsonIgnore]
+    internal ToolSuspensionCompletion? SuspensionCompletion { get; init; }
 }
 
 /// <summary>Dynamic tool contract used by the registry and model invocation pipeline.</summary>
@@ -616,7 +633,8 @@ public sealed record ToolExecutionEnvelope(
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
     ToolExecutionFailure? Failure = null,
-    IReadOnlyList<ImageArtifact>? Images = null);
+    IReadOnlyList<ImageArtifact>? Images = null,
+    [property: JsonIgnore] UserQuestionRequest? Suspension = null);
 
 /// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
 internal interface ITransientToolActivityDetail
@@ -807,7 +825,8 @@ public abstract class Tool<TInput, TOutput> : ITool
             ModelResultContent: result.ModelResultContent,
             TransientActivityDetail: result.TransientActivityDetail,
             Failure: result.Failure,
-            Images: result.Images);
+            Images: result.Images,
+            Suspension: result.Suspension);
     }
 
     /// <summary>Executes validated typed input.</summary>

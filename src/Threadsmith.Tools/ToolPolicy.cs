@@ -49,8 +49,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 return new ToolPolicyDecision(false, ApprovalLevel.None, exception.Message);
             }
 
-            if (policy.DeniedTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase)
-                || (!policy.AllowedTools.IsDefault && !policy.AllowedTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase)))
+            if (!policy.AllowsTool(tool.Definition.Id))
             {
                 return new ToolPolicyDecision(false, ApprovalLevel.None, "The effective security policy denies this tool.");
             }

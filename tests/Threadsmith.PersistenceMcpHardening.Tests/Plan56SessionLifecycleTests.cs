@@ -577,12 +577,18 @@ public static partial class Plan56SessionLifecycleTests
         var artifact = await artifacts.StoreAsync("Source artifact survives rollback", "conversation", source.SessionId, ct);
         await fixture.Conversations.ArchiveMessageAsync(
             new ConversationMessage
-        {
-            Id = ConversationMessageId.New(), SessionId = source.SessionId, RunId = RunId.New(),
-            Sequence = 0, Role = ConversationRole.User, ArtifactId = artifact.ContentHash,
-            Content = "Source transcript survives rollback",
-            ContentHash = artifact.ContentHash, EstimatedTokens = 5, OccurredAt = source.CreatedAt,
-        }, ct);
+            {
+                Id = ConversationMessageId.New(),
+                SessionId = source.SessionId,
+                RunId = RunId.New(),
+                Sequence = 0,
+                Role = ConversationRole.User,
+                ArtifactId = artifact.ContentHash,
+                Content = "Source transcript survives rollback",
+                ContentHash = artifact.ContentHash,
+                EstimatedTokens = 5,
+                OccurredAt = source.CreatedAt,
+            }, ct);
         var sourceCatalog = await catalog.GetAsync(source.SessionId, ct);
         var before = await fixture.Conversations.GetSnapshotAsync(source.SessionId, cancellationToken: ct);
         Assert.Equal("Source transcript survives rollback", Assert.Single(before.Messages).Content);
@@ -737,18 +743,22 @@ public static partial class Plan56SessionLifecycleTests
         private LifecycleHarness(
             DomainEventStream events,
             EvidenceStore evidence,
+            InMemoryProjectionStore projections,
             SessionUsageProjection usage,
             SessionLifecycleApplication lifecycle,
             SessionApplication sessions)
         {
             _events = events;
             Evidence = evidence;
+            Projections = projections;
             Usage = usage;
             Lifecycle = lifecycle;
             Sessions = sessions;
         }
 
         internal EvidenceStore Evidence { get; }
+
+        internal InMemoryProjectionStore Projections { get; }
 
         internal DomainEventStream Events => _events;
 
@@ -770,7 +780,8 @@ public static partial class Plan56SessionLifecycleTests
             ActiveModelSelectionService? activeModels = null,
             IModelProvider? modelProvider = null,
             JsonlModelExchangeLog? modelExchangeLog = null,
-            Action<SessionCatalogEntry>? sessionActivated = null)
+            Action<SessionCatalogEntry>? sessionActivated = null,
+            ISessionRestorer? restorer = null)
         {
             var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -791,7 +802,7 @@ public static partial class Plan56SessionLifecycleTests
             var lifecycle = new SessionLifecycleApplication(
                 repositoryPath,
                 store,
-                new UnusedSessionRestorer(),
+                restorer ?? new UnusedSessionRestorer(),
                 sessions,
                 projections,
                 events,
@@ -801,7 +812,7 @@ public static partial class Plan56SessionLifecycleTests
                 activeModels,
                 modelExchangeLog: modelExchangeLog,
                 sessionActivated: sessionActivated);
-            return new LifecycleHarness(events, evidence, usage, lifecycle, sessions);
+            return new LifecycleHarness(events, evidence, projections, usage, lifecycle, sessions);
         }
     }
 

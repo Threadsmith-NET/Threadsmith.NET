@@ -62,6 +62,8 @@ public static partial class RepositoryMemoryBindingTests
         var git = new GitQueryService();
         ITool[] readers = [queryTool, new GitLogTool(git, TestPromptLoader.Instance), new GitShowTool(git, TestPromptLoader.Instance), new GitDiffTool(git, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())];
         var states = new ToolStateManager(readers.Select(tool => tool.Definition), configuration, Path.Combine(fixture.InitialRoot, ".threadsmith", "config.json"));
+        await states.EnableAsync("git_log", ct);
+        await states.EnableAsync("git_show", ct);
         var registry = new ToolRegistry(readers, states, runtimeOptions: new ToolRuntimeOptions
         {
             Defaults = new ToolRuntimeOverride { MaximumSourceConcurrency = 1 },
@@ -101,8 +103,8 @@ public static partial class RepositoryMemoryBindingTests
         var plans = new DelegateAgentsPlanFactory(new MissingArcheologyWorkspace(), new SessionModelPreferences(profile.Id, ReasoningLevel.None), snapshots, TestPromptLoader.Instance, delegationOptions, selection);
         var tool = new RepositoryArcheologyTool(evidence, query, operations, plans, runners, coordinator, snapshots, registry, delegationOptions, TestPromptLoader.Instance);
         registry.RegisterOrReplace(tool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-archeology"));
-        states.RegisterFeature(tool.Definition.Id, tool, operations.SetEnabledAsync);
-        states.RegisterFeature(queryTool.Definition.Id, queryTool, operations.SetEnabledAsync);
+        states.RegisterFeature(tool.Definition.Id, tool);
+        states.RegisterFeature(queryTool.Definition.Id, queryTool);
         var invocation = new ToolInvocationContext
         {
             RepositoryPath = fixture.InitialRoot, WorkspaceId = WorkspaceId.New(), RequestedBy = "model",
@@ -168,9 +170,9 @@ public static partial class RepositoryMemoryBindingTests
             }
             else
             {
-                await states.DisableAsync(tool.Definition.Id, ct);
-                await states.DisableAsync(tool.Definition.Id, ct);
-                Assert.All(states.GetAllStates().Where(state => state.Id.StartsWith("repository_", StringComparison.Ordinal)), state => Assert.False(state.Enabled));
+                await operations.SetEnabledAsync(false, ct);
+                await operations.SetEnabledAsync(false, ct);
+                Assert.All(states.GetAllStates().Where(state => state.Id.StartsWith("repository_", StringComparison.Ordinal)), state => Assert.Equal("master_disabled", state.AvailabilityReasonCode));
             }
 
             Assert.False(operations.IsBusy);
@@ -232,7 +234,7 @@ public static partial class RepositoryMemoryBindingTests
         var after = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
         Assert.Equal(before.Entries.Select(item => (item.Id, item.Revision)), after.Entries.Select(item => (item.Id, item.Revision)));
         Assert.False(options.CaptureCurrent().Intelligence.AutomaticRecallEnabled);
-        Assert.False(states.IsEnabled("git_log"));
+        Assert.True(states.IsEnabled("git_log"));
         Assert.False(states.IsEnabled("git_diff"));
         if (Environment.GetEnvironmentVariable("THREADSMITH_ARCHEOLOGY_EVIDENCE_DIRECTORY") is { Length: > 0 } artifactDirectory)
         {
@@ -254,7 +256,7 @@ public static partial class RepositoryMemoryBindingTests
         {
             var stale = await tool.ExecuteAsync(new("Another focused question"), new(ToolInvocationId.New(), session, parent, invocation), ct);
             Assert.Equal("master_disabled", stale.Value.ReasonCode);
-            await states.EnableAsync(queryTool.Definition.Id, ct);
+            await operations.SetEnabledAsync(true, ct);
             await intelligence.Monitor.WaitUntilReadyAsync(ct);
             Assert.True(tool.CaptureAvailability(fixture.InitialRoot).Ready);
         }

@@ -396,7 +396,7 @@ public sealed class WebFetchOptionsState
             ".threadsmith",
             "config.json");
         var repositoryConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(configurationPath, optional: true)
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(configurationPath)))
             .Build();
         var next = WebFetchOptions.FromConfiguration(
             repositoryConfiguration,

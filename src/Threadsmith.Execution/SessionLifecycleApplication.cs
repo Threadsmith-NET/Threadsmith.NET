@@ -291,7 +291,7 @@ public sealed class SessionLifecycleApplication :
             var source = _active;
             var sourceSelection = CaptureModelSelection();
             if (kind == SessionTransitionKind.Resume
-                && source is { } current
+                && source is { IsWritable: true } current
                 && current.SessionId == requestedSessionId)
             {
                 return CreateResult(
@@ -389,7 +389,7 @@ public sealed class SessionLifecycleApplication :
             entry,
             new SessionDurableUsage(0, 0, false, false, false),
             cancellationToken);
-        await SeedRepositoryProjectionAsync(source?.SessionId, entry.SessionId, false, cancellationToken);
+        await SeedRepositoryProjectionAsync(source is null ? null : _projections.GetSession(source.SessionId), entry.SessionId, false, cancellationToken);
         _contextAssembler.InvalidateInspections();
         _projections.InvalidateContextInspections();
         if (commitRepositoryBinding is not null)
@@ -442,11 +442,8 @@ public sealed class SessionLifecycleApplication :
                 $"Session {sessionId.Value:D} belongs to repository '{entry.RepositoryDisplayName}'. Open that repository before resuming it.");
         }
 
-        if (!entry.IsWritable && entry.State == SessionLifecycleState.Legacy)
-        {
-            throw new InvalidOperationException("The selected session is inspectable only and cannot accept new turns.");
-        }
-
+        // Re-evaluate durable history with the current reader. An earlier host may
+        // have marked supported events legacy; catalog state must not make that permanent.
         var candidate = new InMemoryProjectionStore();
         var restoration = await _restorer.RestoreAsync(sessionId, candidate, cancellationToken);
         var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
@@ -474,11 +471,6 @@ public sealed class SessionLifecycleApplication :
             }
         }
 
-        if (!selectionRequired && !restoration.IsLegacy)
-        {
-            _sessions.RegisterRestoredSession(sessionId);
-        }
-
         var usage = await _lifecycleStore.GetUsageAsync(sessionId, cancellationToken);
         _usage.Restore(sessionId, usage);
         entry = entry with
@@ -495,15 +487,22 @@ public sealed class SessionLifecycleApplication :
                 : CaptureModelSelection() ?? entry.ModelSelection,
         };
         entry = await _lifecycleStore.CheckpointAsync(entry, usage, cancellationToken);
+        var currentRepository = source is null ? null : _projections.GetSession(source.SessionId);
         if (restoredProjection is not null)
         {
-            _projections.ReplaceSession(restoredProjection);
-        }
-        else
-        {
-            await SeedRepositoryProjectionAsync(source?.SessionId, sessionId, true, cancellationToken);
+            _projections.ReplaceSession(restoredProjection with
+            {
+                WorkspaceId = null,
+                RepositoryTrust = null,
+                SolutionPath = null,
+                TargetFrameworks = [],
+                SemanticConfidence = SemanticConfidenceLevel.None,
+                IsSemanticLoadComplete = false,
+            });
         }
 
+        await SeedRepositoryProjectionAsync(currentRepository, sessionId, restoredProjection is null, cancellationToken);
+        _sessions.RegisterRestoredSession(sessionId, entry.IsWritable);
         Publish(entry);
         return CreateResult(SessionTransitionKind.Resume, entry, source?.SessionId, warnings, usage);
     }
@@ -543,7 +542,7 @@ public sealed class SessionLifecycleApplication :
         _evidenceStore.CopySession(source.SessionId, destinationId);
         _sessions.RegisterRestoredSession(destinationId);
         _usage.Restore(destinationId, cloneUsage);
-        await SeedRepositoryProjectionAsync(source.SessionId, destinationId, true, cancellationToken);
+        await SeedRepositoryProjectionAsync(_projections.GetSession(source.SessionId), destinationId, true, cancellationToken);
         Publish(destination);
         return CreateResult(SessionTransitionKind.Clone, destination, source.SessionId, [], cloneUsage);
     }
@@ -586,14 +585,11 @@ public sealed class SessionLifecycleApplication :
     }
 
     private async Task SeedRepositoryProjectionAsync(
-        SessionId? sourceSessionId,
+        SessionProjection? source,
         SessionId destinationSessionId,
         bool createBaseProjection,
         CancellationToken cancellationToken)
     {
-        var source = sourceSessionId is { } sourceId
-            ? _projections.GetSession(sourceId)
-            : null;
         var now = _timeProvider.GetUtcNow();
         if (createBaseProjection)
         {

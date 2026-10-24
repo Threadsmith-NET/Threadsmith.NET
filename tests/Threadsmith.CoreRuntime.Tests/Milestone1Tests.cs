@@ -2875,9 +2875,68 @@ public static partial class Milestone1Tests
         Assert.DoesNotContain("TrustPlan", surface.Output, StringComparison.Ordinal);
         Assert.Contains("TrustSession — auto-apply in-repository changes this session", surface.Output, StringComparison.Ordinal);
         Assert.Contains("AlwaysTrustRepo — persistently auto-apply", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Current mutation policy: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("persists across restarts", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("effective: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("outside repository files, across restarts", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Unknown mutation policy 'missing'", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>The normal policy command remembers consent outside repository files and survives reopening.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public static async Task InteractionCoordinator_PolicyCommand_PersistsLocalConsent(bool failSave, bool explicitRestriction)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Directory.CreateTempSubdirectory("threadsmith-policy-ui-").FullName;
+        try
+        {
+            var repository = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
+            var facts = new SqliteRepositoryFactsStore($"Data Source={Path.Combine(root, "facts.db")};Pooling=False");
+            await facts.InitializeAsync(ct);
+            var binding = new SessionPolicyBinding();
+            binding.Publish(new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = repository, Fingerprint = "fixture",
+                HasExplicitMutationCeiling = explicitRestriction,
+            });
+            var policy = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
+            await policy.BindRepositoryAsync(repository, ct);
+            if (failSave)
+            {
+                var permissionPath = new RepositoryPermissionStore(Path.Combine(root, "config.json")).GetPath(repository);
+                Directory.CreateDirectory(Path.GetDirectoryName(permissionPath)!);
+                await File.WriteAllTextAsync(permissionPath, "{}", ct);
+            }
+
+            await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+            var surface = new FakeConsoleSurface(["/policy AlwaysTrustRepo", "/policy current", "/quit"]);
+            var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface, mutationApprovalPolicy: policy);
+            await shell.RunAsync(modelStatus: "Test model", cancellationToken: ct);
+            if (failSave)
+            {
+                Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.CurrentPolicy);
+                Assert.Contains("Could not save local mutation consent", surface.Output, StringComparison.Ordinal);
+                Assert.Contains("effective: ReviewAll", surface.Output, StringComparison.Ordinal);
+                return;
+            }
+
+            var restarted = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
+            await restarted.BindRepositoryAsync(repository, ct);
+            Assert.Equal(explicitRestriction ? MutationApprovalPolicy.ReviewAll : MutationApprovalPolicy.AlwaysTrustRepo, restarted.CurrentPolicy);
+            Assert.False(restarted.NeedsLocalConsent);
+            Assert.False(File.Exists(Path.Combine(repository, ".threadsmith", "config.json")));
+            Assert.Contains(explicitRestriction ? "effective: ReviewAll" : "effective: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
+            if (explicitRestriction)
+            {
+                Assert.Contains("requires a deliberate edit to trusted configuration", surface.Output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Warning: eligible diffs will apply", surface.Output, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
     }
 
     /// <summary>Intelligence status is separated from the preceding model answer in either terminal frontend.</summary>
@@ -5667,7 +5726,7 @@ public static partial class Milestone1Tests
 
         internal IReadOnlyList<ImageArtifact> Images { get; init; } = [];
 
-        internal List<PresentationBatch> Batches { get; } = [];
+        internal ConcurrentQueue<PresentationBatch> Batches { get; } = new();
 
         internal List<ComposerRequest> ComposerRequests { get; } = [];
 
@@ -5699,7 +5758,7 @@ public static partial class Milestone1Tests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Batches.Add(batch);
+            Batches.Enqueue(batch);
             return Task.CompletedTask;
         }
 
@@ -5745,9 +5804,12 @@ public static partial class Milestone1Tests
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
+        var question = new UserQuestionRequest(Guid.NewGuid(), sessionId, RunId.New(), ToolInvocationId.New(), "question-call", "repository", 0, [new("q", "Which output?", [])], occurredAt);
         return
         [
             new SessionCreated(sessionId, occurredAt, "test"),
+            new UserQuestionStateChanged(sessionId, occurredAt, question, new(UserQuestionStatus.Pending, [])),
+            new UserQuestionReady(sessionId, occurredAt, question.RunId, question.RequestId),
             new MemoriesIncluded(
                 sessionId,
                 occurredAt,

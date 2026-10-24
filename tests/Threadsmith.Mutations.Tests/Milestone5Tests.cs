@@ -750,12 +750,13 @@ public static partial class Milestone5Tests
             IConfiguration configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
             var service = new MutationApprovalPolicyService(configuration, configPath);
 
-            Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
-            await service.SetPolicyAsync(MutationApprovalPolicy.ReviewAll);
+            Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.RequestedPolicy);
+            Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+            await service.SetPolicyAsync(MutationApprovalPolicy.TrustSession);
 
             using var revoked = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
             var mutation = revoked.RootElement.GetProperty("Mutation");
-            Assert.Equal("reviewAll", mutation.GetProperty("ApprovalPolicy").GetString());
+            Assert.Equal("alwaysTrustRepo", mutation.GetProperty("ApprovalPolicy").GetString());
             Assert.Equal(42, mutation.GetProperty("LargeDiffThreshold").GetInt32());
             Assert.False(revoked.RootElement.TryGetProperty("mutation", out _));
         }

@@ -3,9 +3,11 @@ namespace Threadsmith.CodexProvider.Tests;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCodex;
+using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Plan 50 native Codex provider and OAuth acceptance coverage.</summary>
@@ -13,6 +15,104 @@ public sealed class Plan50OpenAiCodexTests
 {
     private const string ProviderInstructions =
         "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.";
+
+    /// <summary>Expired-token refresh propagates cancellation after the HTTP request has started.</summary>
+    [Fact]
+    public async Task TokenRefresh_HangingEndpoint_ObservesBoundedCancellation()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-cancel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "token.json");
+            await File.WriteAllTextAsync(path, "{\"AccessToken\":\"old\",\"RefreshToken\":\"refresh\",\"ExpiresAt\":\"2020-01-01T00:00:00Z\"}", token);
+            using var handler = new HangingHandler();
+            using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler), path);
+            using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var refresh = oauth.GetAccessTokenAsync(caller.Token);
+            await handler.Started.Task.WaitAsync(token);
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.WaitAsync(token));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Response body timeout failures remain distinct from explicit caller cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
+        var provider = await CreateProviderAsync(handler, "token");
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var response = provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token).AsTask();
+        await stream.Started.Task.WaitAsync(token);
+        if (callerCancels)
+        {
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => response.WaitAsync(token));
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => response.WaitAsync(token));
+            Assert.Contains("timed out", failure.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    /// <summary>Common preferences refresh the real Codex HTTP schema without replacing the provider or run.</summary>
+    [Theory]
+    [InlineData("ask_user")]
+    [InlineData("ordinary_default_off")]
+    public async Task CommonToggleRefreshesOutboundSchemaWithoutRestart(string toolId)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), "codex-tool-toggle-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, ".threadsmith", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            var definition = new ToolDefinition { Id = toolId, Version = "1", Description = "Synthetic fixture", InputSchema = new("input", 1, "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}"), OutputSchema = new("output", 1, "{\"type\":\"string\"}"), EnabledByDefault = false };
+            var state = new ToolStateManager([definition], new ConfigurationBuilder().Build(), path);
+            var handler = new RecordingHandler(_ => StreamingResponse());
+            var provider = await CreateProviderAsync(handler, "synthetic-token");
+            var request = CreateStreamRequest();
+            foreach (var enabled in new[] { false, true, false, true })
+            {
+                if (enabled)
+                {
+                    await state.EnableAsync(toolId, token);
+                }
+                else
+                {
+                    await state.DisableAsync(toolId, token);
+                }
+
+                request = WithCapacity(request with { Tools = state.IsEnabled(toolId) ? [new ModelToolDefinition { Name = definition.Id, Description = definition.Description, ArgumentsJsonSchema = definition.InputSchema.JsonSchema }] : [] });
+                _ = await provider.StreamAsync(request, token).ToListAsync(token);
+                using var body = JsonDocument.Parse(handler.RequestBody!);
+                Assert.Equal(enabled, body.RootElement.TryGetProperty("tools", out var tools));
+                if (enabled)
+                {
+                    Assert.Equal(toolId, Assert.Single(tools.EnumerateArray()).GetProperty("name").GetString());
+                }
+            }
+
+            Assert.Equal(4, handler.RequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     /// <summary>Authenticated discovery projects every distinct model returned by the backend.</summary>
     [Fact]
@@ -270,30 +370,6 @@ public sealed class Plan50OpenAiCodexTests
             Assert.False(status.IsAuthenticated);
             Assert.Null(status.ExpiresAt);
             Assert.Null(status.AccountId);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Expired-token refresh observes caller cancellation even when the shared HTTP client has no timeout.</summary>
-    [Fact]
-    public async Task TokenRefresh_HangingEndpoint_ObservesBoundedCancellation()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-timeout-{Guid.NewGuid():N}");
-        var path = Path.Combine(root, "token.json");
-        Directory.CreateDirectory(root);
-        await File.WriteAllTextAsync(
-            path,
-            "{\"AccessToken\":\"old\",\"RefreshToken\":\"refresh\",\"ExpiresAt\":\"2020-01-01T00:00:00Z\"}",
-            TestContext.Current.CancellationToken);
-        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(new HangingHandler()), path);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-
-        try
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oauth.GetAccessTokenAsync(timeout.Token));
         }
         finally
         {
@@ -899,37 +975,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
-    /// <summary>Response body timeouts are failures; actual caller cancellation remains cancellation.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
-    {
-        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StreamContent(new WaitingResponseStream()),
-        });
-        var provider = await CreateProviderAsync(
-            handler,
-            "token",
-            configureProfile: profile => profile with { Timeout = callerCancels ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(100) });
-        using var caller = new CancellationTokenSource();
-        if (callerCancels)
-        {
-            caller.CancelAfter(TimeSpan.FromMilliseconds(100));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
-        }
-        else
-        {
-            var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(async () =>
-                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
-            Assert.Contains("timed out", exception.Message, StringComparison.Ordinal);
-        }
-
-        Assert.Equal(1, handler.RequestCount);
-    }
-
     /// <summary>Transport failures before a response use the configured attempt limit.</summary>
     [Theory]
     [InlineData(false)]
@@ -1077,48 +1122,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(1, handler.RequestCount);
     }
 
-    private sealed class InterruptedResponseStream(byte[] content) : MemoryStream(content)
-    {
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (Position == Length)
-            {
-                throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
-            }
-
-            return base.ReadAsync(buffer, cancellationToken);
-        }
-    }
-
-    private static HttpResponseMessage JsonResponse(string value)
-    {
-        return new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(value, Encoding.UTF8, "application/json"),
-        };
-    }
-
-    private static HttpResponseMessage StreamingResponse()
-    {
-        return new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
-            "data: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n",
-            Encoding.UTF8,
-            "text/event-stream"),
-        };
-    }
-
-    private sealed class WaitingResponseStream : MemoryStream
-    {
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return 0;
-        }
-    }
-
     /// <summary>Native Codex input preserves image bytes in user messages and correlated function outputs.</summary>
     [Theory]
     [InlineData(false)]
@@ -1243,6 +1246,70 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("red", observed, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("blue", observed, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("green", observed, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class InterruptedResponseStream(byte[] content) : MemoryStream(content)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Position == Length)
+            {
+                throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+            }
+
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
+    private static HttpResponseMessage JsonResponse(string value)
+    {
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(value, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private static HttpResponseMessage StreamingResponse()
+    {
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+            "data: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n",
+            Encoding.UTF8,
+            "text/event-stream"),
+        };
+    }
+
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("A cancelled request cannot return a response.");
+        }
+    }
+
+    private sealed class WaitingResponseStream : MemoryStream
+    {
+        public bool SimulateTimeout { get; init; }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            if (SimulateTimeout)
+            {
+                throw new OperationCanceledException("Synthetic response body timeout.");
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 
     private static async Task<IModelProvider> CreateProviderAsync(
@@ -1385,17 +1452,6 @@ public sealed class Plan50OpenAiCodexTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return respond(request);
-        }
-    }
-
-    private sealed class HangingHandler : HttpMessageHandler
-    {
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }

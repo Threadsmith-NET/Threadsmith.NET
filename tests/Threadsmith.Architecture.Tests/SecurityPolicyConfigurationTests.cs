@@ -40,6 +40,16 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         };
     }
 
+    /// <summary>Ordinary tool preferences cannot broaden the trusted tool allowlist.</summary>
+    [Fact]
+    public void QuestionToolPreferenceCannotBroadenPolicy()
+    {
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":["datetime"]}}""");
+        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"defaultEnabledOverrides":["ask_user"]}}""");
+        Assert.DoesNotContain("ask_user", Load().AllowedTools);
+        Assert.Contains("datetime", Load().AllowedTools);
+    }
+
     /// <summary>Distinguishes absent authority from explicit denial.</summary>
     [Fact]
     public void MissingAndExplicitEmptyToolListsHaveDifferentAuthority()
@@ -50,7 +60,13 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Empty(Load().AllowedTools);
         File.WriteAllText(_paths.RepositoryConfiguration, "{}");
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":[]}}""");
-        Assert.Empty(Load().AllowedTools);
+        var denied = Load();
+        Assert.Empty(denied.AllowedTools);
+        Assert.Contains(denied.Diagnostics, diagnostic => diagnostic.Contains("PolicyMigrationRequired", StringComparison.Ordinal)
+            && diagnostic.Contains("ALL model tools", StringComparison.Ordinal)
+            && diagnostic.Contains(_paths.UserConfiguration, StringComparison.Ordinal));
+        File.WriteAllText(_paths.UserConfiguration, "{}");
+        Assert.True(Load().AllowedTools.IsDefault);
     }
 
     /// <summary>Rejects indexed blending and widening across source boundaries.</summary>
@@ -124,17 +140,31 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Empty(restricted.NetworkHostRestriction);
     }
 
-    /// <summary>Repository preferences cannot authorize automatic application.</summary>
+    /// <summary>Repository requests cannot supply consent; explicit trusted ceilings remain authoritative.</summary>
     [Fact]
     public void MutationPreferenceCannotRaiseTrustedCeilingOrThreshold()
     {
         File.WriteAllText(_paths.RepositoryConfiguration, """{"mutation":{"approvalPolicy":"alwaysTrustRepo","largeDiffThreshold":10000}}""");
         var policy = Load();
         Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.MutationCeiling);
+        Assert.False(policy.HasExplicitMutationCeiling);
         Assert.Equal(500, policy.LargeDiffThreshold);
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        Assert.True(new MutationApprovalPolicyService(policyBinding: binding).RequiresApproval(new MutationRiskAssessment()));
+        var preference = new ConfigurationBuilder().AddJsonFile(_paths.RepositoryConfiguration).Build();
+        var approval = new MutationApprovalPolicyService(preference, policyBinding: binding);
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
+        File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewAll"}}""");
+        binding.Publish(Load());
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));
         File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewRisky","largeDiffThreshold":200}}""");
         Assert.Equal(MutationApprovalPolicy.ReviewRisky, Load().MutationCeiling);
         Assert.Equal(200, Load().LargeDiffThreshold);
+        binding.Publish(Load());
+        Assert.False(approval.RequiresApproval(new MutationRiskAssessment()));
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
     }
 
     /// <summary>Captured immutable authority cannot survive a generation change.</summary>

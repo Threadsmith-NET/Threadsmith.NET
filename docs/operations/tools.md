@@ -1,9 +1,16 @@
 # Tool Runtime Operations
 
+All registered tools use the same Tools checkbox and repository preference store (`tools.enabled`, `tools.disabled`, `tools.defaultEnabledOverrides`). The checkbox records your choice; readiness, source connection, child restrictions, consent and security policy still apply. A checked tool excluded by `tools.allow` or `tools.deny` shows that reason. Changing a checkbox never edits trusted policy.
+
+If every tool disappears after upgrading, check for an explicit `tools.allow: []`. Older releases treated this as unrestricted; source-aware security treats it as deny-all. Startup reports `PolicyMigrationRequired`. If the empty filter is obsolete, deliberately remove only `tools.allow` from the identified configuration to restore inheritance, then reopen the repository or restart. Keep it if deny-all is intended. No automatic policy rewrite occurs.
+
+Intelligence/archeology checkboxes control their individual tool preferences. Their shared service lifecycle remains under `/intelligence enable` and `/intelligence disable`; tool toggles do not start or stop that service. Model-driven history reads also honor common Git-tool preferences, so enable the required history readers explicitly. MCP capability consent/version approval and extension connection/loading remain separate prerequisites.
+
 The built-in tool registry includes:
 
 | Tool | Minimum trust | Approval | Purpose |
 |---|---|---|---|
+| `ask_user` | `UntrustedInspection` | None | Default off; user opt-in. Pauses the parent conversation until answer/cancel in an interactive terminal. Answers grant no permissions. |
 | `list_files` | `UntrustedInspection` | None | Bounded repository file inventory. |
 | `read_file` | `TrustedRead` | None | Bounded text, image and PDF read (default input-file limit 5 MiB). |
 | `memories` | `TrustedRead` | None | Explicit add/update/remove/list for local repository notes; bounded complete-input embeddings and best-effort recall. |
@@ -48,6 +55,18 @@ Model-authored sibling tool calls are preflighted as one batch before any tool s
 Before validating model-authored JSON against an input or output contract, Threadsmith uses the common JSON cleanup path to extract a complete object or array from surrounding prose or Markdown fences. The extracted value still undergoes the original schema, type, policy, and authority checks; cleanup does not accept invalid fields or execute anything by itself.
 
 Process executable values must be bare names; path-qualified values are rejected even when their basename is allow-listed. The process manager resolves the name only from absolute host `PATH` entries, never from the repository working directory. Cancellation terminates the entire tracked process tree, and a manager timeout is recorded as a failed tool invocation. Standard output and error are captured separately, sanitized, and bounded. If a semantic tool is unavailable, inspect the displayed semantic confidence and reopen the solution with `TrustedBuild` or explicitly request the supported text fallback.
+
+## Clarification questions
+
+`ask_user` is **disabled by default**, because it pauses work until you answer or cancel. Open `/tools`, select Ask user, and press Space to enable or disable it through the same control as other tools. Changes apply immediately and persist in the current repository through ordinary `tools.enabled` / `tools.disabled` / `tools.defaultEnabledOverrides` preferences. No restart or ask-user-specific configuration gate is needed. Existing trusted tool allowlists, denials and approvals remain independent ceilings: enabling availability does not grant authority. The earlier `tools:askUser:enabled` setting is no longer used.
+
+`ask_user` pauses the parent conversation for a material missing answer. It is available only with the interactive terminal attached, must be the sole tool call in its batch, and cannot run while child delegation is active. Children and headless sessions cannot create a question wait. Answers are clarification, never permission approval or saved memory. Existing explicit tool allowlists must include `ask_user`; an explicit empty `tools.allow` permits no tools. Installation does not widen an existing personal policy.
+
+The modal headed **The Assistant Has a Question** contains one to three questions, with one blank line after its heading. Choices receive initial keyboard focus; arrows move it and Space or a displayed number selects. A harness-owned **Other** is appended (number 9 after eight model options); selecting it reveals/focuses free text and serializes text, never an invented option ID. No-choice questions show an editor directly. Digits type normally in the editor. **Enter submits**, including from the editor; multiline pasted text does not submit. PgUp/PgDn navigates questions; missing answers are identified and focused before final group submission. Tab/Shift-Tab changes focus, Space activates page actions, and F2 opens full scrollable details. **Escape, Cancel or F5** returns `Cancelled` with the exact message "The user declined to answer", resumes the model once, and releases question input ownership. There is no hidden pending state or F4 reopen. Ctrl+C cancels the run separately; interruption is not a user refusal.
+
+Question IDs have at most 64 characters, prompts 2,000 characters, and each question has zero or two to eight options with labels up to 300 characters. The serialized question payload is bounded to 16 KiB. Answers have at most 8,000 characters each and 24 KiB total. Terminal control characters are rejected. The host output sanitizer redacts recognized credentials in prompts, option labels and submitted answers before they enter retained coordinator state or durable events. Unsaved editor text stays transient like the ordinary composer; hiding retains that draft only until the request ends. Restoration sanitizes projections and newly appended interruption records, but does not rewrite older stored plaintext. Restart marks pending and accepted-but-undelivered questions Interrupted; it never replays the old call or resumes its effects. Start a fresh turn explicitly after recovery.
+
+The personal host preference `tui:questions:audio` accepts `off` (default) or `bell`. For example, set `"tui": { "questions": { "audio": "bell" } }` in the user configuration. Only the trusted machine/user/environment configuration chain is read for this preference; repository configuration and model content cannot enable it. F10 mutes question bells for the current process. The frontend emits one terminal bell when a request is shown, with none on reopen. Emulators may mute, flash, or ignore it, including through SSH/tmux. The visual waiting status is authoritative. Native OS notifications are not implemented in this release.
 
 ## Availability and live activity
 

@@ -1,160 +1,129 @@
 namespace Threadsmith.Mutations.Tests;
 
-using System.Text.Json.Nodes;
-using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
+using Threadsmith.Persistence;
 using Threadsmith.Workspaces;
 using Xunit;
 
-/// <summary>Approval choices persist only in repository settings; session overrides never alter disk.</summary>
+/// <summary>Local user choices survive restarts without granting authority to repository files.</summary>
 public sealed class ApprovalPolicyPersistenceTests
 {
-    /// <summary>Every non-session choice survives reload without modifying machine/user configuration or unrelated repository values.</summary>
+    /// <summary>Explicit local choices survive a new service without changing repository data.</summary>
     [Theory]
-    [InlineData("reviewAll")]
-    [InlineData("reviewRisky")]
-    [InlineData("alwaysTrustRepo")]
-    public static async Task NonSessionChoice_RoundTripsOnlyThroughRepository(string selected)
+    [InlineData(MutationApprovalPolicy.ReviewAll)]
+    [InlineData(MutationApprovalPolicy.ReviewRisky)]
+    [InlineData(MutationApprovalPolicy.AlwaysTrustRepo)]
+    public static async Task LocalChoice_RoundTripsWithoutChangingRepositoryConfiguration(MutationApprovalPolicy selected)
     {
-        using var fixture = new Fixture();
-        var original = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigPath)) as JsonObject
-            ?? throw new InvalidOperationException("Missing fixture config.");
-        var configuration = fixture.Load();
-
-        var policy = Enum.Parse<MutationApprovalPolicy>(selected, ignoreCase: true);
-        var service = new MutationApprovalPolicyService(configuration, fixture.ConfigPath);
-        await service.SetPolicyAsync(policy);
-        Assert.Equal(policy, new MutationApprovalPolicyService(fixture.Load(), fixture.ConfigPath).CurrentPolicy);
-
-        var section = original["Mutation"] as JsonObject
-            ?? throw new InvalidOperationException("Missing fixture policy.");
-        section["ApprovalPolicy"] = selected;
-
-        Assert.True(JsonNode.DeepEquals(original, JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigPath))));
-        fixture.AssertOnlyRepositorySettingsWritten();
+        await using var fixture = await Fixture.CreateAsync();
+        var service = await fixture.OpenAsync();
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+        Assert.True(service.NeedsLocalConsent);
+        await service.SetPolicyAsync(selected, TestContext.Current.CancellationToken);
+        Assert.Equal(selected, (await fixture.OpenAsync()).CurrentPolicy);
+        Assert.Equal(Fixture.Request, await File.ReadAllTextAsync(fixture.ConfigPath, TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Session trust preserves an existing saved policy byte-for-byte and creates no missing configuration.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task SessionChoice_DoesNotWriteOrClearSavedPolicy(bool existing)
-    {
-        using var fixture = new Fixture();
-        if (!existing)
-        {
-            File.Delete(fixture.ConfigPath);
-            Directory.Delete(Path.GetDirectoryName(fixture.ConfigPath) ?? throw new InvalidOperationException());
-        }
-
-        var before = existing ? await File.ReadAllBytesAsync(fixture.ConfigPath) : null;
-        var service = new MutationApprovalPolicyService(fixture.Load(), fixture.ConfigPath);
-        await service.SetPolicyAsync(MutationApprovalPolicy.TrustSession);
-        Assert.Equal(MutationApprovalPolicy.TrustSession, service.CurrentPolicy);
-        Assert.Equal(existing ? MutationApprovalPolicy.AlwaysTrustRepo : MutationApprovalPolicy.ReviewAll, new MutationApprovalPolicyService(fixture.Load(), fixture.ConfigPath).CurrentPolicy);
-
-        Assert.Equal(existing, File.Exists(fixture.ConfigPath));
-        if (existing)
-        {
-            Assert.Equal(before, await File.ReadAllBytesAsync(fixture.ConfigPath));
-        }
-        else
-        {
-            Assert.False(Directory.Exists(Path.GetDirectoryName(fixture.ConfigPath)));
-        }
-
-        fixture.AssertOnlyRepositorySettingsWritten(existing);
-    }
-
-    /// <summary>A cancelled or failed write leaves the live policy and saved bytes unchanged.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task FailedSave_DoesNotChangeEffectivePolicy(bool cancelled)
-    {
-        using var fixture = new Fixture();
-        var configuration = fixture.Load();
-        if (!cancelled)
-        {
-            await File.WriteAllTextAsync(fixture.ConfigPath, "[]");
-        }
-
-        var before = await File.ReadAllBytesAsync(fixture.ConfigPath);
-        var cancellationToken = new CancellationToken(cancelled);
-        var service = new MutationApprovalPolicyService(configuration, fixture.ConfigPath);
-        await Assert.ThrowsAnyAsync<Exception>(() => service.SetPolicyAsync(MutationApprovalPolicy.ReviewAll, cancellationToken));
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
-
-        Assert.Equal(before, await File.ReadAllBytesAsync(fixture.ConfigPath));
-        fixture.AssertOnlyRepositorySettingsWritten();
-    }
-
-    /// <summary>Opening another repository redirects writes and discards only the prior in-memory session override.</summary>
+    /// <summary>Session trust does not replace a persistent choice.</summary>
     [Fact]
-    public static async Task RepositorySwitch_RebindsSavedPolicyAndWriteTarget()
+    public static async Task SessionChoice_DoesNotReplaceSavedConsent()
     {
-        using var first = new Fixture();
-        using var second = new Fixture();
-        var before = await File.ReadAllBytesAsync(first.ConfigPath);
-        var service = new MutationApprovalPolicyService(first.Load(), first.ConfigPath);
-        await service.SetPolicyAsync(MutationApprovalPolicy.TrustSession);
-        await service.BindRepositoryAsync(second.Repository);
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
-        await service.SetPolicyAsync(MutationApprovalPolicy.ReviewRisky);
-        Assert.Equal(MutationApprovalPolicy.ReviewRisky, new MutationApprovalPolicyService(second.Load(), second.ConfigPath).CurrentPolicy);
-        await service.BindRepositoryAsync(first.Repository);
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
-
-        Assert.Equal(before, await File.ReadAllBytesAsync(first.ConfigPath));
-        first.AssertOnlyRepositorySettingsWritten();
-        second.AssertOnlyRepositorySettingsWritten();
+        await using var fixture = await Fixture.CreateAsync();
+        var service = await fixture.OpenAsync();
+        await service.SetPolicyAsync(MutationApprovalPolicy.ReviewRisky, TestContext.Current.CancellationToken);
+        await service.SetPolicyAsync(MutationApprovalPolicy.TrustSession, TestContext.Current.CancellationToken);
+        Assert.Equal(MutationApprovalPolicy.TrustSession, service.CurrentPolicy);
+        Assert.Equal(MutationApprovalPolicy.ReviewRisky, (await fixture.OpenAsync()).CurrentPolicy);
     }
 
-    private sealed class Fixture : IDisposable
+    /// <summary>A failed revocation disables automation in the current process.</summary>
+    [Fact]
+    public static async Task FailedStoreSave_DisablesLiveAutomationAndDoesNotClaimPersistence()
     {
-        private const string HostConfig = "{\"planning\":{\"approvalPolicy\":\"reviewAll\"},\"mutation\":{\"approvalPolicy\":\"reviewAll\"}}";
-        private readonly string _machinePath;
-        private readonly string _userPath;
+        await using var fixture = await Fixture.CreateAsync();
+        var service = await fixture.OpenAsync();
+        await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(fixture.PermissionPath, "{}", TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.SetPolicyAsync(MutationApprovalPolicy.ReviewAll, TestContext.Current.CancellationToken));
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+        Assert.Equal(Fixture.Request, await File.ReadAllTextAsync(fixture.ConfigPath, TestContext.Current.CancellationToken));
+    }
 
-        public Fixture()
+    /// <summary>A host without persistence cannot promise remembered consent.</summary>
+    [Fact]
+    public static async Task MissingStoreCannotRememberAutomation()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var service = new MutationApprovalPolicyService(repositoryConfigurationPath: fixture.ConfigPath);
+        await service.BindRepositoryAsync(fixture.Repository, TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, TestContext.Current.CancellationToken));
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+    }
+
+    /// <summary>Discovery writes preserve consent and repository switches isolate it.</summary>
+    [Fact]
+    public static async Task DiscoveryUpdatesDoNotEraseConsentAndOtherRepositoryDoesNotInherit()
+    {
+        await using var first = await Fixture.CreateAsync();
+        await using var second = await Fixture.CreateAsync();
+        var service = await first.OpenAsync();
+        await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, TestContext.Current.CancellationToken);
+        var facts = new RepositoryFacts(WorkspaceId.New(), first.Repository, new RepositoryTrustState(first.Repository, RepositoryTrustLevel.TrustedMutation, DateTimeOffset.UtcNow), null, [], null);
+        await first.Store.UpsertAsync(facts, TestContext.Current.CancellationToken);
+        await service.BindRepositoryAsync(second.Repository, TestContext.Current.CancellationToken);
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+        await service.BindRepositoryAsync(first.Repository, TestContext.Current.CancellationToken);
+        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
+    }
+
+    private sealed class Fixture : IAsyncDisposable
+    {
+        internal const string Request = "{\"Mutation\":{\"ApprovalPolicy\":\"alwaysTrustRepo\",\"LargeDiffThreshold\":50},\"unrelated\":true}";
+        private readonly string _root = Directory.CreateTempSubdirectory("threadsmith-local-consent-").FullName;
+
+        private Fixture()
         {
-            Root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "threadsmith-policy-tests-" + Guid.NewGuid().ToString("N"))).FullName;
-            Repository = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
+            Repository = Directory.CreateDirectory(Path.Combine(_root, "repo")).FullName;
             ConfigPath = Path.Combine(Directory.CreateDirectory(Path.Combine(Repository, ".threadsmith")).FullName, "config.json");
-            _machinePath = Path.Combine(Root, "machine.json");
-            _userPath = Path.Combine(Root, "user.json");
-            File.WriteAllText(_machinePath, HostConfig);
-            File.WriteAllText(_userPath, HostConfig);
-            File.WriteAllText(ConfigPath, "{\"Planning\":{\"ApprovalPolicy\":\"alwaysTrustRepo\",\"approvalRepositoryIdentity\":\"legacy\",\"Note\":42},\"Mutation\":{\"ApprovalPolicy\":\"alwaysTrustRepo\",\"LargeDiffThreshold\":50},\"unrelated\":true}");
+            Connection = $"Data Source={Path.Combine(_root, "facts.db")};Pooling=False";
+            Store = new SqliteRepositoryFactsStore(Connection);
         }
-
-        public string Root { get; }
 
         public string Repository { get; }
 
         public string ConfigPath { get; }
 
-        public IConfigurationRoot Load()
+        public string Connection { get; }
+
+        public SqliteRepositoryFactsStore Store { get; }
+
+        public string PermissionPath => new RepositoryPermissionStore(Path.Combine(_root, "config.json")).GetPath(Repository);
+
+        public static async Task<Fixture> CreateAsync()
         {
-            return new ConfigurationBuilder().AddJsonFile(_machinePath).AddJsonFile(_userPath).AddJsonFile(ConfigPath, optional: true).Build();
+            var fixture = new Fixture();
+            await File.WriteAllTextAsync(fixture.ConfigPath, Request, TestContext.Current.CancellationToken);
+            await fixture.Store.InitializeAsync(TestContext.Current.CancellationToken);
+            return fixture;
         }
 
-        public void AssertOnlyRepositorySettingsWritten(bool repositoryConfigExists = true)
+        public async Task<MutationApprovalPolicyService> OpenAsync()
         {
-            Assert.Equal(HostConfig, File.ReadAllText(_machinePath));
-            Assert.Equal(HostConfig, File.ReadAllText(_userPath));
-            Assert.Equal(repositoryConfigExists ? 3 : 2, Directory.GetFiles(Root, "*", SearchOption.AllDirectories).Length);
-        }
-
-        public void Dispose()
-        {
-            if (!Path.GetFileName(Root).StartsWith("threadsmith-policy-tests-", StringComparison.Ordinal)
-                || !string.Equals(Path.GetDirectoryName(Root), Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            var binding = new SessionPolicyBinding();
+            binding.Publish(new EffectiveSessionPolicy
             {
-                throw new InvalidOperationException("Unexpected fixture cleanup root.");
-            }
+                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Repository, Fingerprint = "fixture",
+                LegacyRepositoryMutationRequest = MutationApprovalPolicy.AlwaysTrustRepo,
+            });
+            var service = new MutationApprovalPolicyService(facts: Store, policyBinding: binding);
+            await service.BindRepositoryAsync(Repository, TestContext.Current.CancellationToken);
+            return service;
+        }
 
-            Directory.Delete(Root, recursive: true);
+        public ValueTask DisposeAsync()
+        {
+            Directory.Delete(_root, true);
+            return ValueTask.CompletedTask;
         }
     }
 }

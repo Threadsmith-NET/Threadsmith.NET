@@ -11,6 +11,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $required = @{
+    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Real_stdio_server_connects_imports_invokes_and_disconnects' = 1
+    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Hung_stdio_server_process_is_killed_within_drain_timeout' = 1
+    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Failed_stdio_handshake_terminates_spawned_process' = 1
+    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.StopAsync_RemainingDeadlineOverridesOriginalSdkShutdownTimeout' = 1
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization' = 1
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches' = 1
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively' = 1
+    'Threadsmith.ModelTooling.Tests.WriteFileTests.Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles' = 1
     'Threadsmith.ParallelAgents.Tests.Plan91DelegationToolTests.IntelligenceInvestigators_AreNarrowAndCannotSupplyParentReceipts' = 1
     'Threadsmith.NativeTools.Tests.Plan41InventoryToolTests.GitQueries_LogicalRootAlias_PreservesWorktreeBoundary' = 2
     'Threadsmith.ModelTooling.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryIsRepositoryConfined' = 1

@@ -1773,10 +1773,7 @@ public static partial class ToolRuntimeTests
     [Fact]
     public static async Task SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization()
     {
-        if (!IsExecutableAvailable("rg"))
-        {
-            Assert.Skip("ripgrep is not available on PATH.");
-        }
+        var ripgrep = TestRipgrep.Executable;
 
         var repository = CreateTemporaryDirectory();
         try
@@ -1788,7 +1785,7 @@ public static partial class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1820,10 +1817,7 @@ public static partial class ToolRuntimeTests
     [Fact]
     public static async Task SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches()
     {
-        if (!IsExecutableAvailable("rg"))
-        {
-            Assert.Skip("ripgrep is not available on PATH.");
-        }
+        var ripgrep = TestRipgrep.Executable;
 
         var repository = CreateTemporaryDirectory();
         try
@@ -1834,7 +1828,7 @@ public static partial class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -1909,10 +1903,7 @@ public static partial class ToolRuntimeTests
     [Fact]
     public static async Task SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively()
     {
-        if (!IsExecutableAvailable("rg"))
-        {
-            Assert.Skip("ripgrep is not available on PATH.");
-        }
+        var ripgrep = TestRipgrep.Executable;
 
         var repository = CreateTemporaryDirectory();
         try
@@ -1924,7 +1915,7 @@ public static partial class ToolRuntimeTests
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
                 NullLogger<ProcessManager>.Instance);
-            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: "rg");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,

@@ -1,6 +1,5 @@
 namespace Threadsmith.App;
 
-using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
@@ -16,7 +15,9 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     private readonly IProcessManager _processes;
     private readonly ToolRegistry _tools;
     private readonly ToolStateManager _toolState;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private EffectiveSessionPolicy? _fallbackPolicy;
     private ScratchpadSessionCapability _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured);
     private IConfigurationRoot _configuration;
     private ConfigurationPaths _paths;
@@ -33,7 +34,8 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         IProcessManager processes,
         ToolStateManager toolState,
         ToolRegistry tools,
-        ILogger<ScratchpadLifecycle> logger)
+        ILogger<ScratchpadLifecycle> logger,
+        SessionPolicyBinding? policyBinding = null)
     {
         _arguments = [.. arguments];
         _configuration = configuration;
@@ -42,6 +44,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         _toolState = toolState;
         _tools = tools;
         _logger = logger;
+        _policyBinding = policyBinding;
     }
 
     /// <inheritdoc />
@@ -51,7 +54,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         {
             lock (_gate)
             {
-                if (_current.IsActive && !_revokedUntilBoundary && !IsWriteFileAvailable(_configuration))
+                if (_current.IsActive && !_revokedUntilBoundary && !IsWriteFileAvailable())
                 {
                     _revokedUntilBoundary = true;
                     _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.WriteFileUnavailable);
@@ -190,19 +193,20 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         bool failOnCleanup = false)
     {
         var warnings = new List<string>();
-        ResolvedValue configured;
+        (string? Value, bool RepositoryOwned) configured;
         try
         {
+            _fallbackPolicy = _policyBinding is null ? SecurityPolicyConfigurationLoader.Load(_paths, Guid.Empty, 0) : null;
             configured = ResolveConfiguredValue();
         }
-        catch (ArgumentException exception)
+        catch (Exception exception) when (exception is ArgumentException or IOException or InvalidDataException or UnauthorizedAccessException)
         {
             _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.InvalidConfiguration);
             warnings.Add($"Scratchpad is disabled: {exception.Message}");
             return warnings;
         }
 
-        if (!configured.IsPresent || configured.Value is null)
+        if (configured.Value is null)
         {
             _lifecycleRoot = null;
             _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured);
@@ -286,7 +290,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
             return warnings;
         }
 
-        if (!IsWriteFileAvailable(_configuration))
+        if (!IsWriteFileAvailable())
         {
             _current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.WriteFileUnavailable);
             warnings.Add("Scratchpad is disabled for this session because the built-in write_file tool is unavailable.");
@@ -308,7 +312,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         return warnings;
     }
 
-    private bool IsWriteFileAvailable(IConfiguration configuration)
+    private bool IsWriteFileAvailable()
     {
         try
         {
@@ -325,12 +329,16 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
             return false;
         }
 
-        var allowed = configuration.GetSection("tools:allow").Get<string[]>() ?? [];
-        var denied = configuration.GetSection("tools:deny").Get<string[]>() ?? [];
-        var requireApproval = configuration.GetSection("tools:requireApproval").Get<string[]>() ?? [];
-        return (allowed.Length == 0 || allowed.Contains("write_file", StringComparer.OrdinalIgnoreCase))
-            && !denied.Contains("write_file", StringComparer.OrdinalIgnoreCase)
-            && !requireApproval.Contains("write_file", StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var policy = _policyBinding?.Current ?? _fallbackPolicy;
+            return policy is not null && policy.AllowsTool("write_file")
+                && !policy.ReviewTools.Contains("write_file", StringComparer.OrdinalIgnoreCase);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private async Task<bool> IsIgnoredByRepositoryGitIgnoreAsync(string root, CancellationToken cancellationToken)
@@ -460,7 +468,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         }
 
         var relative = Path.GetRelativePath(repository, root).Replace('\\', '/');
-        var prohibited = _configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [];
+        var prohibited = (_policyBinding?.Current ?? _fallbackPolicy)?.ProhibitedPaths ?? [];
         if (IsStrictChild(root, repository) && RepositoryPathPolicy.IsProhibited(relative, prohibited, repository))
         {
             throw new UnauthorizedAccessException("The configured scratchpad matches a prohibited path.");
@@ -521,83 +529,10 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         }
     }
 
-    private ResolvedValue ResolveConfiguredValue()
+    private (string? Value, bool RepositoryOwned) ResolveConfiguredValue()
     {
-        foreach (var environmentVariable in Environment.GetEnvironmentVariables().Keys.Cast<object>().Select(key => key.ToString()!))
-        {
-            if (environmentVariable.Equals("THREADSMITH_scratchpad__path", StringComparison.OrdinalIgnoreCase))
-            {
-                return new(true, Environment.GetEnvironmentVariable(environmentVariable), false);
-            }
-        }
-
-        var commandLine = _arguments.LastOrDefault(argument => argument.StartsWith("--set:scratchpad:path=", StringComparison.OrdinalIgnoreCase));
-        if (commandLine is not null)
-        {
-            return new(true, commandLine[(commandLine.IndexOf('=') + 1)..], false);
-        }
-
-        foreach (var source in new[]
-        {
-            (Path: _paths.SessionConfiguration, RepositoryOwned: true),
-            (Path: _paths.RepositoryConfiguration, RepositoryOwned: true),
-            (Path: _paths.UserConfiguration, RepositoryOwned: false),
-            (Path: _paths.MachineConfiguration, RepositoryOwned: false),
-        })
-        {
-            if (TryReadJsonValue(source.Path, out var present, out var value) && present)
-            {
-                return new(true, value, source.RepositoryOwned);
-            }
-        }
-
-        return new(false, null, false);
-    }
-
-    private static bool TryReadJsonValue(string path, out bool present, out string? value)
-    {
-        present = false;
-        value = null;
-        if (!File.Exists(path))
-        {
-            return false;
-        }
-
-        using var document = JsonDocument.Parse(File.ReadAllBytes(path), new JsonDocumentOptions
-        {
-            CommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true,
-        });
-        if (!TryGetProperty(document.RootElement, "scratchpad", out var scratchpad)
-            || scratchpad.ValueKind != JsonValueKind.Object
-            || !TryGetProperty(scratchpad, "path", out var pathValue))
-        {
-            return true;
-        }
-
-        present = true;
-        value = pathValue.ValueKind switch
-        {
-            JsonValueKind.Null => null,
-            JsonValueKind.String => pathValue.GetString(),
-            _ => throw new ArgumentException("scratchpad:path must be a string or null."),
-        };
-        return true;
-    }
-
-    private static bool TryGetProperty(JsonElement element, string name, out JsonElement value)
-    {
-        foreach (var property in element.EnumerateObject())
-        {
-            if (property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-            {
-                value = property.Value;
-                return true;
-            }
-        }
-
-        value = default;
-        return false;
+        _configuration = ConfigurationBootstrap.Build(_arguments, _paths);
+        return ConfigurationBootstrap.ResolveValue(_configuration, ConfigurationKey);
     }
 
     private static bool IsStrictChild(string candidate, string root)
@@ -624,6 +559,4 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
-
-    private sealed record ResolvedValue(bool IsPresent, string? Value, bool RepositoryOwned);
 }

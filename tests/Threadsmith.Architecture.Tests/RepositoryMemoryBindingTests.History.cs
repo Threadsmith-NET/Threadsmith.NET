@@ -83,6 +83,11 @@ public static partial class RepositoryMemoryBindingTests
         }
 
         var registry = new ToolRegistry(tools, state);
+        foreach (var id in new[] { "git_log", "git_show", "git_diff" })
+        {
+            await state.EnableAsync(id, ct);
+        }
+
         var events = new List<ToolInvocationCompleted>();
         var started = new List<ToolInvocationStarted>();
         await using var subscription = intelligence.Events.Subscribe((item, _) =>
@@ -172,6 +177,7 @@ public static partial class RepositoryMemoryBindingTests
         Assert.All(model.CapturedRequests, request => Assert.DoesNotContain(request.Tools, tool => tool.Name.StartsWith("fixture_", StringComparison.Ordinal)));
         foreach (var id in new[] { "git_log", "git_show", "git_diff" })
         {
+            await state.DisableAsync(id, ct);
             Assert.False(state.IsEnabled(id));
             Assert.DoesNotContain(registry.GetRegistrations(session, RunId.New()), item => item.Tool.Definition.Id == id);
             Assert.Throws<KeyNotFoundException>(() => registry.Get(id));
@@ -238,6 +244,9 @@ public static partial class RepositoryMemoryBindingTests
         };
         Assert.False((await pipeline.InvokeAsync(invocation with { Context = invocation.Context with { IntelligenceRun = null } }, ct)).Succeeded);
         var childInvocation = invocation with { Context = invocation.Context with { RequestedBy = "model", IsChildAgent = true } };
+        Assert.False((await pipeline.InvokeAsync(childInvocation, ct)).Succeeded);
+        Assert.False(pipeline.PreflightBatch([new ToolBatchRequest(0, "disabled-history", invocation)]).Succeeded);
+        await state.EnableAsync("git_show", ct);
         Assert.True((await pipeline.InvokeAsync(childInvocation, ct)).Succeeded);
         Assert.Equal(current, Assert.Single(run.ResolveSupports(["guide.txt"])));
         var preparation = pipeline.PreflightBatch([new ToolBatchRequest(0, "historical-source", invocation)]);
@@ -246,6 +255,7 @@ public static partial class RepositoryMemoryBindingTests
         Assert.True(Assert.Single(completed).Result.Succeeded);
         Assert.False((await pipeline.InvokeAsync(invocation with { Context = invocation.Context with { DeniedToolIds = ["git_show"] } }, ct)).Succeeded);
         Assert.False((await pipeline.InvokeAsync(invocation with { Context = invocation.Context with { TrustLevel = RepositoryTrustLevel.UntrustedInspection } }, ct)).Succeeded);
+        await state.DisableAsync("git_show", ct);
         Assert.False(state.IsEnabled("git_show"));
         await run.DisposeAsync();
         Assert.DoesNotContain(registry.GetRegistrations(context.SessionId, context.RunId, invocation.Context), item => item.Tool.Definition.Id == "git_show");

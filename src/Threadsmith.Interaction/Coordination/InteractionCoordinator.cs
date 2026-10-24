@@ -80,6 +80,7 @@ public sealed partial class InteractionCoordinator
     private readonly IGitQueryService? _gitQueries;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
+    private readonly SemaphoreSlim _modalGate = new(1, 1);
     private readonly IFrontendCommandContribution? _frontendCommands;
     private readonly SemanticStartupProgress? _semanticStartupProgress;
 
@@ -2332,11 +2333,19 @@ public sealed partial class InteractionCoordinator
         }
     }
 
-    private Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
+    private async Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
         DirectFetchApprovalRequest request,
         CancellationToken cancellationToken)
     {
-        return DirectFetchApprovalInteraction.RequestAsync(_surface, request, cancellationToken);
+        await _modalGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await DirectFetchApprovalInteraction.RequestAsync(_surface, request, cancellationToken);
+        }
+        finally
+        {
+            _modalGate.Release();
+        }
     }
 
     private async Task<bool> ManageModelsAsync(CancellationToken cancellationToken)
@@ -4313,11 +4322,20 @@ public sealed partial class InteractionCoordinator
             return;
         }
 
+        var restriction = _mutationApprovalPolicy.SecurityPolicy is { HasExplicitMutationCeiling: true } authority
+            ? $" Current permission restrictions limit this repository to {authority.MutationCeiling}."
+                + (authority.NeedsPermissionMigrationDecision
+                    ? " Use /policy for the one-time legacy ownership decision, then reopen. Explicit machine enforcement still applies."
+                    : " Per-repository choices cannot raise that limit; changing it requires a deliberate edit to trusted configuration or the recorded legacy ownership decision, then reopening.")
+            : string.Empty;
         var argument = commandText.Length == 7 ? string.Empty : commandText[7..].Trim();
         if (string.Equals(argument, "current", StringComparison.OrdinalIgnoreCase))
         {
             await _surface.WriteAsync(
-                $"Current mutation policy: {_mutationApprovalPolicy.CurrentPolicy}.{Environment.NewLine}",
+                $"Mutation policy requested: {_mutationApprovalPolicy.RequestedPolicy}; effective: {_mutationApprovalPolicy.CurrentPolicy}."
+                    + (_mutationApprovalPolicy.NeedsLocalConsent ? " Choose /policy once to approve automation for this repository on this computer." : string.Empty)
+                    + restriction
+                    + Environment.NewLine,
                 PresentationTextRole.Status,
                 cancellationToken);
             return;
@@ -4351,7 +4369,7 @@ public sealed partial class InteractionCoordinator
                 "Cancel",
             ];
             var selected = await _surface.SelectAsync(
-                $"Mutation policy (current: {_mutationApprovalPolicy.CurrentPolicy}; Up/Down, Enter):",
+                $"Mutation policy (requested: {_mutationApprovalPolicy.RequestedPolicy}; effective: {_mutationApprovalPolicy.CurrentPolicy}; Up/Down, Enter):",
                 choices,
                 cancellationToken);
             if (selected < 0 || selected >= policies.Length)
@@ -4367,18 +4385,64 @@ public sealed partial class InteractionCoordinator
         }
 
         var policy = selectedPolicy.Value;
-        await _mutationApprovalPolicy.SetPolicyAsync(policy, cancellationToken);
-        var warning = policy is MutationApprovalPolicy.TrustSession
+        if (!await SaveMutationChoiceAsync(policy, cancellationToken))
+        {
+            return;
+        }
+
+        var warning = _mutationApprovalPolicy.CurrentPolicy is MutationApprovalPolicy.TrustSession
             or MutationApprovalPolicy.AlwaysTrustRepo
             ? " Warning: eligible diffs will apply without a separate mutation prompt; hard guardrails and validation remain active."
             : string.Empty;
         var persistence = policy == MutationApprovalPolicy.TrustSession
-            ? " This choice is session-only; the saved repository policy is unchanged."
-            : " This choice is saved only in repository configuration and persists across restarts.";
+            ? " This choice is session-only; remembered local consent is unchanged."
+            : " This choice is remembered for this repository on this computer, outside repository files, across restarts and source commits.";
         await _surface.WriteAsync(
-            $"Mutation policy changed to {policy}.{warning}{persistence}{Environment.NewLine}",
+            $"Mutation policy requested: {policy}; effective: {_mutationApprovalPolicy.CurrentPolicy}.{warning}{persistence}{restriction}{Environment.NewLine}",
             PresentationTextRole.Status,
             cancellationToken);
+    }
+
+    private async Task<bool> SaveMutationChoiceAsync(MutationApprovalPolicy policy, CancellationToken cancellationToken)
+    {
+        if (_mutationApprovalPolicy?.NeedsPermissionMigrationDecision == true)
+        {
+            var migration = await _surface.SelectAsync(
+                "Legacy permission settings need one local ownership decision. Preserve restrictions, or treat legacy user settings as defaults and stop applying repository-owned permission settings? No global files will be changed. Reopen the repository to apply this decision.",
+                ["Preserve existing restrictions", "Use user defaults and user-owned repository permissions", "Cancel policy change"],
+                cancellationToken);
+            if (migration is not (0 or 1))
+            {
+                return false;
+            }
+
+            try
+            {
+                await _mutationApprovalPolicy.SetPermissionMigrationDecisionAsync(migration == 1, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await _surface.WriteAsync("Could not save the permission migration decision. Existing restrictions remain active; retry after correcting the permission-store problem.\n", PresentationTextRole.Error, cancellationToken);
+                return false;
+            }
+
+            await _surface.WriteAsync("Permission ownership decision saved. Reopen this repository to apply it; the current effective restrictions remain until then.\n", PresentationTextRole.Status, cancellationToken);
+        }
+
+        try
+        {
+            await (_mutationApprovalPolicy ?? throw new InvalidOperationException("Mutation policy is unavailable."))
+                .SetPolicyAsync(policy, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await _surface.WriteAsync(
+                "Could not save local mutation consent. Review All is active for now; a previously remembered choice may return after restart. Correct the local trust-store problem and retry /policy.\n",
+                PresentationTextRole.Error,
+                cancellationToken);
+            return false;
+        }
     }
 
     private static string FormatPolicyChoice(MutationApprovalPolicy policy, bool isCurrent)
@@ -4424,6 +4488,19 @@ public sealed partial class InteractionCoordinator
         string repositoryPath,
         CancellationToken cancellationToken)
     {
+        if (_mutationApprovalPolicy?.NeedsLocalConsent == true)
+        {
+            var requested = _mutationApprovalPolicy.RequestedPolicy;
+            var selected = await _surface.SelectAsync(
+                $"This repository requests {requested}. Choose a local mutation policy once; repository files cannot authorize automation.",
+                ["Keep Review All for this repository", $"Allow {requested} for this repository on this computer", "Decide later (Review All for now)"],
+                cancellationToken);
+            if (selected is 0 or 1)
+            {
+                await SaveMutationChoiceAsync(selected == 0 ? MutationApprovalPolicy.ReviewAll : requested, cancellationToken);
+            }
+        }
+
         var repositoryName = SessionStatusAssembler.GetRepositoryDisplayName(repositoryPath);
         repositoryName = new string([.. repositoryName
             .Where(character => !char.IsControl(character))
@@ -4710,13 +4787,12 @@ public sealed partial class InteractionCoordinator
                 "The staged mutation review does not match its review-ready event.");
         }
 
-        var mutationInput = await InteractionInputReader.ReadSecondaryAsync(
-            _surface,
-            "Mutation review: 1 apply approved set, 2 discard\n",
-            PresentationTextRole.Status,
-            ComposerPurpose.Secondary,
+        var selected = await _surface.SelectAsync(
+            $"Mutation review: apply {staged.MutationSet.Mutations.Count} staged changes?",
+            ["Apply approved set", "Discard"],
+            staged.Preview.UnifiedDiff,
             cancellationToken);
-        if (mutationInput.IsSubmitted && mutationInput.Text.Trim() == "1")
+        if (selected == 0)
         {
             _ = await controller.CommitMutationSetAsync(
                 mutationSetId,

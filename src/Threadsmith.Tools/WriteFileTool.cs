@@ -162,7 +162,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             context.PolicyBinding?.Validate(policy);
         }
 
-        AuthorityControlPathGuard.Validate(destination, repository, context.SecurityPolicy?.ControlPaths);
+        AuthorityControlPathGuard.Validate(destination, repository, context.SecurityPolicy?.ControlPaths, context.SecurityPolicy?.ControlDirectories);
         if (context.IsChildAgent && !context.ApprovedRoots.Any(root =>
                 ToolPathRules.IsSameOrChild(destination, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repository)))))
         {

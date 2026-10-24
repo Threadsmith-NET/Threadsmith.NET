@@ -29,7 +29,6 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly AgentDisplayStream? _display;
     private readonly IConversationToolSnapshotStore _snapshots;
-    private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
     private readonly ExecutionLimits _executionLimits;
 
@@ -47,7 +46,6 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         DelegateAgentsOptions options,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
         AgentDisplayStream? display = null,
@@ -79,7 +77,6 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _prompts = prompts;
         _sessionUsage = sessionUsage;
         _display = display;
-        _steering = steering;
         _executionLimits = executionLimits ?? new ExecutionLimits();
     }
 
@@ -124,7 +121,6 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             registrations,
             _prompts,
             _sessionUsage,
-            _steering,
             _trustedModels,
             _compactionProfile,
             _display,
@@ -145,7 +141,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
     private readonly ChildAgentModelLoop _loop;
     private readonly ToolExecutionContext _parentContext;
     private readonly AgentModelSelector _selection;
-    private readonly RunSteeringCoordinator? _steering;
 
     /// <summary>Initializes a new instance of the <see cref="ModelExplorerAssignmentRunner"/> class.</summary>
     public ModelExplorerAssignmentRunner(
@@ -162,7 +157,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         IReadOnlyList<ToolRegistration> registrations,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
         AgentDisplayStream? display = null,
@@ -186,7 +180,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         _selection = selection;
         _instructions = instructions;
         _parentContext = parentContext;
-        _steering = steering;
         _loop = new ChildAgentModelLoop(
             models,
             tools,
@@ -196,7 +189,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             registrations,
             prompts,
             sessionUsage,
-            steering,
             selection,
             trustedModels,
             compactionProfile,
@@ -223,67 +215,57 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             throw new UnauthorizedAccessException("The assignment is not owned by this delegation.");
         }
 
-        try
+        var model = _selection.Select(frozen);
+        var effective = frozen with
         {
-            var model = _selection.Select(frozen);
-            var effective = frozen with
+            Policy = frozen.Policy with
             {
-                Policy = frozen.Policy with
-                {
-                    ModelProfileId = model.ProfileId,
-                    ReasoningLevel = model.ReasoningLevel.ToString(),
-                    ModelSelectionRationale = string.Join("; ", model.Rationale),
-                    ModelSelection = model.Provenance,
-                },
-            };
-            var context = _contexts.Assemble(plan, frozen);
-            var childToolContext = AgentToolPolicy.Scope(
-                _parentContext.Invocation,
-                plan,
-                frozen,
-                plan.Provenance.RepositoryIdentity) with
-            {
-                ModelContextWindowTokens = model.ContextWindowTokens,
-                ModelRequestOutputReserveTokens = model.OutputReserveTokens,
-                ModelEffectiveInputBudgetTokens = model.ContextWindowTokens
-                    - model.OutputReserveTokens,
-                VisibleSourceFrontier = null,
-            };
-            var instructions = await _instructions.GetAsync(
-                plan,
-                effective,
-                _parentContext.Invocation,
-                cancellationToken);
-            var result = await _loop.RunAsync(
-                plan,
-                effective,
-                context,
-                instructions,
-                childToolContext,
-                model,
-                cancellationToken);
-            return new AgentRunOutcome
-            {
-                AssignmentId = frozen.AssignmentId,
-                ChildRunId = frozen.ChildRunId,
-                Role = frozen.Role,
-                Generation = plan.Provenance.Generation,
-                Status = AgentRunStatus.Completed,
-                Usage = result.Usage,
-                Reason = $"{frozen.Role} response collected",
-                ModelProfileId = result.Model.ProfileId,
-                ModelSelection = result.Model.Provenance,
-                Response = result.Response,
-                DeliveredEvidenceIds = result.DeliveredEvidenceIds,
-            };
-        }
-        finally
+                ModelProfileId = model.ProfileId,
+                ReasoningLevel = model.ReasoningLevel.ToString(),
+                ModelSelectionRationale = string.Join("; ", model.Rationale),
+                ModelSelection = model.Provenance,
+            },
+        };
+        var context = _contexts.Assemble(plan, frozen);
+        var childToolContext = AgentToolPolicy.Scope(
+            _parentContext.Invocation,
+            plan,
+            frozen,
+            plan.Provenance.RepositoryIdentity) with
         {
-            _steering?.CompleteChild(
-                plan.Provenance.SessionId,
-                plan.Provenance.ParentRunId,
-                frozen.ChildRunId);
-        }
+            ModelContextWindowTokens = model.ContextWindowTokens,
+            ModelRequestOutputReserveTokens = model.OutputReserveTokens,
+            ModelEffectiveInputBudgetTokens = model.ContextWindowTokens
+                - model.OutputReserveTokens,
+            VisibleSourceFrontier = null,
+        };
+        var instructions = await _instructions.GetAsync(
+            plan,
+            effective,
+            _parentContext.Invocation,
+            cancellationToken);
+        var result = await _loop.RunAsync(
+            plan,
+            effective,
+            context,
+            instructions,
+            childToolContext,
+            model,
+            cancellationToken);
+        return new AgentRunOutcome
+        {
+            AssignmentId = frozen.AssignmentId,
+            ChildRunId = frozen.ChildRunId,
+            Role = frozen.Role,
+            Generation = plan.Provenance.Generation,
+            Status = AgentRunStatus.Completed,
+            Usage = result.Usage,
+            Reason = $"{frozen.Role} response collected",
+            ModelProfileId = result.Model.ProfileId,
+            ModelSelection = result.Model.Provenance,
+            Response = result.Response,
+            DeliveredEvidenceIds = result.DeliveredEvidenceIds,
+        };
     }
 
     /// <inheritdoc />

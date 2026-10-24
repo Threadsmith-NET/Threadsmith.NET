@@ -125,6 +125,7 @@ public static class AgentToolPolicy
                 ProhibitedPaths = [.. policy.ProhibitedPaths.Concat(frozenAssignment.Policy.ProhibitedPaths).Distinct(StringComparer.Ordinal)],
                 WriteFolders = parent.AllowDirectWrites && frozenAssignment.Mode == AgentRunMode.SharedWorkspace ? NarrowRoots(policy.WriteFolders) : [],
                 EditableRoots = frozenAssignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview ? [] : NarrowRoots(policy.EditableRoots),
+                MutationRoots = frozenAssignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview ? [] : NarrowRoots(policy.MutationRoots),
                 NetworkHostRestriction = frozenAssignment.Policy.AllowNetwork ? policy.NetworkHostRestriction : [],
                 AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? policy.AllowedNetworkHosts : [],
             };

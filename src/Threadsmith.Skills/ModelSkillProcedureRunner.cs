@@ -643,6 +643,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             && !context.DeniedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
         return context with
         {
+            // Skill procedures do not own the conversation loop's suspension handoff.
+            UserQuestions = null,
             TrustLevel = (RepositoryTrustLevel)Math.Min((int)context.TrustLevel, (int)plan.Request.Trust),
             ModelUsesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog,
             AllowedToolIds = allowedTools,

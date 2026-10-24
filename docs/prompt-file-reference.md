@@ -42,11 +42,11 @@ Common editing rules:
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 28 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **293** | Complete deployed catalog. |
+| **Total** | **294** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -450,6 +450,14 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-csharp_script-Description.md` | Advertised script-kind enum and default for `csharp_script`. | `None` |
+
+#### `ask_user` family
+
+This tool defaults off and requires deliberate user enablement through Tools plus ordinary tool policy. Its description warns that questions pause work until answer or cancellation.
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-ask_user-Description.md` | Parent-only blocking clarification guidance. | `None` |
 
 #### `datetime` family
 
@@ -934,3 +942,5 @@ The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`a
 `Context-ImageOnlyUserMessage.md` (Execution; no tokens) labels an admitted user turn containing images and no text when constructing task intent. It supplies wording only; attachment validation, identity, selection and authority remain code-owned.
 
 `Tool-write_file-Description.md` also identifies ordered user-message `attachments` metadata as the source of `artifactId` values for current and retained historical image attachments. The filename and placeholder contract are unchanged; context assembly owns metadata fields/order and artifact access remains code-enforced.
+
+The ask_user description documents the harness-owned Other choice and the Cancelled message "The user declined to answer". Enter submits; Escape/Cancel resumes with that refusal. No prompt tokens or authority rules change.

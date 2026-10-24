@@ -37,6 +37,11 @@ internal static class ConversationToolAvailability
     public static bool IsAdvertised(ToolDefinition definition, ToolInvocationContext? context)
     {
         ArgumentNullException.ThrowIfNull(definition);
+        if (string.Equals(definition.Id, "ask_user", StringComparison.OrdinalIgnoreCase) && (context is null || context.IsChildAgent || context.UserQuestions?.IsAvailable != true))
+        {
+            return false;
+        }
+
         if (context is null)
         {
             return true;
@@ -52,9 +57,7 @@ internal static class ConversationToolAvailability
             return false;
         }
 
-        if (context.SecurityPolicy is { } policy
-            && (policy.DeniedTools.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)
-                || (!policy.AllowedTools.IsDefault && !policy.AllowedTools.Contains(definition.Id, StringComparer.OrdinalIgnoreCase))))
+        if (context.SecurityPolicy is { } policy && !policy.AllowsTool(definition.Id))
         {
             return false;
         }

@@ -285,6 +285,46 @@ public sealed class DelegateAgentsToolExecutionTests
                 checkpoint => checkpoint.Phase == DelegationCheckpointPhase.Cancelled).Phase);
     }
 
+    /// <summary>Steering accepts parent context without waiting for child pause acknowledgements.</summary>
+    [Fact]
+    public async Task ExecuteAsync_SteeringDuringJoin_KeepsChildrenCompletedAndDeliversToParentOnly()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        await using var scheduler = CreateScheduler();
+        var checkpoints = new RecordingCheckpointStore();
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var steering = new RunSteeringCoordinator();
+        var runner = new NonCooperativeJoinRunner();
+        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner), steering: steering);
+        var sessionId = fixture.Context.SessionId;
+        var runId = fixture.Context.RunId;
+        steering.RegisterRun(sessionId, runId);
+        var executionTask = fixture.Tool.ExecuteAsync(CreateInput(2), fixture.Context, cancellationToken);
+        await runner.JoinEntered.WaitAsync(cancellationToken);
+        try
+        {
+            var pause = steering.RequestPause(sessionId, runId);
+            var ready = await steering.WaitForPauseAsync(sessionId, runId, pause.PauseId, cancellationToken);
+            Assert.Equal(RunSteeringPauseWaitStatus.Ready, ready.Status);
+            runner.ReleaseJoin();
+            Assert.Equal(
+                RunSteeringSubmissionStatus.Accepted,
+                steering.Submit(sessionId, runId, pause.PauseId, "main conversation only").Status);
+            var execution = await executionTask;
+            Assert.All(execution.Value.Children, child => Assert.Equal("Completed", child.Status));
+            Assert.Equal(new DelegationSteeringSummary(1, 0, 0), execution.Value.Steering);
+            var messages = await steering.PauseParentAtBoundaryAsync(sessionId, runId, cancellationToken);
+            Assert.Equal("main conversation only", Assert.Single(messages).Text);
+            Assert.Empty(await steering.PauseParentAtBoundaryAsync(sessionId, runId, cancellationToken));
+        }
+        finally
+        {
+            runner.ReleaseJoin();
+            steering.CompleteRun(sessionId, runId);
+        }
+    }
+
     /// <summary>Verifies cancellation that arrives during join wins even when the joiner returns late.</summary>
     [Fact]
     public async Task ExecuteAsync_ParentCancellationDuringNonCooperativeJoin_ReturnsCancelled()
@@ -1044,7 +1084,8 @@ public sealed class DelegateAgentsToolExecutionTests
         IExplorerAssignmentRunnerFactory runners,
         DelegateAgentsOptions? configuredOptions = null,
         IPromptLoader? prompts = null,
-        DelegateAgentsProjectionLimits? projectionLimits = null)
+        DelegateAgentsProjectionLimits? projectionLimits = null,
+        RunSteeringCoordinator? steering = null)
     {
         var workspaceId = WorkspaceId.New();
         var baseline = new WorkspaceBaseline(
@@ -1086,14 +1127,15 @@ public sealed class DelegateAgentsToolExecutionTests
                 runners,
                 coordinator,
                 options,
-                promptLoader)
+                promptLoader,
+                steering: steering)
             : new DelegateAgentsTool(
                 plans,
                 runners,
                 coordinator,
                 options,
                 promptLoader,
-                steering: null,
+                steering: steering,
                 projectionLimits: projectionLimits);
         return new ToolFixture(tool, context, plans);
     }

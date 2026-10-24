@@ -125,8 +125,7 @@ public sealed class RepositoryLifecycle :
         cancellationToken.ThrowIfCancellationRequested();
         var repositoryPath = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(command.RepositoryPath));
-        var facts = await _factsStore.GetAsync(repositoryPath, cancellationToken);
-        return facts?.Trust;
+        return await _factsStore.GetTrustAsync(repositoryPath, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -169,8 +168,9 @@ public sealed class RepositoryLifecycle :
 
         _policyBinding?.Invalidate();
         var persisted = await _factsStore.GetAsync(repositoryPath, cancellationToken);
-        var effectiveTrust = persisted is not null && persisted.Trust.Level > command.RequestedTrust
-            ? persisted.Trust.Level
+        var remembered = await _factsStore.GetTrustAsync(repositoryPath, cancellationToken);
+        var effectiveTrust = remembered is not null && remembered.Level > command.RequestedTrust
+            ? remembered.Level
             : command.RequestedTrust;
         var rememberedTrust = effectiveTrust;
         if (command.TrustCeiling is { } ceiling && effectiveTrust > ceiling)
@@ -178,8 +178,8 @@ public sealed class RepositoryLifecycle :
             effectiveTrust = ceiling;
         }
 
-        var grantedAt = persisted is not null && persisted.Trust.Level == effectiveTrust
-            ? persisted.Trust.GrantedAt
+        var grantedAt = remembered is not null && remembered.Level == effectiveTrust
+            ? remembered.GrantedAt
             : DateTimeOffset.UtcNow;
         var trust = new RepositoryTrustState(repositoryPath, effectiveTrust, grantedAt);
         if (_policyBinding is not null && _repositoryOpened is not null)
@@ -198,7 +198,7 @@ public sealed class RepositoryLifecycle :
         }
 
         var configuration = new ConfigurationBuilder()
-            .AddJsonFile(configPath, optional: true)
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(configPath, _maximumConfigurationBytes), projectPreferencesOnly: _policyBinding is not null))
             .Build();
         var configuredSolution = configuration["solution:path"];
         string[] approvedRoots = [.. configuration.GetSection("editableRoots")
@@ -219,7 +219,7 @@ public sealed class RepositoryLifecycle :
         if (_policyBinding is not null)
         {
             var policy = _policyBinding.Current;
-            approvedRoots = [.. policy.EditableRoots.Select(root => Path.GetRelativePath(repositoryPath, root))];
+            approvedRoots = [.. policy.MutationRoots.Select(root => Path.GetRelativePath(repositoryPath, root))];
             prohibitedPaths = [.. policy.ProhibitedPaths];
         }
 
@@ -309,6 +309,11 @@ public sealed class RepositoryLifecycle :
             persisted?.SolutionPath,
             persisted?.TargetFrameworks.ToArray() ?? [],
             environment ?? persisted?.Environment);
+        if (remembered?.Level != rememberedTrust)
+        {
+            await _factsStore.SetTrustAsync(facts.Trust, cancellationToken);
+        }
+
         await _factsStore.UpsertAsync(facts, cancellationToken);
         var session = new RepositorySession(
             command.SessionId,
@@ -945,29 +950,10 @@ public sealed class RepositoryLifecycle :
 
         await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
-            async token =>
+            token =>
             {
-                JsonObject root;
-                if (File.Exists(configurationPath))
-                {
-                    if (new FileInfo(configurationPath).Length > _maximumConfigurationBytes)
-                    {
-                        throw new InvalidDataException(
-                            "Repository configuration exceeds the configured byte limit.");
-                    }
-
-                    var content = await File.ReadAllTextAsync(configurationPath, token);
-                    root = JsonNode.Parse(
-                        content,
-                        new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-                        RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-                        ?? throw new InvalidDataException(
-                            "Repository configuration must be a JSON object.");
-                }
-                else
-                {
-                    root = [];
-                }
+                token.ThrowIfCancellationRequested();
+                var root = ConfigurationDocument.ReadObject(configurationPath, _maximumConfigurationBytes);
 
                 JsonObject solution;
                 if (root["solution"] is JsonObject existingSolution)
@@ -990,7 +976,7 @@ public sealed class RepositoryLifecycle :
                     throw new InvalidDataException("The updated repository configuration exceeds its configured byte limit.");
                 }
 
-                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(serialized));
+                return Task.FromResult<RepositorySettingsUpdate?>(new(Encoding.UTF8.GetBytes(serialized)));
             },
             cancellationToken: cancellationToken);
     }

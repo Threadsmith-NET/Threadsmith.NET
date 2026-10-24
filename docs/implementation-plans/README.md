@@ -6,6 +6,8 @@ Read [planning governance](planning-governance.md) before changing this package.
 
 ## Working with an implementation document
 
+- [Ask-user clarification](maintenance-ask-user.md)
+
 1. Read `planning-governance.md`, `00-shared-context.md`, and the applicable DOX chain.
 2. Read the active implementation document's status, delivery track, prerequisites, architectural context, tasks, tests, and acceptance criteria.
 3. Read the cited ADRs, guardrails, capability contracts, acceptance scenarios, and implemented contracts.

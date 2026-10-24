@@ -165,6 +165,57 @@ public static class TuiKitCommandInputTests
             timeout.Token);
     }
 
+    /// <summary>One active-run Enter submits the exact text at the steering boundary.</summary>
+    [Fact]
+    public static async Task ActiveRunSubmissionDeliversExactSteeringWithoutSecondEnter()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var backend = new HeadlessBackend(80, 24);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            {
+                backend.FeedInput("  guide main\nonly  \r");
+                Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
+            }
+
+            var input = await surface.ReadComposerAsync(new ComposerRequest("steer > ", ComposerPurpose.Steering), token);
+            Assert.True(input.IsSubmitted);
+            Assert.Equal("  guide main\nonly  ", input.Text);
+            var ordinary = surface.ReadComposerAsync(new ComposerRequest("repo > "), token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            backend.FeedInput("next\r");
+            Assert.Equal("next", (await ordinary).Text);
+        },
+            cancellationToken);
+    }
+
+    /// <summary>Finishing before admission preserves the submitted draft for the next turn.</summary>
+    [Fact]
+    public static async Task ActiveRunFinishingBeforeSteeringRestoresSubmittedText()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var backend = new HeadlessBackend(80, 24);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            {
+                backend.FeedInput("keep this\r");
+                Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
+            }
+
+            var ordinary = surface.ReadComposerAsync(new ComposerRequest("repo > "), token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            backend.FeedInput("\r");
+            Assert.Equal("keep this", (await ordinary).Text);
+        },
+            cancellationToken);
+    }
+
     private sealed class ObservedBackend : ITerminalBackend
     {
         private Expectation? _expectation;

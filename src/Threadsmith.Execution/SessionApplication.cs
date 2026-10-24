@@ -59,8 +59,9 @@ public sealed partial class SessionApplication :
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
     private readonly RunSteeringCoordinator _steering;
+    private readonly UserQuestionCoordinator? _userQuestions;
     private readonly IOutputSanitizer _sanitizer;
-    private readonly ConcurrentDictionary<SessionId, byte> _sessions = new();
+    private readonly ConcurrentDictionary<SessionId, bool> _sessions = new();
     private readonly Func<SessionId, CancellationToken, Task<ToolInvocationContext>>?
         _toolContextFactory;
 
@@ -85,15 +86,15 @@ public sealed partial class SessionApplication :
         return HandleAsync(new CreateSessionCommand(name), cancellationToken);
     }
 
-    /// <summary>Registers a safely restored durable session for subsequent commands.</summary>
-    public void RegisterRestoredSession(SessionId sessionId)
+    /// <summary>Registers restored session availability without treating read-only history as a missing session.</summary>
+    public void RegisterRestoredSession(SessionId sessionId, bool isWritable = true)
     {
         if (sessionId == default)
         {
             throw new ArgumentException("The session id cannot be default.", nameof(sessionId));
         }
 
-        _sessions.TryAdd(sessionId, 0);
+        _sessions[sessionId] = isWritable;
     }
 
     /// <inheritdoc />
@@ -162,7 +163,8 @@ public sealed partial class SessionApplication :
         SourceEditApplication? sourceEdits = null,
         IRepositoryIntelligenceStatusProvider? repositoryIntelligence = null,
         IRepositoryIntelligenceOperations? intelligenceOperations = null,
-        IImageArtifactStore? imageArtifacts = null)
+        IImageArtifactStore? imageArtifacts = null,
+        UserQuestionCoordinator? userQuestions = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -179,6 +181,7 @@ public sealed partial class SessionApplication :
         }
 
         _events = events;
+        _userQuestions = userQuestions;
         _model = model;
         _imageArtifacts = imageArtifacts;
         _budgetFactory = budgetFactory ?? budget switch
@@ -230,7 +233,7 @@ public sealed partial class SessionApplication :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Name);
         var id = SessionId.New();
-        if (!_sessions.TryAdd(id, 0))
+        if (!_sessions.TryAdd(id, true))
         {
             throw new InvalidOperationException("The session identifier already exists.");
         }
@@ -266,9 +269,14 @@ public sealed partial class SessionApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_sessions.ContainsKey(command.SessionId))
+        if (!_sessions.TryGetValue(command.SessionId, out var isWritable))
         {
             throw new InvalidOperationException($"Session {command.SessionId.Value:D} does not exist.");
+        }
+
+        if (!isWritable)
+        {
+            throw new InvalidOperationException($"Session {command.SessionId.Value:D} is read-only or awaiting model selection. Review the resume warnings; use /models to restore an unavailable model or /new to start a writable session.");
         }
 
         if (_semanticRefreshCoordinator is null)
@@ -456,7 +464,7 @@ public sealed partial class SessionApplication :
         SetConversationContextModeCommand command,
         CancellationToken cancellationToken = default)
     {
-        if (_conversationStore is null || !_sessions.ContainsKey(command.SessionId))
+        if (_conversationStore is null || !_sessions.TryGetValue(command.SessionId, out var isWritable) || !isWritable)
         {
             return false;
         }
@@ -728,6 +736,19 @@ public sealed partial class SessionApplication :
         {
             _sourceEdits?.CompleteRun(runId);
             _steering.CompleteRun(command.SessionId, runId);
+            if (_userQuestions is not null)
+            {
+                try
+                {
+                    await _userQuestions.EndRunAsync(command.SessionId, runId, CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    failure ??= exception;
+                    _logger.LogError(exception, "Question cleanup failed for {RunId}", runId.Value);
+                }
+            }
+
             try
             {
                 if (registration.IntelligenceRun is { } intelligenceRun)

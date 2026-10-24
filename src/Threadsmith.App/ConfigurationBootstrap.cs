@@ -2,6 +2,8 @@ namespace Threadsmith.App;
 
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -66,8 +68,8 @@ internal static class ConfigurationBootstrap
         // The byte cap comes only from trusted machine/user/environment layers. Repository configuration
         // cannot widen the bound that protects itself, its session override, or its separate secret store.
         var trustedConfiguration = new ConfigurationBuilder()
-            .AddJsonFile(paths.MachineConfiguration, optional: true)
-            .AddJsonFile(paths.UserConfiguration, optional: true)
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.MachineConfiguration)))
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.UserConfiguration)))
             .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))
             .Build();
         var maximumRepositoryConfigurationBytes = trustedConfiguration.GetValue(
@@ -88,16 +90,21 @@ internal static class ConfigurationBootstrap
             .Select(argument => argument[6..].Split('=', 2))
             .Where(parts => parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]))
             .ToDictionary(parts => parts[0], parts => (string?)parts[1], StringComparer.OrdinalIgnoreCase);
+        if (commandLineConfiguration.Keys.Any(ConfigurationPermissionCatalog.IsPermission))
+        {
+            throw new InvalidDataException("Permission settings cannot be supplied by --set. Use user-owned repository permissions or trusted user/machine configuration.");
+        }
 
         // Keep compiled defaults together so the remaining providers express precedence, not fallback logic.
         return new ConfigurationBuilder()
             .AddInMemoryCollection(CreateCompiledDefaults())
-            .AddJsonFile(paths.MachineConfiguration, optional: true)
-            .AddJsonFile(paths.UserConfiguration, optional: true)
-            .AddJsonFile(paths.RepositoryConfiguration, optional: true)
-            .AddJsonFile(paths.SessionConfiguration, optional: true)
+            .AddInMemoryCollection(BuildTrusted(paths).AsEnumerable())
+            .Add(new RepositoryConfigurationSource { InitialData = ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.RepositoryConfiguration, maximumRepositoryConfigurationBytes), projectPreferencesOnly: true) })
+            .Add(new RepositoryConfigurationSource { InitialData = ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.SessionConfiguration, maximumRepositoryConfigurationBytes), projectPreferencesOnly: true) })
             .AddInMemoryCollection(commandLineConfiguration)
-            .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))
+            .AddInMemoryCollection(new ConfigurationBuilder()
+                .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))
+                .Build().AsEnumerable().Where(pair => !ConfigurationPermissionCatalog.IsPermission(pair.Key)))
             .Build();
     }
 
@@ -106,6 +113,20 @@ internal static class ConfigurationBootstrap
     {
         ArgumentNullException.ThrowIfNull(paths);
         return SecurityPolicyConfigurationLoader.BuildTrusted(paths);
+    }
+
+    /// <summary>Resolves a scalar and its ownership from the actual configured provider order, including explicit null.</summary>
+    internal static (string? Value, bool RepositoryOwned) ResolveValue(IConfigurationRoot configuration, string key)
+    {
+        foreach (var provider in configuration.Providers.Reverse())
+        {
+            if (provider.TryGet(key, out var value))
+            {
+                return (value, provider is RepositoryConfigurationSource.RepositoryConfigurationProvider);
+            }
+        }
+
+        return (null, false);
     }
 
     /// <summary>Creates the user configuration from the shipped documented example on first launch.</summary>
@@ -128,7 +149,11 @@ internal static class ConfigurationBootstrap
                     var content = File.Exists(examplePath)
                         ? StripJsonComments(await File.ReadAllTextAsync(examplePath, token))
                         : "{}\n";
-                    return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(content)) { Overwrite = false, IsHostInitialization = true };
+                    var root = JsonNode.Parse(content, new JsonNodeOptions { PropertyNameCaseInsensitive = true }, RepositorySettingsCoordinator.DocumentOptions) as JsonObject
+                        ?? throw new InvalidDataException("The shipped configuration example must contain an object.");
+                    ConfigurationDocument.RemovePermissionProperties(root);
+                    root["configurationOwnershipVersion"] = 1;
+                    return new RepositorySettingsUpdate(JsonSerializer.SerializeToUtf8Bytes(root, new JsonSerializerOptions { WriteIndented = true })) { Overwrite = false, IsHostInitialization = true };
                 },
                 cancellationToken: cancellationToken);
         }

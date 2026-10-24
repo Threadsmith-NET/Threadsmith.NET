@@ -21,7 +21,8 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 1. Ask for a repository change that requires reading two supporting files outside the write set.
 2. Confirm one ordinary conversation inspects the evidence and invokes `edit_source` with related ordered operations.
-3. Review the exact diff when mutation policy requires it; approve the intended operations.
+   With legacy `editableRoots: ["src/"]` in disposable trusted configuration, include targets beneath `container/source/`, `tests/`, `docs/` and `.inbox/`. Mutation roots remain repository-contained, with child assignment narrowing; protected configuration, policy and secret stores remain blocked.
+3. With no trusted mutation restriction, confirm saved `AlwaysTrustRepo` or locally selected `TrustSession` applies eligible edits without an approval prompt. With `ReviewAll` or an explicit trusted review restriction, inspect the exact diff and approve the intended operations in the Apply/Discard selection modal. Escape declines without writing.
 4. Confirm committed bytes, applied receipt and versioned advisory diagnostics reach the conversation.
 5. Complete related repairs and confirm the final cumulative diff reflects actual disk effects. Verify edit-only completion launches no build/test work; explicitly invoke checks and report their actual results when validation is requested.
 
@@ -319,7 +320,8 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 8. Inspect the clone's durable state. Confirm it excludes active runs, pending approvals, mutation transactions, worker leases, hook invocations, cancellation state, transient `THINKING`/reasoning, raw provider content, expanded secrets, credentials, and opaque provider cache/continuation handles. Interrupted execution/delegation state is historical/paused and cannot execute twice without its normal explicit reconciliation gates.
 9. Attempt `/new`, `/resume`, and `/clone` during model streaming, ordinary tools, MCP, mutation, validation, hooks, skills, selectors, and delegated work. Confirm each waits for or rejects at a complete safe boundary, cancellation/failure before publication leaves the current session active, and no mixed model/session/context/status generation is observable.
 10. After resume and clone, inspect the first model request. Confirm canonical stateless reconstruction, current repository instruction/trust/tool/policy revalidation, invalidation of stale context inspections/cache families, honest unknown/pending values where reconstruction lacks data, and no provider-owned continuation reuse.
-11. Repeat direct resume, selector resume, new, clone, copy/paste of the return command, cancellation, resize, bulk paste, native selection, restart, and a large bounded catalog in a real terminal. Confirm responsive interaction, deterministic labels, monotonic transition timing, no completed `THINKING` row, and secret-free diagnostics.
+11. Resume supported schema-2 repository, approval and mutation history, including a session previously marked legacy by an older host. Confirm the next request executes normally using the current repository workspace/trust/solution binding without replaying historical approvals or writes. Without a current binding, old runtime identities and compiler readiness must not become executable authority. Unknown future schemas remain explicitly read-only, and attempting a new turn reports that state rather than claiming the session does not exist.
+12. Repeat direct resume, selector resume, new, clone, copy/paste of the return command, cancellation, resize, bulk paste, native selection, restart, and a large bounded catalog in a real terminal. Confirm responsive interaction, deterministic labels, monotonic transition timing, no completed `THINKING` row, and secret-free diagnostics.
 
 **Verifies:** durable/tolerant persistence and conversation reconstruction, execution/delegation checkpoints, active model/reasoning and status truth, canonical cache-safe request recovery, and repository-bound catalog, atomic transition authority, `/new`, `/resume`, and independent `/clone` semantics.
 
@@ -597,7 +599,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario AL — Exact Authorization and Retired Configuration
 
-1. Configure supported mutation approval policies and verify exact-diff review/auto-authorization follows the documented policy.
+1. With repository `alwaysTrustRepo` and no trusted ceiling or local consent, verify effective Review All. Select `/policy AlwaysTrustRepo` once; verify local consent survives restart and ordinary commits without another prompt, copied repository settings grant nothing, and `/policy ReviewAll` revokes automation. Explicit trusted restrictions still win, and `TrustSession` expires.
 2. Load legacy planning approval, tranche and plan-only limit settings beside unrelated valid configuration.
 3. Confirm writable known obsolete properties are migrated idempotently, read-only values are ignored with a bounded warning, and unrelated bytes/settings are preserved.
 4. Confirm legacy planning trust grants no source-write authority and removed commands/tools cannot reactivate the old workflow.
@@ -856,3 +858,25 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 3. Invoke `repository_archeology(question)` and observe one read-only Explorer child using real pipeline Git readers and intelligence query. Denied paths and tools remain denied; nested delegation, collection and mutations are rejected. Join exactly one correlated parent result with actual usage and evidence references.
 4. Disable intelligence while that child is active. Observe terminal child cleanup before the feature gate releases, both Tools rows refresh, and a stale invocation rejects. Re-enable and run another permitted investigation without changing automatic recall or explicit denials.
 5. Resume a legacy memory-search call and observe one `legacy_search_removed` result pointing to the new query tool; completed historical results remain readable.
+
+## Scenario ASK-USER - Explicit terminal clarification
+
+1. Ask a parent to resolve a material ambiguity. Observe one question modal after model streaming stops. No sibling tool runs in a mixed question batch and no model request occurs while unanswered.
+2. Show the heading The Assistant Has a Question followed by one blank line. Choices include a harness-owned numbered Other; only selecting Other opens its text editor. No-choice questions open an editor directly. Arrows/numbers select; Enter submits. Escape/Cancel returns The user declined to answer and resumes once; no hidden pending state remains.
+3. Cancel with F5 and inspect the correlated cancellation result. Cancel the run with Ctrl+C and confirm the modal closes and no continuation effects occur.
+4. Opt in to the host bell; observe one cue per request, none on reopen. F10 mutes subsequent cues. Repository configuration cannot enable the cue.
+5. Restart with a pending or accepted-but-undelivered question. Observe Interrupted history and no automatic replay. Children, headless callers, and a parent with live delegation cannot create a wait.
+
+**Verifies:** Bounded explicit answers, shared modal ownership, resource release, cancellation, and interrupted recovery. See MTP-ASK-USER. Automated results do not establish physical terminal/audio behavior.
+
+ASK-USER opt-in addendum: a fresh/default host omits ask_user from model advertisement and rejects forced invocation before persistence. Tools retains a disabled entry with shared Tools enablement guidance. The shared repository tool preference must be enabled, and ordinary trusted tool policy must independently allow it. Disabling restores normal uninterrupted model work.
+
+## Scenario MAIN-STEERING — Main-conversation steering during delegation
+
+1. Start two delegated children and submit multiline steering in MAIN with one Enter.
+2. Confirm children continue through model and tool boundaries and complete without receiving steering text.
+3. Confirm the parent receives the exact message once before its next model request, after joining the delegation.
+4. Open steering with an empty draft and leave it pending while children complete; their progress stays visible. Dismiss or submit and confirm the parent resumes.
+5. Race submission with run completion; text that cannot be admitted returns to the ordinary composer.
+
+**Verifies:** parent-only steering, independent child progress, one-submission delivery, and preservation of undelivered drafts.

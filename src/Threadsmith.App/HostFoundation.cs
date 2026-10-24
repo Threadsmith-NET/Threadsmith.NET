@@ -400,7 +400,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 "Threadsmith");
             Directory.CreateDirectory(factsDirectory);
             var repositoryFacts = new SqliteRepositoryFactsStore(
-                $"Data Source={Path.Combine(factsDirectory, "repository-facts.db")}");
+                $"Data Source={Path.Combine(factsDirectory, "repository-facts.db")}",
+                paths.UserConfiguration);
             await repositoryFacts.InitializeAsync();
             persistenceSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
@@ -820,7 +821,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             eventStore,
             new DomainEventMigrationRegistry([], currentVersion: 1),
             loggerFactory.CreateLogger<SessionRestorer>(),
-            conversationStore);
+            conversationStore,
+            sanitizer);
         var retentionOptions = new RetentionOptions
         {
             Enabled = configuration.GetValue("persistence:retention:enabled", true),
@@ -1095,6 +1097,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 requireRunProcessApproval,
                 shellExecutable),
             new DateTimeTool(promptLoader),
+            new AskUserTool(promptLoader),
             new CSharpScriptTool(scriptEngine, promptLoader, configuration.GetValue("tools:config:csharp_script:max_code_characters", 65536)),
             new WebSearchTool(
                 webSearchClient,
@@ -1120,7 +1123,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             mcpApprovalPath: mcpApprovalPath,
             fetchAuthorization: webFetchAuthorization,
             writeFileConfiguration: writeFileConfiguration,
-            policyStoreLimits: operationalLimits.PolicyStores);
+            policyStoreLimits: operationalLimits.PolicyStores,
+            policyBinding: policyBinding);
         return (
             stateManager,
             new ToolRegistry(

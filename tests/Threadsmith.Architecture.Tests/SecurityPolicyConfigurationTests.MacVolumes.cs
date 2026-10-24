@@ -16,16 +16,14 @@ public sealed partial class SecurityPolicyConfigurationTests
     {
         Assert.SkipUnless(OperatingSystem.IsMacOS(), "Requires macOS disk-image volumes.");
         var token = TestContext.Current.CancellationToken;
-        var rootImage = Path.Combine(_root, "root.sparseimage");
-        var childImage = Path.Combine(_root, "child.sparseimage");
         var mount = Path.Combine(_paths.RepositoryRoot, "Mount");
         var rootAttached = false;
         var childAttached = false;
         var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
         try
         {
-            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "Case-sensitive APFS" : "APFS", "-volname", "ThreadsmithRoot", rootImage], token);
-            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "APFS" : "Case-sensitive APFS", "-volname", "ThreadsmithChild", childImage], token);
+            var rootImage = await CreateDiskImageAsync("root", rootSensitive, processes, token);
+            var childImage = await CreateDiskImageAsync("child", !rootSensitive, processes, token);
             Directory.Delete(Path.Combine(_paths.RepositoryRoot, ".threadsmith"));
             // Nested mountpoints must retain real ownership rather than disk-image
             // noowners semantics, which macOS rejects for unprivileged attachment.
@@ -72,18 +70,100 @@ public sealed partial class SecurityPolicyConfigurationTests
 
         async Task RunDiskImageAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken)
         {
-            var request = new ProcessExecutionRequest
-            {
-                ToolInvocationId = ToolInvocationId.New(),
-                RunId = RunId.New(),
-                FileName = "/usr/bin/hdiutil",
-                Origin = ProcessRequestOrigin.Host,
-                Arguments = arguments,
-                WorkingDirectory = _root,
-                Timeout = cancellationToken.CanBeCanceled ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(30),
-            };
+            var request = DiskImageRequest(arguments);
             var result = await processes.RunAsync(request, cancellationToken);
             Assert.True(result.ExitCode == 0, $"hdiutil {string.Join(' ', arguments)}: {result.StandardError}{result.StandardOutput}");
+        }
+    }
+
+    /// <summary>Only the observed transient provisioning error receives bounded recovery.</summary>
+    [Theory]
+    [InlineData(1, "hdiutil: create failed - Resource busy\n", 2, true)]
+    [InlineData(3, "hdiutil: create failed - Resource busy\n", 3, false)]
+    [InlineData(1, "hdiutil: create failed - Permission denied\n", 1, false)]
+    public async Task DiskImageProvisioningRetriesOnlyBusyCreation(int failures, string diagnostic, int expectedCalls, bool succeeds)
+    {
+        var processes = new DiskImageProcessFixture(failures, diagnostic);
+        var operation = CreateDiskImageAsync("probe", true, processes, TestContext.Current.CancellationToken);
+        if (succeeds)
+        {
+            var path = await operation;
+            Assert.Equal(processes.Requests[^1].Arguments[^1], path);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => operation.WaitAsync(TestContext.Current.CancellationToken));
+        }
+
+        Assert.Equal(expectedCalls, processes.Requests.Count);
+        Assert.Equal(expectedCalls, processes.Requests.Select(request => request.Arguments[^1]).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(processes.Requests, request =>
+        {
+            Assert.Equal("create", request.Arguments[0]);
+            Assert.Equal(_root, Path.GetDirectoryName(request.Arguments[^1]));
+            Assert.DoesNotContain("-ov", request.Arguments);
+        });
+    }
+
+    private async Task<string> CreateDiskImageAsync(string name, bool caseSensitive, IProcessManager processes, CancellationToken cancellationToken)
+    {
+        // macOS can transiently lock newly created images (runner-images#7522).
+        // Retry provisioning only, never policy assertions, attach, or the whole test.
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = Path.Combine(_root, $"{name}-{attempt}.sparseimage");
+            var request = DiskImageRequest(["create", "-size", "256m", "-type", "SPARSE", "-fs", caseSensitive ? "Case-sensitive APFS" : "APFS", "-volname", $"Threadsmith-{name}-{attempt}", path]);
+            var result = await processes.RunAsync(request, cancellationToken);
+            if (result.ExitCode == 0)
+            {
+                return path;
+            }
+
+            var diagnostic = $"hdiutil create attempt {attempt}: {path}; exit={result.ExitCode}; {result.StandardError}{result.StandardOutput}";
+            TestContext.Current.TestOutputHelper?.WriteLine(diagnostic);
+            if (attempt == 3 || result.TimedOut || !result.StandardError.Trim().Equals("hdiutil: create failed - Resource busy", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(diagnostic);
+            }
+        }
+
+        throw new InvalidOperationException("Disk image provisioning exhausted its attempt budget.");
+    }
+
+    private ProcessExecutionRequest DiskImageRequest(IReadOnlyList<string> arguments) => new()
+    {
+        ToolInvocationId = ToolInvocationId.New(),
+        RunId = RunId.New(),
+        FileName = "/usr/bin/hdiutil",
+        Origin = ProcessRequestOrigin.Host,
+        Arguments = arguments,
+        WorkingDirectory = _root,
+        // Infrastructure watchdog, not an assertion about product execution speed.
+        Timeout = TimeSpan.FromMinutes(1),
+    };
+
+    private sealed class DiskImageProcessFixture : IProcessManager
+    {
+        private readonly int _failures;
+        private readonly string _diagnostic;
+
+        public DiskImageProcessFixture(int failures, string diagnostic)
+        {
+            _failures = failures;
+            _diagnostic = diagnostic;
+        }
+
+        public List<ProcessExecutionRequest> Requests { get; } = [];
+
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
+
+        public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            var failed = Requests.Count <= _failures;
+            return Task.FromResult(new ProcessExecutionResult(0, failed ? 1 : 0, string.Empty, failed ? _diagnostic : string.Empty, false, false, false, TimeSpan.Zero));
         }
     }
 }

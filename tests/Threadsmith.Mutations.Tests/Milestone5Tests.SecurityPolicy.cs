@@ -23,6 +23,7 @@ public static partial class Milestone5Tests
             RepositoryPath = original.Root,
             Fingerprint = "test-policy",
             EditableRoots = [Path.Combine(original.Root, "src")],
+            MutationRoots = [original.Root],
         };
         var binding = new SessionPolicyBinding();
         binding.Publish(policy);

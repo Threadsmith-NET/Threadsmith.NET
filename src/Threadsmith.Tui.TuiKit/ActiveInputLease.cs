@@ -80,13 +80,15 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
     }
 
     /// <summary>Requests one steering prompt per active-run lease.</summary>
-    internal void Steer()
+    internal bool Steer()
     {
         if (!_steered)
         {
             _steered = true;
-            _signals.Writer.TryWrite(ActiveRunInputSignal.SteeringRequested);
+            return _signals.Writer.TryWrite(ActiveRunInputSignal.SteeringRequested);
         }
+
+        return false;
     }
 
     /// <summary>Admits a read-only context action without entering steering.</summary>
@@ -112,14 +114,23 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
         var now = _clock.GetTimestamp();
         if (_escape is { } previous && _clock.GetElapsedTime(previous, now).TotalMilliseconds <= 850)
         {
-            _cancelled = true;
-            _escape = null;
-            _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
+            Cancel();
         }
         else
         {
             _escape = now;
             _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationArmed);
+        }
+    }
+
+    /// <summary>Cancels the owning run through its existing input signal channel.</summary>
+    internal void Cancel()
+    {
+        if (!_cancelled)
+        {
+            _cancelled = true;
+            _escape = null;
+            _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
         }
     }
 

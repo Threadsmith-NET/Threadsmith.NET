@@ -358,7 +358,7 @@ public sealed partial class SessionApplication
 
         var invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
         registration.RepositoryIdentity = invocationContext?.RepositoryPath;
-        return invocationContext;
+        return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions };
     }
 
     private async Task RefreshMemoryContextAsync(
@@ -1396,6 +1396,40 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
+            if (result.Suspension is { } question)
+            {
+                var questions = _userQuestions ?? throw new InvalidOperationException("Question coordination is unavailable.");
+                round.Registration.RunStopwatch.Stop();
+                try
+                {
+                    var answer = await questions.WaitAsync(question, cancellationToken);
+                    if (invocationContext.SecurityPolicy is { } captured)
+                    {
+                        invocationContext.PolicyBinding?.Validate(captured);
+                    }
+
+                    var current = await CreateToolInvocationContextAsync(round.Registration, cancellationToken);
+                    if (current is null || RepositoryIdentity.Create(current.RepositoryPath) != question.RepositoryIdentity
+                        || (current.SecurityPolicy?.Generation ?? 0) != question.PolicyGeneration)
+                    {
+                        throw new InvalidOperationException("The repository or policy changed while awaiting clarification.");
+                    }
+
+                    result = await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, answer, cancellationToken);
+                }
+                catch
+                {
+                    // Pre-delivery failures interrupt the invocation. If terminal publication
+                    // already began, the pipeline rethrows that attempt without another outcome or hook.
+                    await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, new(UserQuestionStatus.Interrupted, []), CancellationToken.None);
+                    throw;
+                }
+                finally
+                {
+                    round.Registration.RunStopwatch.Start();
+                }
+            }
+
             if (round.Registration.UsesMemoryConcepts)
             {
                 if (intentRepository == round.Registration.MemoryRepositoryIdentity
@@ -1473,6 +1507,10 @@ public sealed partial class SessionApplication
                 round.ModelRequest.ToolContinuationRound,
                 !result.Succeeded,
                 result.Images));
+            if (batchResult.Result.Suspension is { } consumedQuestion && _userQuestions is not null)
+            {
+                await _userQuestions.ConsumeAsync(consumedQuestion, cancellationToken);
+            }
         }
 
         return true;

@@ -1,8 +1,5 @@
 namespace Threadsmith.Workspaces;
 
-using System.Text;
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 
@@ -97,26 +94,31 @@ public static class MutationRiskCalculator
         : StringComparison.Ordinal;
 }
 
-/// <summary>Repository-backed session mutation policy with invariant path and secret guardrails.</summary>
+/// <summary>Locally approved repository mutation policy with invariant path and secret guardrails.</summary>
 public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
 {
     private readonly SessionPolicyBinding? _policyBinding;
-    private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
+    private readonly IRepositoryFactsStore? _facts;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _repositoryConfigurationPath;
     private MutationApprovalPolicy _currentPolicy;
+    private ConsentState _consent = new(null, 0);
     private int _largeDiffThreshold;
+    private bool _migrationDecisionMade;
 
     /// <summary>Initializes a new instance of the <see cref="MutationApprovalPolicyService"/> class.</summary>
     /// <param name="configuration">Effective layered configuration.</param>
-    /// <param name="repositoryConfigurationPath">Repository config path used for saved policy choices.</param>
+    /// <param name="repositoryConfigurationPath">Repository identity hint; permission choices are never written here.</param>
     /// <param name="policyBinding">Optional host security ceiling and generation owner.</param>
+    /// <param name="facts">Host-owned repository trust persistence; repository configuration never supplies consent.</param>
     public MutationApprovalPolicyService(
         IConfiguration? configuration = null,
         string? repositoryConfigurationPath = null,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        IRepositoryFactsStore? facts = null)
     {
         _policyBinding = policyBinding;
+        _facts = facts;
         if (repositoryConfigurationPath is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(repositoryConfigurationPath);
@@ -127,15 +129,64 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     }
 
     /// <inheritdoc />
-    public MutationApprovalPolicy CurrentPolicy => _currentPolicy;
+    public MutationApprovalPolicy CurrentPolicy
+    {
+        get
+        {
+            var authority = _policyBinding?.Current;
+            var selected = Volatile.Read(ref _consent).Choice ?? authority?.MutationDefault ?? MutationApprovalPolicy.ReviewAll;
+            var ceiling = authority?.HasExplicitMutationCeiling == true
+                ? authority.MutationCeiling
+                : MutationApprovalPolicy.AlwaysTrustRepo;
+            return Restrict(selected, ceiling);
+        }
+    }
 
     /// <inheritdoc />
-    public EffectiveSessionPolicy? SecurityPolicy => _policyBinding?.Current;
+    public MutationApprovalPolicy RequestedPolicy => Volatile.Read(ref _consent).Choice
+        ?? _policyBinding?.Current.LegacyRepositoryMutationRequest ?? _policyBinding?.Current.MutationDefault ?? _currentPolicy;
+
+    /// <inheritdoc />
+    public bool NeedsLocalConsent => Volatile.Read(ref _consent).Choice is null && RequestedPolicy != MutationApprovalPolicy.ReviewAll
+        && CurrentPolicy == MutationApprovalPolicy.ReviewAll
+        && _policyBinding?.Current.HasExplicitMutationCeiling != true;
+
+    /// <inheritdoc />
+    public bool NeedsPermissionMigrationDecision => !_migrationDecisionMade && _policyBinding?.Current.NeedsPermissionMigrationDecision == true;
+
+    /// <inheritdoc />
+    public async Task SetPermissionMigrationDecisionAsync(bool useDefaults, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var root = _repositoryConfigurationPath is null ? null : Path.GetDirectoryName(Path.GetDirectoryName(_repositoryConfigurationPath));
+            if (root is null || _facts is null)
+            {
+                throw new InvalidOperationException("The host has no active repository permission store.");
+            }
+
+            await _facts.SetLegacyPermissionDecisionAsync(root, useDefaults, cancellationToken);
+            _migrationDecisionMade = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public EffectiveSessionPolicy? SecurityPolicy => _policyBinding is null ? null
+        : _policyBinding.Current with { MutationConsentRevision = Volatile.Read(ref _consent).Revision };
 
     /// <inheritdoc />
     public void ValidatePolicyGeneration(EffectiveSessionPolicy? capturedPolicy)
     {
         _policyBinding?.Validate(capturedPolicy ?? throw new MutationPolicyException("PolicyGenerationStale: the mutation has no captured policy."));
+        if (capturedPolicy is not null && capturedPolicy.MutationConsentRevision != Volatile.Read(ref _consent).Revision)
+        {
+            throw new MutationPolicyException("PolicyGenerationStale: local mutation consent changed; stage a new diff.");
+        }
     }
 
     /// <inheritdoc />
@@ -157,17 +208,29 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            if (string.Equals(configurationPath, _repositoryConfigurationPath, PathComparison))
+            EnsureNoReparsePoints(normalizedRoot, configurationPath);
+
+            var keepSessionChoice = string.Equals(configurationPath, _repositoryConfigurationPath, PathComparison)
+                && Volatile.Read(ref _consent).Choice == MutationApprovalPolicy.TrustSession;
+            _migrationDecisionMade = false;
+
+            // Fail closed before reading another repository or an unavailable/corrupt store.
+            SetLocalChoice(MutationApprovalPolicy.ReviewAll);
+            _currentPolicy = MutationApprovalPolicy.ReviewAll;
+            _currentPolicy = _policyBinding?.Current.MutationDefault ?? MutationApprovalPolicy.ReviewAll;
+            var choice = _facts is null ? null : await _facts.GetMutationPolicyAsync(normalizedRoot, cancellationToken);
+            if (choice is not (null or MutationApprovalPolicy.ReviewAll or MutationApprovalPolicy.ReviewRisky or MutationApprovalPolicy.AlwaysTrustRepo))
             {
-                return;
+                throw new InvalidDataException("Stored mutation consent is invalid.");
             }
 
-            EnsureNoReparsePoints(normalizedRoot, configurationPath);
-            var configuration = new ConfigurationBuilder()
-                .AddJsonFile(configurationPath, optional: true)
-                .Build();
-            ApplyConfiguration(configuration);
+            SetLocalChoice(keepSessionChoice ? MutationApprovalPolicy.TrustSession : choice);
             _repositoryConfigurationPath = configurationPath;
+        }
+        catch
+        {
+            SetLocalChoice(MutationApprovalPolicy.ReviewAll);
+            throw;
         }
         finally
         {
@@ -190,10 +253,24 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         {
             if (_repositoryConfigurationPath is not null && policy != MutationApprovalPolicy.TrustSession)
             {
-                await PersistRepositoryPolicyAsync(policy, cancellationToken);
+                var root = Path.GetDirectoryName(Path.GetDirectoryName(_repositoryConfigurationPath))
+                    ?? throw new InvalidOperationException("The repository policy path has no root.");
+                EnsureNoReparsePoints(root, _repositoryConfigurationPath);
+                if (_facts is null)
+                {
+                    throw new InvalidOperationException("Remembered mutation consent is unavailable in this host. Use session-only trust or configure a trust store.");
+                }
+
+                await _facts.SetMutationPolicyAsync(root, policy, cancellationToken);
             }
 
-            _currentPolicy = policy;
+            SetLocalChoice(policy);
+        }
+        catch
+        {
+            // A failed revocation must not leave automatic effects enabled in this process.
+            SetLocalChoice(MutationApprovalPolicy.ReviewAll);
+            throw;
         }
         finally
         {
@@ -205,18 +282,12 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     public bool RequiresApproval(MutationRiskAssessment risk)
     {
         ArgumentNullException.ThrowIfNull(risk);
-        if (_policyBinding?.Current.MutationCeiling is { } ceiling
-            && (ceiling == MutationApprovalPolicy.ReviewAll || (ceiling == MutationApprovalPolicy.ReviewRisky && risk.IsRisky)))
-        {
-            return true;
-        }
-
-        return _currentPolicy switch
+        return CurrentPolicy switch
         {
             MutationApprovalPolicy.ReviewAll => true,
             MutationApprovalPolicy.ReviewRisky => risk.IsRisky,
             MutationApprovalPolicy.TrustSession or MutationApprovalPolicy.AlwaysTrustRepo => false,
-            _ => throw new InvalidOperationException($"Unsupported mutation approval policy '{_currentPolicy}'."),
+            _ => throw new InvalidOperationException($"Unsupported mutation approval policy '{CurrentPolicy}'."),
         };
     }
 
@@ -267,14 +338,14 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             var policy = _policyBinding?.Current;
             try
             {
-                AuthorityControlPathGuard.Validate(fullPath, fullRoot, policy?.ControlPaths);
+                AuthorityControlPathGuard.Validate(fullPath, fullRoot, policy?.ControlPaths, policy?.ControlDirectories);
             }
             catch (UnauthorizedAccessException exception)
             {
                 throw new MutationPolicyException(exception.Message);
             }
 
-            if (policy is not null && (!policy.EditableRoots.Any(root =>
+            if (policy is not null && (!policy.MutationRoots.Any(root =>
                 {
                     var relativeRoot = Path.GetRelativePath(policy.RepositoryPath, root);
                     var workspaceRoot = relativeRoot == ".." || relativeRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relativeRoot)
@@ -309,7 +380,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                 $"Unknown mutation approval policy '{configured}'.");
         }
 
-        if (_currentPolicy == MutationApprovalPolicy.TrustPlan)
+        if (_currentPolicy is MutationApprovalPolicy.TrustPlan or MutationApprovalPolicy.TrustSession)
         {
             _currentPolicy = MutationApprovalPolicy.ReviewAll;
         }
@@ -328,40 +399,23 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             : int.Parse(thresholdText, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private async Task PersistRepositoryPolicyAsync(
-        MutationApprovalPolicy policy,
-        CancellationToken cancellationToken)
+    private void SetLocalChoice(MutationApprovalPolicy? choice)
     {
-        var configurationPath = _repositoryConfigurationPath
-            ?? throw new InvalidOperationException("A repository configuration path is required.");
-        await RepositorySettingsCoordinator.UpdateAsync(
-            configurationPath,
-            async token =>
-            {
-                var root = File.Exists(configurationPath)
-                    ? JsonNode.Parse(
-                        await File.ReadAllTextAsync(configurationPath, token),
-                        new JsonNodeOptions { PropertyNameCaseInsensitive = true },
-                        documentOptions: RepositorySettingsCoordinator.DocumentOptions) as JsonObject
-                        ?? throw new InvalidOperationException(
-                            "Repository configuration must contain a JSON object.")
-                    : [];
-                var mutation = root["mutation"] as JsonObject ?? [];
-                root["mutation"] = mutation;
-                mutation["approvalPolicy"] = policy switch
-                {
-                    MutationApprovalPolicy.ReviewAll => "reviewAll",
-                    MutationApprovalPolicy.ReviewRisky => "reviewRisky",
-                    MutationApprovalPolicy.AlwaysTrustRepo => "alwaysTrustRepo",
-                    _ => throw new ArgumentOutOfRangeException(nameof(policy)),
-                };
+        var previous = Volatile.Read(ref _consent);
+        Volatile.Write(ref _consent, new ConsentState(choice, checked(previous.Revision + 1)));
+    }
 
-                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine))
-                {
-                    AuthorizedPolicyKeys = ["mutation:approvalPolicy"],
-                };
-            },
-            cancellationToken: cancellationToken);
+    private sealed record ConsentState(MutationApprovalPolicy? Choice, long Revision);
+
+    private static MutationApprovalPolicy Restrict(MutationApprovalPolicy selected, MutationApprovalPolicy ceiling)
+    {
+        if (selected == MutationApprovalPolicy.ReviewAll || ceiling == MutationApprovalPolicy.ReviewAll)
+        {
+            return MutationApprovalPolicy.ReviewAll;
+        }
+
+        return selected == MutationApprovalPolicy.ReviewRisky || ceiling == MutationApprovalPolicy.ReviewRisky
+            ? MutationApprovalPolicy.ReviewRisky : selected;
     }
 
     private static void EnsureNoReparsePoints(string repositoryRoot, string candidatePath)

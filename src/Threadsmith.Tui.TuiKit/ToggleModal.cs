@@ -83,6 +83,7 @@ internal sealed class ToggleModal : Modal
     /// <inheritdoc />
     public override bool HandleKey(KeyEvent key)
     {
+        var previousSelection = _tree.SelectedNode;
         key = TuiKitInput.Normalize(key);
         if (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == KeyModifiers.Ctrl)
         {
@@ -184,6 +185,11 @@ internal sealed class ToggleModal : Modal
             }
         }
 
+        if (_tree.SelectedNode != previousSelection)
+        {
+            _notice = "Arrows navigate; Space applies now; Esc closes";
+        }
+
         return true;
     }
 
@@ -223,9 +229,10 @@ internal sealed class ToggleModal : Modal
             _tree.Render(content);
         }
 
-        _text.Draw(frame, 0, frame.Size.Height - 2, _notice, _style(PresentationTextRole.Status));
         var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-        _text.Draw(frame, 0, frame.Size.Height - 1, selected?.Reason ?? "Space applies immediately; closing keeps changes", _style(PresentationTextRole.Muted));
+        var notice = _notice == selected?.Reason ? "Arrows navigate; Space applies now; Esc closes" : _notice;
+        _text.Draw(frame, 0, frame.Size.Height - 2, notice, _style(PresentationTextRole.Status));
+        _text.Draw(frame, 0, frame.Size.Height - 1, _details is null ? selected?.Reason ?? "Space applies immediately; closing keeps changes" : "F2 returns; arrows/PgUp/PgDn scroll details", _style(PresentationTextRole.Muted));
     }
 
     /// <summary>Gets or sets cancellation of the current host operation.</summary>
@@ -357,6 +364,7 @@ internal sealed class ToggleModal : Modal
 
     private void Filter()
     {
+        var previousSelection = _tree.SelectedNode;
         foreach (var group in _groups.Keys)
         {
             if (_filter.Text.Length == 0 || _tree.IsExpanded(group))
@@ -385,6 +393,10 @@ internal sealed class ToggleModal : Modal
         }
 
         ReconcileTree();
+        if (_tree.SelectedNode != previousSelection)
+        {
+            _notice = "Arrows navigate; Space applies now; Esc closes";
+        }
     }
 
     private CheckTree<string> CreateTree()

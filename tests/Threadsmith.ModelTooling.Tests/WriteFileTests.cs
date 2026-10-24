@@ -1,7 +1,6 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -278,32 +277,7 @@ public static class WriteFileTests
     [Fact]
     public static async Task Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles()
     {
-        try
-        {
-            using var probe = Process.Start(new ProcessStartInfo("rg", "--version")
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-            });
-            if (probe is null)
-            {
-                Assert.Skip("ripgrep is not available on PATH.");
-                return;
-            }
-
-            await probe.WaitForExitAsync(TestContext.Current.CancellationToken);
-            if (probe.ExitCode != 0)
-            {
-                Assert.Skip("ripgrep is not available on PATH.");
-                return;
-            }
-        }
-        catch (Win32Exception)
-        {
-            Assert.Skip("ripgrep is not available on PATH.");
-            return;
-        }
+        var ripgrep = TestRipgrep.Executable;
 
         using var fixture = new Fixture();
         Directory.CreateDirectory(Path.Combine(fixture.Repository, ".git"));
@@ -329,7 +303,7 @@ public static class WriteFileTests
         var processManager = new ProcessManager(
             new SecretOutputSanitizer(),
             NullLogger<ProcessManager>.Instance);
-        var search = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
+        var search = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
 
         var result = await search.ExecuteAsync(
             new SearchTextInput { Query = "needle", Path = ".scratch" },

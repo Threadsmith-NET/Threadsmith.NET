@@ -243,27 +243,64 @@ public sealed partial class GitQueryService
 
         public async ValueTask DisposeAsync()
         {
-            await _lifetime.CancelAsync();
-            _termination.Dispose();
-            if (_process is not null)
+            try
             {
-                await _process.WaitForExitAsync(CancellationToken.None);
-                if (_error is not null)
+                await DrainBeforeTerminationAsync();
+            }
+            finally
+            {
+                try
                 {
-                    try
+                    await _lifetime.CancelAsync();
+                    if (_process is not null)
                     {
-                        await _error.WaitAsync(CancellationToken.None);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        // The owning operation cancels the bounded stderr drain on disposal.
+                        await _process.WaitForExitAsync(CancellationToken.None);
+                        if (_error is not null)
+                        {
+                            try
+                            {
+                                await _error.WaitAsync(CancellationToken.None);
+                            }
+                            catch (OperationCanceledException)
+                            {
+                                // The owning operation cancels the stderr drain on disposal.
+                            }
+                        }
                     }
                 }
-
-                _process.Dispose();
+                finally
+                {
+                    _termination.Dispose();
+                    _process?.Dispose();
+                    _lifetime.Dispose();
+                }
             }
+        }
 
-            _lifetime.Dispose();
+        private async Task DrainBeforeTerminationAsync()
+        {
+            if (_process is not null && !_lifetime.IsCancellationRequested)
+            {
+                // Let the Git launcher reap its child on ordinary early disposal.
+                // Killing the tree and waiting only for the launcher can return while
+                // a descendant still holds the repository's working directory.
+                using var drain = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+                drain.CancelAfter(_owner._limits.TimeoutMilliseconds);
+                try
+                {
+                    // Discard unread history with bounded buffering, not ReadToEnd.
+                    await _process.StandardOutput.BaseStream.CopyToAsync(Stream.Null, drain.Token);
+                    await _process.WaitForExitAsync(drain.Token);
+                    if (_error is not null)
+                    {
+                        await _error.WaitAsync(drain.Token);
+                    }
+                }
+                catch (OperationCanceledException) when (drain.IsCancellationRequested)
+                {
+                    // Cancellation or the existing query deadline retains the kill fallback.
+                }
+            }
         }
 
         private async Task<bool> ReadHeaderAsync(CancellationToken cancellationToken)

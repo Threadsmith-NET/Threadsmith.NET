@@ -71,6 +71,28 @@ public sealed partial class Plan41InventoryToolTests
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.OpenHistoryAsync(repository.Path, 0, ct));
     }
 
+    /// <summary>Early disposal finishes the Git process before its repository can be removed.</summary>
+    [Fact]
+    public async Task ChronologicalHistoryEarlyDisposalReleasesRepository()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var repository = await TestRepository.CreateAsync();
+        var messagePath = Path.Combine(repository.Path, "message.txt");
+        await File.WriteAllTextAsync(messagePath, new string('m', 128 * 1024), ct);
+        await repository.RunGitAsync("commit", "--allow-empty", "-F", messagePath);
+        await using (var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, ct))
+        {
+            var page = await reader.ReadPageAsync(1, 4096, ct);
+            Assert.NotNull(page.NextCollectionPage);
+        }
+
+        // No retry or delay: successful disposal is the synchronization boundary.
+        // Move detects Windows working-directory handles without Git readonly-file cleanup.
+        var moved = repository.Path + "-released";
+        Directory.Move(repository.Path, moved);
+        Directory.Move(moved, repository.Path);
+    }
+
     /// <summary>Paging preserves messages and paths, including serialized supplementary Unicode.</summary>
     [Fact]
     public async Task ChronologicalHistorySplitsLargeMessagesAndPathListsWithoutDroppingContent()

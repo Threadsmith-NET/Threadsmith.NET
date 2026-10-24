@@ -1724,6 +1724,7 @@ public static class SemanticRefreshCoordinatorTests
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
         await coordinator.BindAsync(repository.CreateRequest(), ct);
+        PauseNativeNotifications(watchers.Values);
         var deletedWatcher = watchers[folder];
         Directory.Delete(folder);
         deletedWatcher.RaiseError();
@@ -1765,6 +1766,7 @@ public static class SemanticRefreshCoordinatorTests
 
         await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
         await coordinator.BindAsync(repository.CreateRequest(), ct);
+        PauseNativeNotifications(watchers.Values);
         var removedWatcher = watchers[folder];
         File.Delete(additional);
         Directory.Delete(folder);
@@ -2854,6 +2856,16 @@ public static class SemanticRefreshCoordinatorTests
         {
             EnumerationCount++;
             return GetEnumerator();
+        }
+    }
+
+    private static void PauseNativeNotifications(IEnumerable<ErrorProbeWatcher> watchers)
+    {
+        // These probes own error timing. Physical edit/restart tests cover native delivery.
+        // Pause before deleting paths so native errors cannot race the explicit RaiseError.
+        foreach (var watcher in watchers)
+        {
+            watcher.EnableRaisingEvents = false;
         }
     }
 

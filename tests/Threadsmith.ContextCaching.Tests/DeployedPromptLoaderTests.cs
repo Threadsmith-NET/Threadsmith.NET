@@ -7,7 +7,7 @@ using Threadsmith.Core;
 using Xunit;
 
 /// <summary>Plan 90 deployed prompt loader, cache, and template acceptance coverage.</summary>
-public sealed class DeployedPromptLoaderTests
+public sealed partial class DeployedPromptLoaderTests
 {
     /// <summary>The internal production limits retain the public deployed prompt byte contracts.</summary>
     [Fact]

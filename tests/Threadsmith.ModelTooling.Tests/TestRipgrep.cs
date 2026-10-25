@@ -2,18 +2,22 @@ namespace Threadsmith.ModelTooling.Tests;
 
 using Xunit;
 
-/// <summary>Uses the explicitly staged, checksum-verified executable on every test platform.</summary>
+/// <summary>Uses the staged pinned executable in CLI and IDE test hosts without searching machine tools.</summary>
 internal static class TestRipgrep
 {
-    internal static string Executable
+    internal static string Executable => ResolveExecutable(
+        Environment.GetEnvironmentVariable("THREADSMITH_TEST_RIPGREP"),
+        TestPromptLoader.FindRepositoryRoot());
+
+    internal static string ResolveExecutable(string? configuredPath, string repositoryRoot)
     {
-        get
-        {
-            var path = Environment.GetEnvironmentVariable("THREADSMITH_TEST_RIPGREP");
-            Assert.False(string.IsNullOrWhiteSpace(path), "Stage pinned ripgrep with eng/Stage-DevelopmentRipgrep.ps1 and set THREADSMITH_TEST_RIPGREP to its absolute executable path; see CONTRIBUTING.md.");
-            Assert.NotNull(path);
-            Assert.True(Path.IsPathFullyQualified(path) && File.Exists(path), $"The staged ripgrep executable is missing or not absolute: {path}");
-            return path;
-        }
+        var path = string.IsNullOrWhiteSpace(configuredPath)
+            ? Path.Combine(repositoryRoot, "artifacts", "test-ripgrep", "stage", "tools", OperatingSystem.IsWindows() ? "rg.exe" : "rg")
+            : configuredPath;
+        Assert.True(
+            Path.IsPathFullyQualified(path) && File.Exists(path),
+            $"Stage pinned ripgrep with eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot artifacts/test-ripgrep. "
+            + $"For a custom staging location, set THREADSMITH_TEST_RIPGREP to its absolute executable path. Missing or invalid fixture: {path}");
+        return path;
     }
 }

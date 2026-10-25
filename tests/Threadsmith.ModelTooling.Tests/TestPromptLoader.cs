@@ -93,6 +93,26 @@ internal sealed class TestPromptLoader : IPromptLoader
         return new TestPromptLoader(new ReadOnlyDictionary<string, string>(prompts));
     }
 
+    internal static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(
+                directory.FullName,
+                "src",
+                "Threadsmith.Core",
+                "Threadsmith.Core.csproj")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("The Threadsmith source root was not found for prompt-backed tests.");
+    }
+
     private static TestPromptLoader LoadSourceAssets()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -115,25 +135,5 @@ internal sealed class TestPromptLoader : IPromptLoader
 
         return new TestPromptLoader(
             new ReadOnlyDictionary<string, string>(prompts));
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(
-                directory.FullName,
-                "src",
-                "Threadsmith.Core",
-                "Threadsmith.Core.csproj")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new InvalidOperationException("The Threadsmith source root was not found for prompt-backed tests.");
     }
 }

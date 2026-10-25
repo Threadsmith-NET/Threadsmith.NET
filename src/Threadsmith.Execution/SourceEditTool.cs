@@ -37,6 +37,7 @@ public sealed class SourceEditTool : Tool<SourceEditInput, SourceEditReceipt>, I
             Source = "Built-in",
             Version = "1.0.0",
             Description = prompts.Get(PromptFileNames.ToolSourceEditDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.ToolSourceEditDescription),
             Category = ToolCategory.FileWrite,
             InputSchema = new(nameof(SourceEditInput), 1, schema.ToJsonString()),
             OutputSchema = new(nameof(SourceEditReceipt), 1, "{\"type\":\"object\"}"),

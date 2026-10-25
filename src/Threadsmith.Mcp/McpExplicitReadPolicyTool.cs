@@ -26,6 +26,7 @@ public sealed class McpExplicitReadPolicyTool : ITool
             EnabledByDefault = true,
             Version = $"mcp-explicit-read-1-{capability.Digest}",
             Description = prompts.Get(PromptFileNames.AdapterMcpExplicitReadPolicyDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.AdapterMcpExplicitReadPolicyDescription),
             Category = ToolCategory.RepositoryInspection,
             InputSchema = new ToolSchema("McpExplicitRead", 1, "{\"type\":\"object\"}"),
             OutputSchema = new ToolSchema("McpExplicitReadPolicyResult", 1, "{\"type\":\"object\"}"),

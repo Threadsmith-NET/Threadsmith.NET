@@ -85,6 +85,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         }
 
         var profileId = plan.ModelProfileId.Value;
+        using var promptScope = _prompts.BeginModelScope(profileId);
         var usesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog;
         var models = usesTrustedCatalog
             ? _trustedModelProvider ?? throw new InvalidOperationException("The trusted model provider is unavailable.")

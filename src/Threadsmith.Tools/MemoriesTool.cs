@@ -116,7 +116,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         _descriptionMaximumCharacters = options.CaptureCurrent().MaximumTextCharacters;
         var definition = ToolDefinitionFactory.Create<MemoriesInput, MemoriesOutput>(
             "memories",
-            RenderDescription(_descriptionMaximumCharacters),
+            () => RenderDescription(_options.CaptureCurrent().MaximumTextCharacters),
             ToolCategory.Workflow,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -153,7 +153,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
                 var maximumCharacters = _options.CaptureCurrent().MaximumTextCharacters;
                 if (maximumCharacters != _descriptionMaximumCharacters)
                 {
-                    _definition = _definition with { Description = RenderDescription(maximumCharacters) };
+                    _definition = _definition with { Description = RenderDescription(maximumCharacters), DescriptionResolver = () => RenderDescription(_options.CaptureCurrent().MaximumTextCharacters) };
                     _descriptionMaximumCharacters = maximumCharacters;
                 }
 

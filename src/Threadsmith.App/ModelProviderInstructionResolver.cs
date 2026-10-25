@@ -23,12 +23,14 @@ internal sealed class ModelProviderInstructionResolver : IModelProviderInstructi
     /// <inheritdoc />
     public ModelProviderInstructions? Resolve(ModelProfileId profileId)
     {
+        using var promptScope = _prompts.BeginModelScope(profileId);
         var asset = _catalog.Get(profileId).ProviderInstructionAsset;
         return asset is null
             ? null
             : new ModelProviderInstructions
             {
                 SectionId = asset.SectionId,
+                PromptFileName = asset.PromptFileName,
                 Content = _prompts.Get(asset.PromptFileName),
             };
     }

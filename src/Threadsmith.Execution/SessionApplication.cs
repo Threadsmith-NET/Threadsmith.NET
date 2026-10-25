@@ -780,6 +780,7 @@ public sealed partial class SessionApplication :
 
     private async Task<bool> RecordDirectEditOutcomeAsync(SessionId sessionId, RunId runId, ExecutionCheckpointPhase status, CancellationToken cancellationToken = default)
     {
+        using var promptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
         if (_sourceEdits is null)
         {
             return true;

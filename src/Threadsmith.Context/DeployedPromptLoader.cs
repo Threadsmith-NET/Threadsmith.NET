@@ -50,7 +50,7 @@ public sealed record DeployedPromptLoadLimits
         DeployedPromptLoader.MaximumCatalogBytes);
 }
 
-/// <summary>Eagerly loads and strictly renders the required flat deployed prompt catalog.</summary>
+/// <summary>Eagerly loads the deployed catalog and repository overrides, and renders captured receiving-model views.</summary>
 public sealed class DeployedPromptLoader : IPromptLoader
 {
     /// <summary>Maximum UTF-8 bytes accepted from one prompt asset.</summary>
@@ -64,17 +64,28 @@ public sealed class DeployedPromptLoader : IPromptLoader
         throwOnInvalidBytes: true);
 
     private readonly IReadOnlyDictionary<string, LoadedPrompt> _prompts;
+    private readonly AsyncLocal<ModelBinding?> _binding = new();
+    private readonly string _applicationBaseDirectory;
+    private readonly DeployedPromptLoadLimits _limits;
+    private IReadOnlyDictionary<ModelProfileId, DeployedPromptLoader> _models
+        = new ReadOnlyDictionary<ModelProfileId, DeployedPromptLoader>(new Dictionary<ModelProfileId, DeployedPromptLoader>());
+
+    private DeployedPromptLoader? _repository;
 
     private DeployedPromptLoader(
         IReadOnlyDictionary<string, LoadedPrompt> prompts,
         IReadOnlyList<LoadedPromptAssetMetadata> assets,
         long totalBytes,
-        string catalogDigest)
+        string catalogDigest,
+        string applicationBaseDirectory,
+        DeployedPromptLoadLimits limits)
     {
         _prompts = prompts;
         Assets = assets;
         TotalBytes = totalBytes;
         CatalogDigest = catalogDigest;
+        _applicationBaseDirectory = applicationBaseDirectory;
+        _limits = limits;
     }
 
     /// <summary>Gets safe per-file metadata in deterministic filename order.</summary>
@@ -85,6 +96,100 @@ public sealed class DeployedPromptLoader : IPromptLoader
 
     /// <summary>Gets a digest over the ordered filename and content-digest catalog.</summary>
     public string CatalogDigest { get; }
+
+    /// <inheritdoc />
+    public IDisposable BeginModelScope(ModelProfileId? modelProfileId)
+    {
+        var previous = _binding.Value;
+        var catalog = previous?.Catalog ?? Volatile.Read(ref _repository) ?? this;
+        var selected = modelProfileId is { } id && catalog._models.TryGetValue(id, out var model)
+            ? model : catalog;
+        _binding.Value = new ModelBinding(catalog, selected);
+        return new ModelScope(_binding, previous);
+    }
+
+    /// <inheritdoc />
+    public bool HasSameModelPrompts(ModelProfileId? first, ModelProfileId? second)
+    {
+        var catalog = _binding.Value?.Catalog ?? Volatile.Read(ref _repository) ?? this;
+        var firstDigest = first is { } firstId && catalog._models.TryGetValue(firstId, out var firstModel)
+            ? firstModel.CatalogDigest : catalog.CatalogDigest;
+        var secondDigest = second is { } secondId && catalog._models.TryGetValue(secondId, out var secondModel)
+            ? secondModel.CatalogDigest : catalog.CatalogDigest;
+        return firstDigest == secondDigest;
+    }
+
+    /// <summary>Loads a complete repository override candidate without changing active prompts.</summary>
+    public async Task<DeployedPromptLoader> LoadRepositoryAsync(
+        string repositoryPath,
+        string userConfigurationPath,
+        CancellationToken cancellationToken = default)
+    {
+        var permissionPath = new RepositoryPermissionStore(userConfigurationPath).GetPath(repositoryPath);
+        var userRepositoryDirectory = Path.GetDirectoryName(permissionPath)
+            ?? throw new InvalidOperationException("The repository permission path has no directory.");
+        var repositoryKey = Path.GetFileName(userRepositoryDirectory);
+        var userDirectory = Path.GetDirectoryName(Path.GetFullPath(userConfigurationPath))
+            ?? throw new InvalidOperationException("The user configuration path has no directory.");
+        OverrideRoot[] roots =
+        [
+            new(Path.Combine(userRepositoryDirectory, "prompts"), userDirectory),
+            new(Path.Combine(_applicationBaseDirectory, "repositories", repositoryKey, "prompts"), _applicationBaseDirectory),
+        ];
+        var availableRoots = new List<OverrideRoot>();
+        var modelIds = new HashSet<ModelProfileId>();
+        foreach (var root in roots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsOverrideDirectory(root.Path, repositoryPath, root.Boundary))
+            {
+                continue;
+            }
+
+            availableRoots.Add(root);
+            foreach (var owner in PromptAssetCatalog.All.Select(asset => asset.Owner).Distinct(StringComparer.Ordinal))
+            {
+                var modelRoot = Path.Combine(root.Path, owner, "models");
+                if (!IsOverrideDirectory(modelRoot, repositoryPath, root.Path))
+                {
+                    continue;
+                }
+
+                foreach (var directory in Directory.EnumerateDirectories(modelRoot))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var name = Path.GetFileName(directory);
+                    if (Guid.TryParseExact(name, "D", out var id) && name == id.ToString("D"))
+                    {
+                        modelIds.Add(new ModelProfileId(id));
+                        if (modelIds.Count > 256)
+                        {
+                            throw new InvalidOperationException("The repository prompt overrides exceed 256 model folders.");
+                        }
+                    }
+                }
+            }
+        }
+
+        var cache = new OverrideCache();
+        var generic = await LoadOverrideViewAsync(availableRoots, repositoryPath, null, cache, cancellationToken);
+        var models = new Dictionary<ModelProfileId, DeployedPromptLoader>();
+        foreach (var id in modelIds)
+        {
+            models.Add(id, await LoadOverrideViewAsync(availableRoots, repositoryPath, id, cache, cancellationToken));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        generic._models = new ReadOnlyDictionary<ModelProfileId, DeployedPromptLoader>(models);
+        return generic;
+    }
+
+    /// <summary>Publishes a previously validated repository candidate at the existing repository-open boundary.</summary>
+    public void PublishRepository(DeployedPromptLoader candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        Volatile.Write(ref _repository, candidate);
+    }
 
     /// <summary>Loads the complete required catalog from the application base directory.</summary>
     /// <param name="applicationBaseDirectory">Trusted application base directory supplied by the composition root.</param>
@@ -224,7 +329,160 @@ public sealed class DeployedPromptLoader : IPromptLoader
             new ReadOnlyDictionary<string, LoadedPrompt>(loaded),
             Array.AsReadOnly(orderedMetadata),
             totalBytes,
-            catalogDigest);
+            catalogDigest,
+            baseDirectory,
+            limits);
+    }
+
+    private async Task<DeployedPromptLoader> LoadOverrideViewAsync(
+        IReadOnlyList<OverrideRoot> roots,
+        string repositoryPath,
+        ModelProfileId? modelProfileId,
+        OverrideCache cache,
+        CancellationToken cancellationToken)
+    {
+        var loaded = new Dictionary<string, LoadedPrompt>(_prompts, StringComparer.Ordinal);
+        var metadata = Assets.ToDictionary(asset => asset.FileName, StringComparer.Ordinal);
+        foreach (var definition in PromptAssetCatalog.All)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var root in roots)
+            {
+                var ownerDirectory = Path.Combine(root.Path, definition.Owner);
+                string[] directories = modelProfileId is { } id
+                    ? [Path.Combine(ownerDirectory, "models", id.Value.ToString("D")), ownerDirectory]
+                    : [ownerDirectory];
+                var found = false;
+                foreach (var directory in directories)
+                {
+                    if (!cache.Directories.TryGetValue(directory, out var exists))
+                    {
+                        exists = IsOverrideDirectory(directory, repositoryPath, root.Path);
+                        if (exists)
+                        {
+                            ValidatePhysicalNameCollisions(directory);
+                        }
+
+                        cache.Directories.Add(directory, exists);
+                    }
+
+                    if (!exists)
+                    {
+                        continue;
+                    }
+
+                    var path = Path.Combine(directory, definition.FileName);
+                    try
+                    {
+                        _ = File.GetAttributes(path);
+                    }
+                    catch (FileNotFoundException)
+                    {
+                        continue;
+                    }
+                    catch (DirectoryNotFoundException)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (!cache.Files.TryGetValue(path, out var replacement))
+                        {
+                            var bytes = await ReadPromptBytesAsync(path, definition.FileName, _limits.MaximumFileBytes, cancellationToken);
+                            var content = Decode(bytes, definition.FileName);
+                            ValidateTemplate(definition, content);
+                            replacement = new LoadedOverride(
+                                new LoadedPrompt(definition, content),
+                                new LoadedPromptAssetMetadata
+                                {
+                                    FileName = definition.FileName,
+                                    Bytes = bytes.Length,
+                                    Digest = ComputeDigest(bytes),
+                                });
+                            cache.Files.Add(path, replacement);
+                            cache.TotalBytes = checked(cache.TotalBytes + bytes.Length);
+                            if (cache.TotalBytes > _limits.MaximumCatalogBytes)
+                            {
+                                throw new InvalidOperationException("The repository prompt replacements exceed the catalog byte limit.");
+                            }
+                        }
+
+                        loaded[definition.FileName] = replacement.Prompt;
+                        metadata[definition.FileName] = replacement.Metadata;
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        throw new InvalidOperationException($"Prompt override '{path}' is invalid: {exception.Message}", exception);
+                    }
+
+                    found = true;
+                    break;
+                }
+
+                if (found)
+                {
+                    break;
+                }
+            }
+        }
+
+        var ordered = metadata.Values.OrderBy(asset => asset.FileName, StringComparer.Ordinal).ToArray();
+        var totalBytes = ordered.Sum(asset => asset.Bytes);
+        if (totalBytes > _limits.MaximumCatalogBytes)
+        {
+            throw new InvalidOperationException("The effective prompt catalog exceeds the catalog byte limit.");
+        }
+
+        return new DeployedPromptLoader(
+            new ReadOnlyDictionary<string, LoadedPrompt>(loaded),
+            Array.AsReadOnly(ordered),
+            totalBytes,
+            ComputeCatalogDigest(ordered),
+            _applicationBaseDirectory,
+            _limits);
+    }
+
+    private static bool IsOverrideDirectory(string directory, string repositoryPath, string boundary)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(directory);
+            if (!attributes.HasFlag(FileAttributes.Directory))
+            {
+                throw new InvalidOperationException($"Prompt override directory '{directory}' is not a directory.");
+            }
+
+            if (RepositoryPathPolicy.ContainsPath(repositoryPath, directory, RepositoryPathPolicy.GetPathComparer(repositoryPath)))
+            {
+                throw new InvalidOperationException($"Prompt overrides cannot be loaded from the opened repository: '{directory}'.");
+            }
+
+            var normalizedBoundary = Path.TrimEndingDirectorySeparator(Path.GetFullPath(boundary));
+            var comparer = RepositoryPathPolicy.GetPathComparer(normalizedBoundary);
+            for (var parent = directory; parent is not null; parent = Path.GetDirectoryName(parent))
+            {
+                if (File.GetAttributes(parent).HasFlag(FileAttributes.ReparsePoint))
+                {
+                    throw new InvalidOperationException($"Prompt override path '{directory}' contains a link or reparse point.");
+                }
+
+                if (comparer.Equals(parent, normalizedBoundary))
+                {
+                    return true;
+                }
+            }
+
+            throw new InvalidOperationException($"Prompt override path '{directory}' escaped its host-selected root.");
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return false;
+        }
     }
 
     private static string ComputeCatalogDigest(IReadOnlyList<LoadedPromptAssetMetadata> metadata)
@@ -517,12 +775,50 @@ public sealed class DeployedPromptLoader : IPromptLoader
     private LoadedPrompt Resolve(string promptFileName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(promptFileName);
-        return _prompts.TryGetValue(promptFileName, out var prompt)
+        var selected = _binding.Value?.Selected ?? Volatile.Read(ref _repository) ?? this;
+        return selected._prompts.TryGetValue(promptFileName, out var prompt)
             ? prompt
             : throw new ArgumentException("The prompt filename is not declared by the host catalog.", nameof(promptFileName));
     }
 
     private sealed record LoadedPrompt(PromptAssetDefinition Definition, string Content);
+
+    private sealed record LoadedOverride(LoadedPrompt Prompt, LoadedPromptAssetMetadata Metadata);
+
+    private sealed record OverrideRoot(string Path, string Boundary);
+
+    private sealed class OverrideCache
+    {
+        internal Dictionary<string, LoadedOverride> Files { get; } = new(StringComparer.Ordinal);
+
+        internal Dictionary<string, bool> Directories { get; } = new(StringComparer.Ordinal);
+
+        internal long TotalBytes { get; set; }
+    }
+
+    private sealed record ModelBinding(DeployedPromptLoader Catalog, DeployedPromptLoader Selected);
+
+    private sealed class ModelScope : IDisposable
+    {
+        private readonly AsyncLocal<ModelBinding?> _binding;
+        private readonly ModelBinding? _previous;
+        private bool _disposed;
+
+        internal ModelScope(AsyncLocal<ModelBinding?> binding, ModelBinding? previous)
+        {
+            _binding = binding;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                _binding.Value = _previous;
+                _disposed = true;
+            }
+        }
+    }
 
     private sealed record TemplateMarker(int Start, int End, string Name);
 }

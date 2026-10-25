@@ -364,6 +364,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             EnabledByDefault = true,
             Version = "1.0.0",
             Description = prompts.Get(PromptFileNames.ToolInvokeSkillDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.ToolInvokeSkillDescription),
             Category = ToolCategory.Workflow,
             InputSchema = new ToolSchema(
                 nameof(InvokeSkillInput),

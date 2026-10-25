@@ -573,7 +573,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 hooks: hookCoordinator,
                 parallelOptions: parallelOptions,
                 presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true),
-                policyBinding: policyBinding);
+                policyBinding: policyBinding,
+                prompts: promptLoader);
             return new HostFoundation(
                 events,
                 projections,

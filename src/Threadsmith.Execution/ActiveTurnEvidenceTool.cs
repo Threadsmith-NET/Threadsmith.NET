@@ -75,6 +75,7 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
             Version = "1.0",
             DisplayName = "Read Active-Turn Evidence",
             Description = prompts.Get(PromptFileNames.ToolReadActiveTurnEvidenceDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.ToolReadActiveTurnEvidenceDescription),
             Category = ToolCategory.SystemInformation,
             RequiredTrust = RepositoryTrustLevel.UntrustedInspection,
             RequiredApproval = ApprovalLevel.None,

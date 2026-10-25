@@ -29,7 +29,7 @@ public sealed class DateTimeTool : Tool<DateTimeInput, DateTimeOutput>
         _definition = ToolDefinitionFactory
             .Create<DateTimeInput, DateTimeOutput>(
                 "datetime",
-                promptLoader.Get(PromptFileNames.ToolDatetimeDescription),
+                () => promptLoader.Get(PromptFileNames.ToolDatetimeDescription),
                 ToolCategory.SystemInformation,
                 RepositoryTrustLevel.UntrustedInspection,
                 ApprovalLevel.None,
@@ -295,7 +295,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         _definition = ToolDefinitionFactory.WithStringEnum(
             ToolDefinitionFactory.Create<CSharpScriptInput, CSharpScriptOutput>(
                 "csharp_script",
-                promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
+                () => promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
                 ToolCategory.CodeExecution,
                 RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovalLevel.None,

@@ -68,6 +68,7 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
             EnabledByDefault = true,
             Version = "1.0.0",
             Description = prompts.Get(PromptFileNames.ToolInspectSkillDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.ToolInspectSkillDescription),
             Category = ToolCategory.Workflow,
             InputSchema = new ToolSchema(
                 nameof(InspectSkillInput),

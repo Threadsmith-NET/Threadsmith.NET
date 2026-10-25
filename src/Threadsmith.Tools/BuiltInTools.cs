@@ -58,7 +58,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
             ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
                 "list_files",
-                promptLoader.Get(PromptFileNames.ToolListFilesDescription),
+                () => promptLoader.Get(PromptFileNames.ToolListFilesDescription),
                 ToolCategory.RepositoryInspection,
                 RepositoryTrustLevel.UntrustedInspection,
                 ApprovalLevel.None,
@@ -276,7 +276,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             + (3L * Math.Max(0, (long)_limits.ReadFileMaxLines - ToolLimits.DefaultReadFileLineLimit));
         _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
             "read_file",
-            promptLoader.Render(PromptFileNames.ToolReadFileDescription, new Dictionary<string, string>
+            () => promptLoader.Render(PromptFileNames.ToolReadFileDescription, new Dictionary<string, string>
             {
                 ["DefaultLines"] = _limits.ReadFileDefaultLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["MaximumLines"] = _limits.ReadFileMaxLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -610,7 +610,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
             ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
                 "search",
-                promptLoader.Render(PromptFileNames.ToolSearchDescription, new Dictionary<string, string>
+                () => promptLoader.Render(PromptFileNames.ToolSearchDescription, new Dictionary<string, string>
                 {
                     ["MaximumQueryCharacters"] = _limits.SearchMaximumQueryCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 }),
@@ -1350,7 +1350,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
         ArgumentNullException.ThrowIfNull(promptLoader);
         _definition = ToolDefinitionFactory.Create<GitStatusInput, GitStatusOutput>(
             "git_status",
-            promptLoader.Get(PromptFileNames.ToolGitStatusDescription),
+            () => promptLoader.Get(PromptFileNames.ToolGitStatusDescription),
             ToolCategory.GitInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -1478,7 +1478,7 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
         ArgumentNullException.ThrowIfNull(promptLoader);
         _definition = ToolDefinitionFactory.Create<FindSymbolInput, IReadOnlyList<SymbolResult>>(
             "find_symbol",
-            promptLoader.Get(PromptFileNames.ToolFindSymbolDescription),
+            () => promptLoader.Get(PromptFileNames.ToolFindSymbolDescription),
             ToolCategory.SemanticSearch,
             RepositoryTrustLevel.TrustedBuild,
             ApprovalLevel.None,
@@ -1563,7 +1563,7 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
         ArgumentNullException.ThrowIfNull(promptLoader);
         _definition = ToolDefinitionFactory.Create<FindReferencesInput, IReadOnlyList<ReferenceResult>>(
             "find_references",
-            promptLoader.Get(PromptFileNames.ToolFindReferencesDescription),
+            () => promptLoader.Get(PromptFileNames.ToolFindReferencesDescription),
             ToolCategory.SemanticSearch,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -1645,7 +1645,7 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
         ArgumentNullException.ThrowIfNull(promptLoader);
         _definition = ToolDefinitionFactory.Create<FindImplementationsInput, IReadOnlyList<ImplementationResult>>(
             "find_implementations",
-            promptLoader.Get(PromptFileNames.ToolFindImplementationsDescription),
+            () => promptLoader.Get(PromptFileNames.ToolFindImplementationsDescription),
             ToolCategory.SemanticSearch,
             RepositoryTrustLevel.TrustedBuild,
             ApprovalLevel.None,
@@ -1837,7 +1837,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
             ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
                 "run_process",
-                promptLoader.Render(
+                () => promptLoader.Render(
                     PromptFileNames.ToolRunProcessDescription,
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
@@ -2053,6 +2053,32 @@ internal static class ToolDefinitionFactory
             MaximumOutputBytes = maximumOutputBytes,
             RequiresWorkspace = category == ToolCategory.SemanticSearch,
             Scheduling = CreateSchedulingDescriptor(category, sideEffect),
+        };
+    }
+
+    /// <summary>Creates a built-in definition whose prose follows the receiving model's captured prompt scope.</summary>
+    public static ToolDefinition Create<TInput, TOutput>(
+        string id,
+        Func<string> description,
+        ToolCategory category,
+        RepositoryTrustLevel requiredTrust,
+        ApprovalLevel requiredApproval,
+        ToolSideEffect sideEffect,
+        TimeSpan timeout,
+        int maximumOutputBytes)
+    {
+        ArgumentNullException.ThrowIfNull(description);
+        return Create<TInput, TOutput>(
+            id,
+            description(),
+            category,
+            requiredTrust,
+            requiredApproval,
+            sideEffect,
+            timeout,
+            maximumOutputBytes) with
+        {
+            DescriptionResolver = description,
         };
     }
 

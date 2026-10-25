@@ -239,6 +239,12 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 {
                     ["AgentCountDescription"] = options.FormatAgentCountDescription(),
                 }),
+            DescriptionResolver = () => prompts.Render(
+                PromptFileNames.ToolDelegateAgentsDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["AgentCountDescription"] = options.FormatAgentCountDescription(),
+                }),
             Category = ToolCategory.Workflow,
             InputSchema = new ToolSchema(nameof(DelegateAgentsInput), 1, inputSchema),
             OutputSchema = new ToolSchema(nameof(DelegateAgentsResult), 1, OutputSchemaJson),

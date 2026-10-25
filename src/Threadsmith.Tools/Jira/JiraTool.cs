@@ -40,7 +40,7 @@ public sealed class JiraTool : Tool<JiraInput, JiraReadOutput>, IPostSanitizatio
         Definition = ToolDefinitionFactory.WithStringEnum(
             ToolDefinitionFactory.Create<JiraInput, JiraReadOutput>(
                 "jira",
-                prompts.Render(PromptFileNames.ToolJiraDescription, new Dictionary<string, string>(StringComparer.Ordinal)
+                () => prompts.Render(PromptFileNames.ToolJiraDescription, new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     ["Providers"] = providerDescription,
                 }),

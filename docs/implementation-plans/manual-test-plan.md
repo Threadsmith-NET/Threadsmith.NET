@@ -2186,6 +2186,20 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 
 **Limits:** A bounded investigation can be partial. Missing evidence does not prove no relevant history exists. Run these steps only in the disposable repository; no production feature activation is required for implementation verification.
 
+## MTP-PROMPT-OVERRIDES - Repository and receiving-model prompt overrides
+
+**Prerequisites:** Two disposable checkout paths, their existing user repository keys, two configured model profiles with known GUIDs, and access to actual submitted requests through a controlled capturing provider or privileged raw-model logs. Follow [override paths and precedence](../operations/prompts.md#repository-and-model-overrides). Keep credentials and private data out of fixture prose and logs.
+
+1. With no override folders, start and submit a request. Compare the shipped policy and tool descriptions; confirm no override folder or `permissions.json` was created by discovery.
+2. Copy a no-token system/description file into the application all-model root. Add its application model, user all-model, and user model counterparts with distinct harmless markers. Restart or `/open <path>` after each change and inspect the actual request. Verify the five-level order independently for two files. Only copied files may change; removing each winner restores the next fallback.
+3. Give parent A and child B distinct role/tool-description markers. Delegate to B and inspect the child request and normal child progress. Repeat with concurrent children on A/B, a helper procedure, and context compaction on B. The actual receiving profile controls every request; the parent continues using A. Where a controlled capacity fixture permits fallback, verify newly selected text is sized before dispatch. Rename a profile and verify its GUID directory still applies.
+4. Edit a selected file during a run. Verify current and later requests keep cached content until restart/reopen. Reopen and inspect new content; where a controlled in-flight fixture is available, verify its old captured view remains stable. Remove the last replacement and verify shipped fallback.
+5. Place a duplicate tree inside the checkout and a same-named second checkout at another path. Confirm checkout-local files are ignored and repository switching uses the second checkout's distinct key. Where filesystem capabilities permit, point an override file or managed directory at checkout content and verify rejection without reading its body.
+6. Independently introduce missing/unknown template markers, invalid UTF-8, NUL, and oversized replacements. Verify an actionable file path without body/secret leakage, no silent fallback from the invalid selected file, and retention of the prior binding after failed/cancelled reopen. Correct the file and verify a later reopen succeeds. Unknown files must not become addressable prompt assets.
+7. Verify the ordinary direct writer and source-edit path still protect user/application override storage under existing configuration policy. Edited wording must not enable tools, alter schema structure, approve mutations, or widen authority. No prompt activation approval should appear.
+
+**Evidence:** Record the receiving profile IDs, winning paths, submitted markers, reload boundaries, and unavailable link/cancellation fixtures. Record Windows, macOS, and Linux separately. Protect and delete privileged raw logs after review.
+
 ## MTP-ASK-USER - Terminal clarification and attention
 
 **Prerequisites:** An interactive Threadsmith host, disposable session, deliberate enablement through `/tools` plus ordinary policy allowing `ask_user`, and a material ambiguity. Verify the default-off Tools entry first and restore disabled after the test. Record OS, terminal emulator, terminal dimensions, and model/provider path.

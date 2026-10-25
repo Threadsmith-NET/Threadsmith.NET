@@ -65,6 +65,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
     private readonly ToolPresentationLimits _presentationLimits;
     private readonly SessionPolicyBinding? _policyBinding;
+    private readonly IPromptLoader? _prompts;
     private readonly IApprovalPolicy _approvalPolicy;
     private readonly IBudget? _budget;
     private readonly IDomainEventStream _events;
@@ -153,7 +154,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         IHookCoordinator? hooks = null,
         ToolParallelOptions? parallelOptions = null,
         ToolPresentationLimits? presentationLimits = null,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(policy);
@@ -163,6 +165,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(logger);
         _presentationLimits = presentationLimits ?? new();
         _policyBinding = policyBinding;
+        _prompts = prompts;
         _presentationLimits.Validate();
         _registry = registry;
         _policy = policy;
@@ -448,6 +451,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(request.Context);
 
         var invocationId = ToolInvocationId.New();
+        using var promptScope = _prompts?.BeginModelScope(request.Context.ModelProfileId);
         var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
         var registration = preparedRegistration;

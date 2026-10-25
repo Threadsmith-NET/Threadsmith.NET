@@ -10,7 +10,9 @@ For source-owner paths, deployed paths, byte limits, logging behavior, and the a
 
 ## How prompt files are used
 
-Threadsmith loads the complete declared catalog once during startup. A file is either read as exact text or rendered once by replacing its declared named placeholders with host-supplied values. Replacement is literal and one-pass: placeholder values are not interpreted as more template syntax. Files are not reread or watched while the process is running, so an edit takes effect only after restart.
+Threadsmith loads the complete shipped catalog once during startup. Each file can be replaced through the user or application `repositories/<repository-key>/prompts/<owning-project>/` directory, optionally under `models/<profile-guid>/`. Overrides are excluded from the opened repository itself. Per-file precedence is user model → user all-model → application model → application all-model → shipped. Missing replacements fall through automatically, without approval or enablement settings. The receiving model selects the view independently for parents, children, helpers, fallback, and compaction. See [override paths and precedence](operations/prompts.md#repository-and-model-overrides) for the full layout.
+
+A file is either read as exact text or rendered once by replacing its declared named placeholders with host-supplied values. Replacement is literal and one-pass: placeholder values are not interpreted as more template syntax. Ordinary lookup and model switching use cached text. Restart to reload shipped files; restart or reopen the repository to reload overrides. Files are not watched. Removing an override restores fallback, while an invalid selected file fails loading with its path.
 
 The files control model-visible wording and formatting only. They cannot change tool identifiers or schemas, enable capabilities, grant trust, widen repository or delegated-child authority, approve mutations, select a model, grant network or secret access, or bypass host validation. Do not put secrets in prompt files: rendered content may be sent to the configured provider and appears in explicitly enabled raw-model logs.
 

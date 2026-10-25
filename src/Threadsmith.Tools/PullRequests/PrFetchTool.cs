@@ -45,7 +45,7 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
             .Select(pair => $"{pair.Key} ({pair.Value.Type}; {_providers[pair.Value.Type].WebHost})");
         Definition = ToolDefinitionFactory.Create<PrFetchInput, PrFetchOutput>(
             "pr_fetch",
-            prompts.Render(PromptFileNames.ToolPrFetchDescription, new Dictionary<string, string>(StringComparer.Ordinal)
+            () => prompts.Render(PromptFileNames.ToolPrFetchDescription, new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Providers"] = string.Join(", ", descriptions),
             }),

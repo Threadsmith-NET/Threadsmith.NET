@@ -1441,7 +1441,7 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
         _prompts = promptLoader;
         Definition = ToolDefinitionFactory.Create<WebFetchRequest, WebFetchResponse>(
             "web_fetch",
-            promptLoader.Get(PromptFileNames.ToolWebFetchDescription),
+            () => promptLoader.Get(PromptFileNames.ToolWebFetchDescription),
             ToolCategory.ExternalSearch,
             RepositoryTrustLevel.UntrustedInspection,
             ApprovalLevel.None,

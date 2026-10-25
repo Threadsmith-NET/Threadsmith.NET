@@ -1031,6 +1031,8 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 && request.EligiblePrefix.Any(group =>
                     group.Sensitivity == ConversationSensitivity.Sensitive));
         var profile = ResolveCandidateProfile(request, containsSensitiveData);
+        using var promptScope = _prompts.BeginModelScope(profile.ProfileId);
+        profile = profile with { ProviderInstructions = profile.ProviderInstructions?.Resolve(_prompts) };
         ValidateProfileCapacity(profile.ContextWindowTokens, profile.OutputReserveTokens);
         if (containsSensitiveData
             && profile.SensitiveDataPolicy == ModelSensitiveDataPolicy.Prohibited)

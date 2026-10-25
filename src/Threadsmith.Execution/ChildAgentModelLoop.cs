@@ -92,6 +92,7 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelection model,
         CancellationToken cancellationToken)
     {
+        using var promptScope = _prompts.BeginModelScope(model.ProfileId);
         childToolContext = childToolContext with
         {
             AdmittedImageIds = context.Evidence.SelectMany(item => item.Images).Select(image => image.Id).ToHashSet(StringComparer.Ordinal),
@@ -141,6 +142,28 @@ internal sealed class ChildAgentModelLoop
                         $"Captured PR evidence: {snapshot.Metadata.Url}; snapshot {snapshot.SnapshotId:D}; {snapshot.Page.Files.Count} changed files. Read bounded captured metadata, inventory, and diff with read_agent_evidence(evidenceId: \"{snapshot.SnapshotId:D}\"). Follow the returned startLine/startColumn continuation position until complete. This reads the parent's captured snapshot without a provider request.")),
             };
         var messages = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
+        var boundPromptProfileId = model.ProfileId;
+        IReadOnlyList<ModelToolDefinition> BindPrompts(ModelProfileId profileId)
+        {
+            if (boundPromptProfileId == profileId)
+            {
+                return toolDefinitions;
+            }
+
+            var initial = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
+            foreach (var replacement in initial.Take(4))
+            {
+                var index = messages.FindIndex(message => message.SectionId == replacement.SectionId);
+                if (index >= 0)
+                {
+                    messages[index] = replacement;
+                }
+            }
+
+            boundPromptProfileId = profileId;
+            return toolDefinitions = ModelToolCanonicalizer.Canonicalize(ChildAgentPrompt.CreateToolDefinitions(registrations));
+        }
+
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
@@ -161,6 +184,9 @@ internal sealed class ChildAgentModelLoop
 
             for (var round = 0; round < maximumRounds; round++)
             {
+                using var roundPromptScope = _prompts.BeginModelScope(model.ProfileId);
+                toolDefinitions = BindPrompts(model.ProfileId);
+                toolWireEstimate = ModelWireEstimator.EstimateTools(toolDefinitions, ToolTransportMode.Native);
                 cancellationToken.ThrowIfCancellationRequested();
                 childToolContext = childToolContext with
                 {
@@ -186,8 +212,9 @@ internal sealed class ChildAgentModelLoop
                         cancellationToken);
                 }
 
-                var fitted = FitRequest(plan.Provenance.SessionId.Value, assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration, transientState, provider);
+                var fitted = FitRequest(plan.Provenance.SessionId.Value, assignment, model, messages, BindPrompts, round, history.RewriteGeneration, transientState);
                 model = fitted.Model;
+                using var selectedPromptScope = _prompts.BeginModelScope(model.ProfileId);
                 childToolContext = childToolContext with
                 {
                     ModelContextWindowTokens = model.ContextWindowTokens,
@@ -353,16 +380,19 @@ internal sealed class ChildAgentModelLoop
         AgentAssignment assignment,
         AgentModelSelection model,
         IReadOnlyList<ModelMessage> messages,
-        IReadOnlyList<ModelToolDefinition> tools,
-        ModelWireToolEstimate toolEstimate,
+        Func<ModelProfileId, IReadOnlyList<ModelToolDefinition>> bindPrompts,
         int round,
         long historyRewriteGeneration,
-        ModelRequestTransientState transientState,
-        IModelProvider provider)
+        ModelRequestTransientState transientState)
     {
         var attempted = new HashSet<ModelProfileId>();
         while (attempted.Add(model.ProfileId))
         {
+            using var promptScope = _prompts.BeginModelScope(model.ProfileId);
+            model = model with { ProviderInstructions = model.ProviderInstructions?.Resolve(_prompts) };
+            var tools = bindPrompts(model.ProfileId);
+            var toolEstimate = ModelWireEstimator.EstimateTools(tools, ToolTransportMode.Native);
+            var provider = model.UsesTrustedCatalog ? _trustedModels ?? _models : _models;
             var outputTokens = ResolveDesiredOutputTokens(model);
             var estimate = ModelWireEstimator.Estimate(
                 messages,

@@ -28,7 +28,7 @@ public sealed class RepositoryIntelligenceTool : Tool<RepositoryIntelligenceInpu
         ArgumentNullException.ThrowIfNull(prompts);
         var definition = ToolDefinitionFactory.Create<RepositoryIntelligenceInput, MemoriesOutput>(
             "repository_intelligence",
-            prompts.Get(PromptFileNames.ToolRepositoryIntelligenceDescription),
+            () => prompts.Get(PromptFileNames.ToolRepositoryIntelligenceDescription),
             ToolCategory.RepositoryInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,

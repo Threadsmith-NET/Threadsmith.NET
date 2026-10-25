@@ -19,6 +19,7 @@ public sealed partial class SessionApplication
         RunPhase phase,
         CancellationToken cancellationToken)
     {
+        using var runPromptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
         var maximumModelRounds = _limits.MaxModelRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
@@ -56,14 +57,10 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (registration.IntelligenceRun is { } intelligence)
-        {
-            registration.CurrentTurnHostContext = [.. registration.CurrentTurnHostContext, intelligence.Instructions];
-        }
-
         SourceEditAnalysis? deferredFeedback = null;
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
+            using var roundPromptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
             if ((deferredFeedback ?? _sourceEdits?.TakeFeedback(registration.SessionId, runId)) is { } feedback)
             {
                 deferredFeedback = null;
@@ -109,6 +106,7 @@ public sealed partial class SessionApplication
                 loopState,
                 cancellationToken);
             invocationContext = round.InvocationContext;
+            using var responsePromptScope = _prompts.BeginModelScope(round.ModelRequest.ResolvedProfileId);
             ConversationRoundOutcome outcome;
             try
             {
@@ -445,6 +443,7 @@ public sealed partial class SessionApplication
         ConversationLoopState loopState,
         CancellationToken cancellationToken)
     {
+        using var promptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
         var conversationTools = ConversationToolAvailability.CreateSnapshot(
             _toolPipeline,
             _toolRegistry,
@@ -486,7 +485,7 @@ public sealed partial class SessionApplication
 
         if (_contextAssembler is not null && context is null)
         {
-            var toolSchemas = CreateContextToolSchemas(modelTools);
+            var toolSchemas = CreateContextToolSchemas(modelTools, conversationDefinitions);
             var assemblyRequest = CreateContextAssemblyRequest(
                 registration,
                 runId,
@@ -518,10 +517,12 @@ public sealed partial class SessionApplication
                 modelPreference,
                 context,
                 cancellationToken);
+            using var contextPromptScope = _prompts.BeginModelScope(context.ModelResolution?.ProfileId);
             context = loopState.RefreshContext(context, modelRound);
             loopState.FrozenContext = context;
         }
 
+        using var resolvedPromptScope = _prompts.BeginModelScope(context?.ModelResolution?.ProfileId ?? modelPreference?.ProfileId ?? _defaultModelProfileId);
         invocationContext = AttachModelBudgetToInvocationContext(
             invocationContext,
             context?.ModelResolution);
@@ -733,6 +734,7 @@ public sealed partial class SessionApplication
                 persistenceDiagnostic),
             cancellationToken);
 
+        using var promptScope = _prompts.BeginModelScope(updatedPreference.ProfileId);
         var refreshed = await (_contextAssembler
             ?? throw new InvalidOperationException("Context assembly became unavailable during model fallback."))
             .AssembleAsync(
@@ -1838,14 +1840,20 @@ public sealed partial class SessionApplication
         return [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
     }
 
-    private static ContextToolSchema[] CreateContextToolSchemas(IReadOnlyList<ModelToolDefinition> modelTools)
+    private static ContextToolSchema[] CreateContextToolSchemas(
+        IReadOnlyList<ModelToolDefinition> modelTools,
+        IReadOnlyList<ToolDefinition> definitions)
     {
+        var descriptions = definitions.ToDictionary(definition => definition.Id, StringComparer.Ordinal);
         return [.. modelTools.Select(definition =>
             new ContextToolSchema(
                 definition.Name,
                 definition.Description,
                 definition.ArgumentsJsonSchema,
-                definition.PreferStrictArguments))];
+                definition.PreferStrictArguments)
+            {
+                DescriptionResolver = descriptions[definition.Name].DescriptionResolver,
+            })];
     }
 
     private static ContextAssemblyRequest CreateContextAssemblyRequest(
@@ -1882,6 +1890,8 @@ public sealed partial class SessionApplication
             DefaultModelProfileId = modelPreference?.ProfileId
                 ?? defaultModelProfileId,
             CurrentTurnHostContext = registration.CurrentTurnHostContext,
+            IntelligenceInstructionResolver = registration.IntelligenceRun is { } intelligence
+                ? () => intelligence.Instructions : null,
             CurrentMessageId = registration.CurrentMessageId,
             ConversationModeOverride = registration.ConversationMode,
             ConversationModeSource = "session-state",

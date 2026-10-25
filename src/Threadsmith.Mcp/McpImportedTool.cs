@@ -188,6 +188,12 @@ public sealed class McpImportedTool : ITool
                     {
                         ["ServerName"] = capability.ServerName,
                     }),
+            DescriptionResolver = capability.Description.Length > 0 ? null : () => prompts.Render(
+                PromptFileNames.AdapterMcpImportedToolFallbackDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ServerName"] = capability.ServerName,
+                }),
 
             // MCP tool implementations are opaque remote behavior. Server-provided annotations and
             // profile labels cannot prove that an invocation is read-only, so the host must place

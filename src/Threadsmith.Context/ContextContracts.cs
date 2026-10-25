@@ -186,7 +186,12 @@ public sealed record ContextToolSchema(
     string Id,
     string Description,
     string JsonSchema,
-    bool PreferStrictArguments = false);
+    bool PreferStrictArguments = false)
+{
+    /// <summary>Host-only renderer used when governed model selection changes the receiving profile.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Func<string>? DescriptionResolver { get; init; }
+}
 
 /// <summary>Input state for one phase-specific context assembly.</summary>
 public sealed record ContextAssemblyRequest
@@ -257,6 +262,10 @@ public sealed record ContextAssemblyRequest
     /// <summary>Transient host context visible only to the current assembled request.</summary>
     public IReadOnlyList<string> CurrentTurnHostContext { get; init; } = [];
 
+    /// <summary>Host-only repository intelligence instructions rendered after receiving-model binding.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public Func<string>? IntelligenceInstructionResolver { get; init; }
+
     /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
     public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
 
@@ -274,6 +283,12 @@ public sealed record ContextAssemblyRequest
 
     /// <summary>Layer supplying the optional mode override.</summary>
     public string? ConversationModeSource { get; init; }
+
+    /// <summary>Receiving profile used for this provisional rendering attempt.</summary>
+    internal ModelProfileId? PromptProfileId { get; init; }
+
+    /// <summary>Profiles already rendered while resolving model-specific capacity.</summary>
+    internal IReadOnlySet<ModelProfileId> AttemptedPromptProfiles { get; init; } = new HashSet<ModelProfileId>();
 }
 
 /// <summary>Governed model input and its inspectable execution record.</summary>

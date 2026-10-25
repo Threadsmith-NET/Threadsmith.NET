@@ -497,7 +497,8 @@ internal static class ApplicationComposition
             repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)),
             intelligence,
             intelligenceOperations,
-            host.PolicyBinding);
+            host.PolicyBinding,
+            promptLoader: host.PromptLoader as DeployedPromptLoader);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         var intelligenceQuery = new RepositoryIntelligenceQuery(memoryRetriever, memoryOptions, intelligence);
@@ -1175,6 +1176,7 @@ internal sealed record IntegrationCompositionInputs
 /// <summary>Atomically rebinds repository-scoped services and restores the prior repository after any failure.</summary>
 internal sealed class RepositoryScopedBindingCoordinator
 {
+    private readonly DeployedPromptLoader? _promptLoader;
     private readonly SessionPolicyBinding? _policyBinding;
     private readonly Guid _policyBindingId;
     private readonly ActiveModelSelectionService? _activeModels;
@@ -1215,7 +1217,8 @@ internal sealed class RepositoryScopedBindingCoordinator
         RepositoryIntelligenceMonitor? intelligence = null,
         RepositoryIntelligenceOperations? intelligenceOperations = null,
         SessionPolicyBinding? policyBinding = null,
-        Func<string, ConfigurationPaths>? configurationPaths = null)
+        Func<string, ConfigurationPaths>? configurationPaths = null,
+        DeployedPromptLoader? promptLoader = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
         ArgumentNullException.ThrowIfNull(toolState);
@@ -1235,6 +1238,7 @@ internal sealed class RepositoryScopedBindingCoordinator
         _intelligence = intelligence;
         _intelligenceOperations = intelligenceOperations;
         _policyBinding = policyBinding;
+        _promptLoader = promptLoader;
         _startupAuthorityFingerprint = policyBinding?.Current.StartupAuthorityFingerprint;
         _policyBindingId = policyBinding?.Current.BindingId ?? Guid.NewGuid();
     }
@@ -1292,6 +1296,8 @@ internal sealed class RepositoryScopedBindingCoordinator
             try
             {
                 var nextPaths = _configurationPaths(nextRepositoryRoot);
+                var promptCandidate = _promptLoader is null ? null
+                    : await _promptLoader.LoadRepositoryAsync(nextRepositoryRoot, nextPaths.UserConfiguration, cancellationToken);
                 _policyBinding?.Invalidate();
                 var nextConfiguration = (_memoryConfigurationLoader
                     ?? (root => ConfigurationBootstrap.Build([], _configurationPaths(root))))(nextRepositoryRoot);
@@ -1354,6 +1360,11 @@ internal sealed class RepositoryScopedBindingCoordinator
                 }
 
                 _currentRepositoryRoot = nextRepositoryRoot;
+                if (promptCandidate is not null)
+                {
+                    _promptLoader?.PublishRepository(promptCandidate);
+                }
+
                 LastWarnings = [
                     .. candidatePolicy?.Diagnostics ?? [],
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],

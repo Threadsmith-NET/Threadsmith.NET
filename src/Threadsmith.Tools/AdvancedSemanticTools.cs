@@ -397,7 +397,7 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
         ArgumentNullException.ThrowIfNull(promptLoader);
         return ToolDefinitionFactory.Create<TRequest, TResult>(
             id,
-            promptLoader.Get(promptFileName),
+            () => promptLoader.Get(promptFileName),
             ToolCategory.SemanticSearch,
             RepositoryTrustLevel.TrustedBuild,
             ApprovalLevel.None,

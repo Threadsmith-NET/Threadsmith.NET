@@ -3,9 +3,15 @@ namespace Threadsmith.Core;
 using System.Collections.ObjectModel;
 using System.Text;
 
-/// <summary>Provides immutable process-lifetime access to deployed prompt assets.</summary>
+/// <summary>Provides cached prompt assets with immutable receiving-model views for active operations.</summary>
 public interface IPromptLoader
 {
+    /// <summary>Captures the receiving model's immutable prompt view for the current asynchronous operation.</summary>
+    IDisposable BeginModelScope(ModelProfileId? modelProfileId) => PromptModelScope.Empty;
+
+    /// <summary>Returns whether two receiving profiles use identical effective prompt content in the captured repository.</summary>
+    bool HasSameModelPrompts(ModelProfileId? first, ModelProfileId? second) => true;
+
     /// <summary>Gets the exact text of one code-declared prompt asset.</summary>
     /// <param name="promptFileName">A filename from <see cref="PromptFileNames"/>.</param>
     /// <returns>The cached prompt text.</returns>
@@ -16,6 +22,22 @@ public interface IPromptLoader
     /// <param name="tokens">Declared token values keyed by exact token name.</param>
     /// <returns>The rendered prompt text.</returns>
     string Render(string promptFileName, IReadOnlyDictionary<string, string> tokens);
+}
+
+/// <summary>Provides the no-op scope used by prompt loaders without model-specific content.</summary>
+public sealed class PromptModelScope : IDisposable
+{
+    private PromptModelScope()
+    {
+    }
+
+    /// <summary>Gets a scope that leaves the current prompt view unchanged.</summary>
+    public static PromptModelScope Empty { get; } = new();
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+    }
 }
 
 /// <summary>Renders cached prompt templates whose code-owned line breaks must follow the current platform.</summary>

@@ -574,7 +574,7 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         ArgumentNullException.ThrowIfNull(promptLoader);
         Definition = ToolDefinitionFactory.Create<DotNetInventoryInput, DotNetInventoryResult>(
             "dotnet_inventory",
-            promptLoader.Get(PromptFileNames.ToolDotnetInventoryDescription),
+            () => promptLoader.Get(PromptFileNames.ToolDotnetInventoryDescription),
             ToolCategory.RepositoryInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -802,7 +802,7 @@ internal static class RepositoryInventoryToolDefinitions
         ArgumentNullException.ThrowIfNull(promptLoader);
         return ToolDefinitionFactory.Create<TInput, TOutput>(
             id,
-            promptLoader.Get(promptFileName),
+            () => promptLoader.Get(promptFileName),
             ToolCategory.GitInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,

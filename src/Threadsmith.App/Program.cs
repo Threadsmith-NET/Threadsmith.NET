@@ -134,6 +134,10 @@ public static class Program
             AppContext.BaseDirectory,
             trustedConfiguration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
             CancellationToken.None);
+        promptLoader.PublishRepository(await promptLoader.LoadRepositoryAsync(
+            paths.RepositoryRoot,
+            paths.UserConfiguration,
+            CancellationToken.None));
         var promptLogger = loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts");
         if (promptLogger.IsEnabled(LogLevel.Information))
         {

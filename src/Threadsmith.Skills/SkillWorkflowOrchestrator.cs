@@ -522,6 +522,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             or SkillWorkflowStepKind.CollectEvidence
             or SkillWorkflowStepKind.Summarize)
         {
+            using var promptScope = _prompts.BeginModelScope(plan.ModelProfileId);
             if (remainingContentTokens < 1 || remainingModelTurns < 1 || remainingToolCalls < 0)
             {
                 throw new InvalidOperationException("Skill model/content/tool aggregate budget is exhausted.");

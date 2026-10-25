@@ -881,6 +881,17 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 
 **Verifies:** parent-only steering, independent child progress, one-submission delivery, and preservation of undelivered drafts.
 
+## Scenario PROMPT-OVERRIDES - Repository and Model Prompt Overrides
+
+1. Start without overrides. Confirm every cataloged prompt uses the shipped bytes and no override directories or permission records are created.
+2. Place sparse replacements under the user or application `repositories/<existing-repository-key>/prompts/<owning-project>/` root, optionally under `models/<stable-profile-guid>/`. Confirm independent precedence of user model, user all-model, application model, application all-model, and shipped defaults. No approval, activation setting, or Git tracking is required.
+3. Use different models for the parent, concurrent children, skill procedures, fallback, and compaction. Confirm each actual request receives its own model's policy, descriptions, and applicable prose before capacity admission; profile display-name changes do not change folder identity. Tool implementations, schemas, policy, and authority remain unchanged.
+4. Edit and remove files during a run. Confirm cached text stays stable until restart/repository reopen, old in-flight work retains its captured view, and new work uses the newly loaded files or fallback. Invalid or cancelled loading must not publish a partial binding.
+5. Open another checkout, including one with the same leaf name at a different path. Confirm its existing permission-store key selects its own overrides. Checkout-local files, configuration redirects, and links inside managed override trees cannot supply replacements.
+6. Supply invalid UTF-8, NUL, missing/unknown tokens, oversized content, and unknown files. Confirm selected invalid replacements fail with safe path-specific diagnostics, unknown entries do not expand the catalog, and ordinary lookup/model switching performs no filesystem reads. Shipped defaults remain independently required.
+
+**Verifies:** Sparse per-file precedence, stable model identity, actual receiving-model binding, repository isolation, explicit reload, existing validation and authority, and unchanged default behavior. See MTP-PROMPT-OVERRIDES.
+
 ## Scenario SCRATCHPAD - Fixed repository transient storage
 
 1. With `scratchpad.enabled` absent or false, observe no scratchpad capability or cleanup. Enable it and verify the sole location is `.threadsmith/.scratchpad` under the active repository.

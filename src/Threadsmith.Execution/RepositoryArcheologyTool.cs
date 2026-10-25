@@ -102,7 +102,7 @@ public sealed class RepositoryArcheologyTool : Tool<RepositoryArcheologyInput, R
         _projector = new DelegateAgentsResultProjector(_options, prompts);
         var definition = ToolDefinitionFactory.Create<RepositoryArcheologyInput, RepositoryArcheologyOutput>(
             "repository_archeology",
-            prompts.Get(PromptFileNames.ToolRepositoryArcheologyDescription),
+            () => prompts.Get(PromptFileNames.ToolRepositoryArcheologyDescription),
             ToolCategory.RepositoryInspection,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,

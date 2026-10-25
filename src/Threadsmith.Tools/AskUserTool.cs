@@ -12,7 +12,7 @@ public sealed class AskUserTool : Tool<AskUserInput, UserQuestionResult>
     public AskUserTool(IPromptLoader prompts)
     {
         ArgumentNullException.ThrowIfNull(prompts);
-        Definition = ToolDefinitionFactory.Create<AskUserInput, UserQuestionResult>("ask_user", prompts.Get(PromptFileNames.ToolAskUserDescription), ToolCategory.Workflow, RepositoryTrustLevel.UntrustedInspection, ApprovalLevel.None, ToolSideEffect.ReadOnly, TimeSpan.FromSeconds(10), 32 * 1024) with
+        Definition = ToolDefinitionFactory.Create<AskUserInput, UserQuestionResult>("ask_user", () => prompts.Get(PromptFileNames.ToolAskUserDescription), ToolCategory.Workflow, RepositoryTrustLevel.UntrustedInspection, ApprovalLevel.None, ToolSideEffect.ReadOnly, TimeSpan.FromSeconds(10), 32 * 1024) with
         {
             DisplayName = "Ask user",
             SubagentAvailable = false,

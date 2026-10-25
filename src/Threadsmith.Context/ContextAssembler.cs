@@ -131,7 +131,6 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
     private readonly IScratchpadSessionCapabilityProvider? _scratchpad;
-    private readonly string _stableSystemPolicy;
     private readonly TokenEstimator _tokenEstimator;
 
     /// <summary>Initializes a new instance of the <see cref="ContextAssembler"/> class.</summary>
@@ -176,8 +175,6 @@ public sealed class ContextAssembler : IContextAssembler
         _policy = policy;
         _promptAppendLoader = promptAppendLoader;
         _prompts = prompts;
-        _stableSystemPolicy = prompts.Get(PromptFileNames.SystemSystemPrompt)
-            + Environment.NewLine + prompts.Get(PromptFileNames.SystemRepositoryInspection);
         _sanitizer = sanitizer;
         _events = events;
         _modelResolver = modelResolver;
@@ -194,11 +191,15 @@ public sealed class ContextAssembler : IContextAssembler
         ContextAssemblyRequest request,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var promptProfileId = request.PromptProfileId ?? request.DefaultModelProfileId;
+        using var promptScope = _prompts.BeginModelScope(promptProfileId);
+        var stableSystemPolicy = _prompts.Get(PromptFileNames.SystemSystemPrompt)
+            + Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryInspection);
         var scratchpadPrompt = GetScratchpadPrompt();
         var systemPolicy = scratchpadPrompt is null
-            ? _stableSystemPolicy
-            : _stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
-        ArgumentNullException.ThrowIfNull(request);
+            ? stableSystemPolicy
+            : stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
         if (request.IntelligenceEnabled)
         {
             systemPolicy += Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryIntelligenceGuidance);
@@ -248,6 +249,8 @@ public sealed class ContextAssembler : IContextAssembler
         string[] currentTurnHostContext =
         [
             .. request.CurrentTurnHostContext.Select(_sanitizer.Sanitize),
+            .. request.IntelligenceInstructionResolver is { } resolveIntelligence
+                ? new[] { _sanitizer.Sanitize(resolveIntelligence()) } : [],
         ];
         var additionalMessages = SanitizeAdditionalMessages(request.AdditionalMessages);
         var additionalMessageContent = RenderAdditionalMessages(additionalMessages);
@@ -276,7 +279,7 @@ public sealed class ContextAssembler : IContextAssembler
             request.ToolSchemas.Select(schema => new ModelToolDefinition
             {
                 Name = schema.Id,
-                Description = schema.Description,
+                Description = schema.DescriptionResolver?.Invoke() ?? schema.Description,
                 ArgumentsJsonSchema = schema.JsonSchema,
                 PreferStrictArguments = schema.PreferStrictArguments,
             }));
@@ -430,6 +433,23 @@ public sealed class ContextAssembler : IContextAssembler
             request.RequiredCapabilities,
             constraints,
             request.DefaultModelProfileId);
+        if (modelResolution is { } resolved && resolved.ProfileId != promptProfileId
+            && !_prompts.HasSameModelPrompts(promptProfileId, resolved.ProfileId))
+        {
+            if (request.AttemptedPromptProfiles.Contains(resolved.ProfileId))
+            {
+                throw new InvalidOperationException("Model selection repeated while resolving model-specific prompt capacity.");
+            }
+
+            return await AssembleAsync(
+                request with
+                {
+                    PromptProfileId = resolved.ProfileId,
+                    AttemptedPromptProfiles = request.AttemptedPromptProfiles.Append(resolved.ProfileId).ToHashSet(),
+                },
+                cancellationToken);
+        }
+
         var providerInstructions = modelResolution is null
             ? null
             : _providerInstructionResolver?.Resolve(modelResolution.ProfileId);

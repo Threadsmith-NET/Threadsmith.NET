@@ -42,7 +42,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         _options = (options ?? new CodeExploreOptions()).Resolve();
         var definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
             "code_explore",
-            promptLoader.Get(PromptFileNames.ToolCodeExploreDescription),
+            () => promptLoader.Get(PromptFileNames.ToolCodeExploreDescription),
             ToolCategory.SemanticSearch,
             RepositoryTrustLevel.TrustedBuild,
             ApprovalLevel.None,

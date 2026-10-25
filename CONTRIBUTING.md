@@ -130,6 +130,8 @@ pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot $ripgrepRoot
 $env:THREADSMITH_TEST_RIPGREP = Join-Path $ripgrepRoot ('stage/tools/rg' + $(if ($IsWindows) { '.exe' } else { '' }))
 ```
 
+Visual Studio Test Explorer needs the same `THREADSMITH_TEST_RIPGREP` environment variable, pointing to the absolute staged `rg.exe` path on Windows. Set it in the environment used to launch Visual Studio and start a fresh Visual Studio process; an already-running instance does not inherit variables set later in another terminal. The four real-ripgrep cases fail with a fixture-setup message when the variable is absent or its executable is missing. This is an environment prerequisite, not a reason to skip those cases or replace the pinned executable with a machine-installed copy.
+
 For product changes, validate the final code revision with:
 
 ```powershell

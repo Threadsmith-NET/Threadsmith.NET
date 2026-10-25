@@ -4,9 +4,45 @@ Source edits use stable conversation instructions and the registered `edit_sourc
 
 `Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-ConversationGuidance.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
 
-Threadsmith ships its host-authored, model-facing prose as UTF-8 Markdown files. Source assets stay under the owning project's `Prompts/` directory and every build, publish, archive, and installer flattens the declared catalog into `<application-directory>/prompts/`. The application loads the complete catalog once during startup and then serves an immutable in-memory snapshot; it does not stat, reread, watch, or hot-reload these files.
+Threadsmith ships its host-authored, model-facing prose as UTF-8 Markdown files. Source assets stay under the owning project's `Prompts/` directory and every build, publish, archive, and installer flattens the declared catalog into `<application-directory>/prompts/`. The application loads the complete shipped catalog once during startup. Optional repository-specific overrides are loaded at startup and repository-open boundaries; ordinary prompt lookup and model switching use immutable cached views without filesystem reads or watchers.
 
 `Tool-web_search-Description.md` and `Tool-web_fetch-Description.md` explain that search-result hostnames are pre-authorized for public HTTPS fetches during the producing run, whether the model supplies an opaque reference or a raw URL. The fetch description also identifies session-approved and saved user hostnames as pre-authorized. Other direct URLs still need an existing grant or approval. The search description also lists the four canonical arguments, their limits/defaults, locale and freshness semantics, and a valid JSON invocation example. These assets describe code-enforced validation and authority; editing their wording cannot change argument bounds or grant hostname access.
+
+## Repository and model overrides
+
+Use either of these fixed locations, outside the opened repository:
+
+```text
+~/.threadsmith/repositories/<repository-key>/prompts/
+<application-directory>/repositories/<repository-key>/prompts/
+```
+
+The application directory is `AppContext.BaseDirectory`, where the executable and shipped `prompts/` directory live. The user location follows the existing user configuration directory. Reuse the repository folder name used for `permissions.json`: its readable name and hash identify the canonical local repository path. A permissions file does not have to exist. Different checkout paths, including same-named repositories, use different keys; moving a checkout requires copying the desired overrides to its new key.
+
+Under either override root, group files by the owning project from the catalog below:
+
+```text
+Threadsmith.Execution/Context-ExecutionOutcome.md
+Threadsmith.Execution/models/11111111-1111-1111-1111-111111111111/Context-ExecutionOutcome.md
+```
+
+The first form applies to every model for that repository. The second applies to one stable `ModelProfile.Id`, formatted as a lowercase hyphenated GUID. Use the actual profile GUID from your provider catalog or effective-configuration preflight; a friendly name or provider model slug is not a folder identifier. Renaming the profile keeps its overrides. Parent requests, sub-agents, helper procedures, fallback requests, and context compaction each use the model actually receiving that request. A child or compaction model does not inherit its parent's model folder.
+
+Resolve each cataloged file independently, taking the first present candidate:
+
+1. User directory, model-specific file.
+2. User directory, all-model file.
+3. Application directory, model-specific file.
+4. Application directory, all-model file.
+5. Shipped flat `prompts/<filename>` file.
+
+Copy only the files you want to replace, preserving their exact names and declared placeholders. For example, an all-model Execution override can live at `~/.threadsmith/repositories/<repository-key>/prompts/Threadsmith.Execution/Context-ExecutionOutcome.md`. To restrict it to a model, put it under that project's `models/<profile-guid>/` subfolder instead. The user directory takes precedence even over a more model-specific application-directory file. Absent folders and files fall through; no overrides preserves shipped behavior. Unknown files and owner directories do not extend the code-owned catalog.
+
+Placing the files there authorizes their use. There are no enablement flags, approval prompts, grants, or Git tracking requirements. Overrides are never discovered in the opened checkout, its `.threadsmith` directory, repository/session configuration, or parent directories. Links and reparse points inside managed override trees are rejected. Existing host configuration protections also apply to these trees.
+
+Restart Threadsmith or reopen the repository with `/open <path>` to load edits or deletions. There is no hot reload. Removing a replacement restores the next fallback. A present but invalid selected replacement reports its path and fails loading instead of silently choosing another file. Failed or cancelled repository opens retain the previous binding; operations already in flight keep their captured text. Shipped defaults are still required and validated independently, so overrides cannot repair an incomplete installation.
+
+Default limits are 128 KiB per file and 4 MiB per effective model catalog. Loaded replacement bytes across models also share the catalog limit; unchanged cached files are shared. Discovery accepts at most 256 distinct model GUID folders across both roots and all projects. Existing trusted deployed-prompt load limits govern byte bounds.
 
 ## Safe customization
 
@@ -18,13 +54,13 @@ Threadsmith ships its host-authored, model-facing prose as UTF-8 Markdown files.
 
 Back up any local experiment before editing a deployed prompt. Edit only the file body and retain every declared `{{TokenName}}` shown in the catalog below. Token replacement is one-pass and non-executable: assets cannot add tools, change schemas or tool availability, approve or apply mutations, widen repository or child-agent authority, alter trust, select a model, grant network or secret access, or bypass host validation. Repository `AGENTS.md` and [project prompt appends](project-prompt-append.md) remain separate untrusted inputs with their existing precedence.
 
-Restart Threadsmith after an edit. Changes made while a process is running do not affect that process. Startup fails before model or tool activity when a required file is missing, unreadable, invalid UTF-8, contains NUL, is a link/reparse point, escapes the flat catalog, has an undeclared or unresolved template token, exceeds 128 KiB, causes the catalog to exceed 4 MiB, or collides case-insensitively with another declared filename. Unknown extra files are ignored and cannot be requested by consumers. The default catalog contains 294 prompt files; the per-file and aggregate limits apply to every deployed copy.
+Restart Threadsmith after editing shipped defaults; editing overrides requires restart or repository reopen as described above. Loading fails before affected model or tool activity when a required file is missing, unreadable, invalid UTF-8, contains NUL, is a link/reparse point, escapes its managed tree, has an undeclared or unresolved template token, exceeds 128 KiB, causes the effective catalog to exceed 4 MiB, or collides case-insensitively with another declared filename. Unknown extra files are ignored and cannot be requested by consumers. The default catalog contains 294 prompt files; the per-file and aggregate limits apply to every deployed copy.
 
 Prompt content is sent to the configured model provider whenever the corresponding request path uses it. Do not put credentials, personal data, or other secrets in these files. Ordinary startup, request, telemetry, event, and diagnostic output records only bounded metadata such as filename, size, digest, character count, or token count—not prompt bodies or rendered token values. Explicit `--raw-model-log` output is a privileged diagnostic and intentionally contains the complete provider-visible request, including externalized system/context messages, tool descriptions, tool results, and provider instructions. Protect and delete raw logs accordingly.
 
 All rendered prompt content counts against the selected model's normal request capacity. A compiled provider registration can declare one cataloged provider-instruction asset; the effective catalog carries that declaration onto its projected profiles, and the shared resolver loads it without provider-specific routing. Native Codex currently declares such an asset. Provider instructions are attached to the provider-neutral request before admission, appear as a dedicated instruction contribution in wire/context inspection, and can reduce the room available for other context. A request that cannot fit the exact instructions, fixed framing, tools, and output reserve fails before network dispatch.
 
-Upgrades replace the prompt defaults contained in an installed application payload; Threadsmith does not merge local edits. Copy experiments elsewhere before upgrading and reapply them deliberately against the new catalog. A partial copied catalog is not supported.
+Upgrades replace the prompt defaults contained in an installed application payload; Threadsmith does not merge edits to those defaults. Keep customizations under the user repository override root to separate them from the installed payload. After upgrading, check replacements against the current filename and token contracts. Sparse override directories are supported; a partial shipped catalog is not.
 
 ## Ordinary delegated children
 

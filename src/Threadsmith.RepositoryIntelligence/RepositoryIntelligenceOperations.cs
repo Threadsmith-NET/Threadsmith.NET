@@ -165,6 +165,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
             var instructions = _prompts.Get(operation == RepositoryIntelligenceOperation.Archeology
                 ? PromptFileNames.ContextRepositoryArcheology : PromptFileNames.ContextRepositoryIntelligenceCollection);
+            var instructionPrefixLength = instructions.Length;
             instructions += "\n" + JsonSerializer.Serialize(new
             {
                 Operation = operation.ToString(),
@@ -173,7 +174,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                 options.Intelligence.MaximumStoredMemories,
                 HistoryDepth = historyDepth,
             });
-            return new IntelligenceRun(this, sessionId, repositoryPath, operation, collection, instructions, commitGeneration, cancellation, historyDepth, resume);
+            return new IntelligenceRun(this, sessionId, repositoryPath, operation, collection, instructions, instructionPrefixLength, commitGeneration, cancellation, historyDepth, resume);
         }
         catch
         {
@@ -348,6 +349,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         private readonly CancellationTokenSource _cancellation;
         private readonly CancellationTokenRegistration _monitorFailure;
         private readonly long _commitGeneration;
+        private readonly int _instructionPrefixLength;
         private readonly ConcurrentDictionary<string, RepositoryMemorySupport> _sources = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         private RepositoryIntelligenceCheckpoint? _resume;
         private IReadOnlyList<RepositoryMemorySupport> _verifiedResumeSupports = [];
@@ -358,9 +360,10 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         private string? _historyNotice;
         private bool _completed;
         private int _disposed;
+        private string _instructions;
 
         public IntelligenceRun(
-            RepositoryIntelligenceOperations owner, SessionId sessionId, string repositoryPath, RepositoryIntelligenceOperation operation, RepositoryMemoryCollection? collection, string instructions, long commitGeneration, CancellationTokenSource cancellation, int? historyDepth, RepositoryIntelligenceCheckpoint? resume)
+            RepositoryIntelligenceOperations owner, SessionId sessionId, string repositoryPath, RepositoryIntelligenceOperation operation, RepositoryMemoryCollection? collection, string instructions, int instructionPrefixLength, long commitGeneration, CancellationTokenSource cancellation, int? historyDepth, RepositoryIntelligenceCheckpoint? resume)
         {
             _owner = owner;
             _sessionId = sessionId;
@@ -372,7 +375,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             _monitorFailure = owner._monitor.FailureToken.Register(cancellation.Cancel);
             Operation = operation;
             Collection = collection;
-            Instructions = instructions;
+            _instructions = instructions;
+            _instructionPrefixLength = instructionPrefixLength;
             HistoryDepth = historyDepth;
             _resume = resume;
             PendingHistoryPage = operation == RepositoryIntelligenceOperation.Onboard ? resume?.NextHistoryPage ?? 0 : null;
@@ -384,7 +388,16 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
         public RepositoryMemoryCollection? Collection { get; }
 
-        public string Instructions { get; private set; }
+        public string Instructions
+        {
+            get
+            {
+                var prompt = _owner._prompts.Get(Operation == RepositoryIntelligenceOperation.Archeology
+                    ? PromptFileNames.ContextRepositoryArcheology : PromptFileNames.ContextRepositoryIntelligenceCollection);
+                return _instructions.AsSpan(0, _instructionPrefixLength).SequenceEqual(prompt.AsSpan())
+                    ? _instructions : prompt + _instructions[_instructionPrefixLength..];
+            }
+        }
 
         public bool IsCoverageReviewActive { get; private set; }
 
@@ -420,7 +433,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                         _sources[support.Path] = support;
                     }
 
-                    Instructions += "\n" + JsonSerializer.Serialize(new
+                    _instructions += "\n" + JsonSerializer.Serialize(new
                     {
                         ResumedOnboarding = true,
                         CompletedHistoryPages = page,

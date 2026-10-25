@@ -25,11 +25,22 @@ public sealed record ModelToolDefinition
 /// <summary>Provider-neutral exact instructions contributed to one provider request.</summary>
 public sealed record ModelProviderInstructions
 {
+    /// <summary>Host-owned source asset retained so repository rebind can refresh provider prose.</summary>
+    [JsonIgnore]
+    public string? PromptFileName { get; init; }
+
     /// <summary>Stable section identity used for capacity and request inspection.</summary>
     public required string SectionId { get; init; }
 
     /// <summary>Exact provider-visible instruction content.</summary>
     public required string Content { get; init; }
+
+    /// <summary>Resolves cataloged instructions within the receiving model's captured prompt view.</summary>
+    public ModelProviderInstructions Resolve(IPromptLoader prompts)
+    {
+        ArgumentNullException.ThrowIfNull(prompts);
+        return PromptFileName is { } fileName ? this with { Content = prompts.Get(fileName) } : this;
+    }
 }
 
 /// <summary>Provider-owned declaration of a deployed instruction asset.</summary>

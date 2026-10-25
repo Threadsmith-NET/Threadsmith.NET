@@ -48,7 +48,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         _conversations = conversations;
         _definition = ToolDefinitionFactory.Create<WriteFileInput, WriteFileOutput>(
             "write_file",
-            promptLoader.Render(PromptFileNames.ToolWriteFileDescription, new Dictionary<string, string>
+            () => promptLoader.Render(PromptFileNames.ToolWriteFileDescription, new Dictionary<string, string>
             {
                 ["MaximumContentBytes"] = _limits.WriteFileMaximumContentBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
             }),

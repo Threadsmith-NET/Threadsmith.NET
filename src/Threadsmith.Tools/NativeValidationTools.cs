@@ -602,7 +602,7 @@ internal static class NativeValidationToolDefinitions
         ArgumentNullException.ThrowIfNull(promptLoader);
         return ToolDefinitionFactory.Create<TInput, TOutput>(
             id,
-            promptLoader.Get(promptFileName),
+            () => promptLoader.Get(promptFileName),
             executable ? ToolCategory.ProcessExecution : ToolCategory.RepositoryInspection,
             trust,
             ApprovalLevel.None,

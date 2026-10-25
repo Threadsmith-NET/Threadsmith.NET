@@ -56,6 +56,7 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
             Version = "1.0",
             DisplayName = "Read Agent Evidence",
             Description = prompts.Get(PromptFileNames.ToolReadAgentEvidenceDescription),
+            DescriptionResolver = () => prompts.Get(PromptFileNames.ToolReadAgentEvidenceDescription),
             Category = ToolCategory.SystemInformation,
             RequiredTrust = RepositoryTrustLevel.UntrustedInspection,
             RequiredApproval = ApprovalLevel.None,

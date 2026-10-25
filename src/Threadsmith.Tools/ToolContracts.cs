@@ -228,7 +228,19 @@ public sealed record ToolDefinition
     public required string Version { get; init; }
 
     /// <summary>Human-readable capability description.</summary>
-    public required string Description { get; init; }
+    public required string Description
+    {
+        get => DescriptionResolver?.Invoke() ?? field;
+        init
+        {
+            field = value;
+            DescriptionResolver = null;
+        }
+    }
+
+    /// <summary>Renders host-owned prose in the captured receiving-model scope without changing tool execution.</summary>
+    [JsonIgnore]
+    public Func<string>? DescriptionResolver { get; init; }
 
     /// <summary>Policy and concurrency category.</summary>
     public ToolCategory Category { get; init; }

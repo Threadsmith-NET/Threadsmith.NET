@@ -402,7 +402,11 @@ internal static class SecurityPolicyConfigurationLoader
                 Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-wal"),
                 Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-shm"),
                 Path.Combine(Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "repository-facts.db-journal")],
-            ControlDirectories = [new RepositoryPermissionStore(paths.UserConfiguration).DirectoryPath],
+            ControlDirectories =
+            [
+                new RepositoryPermissionStore(paths.UserConfiguration).DirectoryPath,
+                Path.Combine(AppContext.BaseDirectory, "repositories"),
+            ],
             Sources = [.. sources],
             Diagnostics = [.. diagnostics.Distinct(StringComparer.Ordinal)],
         };

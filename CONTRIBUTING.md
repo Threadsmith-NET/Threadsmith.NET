@@ -121,7 +121,7 @@ pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1
 This validates the actual release documentation catalog. Relative links to excluded source material, including implementation plans, break installed help; use source-repository URLs for those references.
 
 Stage the pinned ripgrep fixture before running tests. The real-ripgrep tests require
-an explicit executable path and fail if it is missing; CI stages the same verified
+the staged executable and fail if it is missing; CI stages the same verified
 asset and requires all four integration cases to pass on every platform.
 
 ```powershell
@@ -130,7 +130,7 @@ pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot $ripgrepRoot
 $env:THREADSMITH_TEST_RIPGREP = Join-Path $ripgrepRoot ('stage/tools/rg' + $(if ($IsWindows) { '.exe' } else { '' }))
 ```
 
-Visual Studio Test Explorer needs the same `THREADSMITH_TEST_RIPGREP` environment variable, pointing to the absolute staged `rg.exe` path on Windows. Set it in the environment used to launch Visual Studio and start a fresh Visual Studio process; an already-running instance does not inherit variables set later in another terminal. The four real-ripgrep cases fail with a fixture-setup message when the variable is absent or its executable is missing. This is an environment prerequisite, not a reason to skip those cases or replace the pinned executable with a machine-installed copy.
+Visual Studio Test Explorer automatically uses the same repository-owned fixture at `artifacts/test-ripgrep/stage/tools/rg.exe` on Windows (`rg` on Unix). Stage it once with the command above, then build and run tests normally; no Visual Studio process environment change or restart is needed. `THREADSMITH_TEST_RIPGREP` remains the explicit override for CI or a custom staging directory. An invalid explicit path fails instead of silently falling back, and a missing local fixture still fails with staging instructions. Tests never download an executable or search machine-installed tools.
 
 For product changes, validate the final code revision with:
 

@@ -9,6 +9,86 @@ using Xunit;
 /// <summary>Verifies bounded semantic Markdown parsing, layout, fallback, and display configuration.</summary>
 public static class TuiMarkdownRenderingTests
 {
+    /// <summary>URL labels already expose the destination and must not duplicate it.</summary>
+    [Theory]
+    [InlineData("<https://example.com/docs>")]
+    [InlineData("https://example.com/docs")]
+    [InlineData("[https://example.com/docs](https://example.com/docs)")]
+    public static void Format_UrlLabel_DisplaysDestinationOnce(string source)
+    {
+        var result = new MarkdownParser().Parse(source);
+        var document = Assert.IsType<MarkdownDocument>(result.Document);
+        var segments = TuiMarkdownLayout.Format(document, 120);
+
+        Assert.Equal("https://example.com/docs\n", string.Concat(segments.Select(segment => segment.Text)));
+        Assert.Contains(segments, segment => segment.LinkTarget?.AbsoluteUri == "https://example.com/docs");
+    }
+
+    /// <summary>Unsupported or unsafe autolink targets preserve surrounding Markdown without becoming active.</summary>
+    [Theory]
+    [InlineData("<user@example.com>")]
+    [InlineData("<javascript:alert(1)>")]
+    [InlineData("<https://example.com/%1B>")]
+    public static void Parse_UnsafeAutolink_RemainsInertWithoutDiscardingMarkdown(string source)
+    {
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse("**before** " + source).Document);
+        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(document.Blocks));
+
+        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
+        Assert.DoesNotContain(paragraph.Spans, span => span.LinkTarget is not null);
+    }
+
+    /// <summary>Distinct fragment targets survive both layout and retained link selection.</summary>
+    [Theory]
+    [InlineData("[one](https://example.com/docs#one)[two](https://example.com/docs#two)")]
+    [InlineData("[**one**](https://example.com/docs#one)[`two`](https://example.com/docs#two)")]
+    public static void Format_AdjacentFragmentLinks_PreservesBothDestinations(string source)
+    {
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var segments = TuiMarkdownLayout.Format(document, 120);
+
+        Assert.Equal(
+            "one (https://example.com/docs#one)two (https://example.com/docs#two)\n",
+            string.Concat(segments.Select(segment => segment.Text)));
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+        Assert.Equal(["https://example.com/docs#one", "https://example.com/docs#two"], view.Links.Select(link => link.AbsoluteUri));
+    }
+
+    /// <summary>Wide tables and responsive table projections retain hyperlink metadata.</summary>
+    [Theory]
+    [InlineData(20)]
+    [InlineData(120)]
+    public static void Format_TableLinks_RemainSelectableAcrossWidths(int width)
+    {
+        const string source = "| Resource |\n| --- |\n| [one](https://example.com/docs#one) |\n| [two](https://example.com/docs#two) |";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var segments = TuiMarkdownLayout.Format(document, width);
+        var targets = segments.Where(segment => segment.LinkTarget is not null)
+            .Select(segment => segment.LinkTarget!.AbsoluteUri).Distinct(StringComparer.Ordinal);
+
+        Assert.Equal(["https://example.com/docs#one", "https://example.com/docs#two"], targets);
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationTextItem(segments)]));
+        Assert.Equal(["https://example.com/docs#one", "https://example.com/docs#two"], view.Links.Select(link => link.AbsoluteUri));
+    }
+
+    /// <summary>Reference links decode labels and destinations while deduplicating only complete matching targets.</summary>
+    [Fact]
+    public static void Format_ReferenceLinksAndEscapedTargets_PreservesLabelsAndTargets()
+    {
+        const string source = "- [**one** &amp; two][ref]\n- [again][ref]\n- [section](https://example.com/docs?q=a&amp;b=c#two)\n\n[ref]: https://example.com/docs?q=a&b=c#one";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+
+        Assert.Equal(
+            ["https://example.com/docs?q=a&b=c#one", "https://example.com/docs?q=a&b=c#two"],
+            view.Links.Select(link => link.AbsoluteUri));
+        var visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
+        Assert.Contains("one & two (https://example.com/docs?q=a&b=c#one)", visible, StringComparison.Ordinal);
+    }
+
     /// <summary>Configuration cannot raise recursive traversal beyond its stack-safety ceiling.</summary>
     [Theory]
     [InlineData(33)]

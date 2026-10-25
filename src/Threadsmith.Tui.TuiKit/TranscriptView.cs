@@ -396,7 +396,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     /// <summary>Gets only validated targets belonging to retained, projected text.</summary>
     internal IReadOnlyList<Uri> Links => _styles.Values.SelectMany(ranges => ranges)
-        .Select(range => range.Link).OfType<Uri>().Distinct().Take(_limits.MaximumLinks).ToArray();
+        .Select(range => range.Link).OfType<Uri>().DistinctBy(link => link.AbsoluteUri, StringComparer.Ordinal).Take(_limits.MaximumLinks).ToArray();
 
     /// <summary>Starts a fresh viewport while keeping bounded history available above it.</summary>
     internal void ClearView()
@@ -1036,7 +1036,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
                     }
 
                     var range = new StyledRange(line.Text.Length, line.Text.Length + fragment.Length, segment.Role, segment.LinkTarget);
-                    if (ranges.Count > 0 && ranges[^1].End == range.Start && ranges[^1].Role == range.Role && ranges[^1].Link == range.Link)
+                    if (ranges.Count > 0 && ranges[^1].End == range.Start && ranges[^1].Role == range.Role
+                        && string.Equals(ranges[^1].Link?.AbsoluteUri, range.Link?.AbsoluteUri, StringComparison.Ordinal))
                     {
                         ranges[^1] = ranges[^1] with { End = range.End };
                     }

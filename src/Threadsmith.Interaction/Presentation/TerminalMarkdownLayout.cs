@@ -182,13 +182,15 @@ internal static class TerminalMarkdownLayout<TMetrics>
         }
 
         var columns = table.Rows.Max(row => row.Cells.Length);
-        string[][] textRows =
+        ImmutableArray<MarkdownSpan>[][] cellRows =
         [
             .. table.Rows.Select(row => row.Cells
-                .Select(Flatten)
-                .Concat(Enumerable.Repeat(string.Empty, columns - row.Cells.Length))
+                .Select(cell => cell.Select(span => span with { Text = span.Text.Replace('\n', ' ') }).ToImmutableArray())
+                .Concat(Enumerable.Repeat(ImmutableArray<MarkdownSpan>.Empty, columns - row.Cells.Length))
                 .ToArray()),
         ];
+        var textRows = cellRows.Select(row => row.Select(cell =>
+            string.Concat(CreateInlineSegments(cell, null).Select(segment => segment.Text))).ToArray()).ToArray();
         int[] columnWidths =
         [
             .. Enumerable.Range(0, columns)
@@ -202,9 +204,12 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 segments.Add(new PresentationTextSegment(prefix + "| ", PresentationTextRole.MarkdownTableBorder));
                 for (var column = 0; column < columns; column++)
                 {
+                    segments.AddRange(CreateInlineSegments(
+                        cellRows[rowIndex][column],
+                        table.Rows[rowIndex].IsHeader ? PresentationTextRole.MarkdownStrong : null));
                     segments.Add(new PresentationTextSegment(
-                        Pad(textRows[rowIndex][column], columnWidths[column]),
-                        table.Rows[rowIndex].IsHeader ? PresentationTextRole.MarkdownStrong : PresentationTextRole.Default));
+                        new string(' ', columnWidths[column] - GetWidth(textRows[rowIndex][column])),
+                        PresentationTextRole.Default));
                     segments.Add(new PresentationTextSegment(" | ", PresentationTextRole.MarkdownTableBorder));
                 }
 
@@ -228,7 +233,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 var continuationPrefix = prefix + new string(' ', GetWidth($"- Column {column + 1}: "));
                 AppendWrappedSpans(
                     segments,
-                    [new MarkdownSpan(headers[column])],
+                    cellRows[0][column],
                     width,
                     valuePrefix,
                     continuationPrefix,
@@ -250,7 +255,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 var continuationPrefix = prefix + new string(' ', GetWidth($"- {label}: "));
                 AppendWrappedSpans(
                     segments,
-                    [new MarkdownSpan(textRows[rowIndex][column])],
+                    cellRows[rowIndex][column],
                     width,
                     valuePrefix,
                     continuationPrefix,
@@ -373,28 +378,41 @@ internal static class TerminalMarkdownLayout<TMetrics>
     {
         var segments = new List<PresentationTextSegment>();
         Uri? previousLink = null;
+        var linkLabel = new StringBuilder();
         foreach (var span in spans)
         {
-            if (previousLink is not null && span.LinkTarget != previousLink)
+            if (previousLink is not null
+                && !string.Equals(span.LinkTarget?.AbsoluteUri, previousLink.AbsoluteUri, StringComparison.Ordinal))
             {
-                AppendLinkDestination(segments, previousLink);
+                AppendLinkDestination(segments, previousLink, linkLabel.ToString());
+                linkLabel.Clear();
             }
 
             var role = forcedRole ?? GetRole(span);
             segments.Add(new PresentationTextSegment(span.Text, role, span.LinkTarget));
             previousLink = span.LinkTarget;
+            if (previousLink is not null)
+            {
+                linkLabel.Append(span.Text);
+            }
         }
 
         if (previousLink is not null)
         {
-            AppendLinkDestination(segments, previousLink);
+            AppendLinkDestination(segments, previousLink, linkLabel.ToString());
         }
 
         return segments;
     }
 
-    private static void AppendLinkDestination(List<PresentationTextSegment> segments, Uri link)
+    private static void AppendLinkDestination(List<PresentationTextSegment> segments, Uri link, string label)
     {
+        if (string.Equals(label, link.OriginalString, StringComparison.Ordinal)
+            || string.Equals(label, link.AbsoluteUri, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         segments.Add(new PresentationTextSegment($" ({link.AbsoluteUri})", PresentationTextRole.Hyperlink, link));
     }
 
@@ -413,29 +431,6 @@ internal static class TerminalMarkdownLayout<TMetrics>
                                 : PresentationTextRole.Default;
     }
 
-    private static string Flatten(ImmutableArray<MarkdownSpan> spans)
-    {
-        var builder = new StringBuilder();
-        Uri? previousLink = null;
-        foreach (var span in spans)
-        {
-            if (previousLink is not null && span.LinkTarget != previousLink)
-            {
-                builder.Append(" (").Append(previousLink.AbsoluteUri).Append(')');
-            }
-
-            builder.Append(span.Text.Replace('\n', ' '));
-            previousLink = span.LinkTarget;
-        }
-
-        if (previousLink is not null)
-        {
-            builder.Append(" (").Append(previousLink.AbsoluteUri).Append(')');
-        }
-
-        return builder.ToString();
-    }
-
     private static int GetWidth(string value)
     {
         return TMetrics.GetWidth(value);
@@ -446,11 +441,5 @@ internal static class TerminalMarkdownLayout<TMetrics>
         var maximumWidth = Math.Max(0, width - 2);
         var length = TMetrics.GetLengthThatFits(value, maximumWidth);
         return value[..length];
-    }
-
-    private static string Pad(string value, int width)
-    {
-        var padding = width - GetWidth(value);
-        return padding > 0 ? value + new string(' ', padding) : value;
     }
 }

@@ -311,6 +311,12 @@ internal sealed class MarkdownParser : IMarkdownParser
                         inheritedLink,
                         spans);
                     break;
+                case AutolinkInline autolink:
+                    AddSpan(spans, state, new MarkdownSpan(
+                        TerminalControlEncoder.Encode(autolink.Url),
+                        inheritedStyle,
+                        autolink.IsEmail ? null : TryCreateSafeLink(autolink.Url)));
+                    break;
                 case LinkInline link:
                     ParseLink(link, state, depth + 1, inheritedStyle, spans);
                     break;

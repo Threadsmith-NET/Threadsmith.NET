@@ -52,7 +52,7 @@ public sealed partial class SemanticEngine
         lock (_gate)
         {
             // Actual tasks retain admission across logical abandonment and source replacement.
-            slots = _actualCompilerSlots ??= new(_preparationLimits.Workers + 1, _preparationLimits.Workers + 1);
+            slots = _actualCompilerSlots ??= new(checked(_preparationLimits.Workers + 1), checked(_preparationLimits.Workers + 1));
         }
 
         // Capacity pressure remains pending; it must never be cached as a failed project or analyzer.

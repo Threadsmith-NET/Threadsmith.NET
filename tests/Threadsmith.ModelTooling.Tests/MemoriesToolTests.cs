@@ -845,9 +845,8 @@ public static class MemoriesToolTests
     public static async Task Legacy_search_payload_rejects_through_real_pipeline()
     {
         var ct = TestContext.Current.CancellationToken;
-        var search = new IntelligenceSearch();
         var memory = new MemoryService();
-        var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null));
         var registry = new ToolRegistry([tool]);
         await using var events = new DomainEventStream();
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
@@ -862,7 +861,6 @@ public static class MemoriesToolTests
         Assert.True(result.Result.Succeeded, result.Result.Error);
         using var json = JsonDocument.Parse(result.Result.ResultJson!);
         Assert.Equal("legacy_search_removed", json.RootElement.GetProperty("ReasonCode").GetString());
-        Assert.Null(search.Request);
         Assert.Empty(memory.Actions);
     }
 

@@ -103,8 +103,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         IManagedRepositoryMemoryService memories,
         IRepositoryMemoryOptionsProvider options,
         IPromptLoader prompts,
-        IRepositoryIntelligenceStatusProvider? intelligence = null,
-        IRepositoryMemorySearch? search = null)
+        IRepositoryIntelligenceStatusProvider? intelligence = null)
     {
         ArgumentNullException.ThrowIfNull(memories);
         ArgumentNullException.ThrowIfNull(options);
@@ -262,8 +261,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             var items = new List<RepositoryIntelligenceCoverage>();
             var coverageBytes = 0;
             string? nextAfterKey = null;
-            foreach (var item in preparation.Coverage.Where(_ => input.ProposalKey is null).Where(item => input.Coverage is null || item.Key == input.Coverage.Key)
-                .Where(item => input.AfterKey is null || string.CompareOrdinal(item.Key, input.AfterKey) > 0))
+            foreach (var item in preparation.Coverage.Where(_ => input.ProposalKey is null).Where(item => (input.Coverage is null || item.Key == input.Coverage.Key) && (input.AfterKey is null || string.CompareOrdinal(item.Key, input.AfterKey) > 0)))
             {
                 coverageBytes += JsonSerializer.SerializeToUtf8Bytes(item).Length;
                 if (items.Count == 4 || coverageBytes > 24 * 1024)

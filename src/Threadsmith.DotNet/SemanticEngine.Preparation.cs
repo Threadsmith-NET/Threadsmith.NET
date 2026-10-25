@@ -12,7 +12,7 @@ public sealed partial class SemanticEngine
     private readonly SemaphoreSlim _preparationPublication = new(1, 1);
     private readonly SemaphoreSlim _transition = new(1, 1);
     private readonly CancellationTokenSource _engineLifetime = new();
-    private readonly SemanticPreparationLimits _preparationLimits = new();
+    private readonly SemanticPreparationLimits _preparationLimits;
     private readonly ConcurrentQueue<string> _preparationDiagnostics = new();
     private readonly List<ProjectCompilationSample> _preparationSlowSamples = [];
     private CancellationTokenSource _preparationOwnerLifetime = new();
@@ -47,10 +47,8 @@ public sealed partial class SemanticEngine
         SemanticPreparationLimits preparationLimits,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null)
-        : this(events, logger, prompts, cancellationBackstop, resourceLimits)
+        : this(events, logger, prompts, cancellationBackstop, preparationLimits.ApplyTo(resourceLimits))
     {
-        preparationLimits.Validate();
-        _preparationLimits = preparationLimits;
     }
 
     /// <summary>Joins terminal warm coverage, used by deterministic verification and complete refresh.</summary>

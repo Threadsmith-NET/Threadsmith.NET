@@ -88,8 +88,17 @@ public sealed partial class SourceEditApplicationTests
         sessions.RegisterRestoredSession(fixture.SessionId);
         var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Read both supporting files, add a field, and repair any compiler error."), ct);
         Assert.True(await sessions.HandleAsync(new WaitForRunCommand(run), ct));
-        var continuedForFeedback = feedbackDuringFinalAnswer && maximumModelRounds != 6;
-        Assert.Equal(continuedForFeedback ? 7 : 6, provider.Requests.Count);
+        if (feedbackDuringFinalAnswer)
+        {
+            Assert.Equal(maximumModelRounds == 6 ? 6 : 7, provider.Requests.Count);
+        }
+        else
+        {
+            // Committed analysis may arrive during the final response even when candidate analysis completed earlier.
+            Assert.InRange(provider.Requests.Count, 6, 7);
+        }
+
+        var continuedForFeedback = provider.Requests.Count == 7;
         if (feedbackDuringFinalAnswer)
         {
             var diagnostic = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback");
@@ -101,9 +110,21 @@ public sealed partial class SourceEditApplicationTests
 
         if (continuedForFeedback)
         {
-            var feedbackMessage = Assert.Single(provider.Requests[6].Messages, message => message.SectionId == "source-edit-feedback" && message.GetModelVisibleContent().Contains("CS5001", StringComparison.Ordinal));
-            Assert.Contains("initial", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+            var feedbackMessage = Assert.Single(provider.Requests[6].Messages, message => message.SectionId == "source-edit-feedback"
+                && !provider.Requests[5].Messages.Any(previous => previous.SectionId == "source-edit-feedback"
+                    && previous.GetModelVisibleContent() == message.GetModelVisibleContent()));
+            var finalAnalysis = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback" && item.EditAnalysis is not null).EditAnalysis!;
+            var finalCandidate = observed.OfType<SemanticCheckCompleted>().Last(item => item.Phase == SemanticCheckPhase.PreMutation && item.CheckName == "advisory edit analysis").Analysis!;
+            Assert.Equal(finalCandidate.EffectId, finalAnalysis.EffectId);
+            Assert.NotNull(finalAnalysis.CommittedGeneration);
+            Assert.False(finalAnalysis.Pending);
+            Assert.Contains(finalAnalysis.EffectId.ToString(), feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
             Assert.Contains("correct any outdated validation claim", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+            if (feedbackDuringFinalAnswer)
+            {
+                Assert.Contains("CS5001", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+                Assert.Contains("initial", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+            }
         }
 
         Assert.Equal(2, fixture.Commits.Count);
@@ -402,9 +423,18 @@ public sealed partial class SourceEditApplicationTests
             RequestText.Add(JsonSerializer.Serialize(request.Messages));
             await Task.Yield();
             var ordinal = Requests.Count;
-            if (ordinal == 7 && BeforeFinalAnswer is not null)
+            if (ordinal == 7)
             {
-                yield return new() { Text = "Correction: advisory analysis reports an initial CS5001 error, with no new errors. Build and tests were not run.", FinishReason = ModelFinishReason.Stop };
+                Assert.Single(request.Messages, message => message.SectionId == "source-edit-feedback"
+                    && !Requests[5].Messages.Any(previous => previous.SectionId == "source-edit-feedback"
+                        && previous.GetModelVisibleContent() == message.GetModelVisibleContent()));
+                yield return new()
+                {
+                    Text = BeforeFinalAnswer is not null
+                        ? "Correction: advisory analysis reports an initial CS5001 error, with no new errors. Build and tests were not run."
+                        : "Correction: the latest advisory compiler feedback is available. Build and tests were not run.",
+                    FinishReason = ModelFinishReason.Stop,
+                };
                 yield break;
             }
 

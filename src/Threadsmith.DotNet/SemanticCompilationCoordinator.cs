@@ -2,24 +2,41 @@ namespace Threadsmith.DotNet;
 
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
+using Threadsmith.Core;
 
-/// <summary>Immutable engine-owned bounds; deliberately absent from repository configuration.</summary>
+/// <summary>Immutable compiler bounds mapped from the captured semantic resource configuration.</summary>
 internal sealed record SemanticPreparationLimits
 {
+    private readonly SemanticResourceLimits _resources;
+
+    /// <summary>Initializes a new instance of the <see cref="SemanticPreparationLimits"/> class from captured configuration.</summary>
+    public SemanticPreparationLimits(SemanticResourceLimits? resources = null)
+    {
+        _resources = resources ?? new SemanticResourceLimits();
+        _resources.Validate();
+    }
+
     /// <summary>Gets the maximum simultaneous preparation operations.</summary>
-    public int Workers { get; init; } = 1;
+    public int Workers { get => _resources.CompilationWorkers; init => _resources = _resources with { CompilationWorkers = value }; }
 
     /// <summary>Gets the number of initial graph-ranked candidates admitted together.</summary>
-    public int Frontier { get; init; } = 1;
+    public int Frontier { get => _resources.InitialPreparationFrontier; init => _resources = _resources with { InitialPreparationFrontier = value }; }
 
-    /// <summary>Rejects fan-out beyond the reviewed conservative range.</summary>
-    public void Validate()
+    /// <summary>Gets the configured foreground queue capacity.</summary>
+    public int MaximumQueuedOperations => _resources.MaximumQueuedCompilerOperations;
+
+    /// <summary>Applies explicit measurement bounds before the production constructor captures configuration.</summary>
+    public SemanticResourceLimits ApplyTo(SemanticResourceLimits? resources)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(Workers, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(Workers, 2);
-        ArgumentOutOfRangeException.ThrowIfLessThan(Frontier, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(Frontier, Workers);
+        return (resources ?? _resources) with
+        {
+            CompilationWorkers = Workers,
+            InitialPreparationFrontier = Frontier,
+        };
     }
+
+    /// <summary>Rejects invalid compiler bounds using the configuration contract.</summary>
+    public void Validate() => _resources.Validate();
 }
 
 /// <summary>A detached preparation outcome inside the compiler-aware subsystem.</summary>
@@ -41,6 +58,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
     private readonly Func<ProjectId, CancellationToken, Task<SemanticPreparationOutcome>> _prepare;
     private readonly Func<SemanticCompilationCoordinator, SemanticPreparationOutcome, CancellationToken, Task> _publish;
     private readonly Task[] _workers;
+    private readonly int _maximumQueuedOperations;
     private readonly TaskCompletionSource _disposal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _stopped;
     private int _running;
@@ -80,6 +98,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         Func<SemanticCompilationCoordinator, SemanticPreparationOutcome, CancellationToken, Task> publish)
     {
         limits.Validate();
+        _maximumQueuedOperations = limits.MaximumQueuedOperations;
         Solution = solution;
         _prepare = prepare;
         _publish = publish;
@@ -139,7 +158,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 throw new InvalidOperationException("The semantic compilation generation was superseded.");
             }
 
-            if (_operations.Count >= 32)
+            if (_operations.Count >= _maximumQueuedOperations)
             {
                 throw new InvalidOperationException("The semantic foreground compilation queue is full.");
             }

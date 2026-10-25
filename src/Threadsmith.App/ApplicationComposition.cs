@@ -505,7 +505,7 @@ internal static class ApplicationComposition
         var intelligenceQuery = new RepositoryIntelligenceQuery(memoryRetriever, memoryOptions, intelligence);
         var intelligenceTool = new RepositoryIntelligenceTool(intelligenceQuery, memoryOptions, host.PromptLoader);
         RepositoryArcheologyTool? archeologyTool = null;
-        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence, memoryRetriever);
+        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence);
         try
         {
             tools.ToolRegistry.RegisterOrReplace(intelligenceTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));

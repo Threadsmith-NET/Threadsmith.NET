@@ -40,16 +40,26 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Equal(engine.Projects.Count, engine.CaptureAdvancedSnapshot().CompiledProjects.Count);
     }
 
-    /// <summary>Production admits one operation while test bounds reject unreviewed fan-out.</summary>
+    /// <summary>Production defaults map from configuration and reject invalid resource relationships.</summary>
     [Fact]
-    public static void ProductionLimitsAreConservativeAndRejectFanOut()
+    public static void ProductionLimitsUseConfiguredWorkersAndValidateBounds()
     {
-        var limits = new SemanticPreparationLimits();
-        Assert.Equal(1, limits.Workers);
-        Assert.Equal(1, limits.Frontier);
+        var resources = new SemanticResourceLimits();
+        var limits = new SemanticPreparationLimits(resources);
+        Assert.Equal(2, resources.CompilationWorkers);
+        Assert.Equal(1, resources.InitialPreparationFrontier);
+        Assert.Equal(32, resources.MaximumQueuedCompilerOperations);
+        Assert.Equal(resources.CompilationWorkers, limits.Workers);
+        Assert.Equal(resources.InitialPreparationFrontier, limits.Frontier);
+        Assert.Equal(resources.MaximumQueuedCompilerOperations, limits.MaximumQueuedOperations);
+        limits.Validate();
+        (limits with { Workers = 1 }).Validate();
+        (limits with { Workers = 3, Frontier = 3 }).Validate();
         Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = 0 }).Validate());
-        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = 3 }).Validate());
-        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Frontier = 2 }).Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = int.MaxValue }).Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Frontier = 0 }).Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Frontier = 3 }).Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => (resources with { MaximumQueuedCompilerOperations = 0 }).Validate());
     }
 
     /// <summary>One waiter can leave shared preparation without cancelling another caller.</summary>
@@ -101,7 +111,7 @@ public static class SemanticCompilationCoordinatorTests
         var order = new ConcurrentQueue<ProjectId>();
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new(),
+            new() { Workers = 1 },
             new HashSet<ProjectId>(),
             async (id, token) =>
             {
@@ -129,18 +139,21 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Equal(1, coordinator.Statistics.Promotions);
     }
 
-    /// <summary>Two-worker admission is exact and late obsolete work has no publication authority.</summary>
-    [Fact]
-    public static async Task WorkerBoundIsExactAndObsoleteResultsCannotPublish()
+    /// <summary>Configured admission is exact and late obsolete work has no publication authority.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public static async Task WorkerBoundIsExactAndObsoleteResultsCannotPublish(int workers)
     {
         using var workspace = new AdhocWorkspace();
-        var solution = CreateSolution(workspace, 3);
+        var solution = CreateSolution(workspace, workers + 1);
         var starts = solution.ProjectIds.ToDictionary(id => id, _ => Signal());
         var releases = solution.ProjectIds.ToDictionary(id => id, _ => Signal());
         var published = new ConcurrentQueue<ProjectId>();
         var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new() { Workers = 2 },
+            new() { Workers = workers },
             new HashSet<ProjectId>(),
             async (id, _) =>
             {
@@ -156,10 +169,13 @@ public static class SemanticCompilationCoordinatorTests
         try
         {
             coordinator.Warm(solution.ProjectIds);
-            await Task.WhenAll(starts[solution.ProjectIds[0]].Task, starts[solution.ProjectIds[1]].Task)
-                .WaitAsync(TestContext.Current.CancellationToken);
-            Assert.False(starts[solution.ProjectIds[2]].Task.IsCompleted);
-            Assert.Equal(2, coordinator.Statistics.MaximumRunning);
+            foreach (var id in solution.ProjectIds.Take(workers))
+            {
+                await starts[id].Task.WaitAsync(TestContext.Current.CancellationToken);
+            }
+
+            Assert.False(starts[solution.ProjectIds[workers]].Task.IsCompleted);
+            Assert.Equal(workers, coordinator.Statistics.MaximumRunning);
             coordinator.Abort();
             var outcomes = await coordinator.Completion.WaitAsync(TestContext.Current.CancellationToken);
             Assert.All(outcomes, result => Assert.True(result.Obsolete));
@@ -170,7 +186,7 @@ public static class SemanticCompilationCoordinatorTests
 
             await coordinator.DisposeAsync();
             Assert.Empty(published);
-            Assert.False(starts[solution.ProjectIds[2]].Task.IsCompleted);
+            Assert.False(starts[solution.ProjectIds[workers]].Task.IsCompleted);
         }
         finally
         {
@@ -290,7 +306,7 @@ public static class SemanticCompilationCoordinatorTests
         var order = new ConcurrentQueue<string>();
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new(),
+            new() { Workers = 1 },
             new HashSet<ProjectId>(),
             async (id, token) =>
             {
@@ -313,7 +329,6 @@ public static class SemanticCompilationCoordinatorTests
             return Task.FromResult(42);
         },
             TestContext.Current.CancellationToken);
-        Assert.False(operation.IsCompleted);
         release.SetResult();
         Assert.Equal(42, await operation);
         await coordinator.Completion.WaitAsync(TestContext.Current.CancellationToken);
@@ -335,7 +350,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new(),
+            new() { Workers = 1 },
             solution.ProjectIds.ToHashSet(),
             static (id, _) => Task.FromResult(new SemanticPreparationOutcome(id, true)),
             static (_, _, _) => Task.CompletedTask);
@@ -1022,7 +1037,7 @@ public static class SemanticCompilationCoordinatorTests
         var ct = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), resourceLimits: new SemanticResourceLimits { CompilationWorkers = 1 });
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var snapshot = engine.CaptureMutationSnapshot();

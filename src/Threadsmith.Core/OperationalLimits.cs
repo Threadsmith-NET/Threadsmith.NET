@@ -112,6 +112,15 @@ public sealed record WorkspaceResourceLimits
 /// <summary>Limits for fallback search and project inventory, separate from semantic input loading.</summary>
 public sealed record SemanticResourceLimits
 {
+    /// <summary>Maximum concurrent compiler workers per engine, captured at startup.</summary>
+    public int CompilationWorkers { get; init; } = 2;
+
+    /// <summary>Graph-ranked projects admitted together for initial readiness.</summary>
+    public int InitialPreparationFrontier { get; init; } = 1;
+
+    /// <summary>Maximum waiting foreground compiler operations per engine generation.</summary>
+    public int MaximumQueuedCompilerOperations { get; init; } = 32;
+
     /// <summary>Compiler advisory reporting and candidate resource settings.</summary>
     public EditAnalysisOptions EditAnalysis { get; init; } = new();
 
@@ -184,6 +193,13 @@ public sealed record SemanticResourceLimits
     /// <summary>Rejects nonpositive resource limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(CompilationWorkers);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(CompilationWorkers, Array.MaxLength);
+        _ = checked(CompilationWorkers + 1);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(InitialPreparationFrontier);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(InitialPreparationFrontier, CompilationWorkers);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumQueuedCompilerOperations);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumQueuedCompilerOperations, Array.MaxLength);
         ArgumentNullException.ThrowIfNull(EditAnalysis);
         EditAnalysis.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumGeneratedDocuments);

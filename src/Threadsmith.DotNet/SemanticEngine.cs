@@ -68,6 +68,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
+        _preparationLimits = new(_resourceLimits);
         _editOptions = _resourceLimits.EditAnalysis.Capture();
         _diagnosticReporting = new(_editOptions);
         _prompts = prompts;

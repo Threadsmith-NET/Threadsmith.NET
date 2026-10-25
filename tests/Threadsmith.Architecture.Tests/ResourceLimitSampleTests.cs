@@ -2,6 +2,8 @@ namespace Threadsmith.Architecture.Tests;
 
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.App;
+using Threadsmith.Core;
 using Xunit;
 
 /// <summary>Ensures the published defaults bind without silently ignored or misstated fields.</summary>
@@ -10,6 +12,7 @@ public sealed class ResourceLimitSampleTests
     /// <summary>Every documented typed section accepts its sample and retains exact compiled defaults.</summary>
     [Theory]
     [InlineData("limits", "Threadsmith.Core.OperationalLimits", "Threadsmith.Core")]
+    [InlineData("limits:semantic:editAnalysis", "Threadsmith.Core.EditAnalysisOptions", "Threadsmith.Core")]
     [InlineData("tui:limits", "Threadsmith.Interaction.Contracts.TuiResourceLimits", "Threadsmith.Interaction")]
     [InlineData("mcp:limits", "Threadsmith.Mcp.McpResourceLimits", "Threadsmith.Mcp")]
     [InlineData("hooks:limits", "Threadsmith.Hooks.HookResourceLimits", "Threadsmith.Hooks")]
@@ -40,6 +43,16 @@ public sealed class ResourceLimitSampleTests
             .Build();
         var type = Assembly.Load(assemblyName).GetType(typeName, throwOnError: true)!;
         var configured = configuration.GetSection(section).Get(type, options => options.ErrorOnUnknownConfiguration = true);
+        if (type == typeof(EditAnalysisOptions))
+        {
+            // The host replaces initialized ID arrays rather than accepting binder append semantics.
+            configured = HostFoundation.LoadOperationalLimits(configuration).Semantic.EditAnalysis;
+            var editDefaults = new EditAnalysisOptions();
+            var editOptions = Assert.IsType<EditAnalysisOptions>(configured);
+            Assert.Equal(editDefaults.CompilerWarningIds, editOptions.CompilerWarningIds);
+            Assert.Equal(editDefaults.ExcludedDiagnosticIds, editOptions.ExcludedDiagnosticIds);
+        }
+
         Assert.NotNull(configured);
         var constructor = Assert.Single(type.GetConstructors(), candidate => candidate.GetParameters().All(parameter => parameter.HasDefaultValue));
         var defaults = constructor.Invoke([.. constructor.GetParameters().Select(parameter => parameter.DefaultValue)]);

@@ -31,31 +31,60 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task GitShowInventory_StreamsLargeTreesBeforeSelectingThePage()
     {
+        const int fileCount = 10;
+        const int captureLimit = 512;
+        var cancellationToken = TestContext.Current.CancellationToken;
         await using var fixture = new GitToolRepositoryFixture();
         await fixture.InitializeAsync();
+        var tools = new ToolRegistry([new GitShowTool(
+            new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = captureLimit }),
+            TestPromptLoader.Instance)]);
+        var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         var suffix = new string('x', 75);
-        for (var index = 0; index < 5500; index++)
+        for (var index = 0; index < fileCount; index++)
         {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "x");
+            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "x", cancellationToken);
         }
 
         await fixture.GitAsync("add", "--all");
         await fixture.GitAsync("commit", "-m", "large inventory");
-        var first = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = "HEAD", Inventory = true, InventoryMaximumEntries = 1 });
+        Assert.True((await fixture.GitAsync("ls-tree", "-r", "-l", "-z", "HEAD")).Length > captureLimit);
+        var first = await InvokeInventoryAsync(new GitShowInput { Revision = "HEAD", Inventory = true, InventoryMaximumEntries = 1 });
         var inventory = JsonSerializer.Deserialize<GitShowInventory>(first.Content)!;
         Assert.Single(inventory.Files);
         Assert.Equal(1, inventory.NextOffset);
-        var last = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = inventory.Revision, Inventory = true, InventoryOffset = 5500 });
+        var last = await InvokeInventoryAsync(new GitShowInput { Revision = inventory.Revision, Inventory = true, InventoryOffset = fileCount });
         var tail = JsonSerializer.Deserialize<GitShowInventory>(last.Content)!;
         Assert.Equal("tracked.txt", Assert.Single(tail.Files).Path);
         Assert.Null(tail.NextOffset);
-        for (var index = 0; index < 5500; index++)
+        for (var index = 0; index < fileCount; index++)
         {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "changed");
+            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "changed", cancellationToken);
         }
 
-        var dirty = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = inventory.Revision, Inventory = true, IncludeWorkingTree = true, InventoryMaximumEntries = 1 });
+        Assert.True((await fixture.GitAsync("status", "--porcelain=v2", "--untracked-files=all")).Length > captureLimit);
+        var dirty = await InvokeInventoryAsync(new GitShowInput { Revision = inventory.Revision, Inventory = true, IncludeWorkingTree = true, InventoryMaximumEntries = 1 });
         Assert.NotNull(JsonSerializer.Deserialize<GitShowInventory>(dirty.Content)!.StatusDigest);
+
+        async Task<GitShowResult> InvokeInventoryAsync(GitShowInput input)
+        {
+            var request = PermissionPlan().Request;
+            var result = await pipeline.InvokeAsync(
+                new ToolInvocationRequest
+                {
+                    SessionId = request.SessionId,
+                    RunId = request.RunId,
+                    Phase = request.Phase,
+                    ToolId = "git_show",
+                    ArgumentsJson = JsonSerializer.Serialize(input),
+                    Context = fixture.Authority,
+                    ExpectedRegistration = tools.GetRegistration("git_show"),
+                },
+                cancellationToken);
+            Assert.True(result.Succeeded, result.ErrorClassification.ToString());
+            Assert.False(result.IsTruncated);
+            return JsonSerializer.Deserialize<GitShowResult>(result.ResultJson!, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        }
     }
 
     /// <summary>Policy omissions remain explicit after the ordinary pipeline projects metadata to the model.</summary>

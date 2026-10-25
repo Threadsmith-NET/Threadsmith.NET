@@ -231,10 +231,12 @@ public sealed partial class SessionApplication
                     continue;
                 }
 
-                if (_sourceEdits?.TakeFeedback(registration.SessionId, runId) is { } finalFeedback)
+                var finalFeedback = _sourceEdits is null ? null
+                    : await _sourceEdits.WaitForFinalFeedbackAsync(registration.SessionId, runId, cancellationToken);
+                if (finalFeedback is not null)
                 {
                     await _events.PublishAsync(
-                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(finalFeedback)),
+                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(finalFeedback)) { EditAnalysis = finalFeedback },
                         cancellationToken);
                     if (maximumModelRounds <= 0 || modelRound < maximumModelRounds)
                     {

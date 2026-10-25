@@ -36,7 +36,15 @@
   // Application-owned limits; omitted values retain defaults. See resource-limits.example.
   "limits": {
     "workspace": { "maximumBaselineContentBytes": 268435456, "maximumMutations": 100 },
-    "semantic": { "maximumFallbackFiles": 10000 },
+    "semantic": {
+      "maximumFallbackFiles": 10000,
+      // Advisory output only; restart after changing. Empty warnings means errors only.
+      "editAnalysis": {
+        "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
+        // Exact IDs, case-insensitive. Exclusions win even for compiler errors.
+        "excludedDiagnosticIds": []
+      }
+    },
     "git": { "timeoutMilliseconds": 30000 },
     "validation": { "timeoutMilliseconds": 120000 }
   },

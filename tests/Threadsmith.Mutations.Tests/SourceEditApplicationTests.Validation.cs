@@ -162,7 +162,7 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome!.Status);
         Assert.Equal(new[] { "Example.cs", "Second.cs" }, outcome.ChangedFiles);
         Assert.Null(outcome.Validation);
-        Assert.Contains(outcome.ResidualRisks, risk => risk.Contains("Advisory analysis reports 1 errors", StringComparison.Ordinal));
+        Assert.Contains(outcome.ResidualRisks, risk => risk.Contains("reportable findings: 1 current errors", StringComparison.Ordinal));
         Assert.DoesNotContain(observed, item => item is BuildStarted or TestRunCompleted);
     }
 
@@ -253,12 +253,19 @@ public sealed partial class SourceEditApplicationTests
     private sealed class AdvisoryAnalyzer : ISourceEditAnalyzer
     {
         private readonly IReadOnlyList<string> _omissions;
+        private readonly bool _pending;
         private SourceEditAnalysis? _analysis;
+        private ApplySourceEditCommand? _command;
 
-        public AdvisoryAnalyzer(IReadOnlyList<string> omissions)
+        public AdvisoryAnalyzer(IReadOnlyList<string> omissions, bool pending = false)
         {
             _omissions = omissions;
+            _pending = pending;
         }
+
+        public SourceEditAnalysis? Latest => _analysis;
+
+        public Action? BeforeRead { get; set; }
 
         public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
         {
@@ -268,13 +275,16 @@ public sealed partial class SourceEditApplicationTests
         public Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _analysis = new() { EffectId = command.EffectId, CurrentErrors = 1, Omissions = _omissions };
+            _command = command;
+            _analysis = new() { EffectId = command.EffectId, Pending = _pending, ProjectsAnalyzed = 1, ProjectsInScope = 1, CurrentErrors = 1, Omissions = _omissions };
             return Task.FromResult<SourceEditAnalysis?>(_analysis);
         }
 
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
         {
-            return _analysis;
+            BeforeRead?.Invoke();
+            return _command is { } owner && owner.SessionId == sessionId && owner.RunId == runId
+                && owner.WorkspaceId == workspaceId && owner.EffectId == effectId ? _analysis : null;
         }
 
         public void Publish(SourceEditAnalysis analysis)

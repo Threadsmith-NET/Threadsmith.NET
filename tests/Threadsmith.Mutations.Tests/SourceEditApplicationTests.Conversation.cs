@@ -18,10 +18,11 @@ public sealed partial class SourceEditApplicationTests
 {
     /// <summary>Two supporting reads outside the write baseline precede edit, advisory compiler feedback, repair, and final text.</summary>
     [Theory]
-    [InlineData(false, 0)]
-    [InlineData(true, 0)]
-    [InlineData(true, 6)]
-    public async Task Conversation_ReadsEditsAndRepairsWithoutAProposalRequest(bool feedbackDuringFinalAnswer, int maximumModelRounds)
+    [InlineData(false, 0, false)]
+    [InlineData(false, 0, true)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 6, false)]
+    public async Task Conversation_ReadsEditsAndRepairsWithoutAProposalRequest(bool feedbackDuringFinalAnswer, int maximumModelRounds, bool excludeDiagnostics)
     {
         var ct = TestContext.Current.CancellationToken;
         SemanticEngineRegistry? createdEngines = null;
@@ -29,7 +30,7 @@ public sealed partial class SourceEditApplicationTests
         var publication = new TestPublicationGate();
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeDiagnostics ? ["CS0246", "CS8602"] : [] } });
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance, publication);
             return createdRefresh;
         });
@@ -92,6 +93,7 @@ public sealed partial class SourceEditApplicationTests
         if (feedbackDuringFinalAnswer)
         {
             var diagnostic = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback");
+            Assert.NotNull(diagnostic.EditAnalysis);
             Assert.Contains("1 current errors", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("{", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("EffectId", diagnostic.Message, StringComparison.Ordinal);
@@ -105,8 +107,17 @@ public sealed partial class SourceEditApplicationTests
         }
 
         Assert.Equal(2, fixture.Commits.Count);
-        Assert.Equal("class Example { int Value; }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
-        Assert.True(provider.RequestText[2].Contains("CS0246", StringComparison.Ordinal), provider.RequestText[2]);
+        Assert.Contains("int Value", await File.ReadAllTextAsync(fixture.SourcePath, ct), StringComparison.Ordinal);
+        Assert.Equal(!excludeDiagnostics, provider.RequestText[2].Contains("CS0246", StringComparison.Ordinal));
+        Assert.Equal(!excludeDiagnostics, provider.RequestText[2].Contains("CS8602", StringComparison.Ordinal));
+        Assert.Contains("CS4014", provider.RequestText[2], StringComparison.Ordinal);
+        if (excludeDiagnostics)
+        {
+            Assert.All(provider.RequestText, text => Assert.DoesNotContain("CS0246", text, StringComparison.Ordinal));
+            Assert.All(provider.RequestText, text => Assert.DoesNotContain("CS8602", text, StringComparison.Ordinal));
+            Assert.Contains("OutputFiltered", provider.RequestText[2], StringComparison.Ordinal);
+        }
+
         Assert.Contains("MissingType Value", provider.Requests[3].Messages.Last(message => message.Role == ModelMessageRole.Tool).GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains("int Value", provider.Requests[5].Messages.Last(message => message.Role == ModelMessageRole.Tool).GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains("Use an integer field.", provider.RequestText[1], StringComparison.Ordinal);
@@ -440,7 +451,7 @@ public sealed partial class SourceEditApplicationTests
             }
 
             var expected = ordinal == 2 ? "class Example { }" : "MissingType";
-            var replacement = ordinal == 2 ? "class Example { MissingType Value; }" : "int";
+            var replacement = ordinal == 2 ? "#nullable enable\nclass Example { MissingType Value; int M(string? s) => s.Length; async System.Threading.Tasks.Task W() { System.Threading.Tasks.Task.Delay(1); await System.Threading.Tasks.Task.CompletedTask; } }" : "int";
             var arguments = JsonSerializer.Serialize(new
             {
                 rationale = "Apply the next source edit.",

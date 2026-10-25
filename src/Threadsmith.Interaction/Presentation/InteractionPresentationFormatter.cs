@@ -3,6 +3,7 @@ namespace Threadsmith.Interaction.Presentation;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
@@ -86,6 +87,7 @@ internal static class InteractionPresentationFormatter
     /// <param name="inspectCodeExploreOutput">Whether successful code_explore blocks include final model-visible output.</param>
     /// <param name="progress">Final host-owned progress entries collected for this invocation.</param>
     /// <param name="maximumInspectionCharacters">Configured expanded-output character limit.</param>
+    /// <param name="limits">Captured diagnostic presentation limits.</param>
     /// <returns>A terminal-neutral TUI presentation block.</returns>
     internal static string FormatToolCompletion(
         ToolInvocationStarted started,
@@ -93,19 +95,27 @@ internal static class InteractionPresentationFormatter
         bool showOperationDurations,
         bool inspectCodeExploreOutput = false,
         IReadOnlyList<PresentationTextSegment>? progress = null,
-        int maximumInspectionCharacters = MaximumToolInspectionCharacters)
+        int maximumInspectionCharacters = MaximumToolInspectionCharacters,
+        TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
 
         var source = completed.Source ?? started.Source;
+        var buildLines = GetBuildDiagnosticLines(started, completed, source, limits ?? new());
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
+            buildLines is { Count: > 0 } ? buildLines[0] : new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
         };
         foreach (var entry in progress ?? [])
         {
             lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, entry.Text, entry.Role));
+        }
+
+        if (buildLines is not null)
+        {
+            // Preserve the shared segment projection's header/detail/progress ordering.
+            lines.AddRange(buildLines.Skip(1));
         }
 
         if (IsBuiltInMemoryTool(started, source)
@@ -149,11 +159,13 @@ internal static class InteractionPresentationFormatter
     /// <param name="started">The matching check start event.</param>
     /// <param name="completed">The check completion event.</param>
     /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
+    /// <param name="limits">Captured presentation limits.</param>
     /// <returns>A terminal-neutral TUI block with bounded advisory evidence when available.</returns>
     internal static string FormatSemanticCheckCompletion(
         SemanticCheckStarted started,
         SemanticCheckCompleted completed,
-        bool showOperationDurations)
+        bool showOperationDurations,
+        TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
@@ -167,12 +179,83 @@ internal static class InteractionPresentationFormatter
                 GetSemanticCheckTitle(completed.Phase, checkName),
                 GetSemanticOutcomeText(completed.Outcome),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
-                GetSemanticOutcomeRole(completed.Outcome),
-                GetSemanticOutcomeRole(completed.Outcome)),
-            GetSemanticCheckLines(completed),
+                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome),
+                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome)),
+            GetSemanticCheckLines(completed, limits ?? new()),
             ChildIndent: "  ");
 
         return FormatBlock(block);
+    }
+
+    /// <summary>Displays delivered edit evidence without implying another compiler pass or duration.</summary>
+    internal static string FormatFinalizedEditFeedback(SourceEditAnalysis analysis, TuiResourceLimits limits)
+    {
+        var state = analysis.Obsolete ? "obsolete" : analysis.Pending ? "pending"
+            : analysis.CommittedGeneration is null || analysis.ProjectsAnalyzed == 0 ? "unavailable"
+            : analysis.ProjectsAnalyzed < analysis.ProjectsInScope ? "partial" : "available";
+        var generationText = analysis.CommittedGeneration is { } generation
+            ? $"Committed source generation: {generation}" : "Committed source generation: unavailable";
+        var lines = new List<TuiBlockLine>
+        {
+            new(TuiBlockLineKind.Item, generationText, PresentationTextRole.Muted),
+        };
+        if (analysis.CandidateReused)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Evidence: candidate analysis reused; no additional compiler pass", PresentationTextRole.Muted));
+        }
+
+        lines.AddRange(GetEditAnalysisLines(analysis, SemanticCheckPhase.PostMutation, SemanticCheckOutcome.Completed, limits));
+        var role = GetFinalizedEditFeedbackRole(analysis);
+        return FormatBlock(new TuiBlockPresentation(
+            new TuiBlockHeader("SEMANTIC CHECKS", "finalized edit feedback", state, null, role, role),
+            lines,
+            ChildIndent: "  "));
+    }
+
+    /// <summary>Uses the same semantic outcome roles in formatted blocks and frontend-neutral segments.</summary>
+    internal static PresentationTextRole GetSemanticOutcomeRole(SemanticCheckOutcome outcome)
+    {
+        return outcome switch
+        {
+            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => PresentationTextRole.ToolSuccess,
+            SemanticCheckOutcome.Degraded => PresentationTextRole.Warning,
+            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => PresentationTextRole.ToolFailure,
+            _ => PresentationTextRole.Status,
+        };
+    }
+
+    /// <summary>Maps finalized evidence availability through the ordinary semantic outcome palette.</summary>
+    internal static PresentationTextRole GetFinalizedEditFeedbackRole(SourceEditAnalysis analysis)
+    {
+        var outcome = !analysis.Pending && !analysis.Obsolete && analysis.CommittedGeneration is not null
+            && analysis.ProjectsAnalyzed > 0 && analysis.ProjectsAnalyzed >= analysis.ProjectsInScope
+                ? SemanticCheckOutcome.Completed : SemanticCheckOutcome.Degraded;
+        return GetSemanticFeedbackRole(analysis, outcome);
+    }
+
+    /// <summary>Highlights findings and evidence limitations even when the analysis operation completed successfully.</summary>
+    internal static PresentationTextRole GetSemanticFeedbackRole(SourceEditAnalysis? analysis, SemanticCheckOutcome outcome)
+    {
+        if (outcome is SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled
+            || (analysis is { Obsolete: false } && (analysis.CurrentErrors > 0 || analysis.SyntaxErrors > 0
+                || analysis.Diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))))
+        {
+            return PresentationTextRole.Error;
+        }
+
+        if (analysis is null)
+        {
+            return outcome == SemanticCheckOutcome.Completed ? PresentationTextRole.Warning : GetSemanticOutcomeRole(outcome);
+        }
+
+        if (analysis.Obsolete || analysis.Pending || analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
+            || analysis.CurrentWarnings is null or > 0 || analysis.DiagnosticsTruncated
+            || analysis.Diagnostics.Any(item => item.Severity == DiagnosticSeverity.Warning))
+        {
+            return PresentationTextRole.Warning;
+        }
+
+        return GetSemanticOutcomeRole(outcome);
     }
 
     /// <summary>Names advisory phases consistently in live activity and retained completion blocks.</summary>
@@ -1240,30 +1323,112 @@ internal static class InteractionPresentationFormatter
         };
     }
 
-    private static PresentationTextRole GetSemanticOutcomeRole(SemanticCheckOutcome outcome)
+    private static List<TuiBlockLine>? GetBuildDiagnosticLines(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        ToolActivitySource? source,
+        TuiResourceLimits limits)
     {
-        return outcome switch
+        if (started.ToolName != "dotnet_build" || source is { Kind: not ToolActivitySourceKind.BuiltIn }
+            || string.IsNullOrWhiteSpace(completed.ResultJson))
         {
-            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => PresentationTextRole.ToolSuccess,
-            SemanticCheckOutcome.Degraded => PresentationTextRole.Warning,
-            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => PresentationTextRole.ToolFailure,
-            _ => PresentationTextRole.Status,
+            return null;
+        }
+
+        ValidationToolResult? result;
+        try
+        {
+            using var document = JsonDocument.Parse(completed.ResultJson);
+            var root = document.RootElement;
+
+            // Old, truncated or malformed receipts must never become an invented clean build.
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty(nameof(ValidationToolResult.Succeeded), out var succeeded)
+                || succeeded.ValueKind is not (JsonValueKind.True or JsonValueKind.False)
+                || !root.TryGetProperty(nameof(ValidationToolResult.Diagnostics), out var diagnostics)
+                || diagnostics.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            result = root.Deserialize<ValidationToolResult>();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (result?.Kind != ValidationInvocationKind.Build || string.IsNullOrWhiteSpace(result.EffectiveScope)
+            || result.Diagnostics?.Any(item => item is null || !Enum.IsDefined(item.Severity)) != false)
+        {
+            return null;
+        }
+
+        var status = result.TimedOut ? "timed out" : result.Succeeded ? "succeeded" : "failed";
+        var lines = new List<TuiBlockLine>
+        {
+            new(TuiBlockLineKind.Item, TruncateForDisplay($"Build: {status}; exit code {result.ExitCode}; {result.EffectiveScope}"), PresentationTextRole.Muted),
+            new(TuiBlockLineKind.Item, $"Captured diagnostics: {result.Diagnostics.Count(item => item.Severity == DiagnosticSeverity.Error)} errors; {result.Diagnostics.Count(item => item.Severity == DiagnosticSeverity.Warning)} warnings; {result.Diagnostics.Count(item => item.Severity == DiagnosticSeverity.Info)} informational", PresentationTextRole.Muted),
         };
+        foreach (var diagnostic in result.Diagnostics.OrderByDescending(item => item.Severity).Take(limits.MaximumBuildDiagnostics))
+        {
+            lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Range?.StartLine, diagnostic.Range?.StartColumn, diagnostic.Project, diagnostic.TargetFramework, null, diagnostic.Message));
+        }
+
+        if (result.Diagnostics.Count > limits.MaximumBuildDiagnostics)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, $"Limit: {result.Diagnostics.Count - limits.MaximumBuildDiagnostics} additional diagnostics omitted from display", PresentationTextRole.Muted));
+        }
+
+        if (result.IsTruncated || completed.IsTruncated)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Limit: captured build output is truncated; diagnostic counts may be incomplete", PresentationTextRole.Muted));
+        }
+
+        if (!result.Succeeded && result.Diagnostics.Count == 0)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "No structured compiler diagnostics were captured; build failure is not a clean diagnostic result", PresentationTextRole.Muted));
+        }
+
+        lines.Add(new(TuiBlockLineKind.Item, "Scope: explicit build target and dependencies; tests were not run by this tool", PresentationTextRole.Muted));
+        return lines;
     }
 
-    private static IReadOnlyList<TuiBlockLine> GetSemanticCheckLines(SemanticCheckCompleted completed)
+    private static TuiBlockLine CreateDiagnosticLine(
+        DiagnosticSeverity severity,
+        string code,
+        string? file,
+        int? line,
+        int? column,
+        string project,
+        string framework,
+        string? origin,
+        string message)
+    {
+        var location = file is null ? project : file + (line is { } number ? $":{number}" + (column is { } position ? $":{position}" : string.Empty) : string.Empty);
+        var context = project + (string.IsNullOrWhiteSpace(framework) ? string.Empty : $"; {framework}")
+            + (origin is null ? string.Empty : $"; {origin}");
+        return new(TuiBlockLineKind.Item, TruncateForDisplay($"{severity} {code} {location} [{context}]: {message}"), PresentationTextRole.Muted);
+    }
+
+    private static IReadOnlyList<TuiBlockLine> GetSemanticCheckLines(SemanticCheckCompleted completed, TuiResourceLimits limits)
     {
         if (completed.Analysis is not { } analysis)
         {
             return [new(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)];
         }
 
+        return GetEditAnalysisLines(analysis, completed.Phase, completed.Outcome, limits);
+    }
+
+    private static IReadOnlyList<TuiBlockLine> GetEditAnalysisLines(SourceEditAnalysis analysis, SemanticCheckPhase phase, SemanticCheckOutcome outcome, TuiResourceLimits limits)
+    {
         var lines = new List<TuiBlockLine>();
         var syntax = analysis.Obsolete ? "Syntax: results obsolete"
             : analysis.SyntaxDocumentsAnalyzed is > 0 && analysis.SyntaxErrors is { } syntaxErrors
-                ? $"Syntax: {analysis.SyntaxDocumentsAnalyzed} C# document instances checked; {syntaxErrors} retained errors"
+                ? $"Syntax: {analysis.SyntaxDocumentsAnalyzed} C# document instances checked; {syntaxErrors} reportable errors"
             : analysis.SyntaxDocumentsAnalyzed == 0 ? "Syntax: no candidate documents to check"
-            : completed.Phase == SemanticCheckPhase.PostMutation ? "Syntax: included in project compiler diagnostics; no separate document pass"
+            : phase == SemanticCheckPhase.PostMutation && analysis.ProjectsAnalyzed > 0 ? "Syntax: included in project compiler diagnostics; no separate document pass"
             : "Syntax: results unavailable";
         lines.Add(new(TuiBlockLineKind.Item, syntax, PresentationTextRole.Muted));
 
@@ -1273,9 +1438,9 @@ internal static class InteractionPresentationFormatter
             : $"Compiler: {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} affected project instances analyzed"
                 + (analysis.ProjectsAnalyzed < analysis.ProjectsInScope ? "; coverage incomplete" : string.Empty);
         lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
-        if (!analysis.Obsolete && !analysis.Pending && analysis.ProjectsAnalyzed > 0 && completed.Outcome == SemanticCheckOutcome.Completed)
+        if (!analysis.Obsolete && !analysis.Pending && analysis.ProjectsAnalyzed > 0 && outcome == SemanticCheckOutcome.Completed)
         {
-            var errors = $"Errors in analyzed coverage: {analysis.CurrentErrors} current";
+            var errors = $"Reportable errors in analyzed coverage: {analysis.CurrentErrors} current";
             errors += analysis.ErrorComparisonAvailable
                 ? $"; {analysis.NewErrors} new; {analysis.ResolvedErrors} resolved"
                 : "; before/after comparison unavailable";
@@ -1286,29 +1451,38 @@ internal static class InteractionPresentationFormatter
             lines.Add(new(TuiBlockLineKind.Item, "Errors: totals unknown for current coverage", PresentationTextRole.Muted));
         }
 
+        if (!analysis.Obsolete && !analysis.Pending && analysis.CurrentWarnings is { } warnings)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, $"Selected reportable warnings: {warnings}", PresentationTextRole.Muted));
+        }
+
+        if (analysis.OutputFiltered)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered advisory output", PresentationTextRole.Muted));
+        }
+
         if (!analysis.Obsolete)
         {
-            foreach (var diagnostic in analysis.Diagnostics.Take(3))
+            foreach (var diagnostic in analysis.Diagnostics.Take(limits.MaximumEditAnalysisFindings))
             {
-                var location = diagnostic.File is null ? diagnostic.Project : diagnostic.File + (diagnostic.Line is { } line ? $":{line}" : string.Empty);
-                lines.Add(new(TuiBlockLineKind.Item, TruncateForDisplay($"{diagnostic.Code} {location} [{diagnostic.Project}; {diagnostic.TargetFramework}; {diagnostic.Origin}]: {diagnostic.Message}"), PresentationTextRole.Muted));
+                lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, null, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, diagnostic.Message));
             }
 
-            if (analysis.Diagnostics.Count > 3 || analysis.DiagnosticsTruncated)
+            if (analysis.Diagnostics.Count > limits.MaximumEditAnalysisFindings || analysis.DiagnosticsTruncated)
             {
-                lines.Add(new(TuiBlockLineKind.Item, "Findings shown are bounded; additional errors may be omitted", PresentationTextRole.Muted));
+                lines.Add(new(TuiBlockLineKind.Item, "Findings shown are bounded; additional findings may be omitted", PresentationTextRole.Muted));
             }
         }
 
-        lines.Add(new(TuiBlockLineKind.Item, "Scope: compiler errors only; analyzer execution, build and tests are separate", PresentationTextRole.Muted));
-        foreach (var omission in analysis.Omissions.Take(4))
+        lines.Add(new(TuiBlockLineKind.Item, "Scope: reportable compiler errors and selected warnings; analyzer execution, build and tests are separate", PresentationTextRole.Muted));
+        foreach (var omission in analysis.Omissions.Take(limits.MaximumEditAnalysisOmissions))
         {
             lines.Add(new(TuiBlockLineKind.Item, "Limit: " + TruncateForDisplay(omission), PresentationTextRole.Muted));
         }
 
-        if (analysis.Omissions.Count > 4)
+        if (analysis.Omissions.Count > limits.MaximumEditAnalysisOmissions)
         {
-            lines.Add(new(TuiBlockLineKind.Item, $"Limits: {analysis.Omissions.Count - 4} additional omissions", PresentationTextRole.Muted));
+            lines.Add(new(TuiBlockLineKind.Item, $"Limits: {analysis.Omissions.Count - limits.MaximumEditAnalysisOmissions} additional omissions", PresentationTextRole.Muted));
         }
 
         return lines;

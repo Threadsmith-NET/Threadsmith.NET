@@ -93,9 +93,21 @@ public sealed record TuiResourceLimits
     /// <summary>Maximum expanded tool or memory output characters.</summary>
     public int MaximumToolInspectionCharacters { get; init; } = 98304;
 
+    /// <summary>Maximum explicit build diagnostics shown per tool completion, with errors first.</summary>
+    public int MaximumBuildDiagnostics { get; init; } = 20;
+
+    /// <summary>Maximum compiler advisory findings shown per semantic completion.</summary>
+    public int MaximumEditAnalysisFindings { get; init; } = 3;
+
+    /// <summary>Maximum compiler advisory omissions shown per semantic completion.</summary>
+    public int MaximumEditAnalysisOmissions { get; init; } = 4;
+
     /// <summary>Rejects nonpositive limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumBuildDiagnostics);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumEditAnalysisFindings);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumEditAnalysisOmissions);
         ArgumentNullException.ThrowIfNull(Markdown);
         Markdown.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFilterCharacters);

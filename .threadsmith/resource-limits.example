@@ -21,6 +21,21 @@
       "maximumValidationPolicyCharacters": 256
     },
     "semantic": {
+      "editAnalysis": {
+        "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
+        "excludedDiagnosticIds": [],
+        "maximumRetainedDiagnostics": 64,
+        "maximumReportedDiagnostics": 8,
+        "maximumCachedProjects": 32,
+        "maximumOmissions": 16,
+        "maximumDiagnosticMessageCharacters": 384,
+        "maximumDiagnosticPathCharacters": 256,
+        "maximumDiagnosticProjectCharacters": 128,
+        "maximumDiagnosticFrameworkCharacters": 64,
+        "immediateObservationMilliseconds": 500,
+        "finalFeedbackWaitMilliseconds": 30000,
+        "candidateLifetimeMilliseconds": 30000
+      },
       "maximumFallbackEntries": 50000,
       "maximumFallbackFiles": 10000,
       "maximumFallbackMatches": 500,
@@ -96,6 +111,9 @@
   },
   "tui": {
     "limits": {
+      "maximumBuildDiagnostics": 20,
+      "maximumEditAnalysisFindings": 3,
+      "maximumEditAnalysisOmissions": 4,
       "maximumDraftBytes": 1048576,
       "maximumUndoBytes": 1048576,
       "maximumUndoEntries": 200,

@@ -31,7 +31,8 @@ public sealed class SourceEditApplication :
     private readonly ISourceEditAnalyzer? _analyzer;
     private readonly ISemanticRefreshCoordinator? _semanticRefresh;
     private readonly TimeSpan _immediateAllowance;
-    private readonly ConcurrentDictionary<RunId, FeedbackDelivery> _feedback = new();
+    private readonly TimeSpan _finalFeedbackWait;
+    private readonly ConcurrentDictionary<SessionId, FeedbackDelivery> _feedback = new();
     private readonly ConcurrentDictionary<MutationSetId, PendingEdit> _pending = new();
 
     /// <summary>Initializes a new instance of the <see cref="SourceEditApplication"/> class.</summary>
@@ -51,7 +52,8 @@ public sealed class SourceEditApplication :
         ISemanticRefreshCoordinator? semanticRefresh = null,
         TimeSpan? immediateAllowance = null,
         ICommandHandler<GetMutationReviewCommand, StagedMutationSet>? reviews = null,
-        ICommandHandler<SetMutationPreviewCommand, MutationPreview>? previews = null)
+        ICommandHandler<SetMutationPreviewCommand, MutationPreview>? previews = null,
+        EditAnalysisOptions? editAnalysisOptions = null)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(rollbacks);
@@ -72,7 +74,10 @@ public sealed class SourceEditApplication :
         _sanitizer = sanitizer;
         _analyzer = analyzer;
         _semanticRefresh = semanticRefresh;
-        _immediateAllowance = immediateAllowance ?? TimeSpan.FromMilliseconds(500);
+        var editOptions = editAnalysisOptions ?? new EditAnalysisOptions();
+        editOptions.Validate();
+        _immediateAllowance = immediateAllowance ?? TimeSpan.FromMilliseconds(editOptions.ImmediateObservationMilliseconds);
+        _finalFeedbackWait = TimeSpan.FromMilliseconds(editOptions.FinalFeedbackWaitMilliseconds);
         ArgumentOutOfRangeException.ThrowIfLessThan(_immediateAllowance, TimeSpan.Zero);
     }
 
@@ -180,7 +185,7 @@ public sealed class SourceEditApplication :
                     analysis = _analyzer?.GetLatestAnalysis(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId) ?? analysis;
                     if (analysis is not null)
                     {
-                        _feedback[command.RunId] = new(command.SessionId, command.WorkspaceId, command.EffectId, analysis.Revision);
+                        _feedback[command.SessionId] = new(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId, analysis.Revision);
                     }
                 }
                 catch (Exception)
@@ -232,7 +237,7 @@ public sealed class SourceEditApplication :
     /// <summary>Consumes a newer bounded advisory result at an ordinary provider boundary.</summary>
     public SourceEditAnalysis? TakeFeedback(SessionId sessionId, RunId runId)
     {
-        if (!_feedback.TryGetValue(runId, out var delivered) || delivered.SessionId != sessionId)
+        if (!_feedback.TryGetValue(sessionId, out var delivered) || (delivered.RunId != runId && !delivered.WaitTimedOut))
         {
             return null;
         }
@@ -240,12 +245,12 @@ public sealed class SourceEditApplication :
         SourceEditAnalysis? latest;
         try
         {
-            latest = _analyzer?.GetLatestAnalysis(sessionId, runId, delivered.WorkspaceId, delivered.EffectId);
+            latest = _analyzer?.GetLatestAnalysis(sessionId, delivered.RunId, delivered.WorkspaceId, delivered.EffectId);
         }
         catch (Exception)
         {
             // A retired compiler owner cannot turn an already applied edit into a failed conversation.
-            return _feedback.TryRemove(new KeyValuePair<RunId, FeedbackDelivery>(runId, delivered))
+            return _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivered))
                 ? new SourceEditAnalysis { EffectId = delivered.EffectId, Revision = delivered.Revision + 1, Omissions = ["The applied edit's semantic owner is unavailable; no further compiler coverage is claimed."] }
                 : null;
         }
@@ -259,7 +264,7 @@ public sealed class SourceEditApplication :
 
         if (latest is null || latest.Obsolete)
         {
-            return _feedback.TryRemove(new KeyValuePair<RunId, FeedbackDelivery>(runId, delivered))
+            return _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivered))
                 ? new SourceEditAnalysis
                 {
                     EffectId = delivered.EffectId,
@@ -274,14 +279,72 @@ public sealed class SourceEditApplication :
             return null;
         }
 
-        return _feedback.TryUpdate(runId, delivered with { Revision = latest.Revision }, delivered) ? latest : null;
+        if (delivered.RunId != runId && !latest.Pending)
+        {
+            return _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivered)) ? latest : null;
+        }
+
+        return _feedback.TryUpdate(sessionId, delivered with { Revision = latest.Revision }, delivered) ? latest : null;
+    }
+
+    /// <summary>Observes pending analysis once per applied effect before the model's final completion.</summary>
+    public async Task<SourceEditAnalysis?> WaitForFinalFeedbackAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var feedback = TakeFeedback(sessionId, runId);
+        if (_finalFeedbackWait == TimeSpan.Zero
+            || !_feedback.TryGetValue(sessionId, out var delivery) || delivery.SessionId != sessionId
+            || delivery.FinalWaitAttempted || !HasPendingFeedback(delivery, runId)
+            || !_feedback.TryUpdate(sessionId, delivery with { FinalWaitAttempted = true }, delivery))
+        {
+            return feedback;
+        }
+
+        using var deadline = new CancellationTokenSource(_finalFeedbackWait);
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        if (!HasPendingFeedback(delivery, runId))
+        {
+            return TakeFeedback(sessionId, runId) ?? feedback;
+        }
+
+        await _events.PublishAsync(
+            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Waiting for semantic feedback to complete.") { PendingSemanticEffectId = delivery.EffectId },
+            cancellationToken);
+        try
+        {
+            while (HasPendingFeedback(delivery, runId))
+            {
+                // Observe the existing semantic owner, including replacement snapshots and retirement.
+                // Polling also handles promotion after the compiler completion event has already fired.
+                await Task.Delay(TimeSpan.FromMilliseconds(100), waiting.Token);
+            }
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            if (_feedback.TryGetValue(sessionId, out var timedOut) && timedOut.EffectId == delivery.EffectId)
+            {
+                _feedback.TryUpdate(sessionId, timedOut with { WaitTimedOut = true }, timedOut);
+            }
+
+            await _events.PublishAsync(
+                new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Semantic checks are taking longer than expected and should be available in a future turn."),
+                cancellationToken);
+            return null;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return TakeFeedback(sessionId, runId) ?? feedback;
     }
 
     /// <summary>Releases delivery bookkeeping when its ordinary conversation run ends.</summary>
     public void CompleteRun(RunId runId)
     {
-        _feedback.TryRemove(runId, out _);
-        _runs.TryRemove(runId, out _);
+        if (_runs.TryRemove(runId, out var owner)
+            && _feedback.TryGetValue(owner.SessionId, out var delivery)
+            && delivery.RunId == runId && !delivery.WaitTimedOut)
+        {
+            _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(owner.SessionId, delivery));
+        }
     }
 
     /// <summary>Records cumulative disk effects independently of model claims and plan progression.</summary>
@@ -403,12 +466,12 @@ public sealed class SourceEditApplication :
             risks.Add("The transactional baseline does not match final edit identities; cumulative diff text is unavailable.");
         }
 
-        if (_feedback.TryGetValue(runId, out var delivery))
+        if (_feedback.TryGetValue(sessionId, out var delivery))
         {
             SourceEditAnalysis? latest;
             try
             {
-                latest = _analyzer?.GetLatestAnalysis(sessionId, runId, delivery.WorkspaceId, delivery.EffectId);
+                latest = _analyzer?.GetLatestAnalysis(sessionId, delivery.RunId, delivery.WorkspaceId, delivery.EffectId);
             }
             catch (Exception)
             {
@@ -422,10 +485,7 @@ public sealed class SourceEditApplication :
             else
             {
                 risks.AddRange(latest.Omissions);
-                if (latest.CurrentErrors > 0)
-                {
-                    risks.Add($"Advisory analysis reports {latest.CurrentErrors} errors within completed coverage.");
-                }
+                risks.Add(SourceEditAnalysisProjection.CreateDisplaySummary(latest));
             }
         }
 
@@ -544,7 +604,7 @@ public sealed class SourceEditApplication :
             var requiresSemanticRefresh = _analyzer?.HasSemanticInputs(owned.Key, workspace.Isolation.RepositoryPath, reverse) != false;
             if (requiresSemanticRefresh)
             {
-                _feedback.TryRemove(current.RunId, out _);
+                _feedback.TryRemove(current.SessionId, out _);
             }
 
             _runs.TryAdd(current.RunId, (current.SessionId, owned.Key));
@@ -613,6 +673,19 @@ public sealed class SourceEditApplication :
         catch (KeyNotFoundException) when (pending.Authorization.Task.IsCompleted || !_pending.ContainsKey(command.MutationSetId))
         {
             throw new SourceEditReviewUnavailableException();
+        }
+    }
+
+    private bool HasPendingFeedback(FeedbackDelivery delivery, RunId runId)
+    {
+        try
+        {
+            return _analyzer?.GetLatestAnalysis(delivery.SessionId, runId, delivery.WorkspaceId, delivery.EffectId)?.Pending == true;
+        }
+        catch (Exception)
+        {
+            // TakeFeedback reports an unavailable owner through the ordinary advisory path.
+            return false;
         }
     }
 
@@ -687,7 +760,12 @@ public sealed class SourceEditApplication :
         return pending;
     }
 
-    private sealed record FeedbackDelivery(SessionId SessionId, WorkspaceId WorkspaceId, Guid EffectId, long Revision);
+    private sealed record FeedbackDelivery(SessionId SessionId, RunId RunId, WorkspaceId WorkspaceId, Guid EffectId, long Revision)
+    {
+        public bool FinalWaitAttempted { get; init; }
+
+        public bool WaitTimedOut { get; init; }
+    }
 
     private sealed class PendingEdit
     {

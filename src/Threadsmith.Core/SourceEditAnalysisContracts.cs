@@ -8,7 +8,11 @@ public sealed record SourceEditDiagnostic(
     int? Line,
     string Project,
     string TargetFramework,
-    string Origin);
+    string Origin)
+{
+    /// <summary>Effective compiler severity; older serialized findings remain errors.</summary>
+    public DiagnosticSeverity Severity { get; init; } = DiagnosticSeverity.Error;
+}
 
 /// <summary>Versioned advisory coverage, independent of write authorization and authoritative build/test results.</summary>
 public sealed record SourceEditAnalysis
@@ -40,7 +44,7 @@ public sealed record SourceEditAnalysis
     /// <summary>Document instances checked for syntax, or null when that phase did not complete.</summary>
     public int? SyntaxDocumentsAnalyzed { get; init; }
 
-    /// <summary>Retained syntax errors, or null when syntax results are unavailable.</summary>
+    /// <summary>Reportable syntax errors, or null when syntax results are unavailable.</summary>
     public int? SyntaxErrors { get; init; }
 
     /// <summary>Whether every completed project has comparable, untruncated before/after evidence.</summary>
@@ -49,7 +53,7 @@ public sealed record SourceEditAnalysis
     /// <summary>Whether exact committed inputs reused this candidate's analysis.</summary>
     public bool CandidateReused { get; init; }
 
-    /// <summary>Current errors within completed coverage; a bounded list does not imply a complete list.</summary>
+    /// <summary>Current reportable errors within completed coverage; a bounded list does not imply a complete list.</summary>
     public int CurrentErrors { get; init; }
 
     /// <summary>Errors absent from the known preceding snapshot.</summary>
@@ -61,8 +65,20 @@ public sealed record SourceEditAnalysis
     /// <summary>Bounded actionable compiler findings.</summary>
     public IReadOnlyList<SourceEditDiagnostic> Diagnostics { get; init; } = [];
 
-    /// <summary>Whether the compact finding list omits errors counted in completed coverage.</summary>
-    public bool DiagnosticsTruncated => CurrentErrors > Diagnostics.Count;
+    /// <summary>Whether bounded retention or compact projection omits reportable findings.</summary>
+    public bool DiagnosticsTruncated => FindingRetentionTruncated || FindingProjectionTruncated || CurrentErrors + (CurrentWarnings ?? 0) > Diagnostics.Count;
+
+    /// <summary>Selected warning total in completed coverage, or null when not measured.</summary>
+    public int? CurrentWarnings { get; init; }
+
+    /// <summary>Whether bounded internal retention omitted reportable findings.</summary>
+    public bool FindingRetentionTruncated { get; init; }
+
+    /// <summary>Whether compact output omitted retained findings, independent of unknown coverage totals.</summary>
+    public bool FindingProjectionTruncated { get; init; }
+
+    /// <summary>Whether exclusions removed diagnostics from this advisory evidence.</summary>
+    public bool OutputFiltered { get; init; }
 
     /// <summary>Explicit limits, omitted checks and unavailable coverage.</summary>
     public IReadOnlyList<string> Omissions { get; init; } = [];

@@ -112,6 +112,9 @@ public sealed record WorkspaceResourceLimits
 /// <summary>Limits for fallback search and project inventory, separate from semantic input loading.</summary>
 public sealed record SemanticResourceLimits
 {
+    /// <summary>Compiler advisory reporting and candidate resource settings.</summary>
+    public EditAnalysisOptions EditAnalysis { get; init; } = new();
+
     /// <summary>Maximum fallback directory entries inspected.</summary>
     public int MaximumFallbackEntries { get; init; } = 50_000;
 
@@ -181,6 +184,8 @@ public sealed record SemanticResourceLimits
     /// <summary>Rejects nonpositive resource limits.</summary>
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(EditAnalysis);
+        EditAnalysis.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumGeneratedDocuments);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumGeneratedContentCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTraversalDepth);

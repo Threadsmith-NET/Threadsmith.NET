@@ -595,6 +595,10 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 6. Arrange newer findings during a final response. Confirm a follow-up receives them within existing round/budget limits, the earlier response remains in history, and the round-limit case reports the advisory notification without another request. Pending work does not delay completion.
 7. Repair introduced errors within the requested scope or explain a conflict with the request. Explicitly invoke authoritative build/test tools when verification is requested; edit-only completion starts no validation.
 
+8. Introduce a selected compiler warning beside an error. Confirm severity is visible, warning repairs do not resolve errors, suppressed warnings stay hidden, and warnings promoted to errors count as errors. New warnings follow errors and precede unchanged warnings in bounded output.
+9. Configure `limits:semantic:editAnalysis:excludedDiagnosticIds` with `CS0246` and a selected warning ID, restart, and repeat. Confirm excluded details and counts are absent from receipts, continuing-model feedback and semantic summaries; an unrelated finding remains visible, output is labeled reportable/filtered, and filtering alone does not imply truncation or repair. Explicit build still fails for the excluded nonsuppressible error.
+10. Change warning selection and retention/presentation settings through ordinary configuration and restart. Verify output follows the captured settings without a second diagnostic pass or approval; empty warning selection retains errors, and invalid/unknown settings fail startup.
+
 **Verifies:** generation correctness, bounded coverage/cache ownership, advisory diagnostics and honest final acceptance.
 
 ## Scenario AL — Exact Authorization and Retired Configuration

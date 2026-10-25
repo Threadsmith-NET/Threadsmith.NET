@@ -1,5 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Agents;
@@ -371,6 +372,35 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Completed, 1, "abcdef"), timeout.Token);
         var text = string.Concat(Assert.Single(sink.Output).Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
         Assert.EndsWith(" — " + expected + "\n", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Child build completions honor the same captured limits as MAIN.</summary>
+    [Fact]
+    public static async Task ChildBuildDiagnosticsHonorCapturedDisplayLimit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var session = SessionId.New();
+        var target = Target(session);
+        var sink = new RecordingSurface();
+        var limits = new TuiResourceLimits { MaximumBuildDiagnostics = 1 };
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, false, limits, ct);
+        await projection.AttachAsync(session, ct);
+        await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), ct);
+        await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty), ct);
+        var started = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "dotnet_build", target.RunId);
+        var warning = new Diagnostic { Id = "1", Code = "CS8604", Severity = DiagnosticSeverity.Warning, Project = "Example", TargetFramework = "net10.0", Message = "Possible null", Confidence = SemanticConfidenceLevel.None };
+        var result = new ValidationToolResult("build", ValidationInvocationKind.Build, ValidationAuthority.Exploratory, false, "Example.csproj", [], [warning, warning with { Id = "2", Code = "CS0246", Severity = DiagnosticSeverity.Error }], string.Empty, 1, TimeSpan.Zero, false, false);
+        var completed = new ToolInvocationCompleted(session, started.OccurredAt, started.ToolInvocationId, true, JsonSerializer.Serialize(result));
+        await projection.ObserveAsync(started, ct);
+        await projection.ObserveAsync(completed, ct);
+        var text = string.Concat(sink.Output.Where(batch => batch.Target == target).SelectMany(batch => batch.Items.OfType<PresentationTextItem>()).SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.Contains("Error CS0246", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Warning CS8604", text, StringComparison.Ordinal);
+        Assert.Contains("1 additional diagnostics omitted", text, StringComparison.Ordinal);
+        var main = new ConversationTranscript(string.Empty, limits: limits);
+        main.Apply(started);
+        main.Apply(completed);
+        Assert.Equal(main.Text, text);
     }
 
     /// <summary>Child tool starts publish immediately and one completion leaves the other tool visible.</summary>

@@ -57,7 +57,9 @@ public sealed class SourceEditToolTests
             CurrentErrors = projectsAnalyzed == 0 ? 0 : 3,
             NewErrors = 0,
             ErrorComparisonAvailable = true,
-            Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
+            CurrentWarnings = 1,
+            Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial"),
+                new("CS8602", "Possible null reference", "Example.cs", 1, "Example", "net10.0", "introduced") { Severity = DiagnosticSeverity.Warning }],
         };
         var receipt = new SourceEditReceipt(analysis.EffectId, MutationSetId.New(), SourceEditStatus.Applied, ["Example.cs"], "Applied") { Analysis = analysis };
         var tool = new SourceEditTool(new ReceiptHandler(receipt), TestPromptLoader.Instance);
@@ -78,6 +80,9 @@ public sealed class SourceEditToolTests
             Assert.Equal(3, currentErrors.GetInt32());
         }
 
+        Assert.Equal(hasCounts, projected.TryGetProperty("CurrentWarnings", out _));
+        Assert.Equal((int)DiagnosticSeverity.Warning, projected.GetProperty("Diagnostics")[1].GetProperty("Severity").GetInt32());
+        Assert.Equal("reportable", projected.GetProperty("CountScope").GetString());
         Assert.Equal("initial", projected.GetProperty("Diagnostics")[0].GetProperty("Origin").GetString());
     }
 
@@ -124,6 +129,16 @@ public sealed class SourceEditToolTests
         Assert.False(projected.ContainsKey(nameof(SourceEditAnalysis.ResolvedErrors)));
         Assert.Contains("before/after comparison unavailable", summary, StringComparison.Ordinal);
         Assert.DoesNotContain("0 new", summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>Older durable findings retain error semantics.</summary>
+    [Fact]
+    public void LegacyFindingWithoutSeverityRemainsAnError()
+    {
+        var finding = JsonSerializer.Deserialize<SourceEditDiagnostic>("""
+            {"Code":"CS0246","Message":"Missing type","Project":"Example","TargetFramework":"net10.0","Origin":"initial"}
+            """);
+        Assert.Equal(DiagnosticSeverity.Error, finding!.Severity);
     }
 
     private sealed class ReceiptHandler : ICommandHandler<ApplySourceEditCommand, SourceEditReceipt>

@@ -420,7 +420,7 @@ public sealed partial class InteractionCoordinator
         Task? contextMapPresentation = null;
         InteractionActivity? currentActivity = null;
         SemanticActivityKey? currentSemanticActivityKey = null;
-        var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
+        var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, (InteractionActivity Activity, Guid? EffectId)>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
         var toolSurface = _surface.Surface as IInteractionToolActivitySurface;
         var operationActivities = new InteractionOperationActivities(_timeProvider, _displayOptions.ShowOperationDurations);
@@ -528,8 +528,16 @@ public sealed partial class InteractionCoordinator
                             semanticActivityOrder.Add(semanticKey);
                         }
 
-                        semanticActivitiesByKey[semanticKey] = incomingActivity;
+                        semanticActivitiesByKey[semanticKey] = (incomingActivity, semanticStarted.EffectId);
                         incomingSemanticActivityKey = semanticKey;
+                    }
+                    else if (domainEvent is DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: { } waitingEffect }
+                        && semanticActivityOrder.LastOrDefault(key => semanticActivitiesByKey[key].EffectId == waitingEffect) is var waitingKey
+                        && semanticActivitiesByKey.TryGetValue(waitingKey, out var waitingActivity)
+                        && waitingActivity.EffectId == waitingEffect)
+                    {
+                        incomingActivity = waitingActivity.Activity;
+                        incomingSemanticActivityKey = waitingKey;
                     }
                     else
                     {
@@ -659,6 +667,7 @@ public sealed partial class InteractionCoordinator
                             output.Add(new PresentationTextItem(eventSegments)
                             {
                                 Notification = InteractionEventSegments.CreateNotification(domainEvent),
+                                Disclosure = InteractionEventSegments.CreateDisclosure(domainEvent, eventSegments),
                                 WakeIdleInput = domainEvent is DiagnosticObserved { Code: "intelligence.refresh.pending" },
                             });
                         }
@@ -2601,7 +2610,7 @@ public sealed partial class InteractionCoordinator
     }
 
     private static bool TryGetLatestSemanticActivity(
-        IReadOnlyDictionary<SemanticActivityKey, InteractionActivity> activitiesByKey,
+        IReadOnlyDictionary<SemanticActivityKey, (InteractionActivity Activity, Guid? EffectId)> activitiesByKey,
         IReadOnlyList<SemanticActivityKey> activityOrder,
         out SemanticActivityKey key,
         out InteractionActivity? activity)
@@ -2609,8 +2618,9 @@ public sealed partial class InteractionCoordinator
         for (var index = activityOrder.Count - 1; index >= 0; index--)
         {
             var candidate = activityOrder[index];
-            if (activitiesByKey.TryGetValue(candidate, out activity))
+            if (activitiesByKey.TryGetValue(candidate, out var state))
             {
+                activity = state.Activity;
                 key = candidate;
                 return true;
             }
@@ -2622,7 +2632,7 @@ public sealed partial class InteractionCoordinator
     }
 
     private static void RemoveSemanticActivitiesForRun(
-        IDictionary<SemanticActivityKey, InteractionActivity> activitiesByKey,
+        IDictionary<SemanticActivityKey, (InteractionActivity Activity, Guid? EffectId)> activitiesByKey,
         IList<SemanticActivityKey> activityOrder,
         RunId runId)
     {

@@ -29,6 +29,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
     private readonly TimeSpan _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
+    private readonly EditAnalysisOptions _editOptions;
+    private readonly DiagnosticReportingPolicy _diagnosticReporting;
     private readonly IPromptLoader _prompts;
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
@@ -66,6 +68,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
+        _editOptions = _resourceLimits.EditAnalysis.Capture();
+        _diagnosticReporting = new(_editOptions);
         _prompts = prompts;
         _events = events;
         _logger = logger;

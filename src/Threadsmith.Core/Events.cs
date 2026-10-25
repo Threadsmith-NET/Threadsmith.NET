@@ -304,7 +304,11 @@ public sealed record SemanticCheckStarted(
     RunId RunId,
     SemanticCheckId SemanticCheckId,
     SemanticCheckPhase Phase,
-    string CheckName) : DomainEvent(SessionId, OccurredAt);
+    string CheckName) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Exact source edit whose analysis is running, when applicable.</summary>
+    public Guid? EffectId { get; init; }
+}
 
 /// <summary>A semantic check completed.</summary>
 public sealed record SemanticCheckCompleted(
@@ -444,7 +448,14 @@ public sealed record DiagnosticObserved(
     DateTimeOffset OccurredAt,
     string Code,
     string Message,
-    Diagnostic? StructuredDiagnostic = null) : DomainEvent(SessionId, OccurredAt);
+    Diagnostic? StructuredDiagnostic = null) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Finalized advisory edit evidence, when this diagnostic delivers semantic feedback.</summary>
+    public SourceEditAnalysis? EditAnalysis { get; init; }
+
+    /// <summary>Correlates a waiting notice with the existing semantic activity, so completed work does not display a stale wait.</summary>
+    public Guid? PendingSemanticEffectId { get; init; }
+}
 
 /// <summary>A test run completed.</summary>
 public sealed record TestRunCompleted(

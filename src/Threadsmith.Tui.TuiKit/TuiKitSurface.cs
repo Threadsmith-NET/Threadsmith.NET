@@ -41,6 +41,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         "F9 — paste image; inspect/remove image attachments",
         "Ctrl+C — copy selected text; exit Threadsmith when none is selected",
         "F6 — copy the current selection without using Ctrl+C",
+        "Output: click semantic headers to expand/collapse; Ctrl+Up/Down selects, Enter/Space toggles",
         "Ctrl+Shift+C — copy the complete message draft",
         "F12 — let the terminal select text; press again to return mouse control",
         "Ctrl+Enter — insert a line break without sending",

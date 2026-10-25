@@ -2,12 +2,130 @@ namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Text.Json.Nodes;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
+using Threadsmith.Interaction.Presentation;
 using Xunit;
 
 /// <summary>Exercises advisory completion projection, incomplete evidence and durable replay.</summary>
 public static class SemanticCheckPresentationTests
 {
+    /// <summary>A completion rendered before a correlated wait suppresses that stale notice in live and replay projections.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void CorrelatedWaitRespectsSemanticCompletionOrder(bool completedBeforeWait)
+    {
+        var sessionId = SessionId.New();
+        var effectId = Guid.NewGuid();
+        var start = new SemanticCheckStarted(sessionId, DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analysis") { EffectId = effectId };
+        var completed = new SemanticCheckCompleted(sessionId, DateTimeOffset.UtcNow, start.RunId, start.SemanticCheckId, start.Phase, start.CheckName, SemanticCheckOutcome.Completed)
+        {
+            Analysis = new() { EffectId = effectId, ProjectsAnalyzed = 1, ProjectsInScope = 1 },
+        };
+        var wait = new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Waiting for semantic feedback to complete.") { PendingSemanticEffectId = effectId };
+        var transcript = new ConversationTranscript(string.Empty);
+        transcript.Apply(DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(start), 1, DomainEventJson.Serialize(start)));
+        transcript.Apply(start with { SemanticCheckId = SemanticCheckId.New(), EffectId = Guid.NewGuid() });
+        if (completedBeforeWait)
+        {
+            transcript.Apply(completed);
+        }
+
+        var restoredWait = DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(wait), 1, DomainEventJson.Serialize(wait));
+        var before = transcript.Length;
+        Assert.Equal(!completedBeforeWait, transcript.Apply(restoredWait));
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(segments, restoredWait, transcript.GetTextSince(before));
+        Assert.Equal(!completedBeforeWait, string.Concat(segments.Select(segment => segment.Text)).Contains(wait.Message, StringComparison.Ordinal));
+        Assert.All(segments, segment => Assert.Equal(PresentationTextRole.Warning, segment.Role));
+    }
+
+    /// <summary>Finalized evidence uses the shared bounded block, survives replay, and does not imply another timed operation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void FinalizedFeedbackRendersEvidenceOnceWithoutDuration(bool reused)
+    {
+        var feedback = new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Legacy compact summary")
+        {
+            EditAnalysis = new()
+            {
+                EffectId = Guid.NewGuid(),
+                CommittedGeneration = 33,
+                CandidateReused = reused,
+                ProjectsAnalyzed = 5,
+                ProjectsInScope = 5,
+                SyntaxDocumentsAnalyzed = 1,
+                SyntaxErrors = 0,
+                CurrentErrors = 3,
+                CurrentWarnings = 1,
+                ErrorComparisonAvailable = true,
+                Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net8.0", "initial"), new("CS8602", "Nullable access", "Example.cs", 2, "Example", "net8.0", "initial") { Severity = DiagnosticSeverity.Warning }],
+            },
+        };
+        var restored = DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(feedback), 1, DomainEventJson.Serialize(feedback));
+        var transcript = new ConversationTranscript(string.Empty, limits: new TuiResourceLimits { MaximumEditAnalysisFindings = 1 });
+        Assert.True(transcript.Apply(restored));
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(segments, restored, transcript.Text);
+        var text = string.Concat(segments.Select(segment => segment.Text));
+        Assert.Equal(transcript.Text, text);
+        Assert.Contains("SEMANTIC CHECKS: finalized edit feedback - available", text, StringComparison.Ordinal);
+        Assert.Contains(segments, segment => segment.Text.Contains("finalized edit feedback", StringComparison.Ordinal)
+            && segment.Role == PresentationTextRole.Error);
+        Assert.Contains("Committed source generation: 33", text, StringComparison.Ordinal);
+        Assert.Contains("5/5 affected project instances", text, StringComparison.Ordinal);
+        Assert.Contains("3 current; 0 new; 0 resolved", text, StringComparison.Ordinal);
+        Assert.Contains("Selected reportable warnings: 1", text, StringComparison.Ordinal);
+        Assert.Contains("Error CS5001", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("CS8602", text, StringComparison.Ordinal);
+        Assert.Contains("Findings shown are bounded", text, StringComparison.Ordinal);
+        Assert.Equal(reused, text.Contains("candidate analysis reused; no additional compiler pass", StringComparison.Ordinal));
+        Assert.DoesNotContain("Legacy compact summary", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("·", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Unavailable owners and interrupted coverage do not claim completed checks.</summary>
+    [Theory]
+    [InlineData(0, "unavailable")]
+    [InlineData(1, "partial")]
+    public static void FinalizedFeedbackDisclosesMissingCoverage(int projectsAnalyzed, string state)
+    {
+        var analysis = new SourceEditAnalysis
+        {
+            EffectId = Guid.NewGuid(),
+            CommittedGeneration = projectsAnalyzed == 0 ? null : 1,
+            ProjectsAnalyzed = projectsAnalyzed,
+            ProjectsInScope = 2,
+            Omissions = ["Remaining coverage is unavailable."],
+        };
+        var text = InteractionPresentationFormatter.FormatFinalizedEditFeedback(analysis, new());
+        Assert.Contains("finalized edit feedback - " + state, text, StringComparison.Ordinal);
+        Assert.Contains("Remaining coverage is unavailable", text, StringComparison.Ordinal);
+        if (projectsAnalyzed == 0)
+        {
+            Assert.Contains("Syntax: results unavailable", text, StringComparison.Ordinal);
+            Assert.Contains("Errors: totals unknown", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("included in project compiler diagnostics", text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Waiting and timeout notices retain the ordinary advisory feedback text role.</summary>
+    [Theory]
+    [InlineData("Waiting for semantic feedback to complete.")]
+    [InlineData("Semantic checks are taking longer than expected and should be available in a future turn.")]
+    public static void FeedbackWaitNoticesUseAdvisoryRole(string message)
+    {
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
+            segments,
+            new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", message),
+            string.Empty);
+        Assert.All(segments, segment => Assert.Equal(PresentationTextRole.Warning, segment.Role));
+        Assert.Contains(message, string.Concat(segments.Select(segment => segment.Text)), StringComparison.Ordinal);
+    }
+
     /// <summary>Completed checks show bounded actionable findings and the actual scope of evidence.</summary>
     [Fact]
     public static void CompletionShowsChecksCoverageComparisonAndBoundedFindings()
@@ -31,13 +149,13 @@ public static class SemanticCheckPresentationTests
         var text = Render(analysis);
 
         Assert.Contains("SEMANTIC CHECKS: pre-mutation candidate analysis - completed", text, StringComparison.Ordinal);
-        Assert.Contains("Syntax: 2 C# document instances checked; 0 retained errors", text, StringComparison.Ordinal);
+        Assert.Contains("Syntax: 2 C# document instances checked; 0 reportable errors", text, StringComparison.Ordinal);
         Assert.Contains("Compiler: 3/3 affected project instances analyzed", text, StringComparison.Ordinal);
         Assert.Contains("5 current; 1 new; 2 resolved", text, StringComparison.Ordinal);
         Assert.Contains("CS0001 Example.cs:1 [Example; net10.0; introduced]", text, StringComparison.Ordinal);
         Assert.DoesNotContain("CS0004", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\nInjected line", text, StringComparison.Ordinal);
-        Assert.Contains("additional errors may be omitted", text, StringComparison.Ordinal);
+        Assert.Contains("additional findings may be omitted", text, StringComparison.Ordinal);
         Assert.Contains("analyzer execution, build and tests are separate", text, StringComparison.Ordinal);
         Assert.Contains("Limit: Unevaluated target frameworks omitted", text, StringComparison.Ordinal);
         Assert.DoesNotContain(analysis.EffectId.ToString(), text, StringComparison.Ordinal);
@@ -67,7 +185,7 @@ public static class SemanticCheckPresentationTests
         Assert.Contains("Errors: totals unknown", text, StringComparison.Ordinal);
         Assert.DoesNotContain("0 current", text, StringComparison.Ordinal);
         Assert.DoesNotContain("0 new", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("0 retained errors", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("0 reportable errors", text, StringComparison.Ordinal);
     }
 
     /// <summary>Graph replacement retains measured current errors without inventing comparison evidence.</summary>
@@ -107,7 +225,7 @@ public static class SemanticCheckPresentationTests
 
         var text = Render(analysis);
 
-        Assert.Contains("Syntax: 1 C# document instances checked; 1 retained errors", text, StringComparison.Ordinal);
+        Assert.Contains("Syntax: 1 C# document instances checked; 1 reportable errors", text, StringComparison.Ordinal);
         Assert.Contains("Compiler: unavailable", text, StringComparison.Ordinal);
         Assert.Contains("CS1513 New.cs:1", text, StringComparison.Ordinal);
         Assert.DoesNotContain("0 current", text, StringComparison.Ordinal);
@@ -130,6 +248,30 @@ public static class SemanticCheckPresentationTests
         var transcript = new ConversationTranscript(string.Empty);
         Assert.True(transcript.Apply(restoredLegacy));
         Assert.Contains("Legacy detail", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Captured display bounds retain warning severity and filtering labels.</summary>
+    [Fact]
+    public static void ConfiguredPresentationShowsSeverityAndFilteredScope()
+    {
+        var analysis = new SourceEditAnalysis
+        {
+            EffectId = Guid.NewGuid(),
+            ProjectsAnalyzed = 1,
+            ProjectsInScope = 1,
+            CurrentWarnings = 2,
+            OutputFiltered = true,
+            Diagnostics = [new("CS8602", "Possible null", "Example.cs", 1, "Example", "net10.0", "initial") { Severity = DiagnosticSeverity.Warning },
+                new("CS4014", "Unawaited", "Example.cs", 2, "Example", "net10.0", "introduced") { Severity = DiagnosticSeverity.Warning }],
+            Omissions = ["first omission", "second omission"],
+        };
+        var transcript = new ConversationTranscript(string.Empty, limits: new TuiResourceLimits { MaximumEditAnalysisFindings = 1, MaximumEditAnalysisOmissions = 1 });
+        Assert.True(transcript.Apply(Completion(analysis)));
+        Assert.Contains("Warning CS8602", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("CS4014", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Selected reportable warnings: 2", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("exclusions filtered", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("second omission", transcript.Text, StringComparison.Ordinal);
     }
 
     private static string Render(SourceEditAnalysis analysis, SemanticCheckPhase phase = SemanticCheckPhase.PreMutation, SemanticCheckOutcome outcome = SemanticCheckOutcome.Completed)

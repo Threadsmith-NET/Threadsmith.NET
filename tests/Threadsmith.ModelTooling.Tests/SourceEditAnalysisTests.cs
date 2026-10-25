@@ -9,7 +9,7 @@ using Threadsmith.Execution;
 using Xunit;
 
 /// <summary>Exercises advisory candidates against a real evaluated multi-project solution.</summary>
-public static class SourceEditAnalysisTests
+public static partial class SourceEditAnalysisTests
 {
     /// <summary>Temporary errors remain introduced across subsequent edits, and exact promotion reuses completed diagnostics.</summary>
     [Fact]
@@ -177,13 +177,15 @@ public static class SourceEditAnalysisTests
     }
 
     /// <summary>Existing-project aggregation preserves syntax findings from a newly created, not-yet-evaluated file.</summary>
-    [Fact]
-    public static async Task MixedMembershipCandidateRetainsNewFileSyntaxErrors()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task MixedMembershipCandidateRetainsNewFileSyntaxErrors(bool excludeSyntax)
     {
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeSyntax ? ["CS1513"] : [] } });
         var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -199,11 +201,13 @@ public static class SourceEditAnalysisTests
         Assert.NotNull(result);
         Assert.False(result.Pending);
         Assert.Equal(2, result.SyntaxDocumentsAnalyzed);
-        Assert.True(result.SyntaxErrors > 0);
+        Assert.Equal(!excludeSyntax, result.SyntaxErrors > 0);
         Assert.False(result.ErrorComparisonAvailable);
         Assert.True(result.ProjectsAnalyzed > 0);
-        Assert.Contains(result.Diagnostics, item => item.Code == "CS1513" && item.File == "Contracts/New.cs");
-        Assert.True(result.CurrentErrors >= 2);
+        Assert.Equal(!excludeSyntax, result.Diagnostics.Any(item => item.Code == "CS1513" && item.File == "Contracts/New.cs"));
+        Assert.Equal(excludeSyntax, result.OutputFiltered);
+        Assert.Equal(excludeSyntax ? 1 : 2, result.CurrentErrors);
+        Assert.False(result.DiagnosticsTruncated);
     }
 
     /// <summary>A graph refresh before write confirmation cannot redefine introduced errors as initial on the next edit.</summary>

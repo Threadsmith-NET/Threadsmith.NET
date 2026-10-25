@@ -43,6 +43,10 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private readonly Dictionary<RowKey, DisplayGlyph[]> _rowGlyphs = [];
     private readonly List<RowKey> _rowGlyphRemovals = [];
     private readonly Dictionary<long, List<StyledRange>> _styles = [];
+    private readonly HashSet<string> _expandedDisclosures = new(StringComparer.Ordinal);
+    private readonly Dictionary<long, string> _disclosureHeaders = [];
+    private readonly Dictionary<long, string> _disclosureLines = [];
+    private string? _focusedDisclosure;
     private long _activityTick;
     private int _activityTop;
     private int _activityBottom;
@@ -53,6 +57,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private Point? _anchor;
     private Point? _end;
     private long? _clearBeforeId;
+    private PresentationItem? _clearFirstItem;
+    private bool _clearPending;
     private int _itemBytes;
     private int _byteBudget = ByteLimit;
     private int _lineBudget = LineLimit;
@@ -165,6 +171,18 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <inheritdoc/>
     public bool HandleKey(KeyEvent key)
     {
+        if (key.Modifiers == KeyModifiers.Ctrl && key.Code is KeyCode.Up or KeyCode.Down)
+        {
+            return FocusDisclosure(key.Code == KeyCode.Down);
+        }
+
+        if (key.Modifiers == KeyModifiers.None && (key.Code == KeyCode.Enter || (key.Code == KeyCode.Character && key.Rune == ' ')))
+        {
+            var visibleHeaders = _rows.Skip(_top).Take(_height).Select(row => _disclosureHeaders.GetValueOrDefault(row.Line.Id)).OfType<string>();
+            var target = visibleHeaders.FirstOrDefault(id => id == _focusedDisclosure) ?? visibleHeaders.FirstOrDefault();
+            return target is not null && ToggleDisclosure(target);
+        }
+
         if (key.Modifiers.HasFlag(KeyModifiers.Shift) && _rows.Count > _top
             && key.Code is KeyCode.Left or KeyCode.Right or KeyCode.Up or KeyCode.Down
                 or KeyCode.Home or KeyCode.End or KeyCode.PageUp or KeyCode.PageDown)
@@ -242,6 +260,14 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             return false;
         }
 
+        var clickedRow = _top + mouse.Y - (Evicted > 0 ? 1 : 0);
+        if (mouse.Kind == MouseEventKind.Press && mouse.Modifiers == KeyModifiers.None
+            && clickedRow >= _top && clickedRow < Math.Min(_rows.Count, _top + _height)
+            && _disclosureHeaders.TryGetValue(_rows[clickedRow].Line.Id, out var disclosure))
+        {
+            return ToggleDisclosure(disclosure);
+        }
+
         MoveSelectionEnd(mouse);
         if (mouse.Kind == MouseEventKind.Press && !mouse.Modifiers.HasFlag(KeyModifiers.Shift))
         {
@@ -268,6 +294,10 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             _rowGlyphs.Clear();
             _rowGlyphRemovals.Clear();
             _styles.Clear();
+            _expandedDisclosures.Clear();
+            _disclosureHeaders.Clear();
+            _disclosureLines.Clear();
+            _focusedDisclosure = null;
             _toolIndicators.Clear();
             ToolActivities = [];
             _itemBytes = RetainedBytes = 0;
@@ -275,14 +305,28 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             _top = 0;
             _anchor = _end = null;
             _clearBeforeId = null;
+            _clearFirstItem = null;
+            _clearPending = false;
             Evicted = 0;
             AtBottom = true;
             NewCount = 0;
         }
 
-        foreach (var item in batch.Items)
+        foreach (var incoming in batch.Items)
         {
+            var item = PrepareRetentionItem(incoming);
+            if (_clearPending)
+            {
+                _clearFirstItem = item;
+                _clearPending = false;
+            }
+
             Retain(item);
+            if (item is PresentationTextItem { Disclosure: not null } && !_items.Contains(item))
+            {
+                continue;
+            }
+
             AppendItem(item);
         }
     }
@@ -358,6 +402,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     internal void ClearView()
     {
         _clearBeforeId = _nextId;
+        _clearPending = true;
+        _clearFirstItem = null;
         _anchor = _end = null;
         AtBottom = true;
         NewCount = 0;
@@ -428,7 +474,9 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         _lineBudget = Math.Clamp(lines, 0, _limits.MaximumTranscriptLines);
         while (_items.Count > _lineBudget || _itemBytes > _byteBudget)
         {
-            _itemBytes -= PresentationBytes(_items.Dequeue());
+            var removed = _items.Dequeue();
+            _itemBytes -= PresentationBytes(removed);
+            RemoveDisclosure(removed);
         }
 
         Trim();
@@ -444,6 +492,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         {
             var removed = _items.Dequeue();
             _itemBytes -= PresentationBytes(removed);
+            RemoveDisclosure(removed);
         }
     }
 
@@ -452,7 +501,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         return item switch
         {
             PresentationUserInputItem echo => Encoding.UTF8.GetByteCount(echo.Prompt) + Encoding.UTF8.GetByteCount(echo.Text) + 1,
-            PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text)),
+            PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text))
+                + (text.Disclosure is { } disclosure ? Encoding.UTF8.GetByteCount(disclosure.Summary) + Encoding.UTF8.GetByteCount(disclosure.Id) : 0),
             PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
             PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
             _ => 0,
@@ -471,14 +521,27 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         _rows.Clear();
         _rowGlyphs.Clear();
         _styles.Clear();
+        _disclosureHeaders.Clear();
+        _disclosureLines.Clear();
         _anchor = _end = null;
-        _clearBeforeId = null;
+        var cleared = _clearBeforeId is not null;
+        _clearBeforeId = cleared ? 0 : null;
         RetainedBytes = 0;
         _nextId = 0;
         AtBottom = true;
         foreach (var item in _items)
         {
+            if (cleared && ReferenceEquals(item, _clearFirstItem))
+            {
+                _clearBeforeId = _nextId;
+            }
+
             AppendItem(item);
+        }
+
+        if (cleared && _clearPending)
+        {
+            _clearBeforeId = _nextId;
         }
 
         AtBottom = followedTail;
@@ -519,6 +582,11 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             var style = ranges is not null && rangeIndex < ranges.Count && ranges[rangeIndex].Start <= glyph.Offset
                 ? ResolveStyle(ranges[rangeIndex].Role)
                 : row.Line.Style;
+            if (_focusedDisclosure is not null && _disclosureHeaders.GetValueOrDefault(row.Line.Id) == _focusedDisclosure)
+            {
+                style = style.WithAttribute(CellAttributes.Underline, true);
+            }
+
             if (glyph.Offset >= selectionStart && glyph.Offset < selectionEnd)
             {
                 style = style.WithAttribute(CellAttributes.Reverse, true);
@@ -707,10 +775,167 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             NormalizeInputBoundary();
         }
 
-        foreach (var segment in Project(item, Math.Max(40, _width)))
+        var firstId = _nextId;
+        long? disclosureHeaderId = null;
+        var headerObserved = false;
+        foreach (var segment in item is PresentationTextItem { Disclosure: { } } disclosureItem
+            ? ProjectDisclosure(disclosureItem) : Project(item, Math.Max(40, _width)))
         {
             segment.Validate();
             AppendContent(segment);
+            if (item is PresentationTextItem { Disclosure: not null } && !headerObserved)
+            {
+                headerObserved = true;
+                disclosureHeaderId = _lines.FirstOrDefault(line => line.Id >= firstId && !string.IsNullOrEmpty(line.Text))?.Id;
+            }
+        }
+
+        if (item is PresentationTextItem { Disclosure: { } disclosure })
+        {
+            var lines = _lines.Where(line => line.Id >= firstId && !string.IsNullOrEmpty(line.Text)).ToArray();
+            foreach (var line in lines)
+            {
+                _disclosureLines[line.Id] = disclosure.Id;
+            }
+
+            if (disclosureHeaderId is { } headerId && _lines.Any(line => line.Id == headerId))
+            {
+                _disclosureHeaders[headerId] = disclosure.Id;
+            }
+        }
+    }
+
+    private IEnumerable<PresentationTextSegment> ProjectDisclosure(PresentationTextItem item)
+    {
+        var disclosure = item.Disclosure ?? throw new InvalidOperationException("Missing disclosure metadata.");
+        var expanded = _expandedDisclosures.Contains(disclosure.Id);
+        yield return new($"\n[{(expanded ? '-' : '+')}] {disclosure.Summary}\n", disclosure.Role);
+        if (!expanded)
+        {
+            yield break;
+        }
+
+        if (!FitsDisclosure(item))
+        {
+            yield return new("   └ Details omitted by transcript retention limits.\n", PresentationTextRole.Warning);
+            yield break;
+        }
+
+        var skip = disclosure.DetailsOffset;
+        foreach (var segment in item.Segments)
+        {
+            if (skip < segment.Text.Length)
+            {
+                yield return segment with { Text = segment.Text[Math.Max(0, skip)..] };
+            }
+
+            skip = Math.Max(0, skip - segment.Text.Length);
+        }
+    }
+
+    private PresentationItem PrepareRetentionItem(PresentationItem item)
+    {
+        if (item is not PresentationTextItem { Disclosure: { } disclosure } text)
+        {
+            return item;
+        }
+
+        if (FitsDisclosure(text))
+        {
+            return item;
+        }
+
+        return new PresentationTextItem([
+            new("\n" + disclosure.Summary + "\n", disclosure.Role),
+            new("   └ Details omitted by transcript retention limits.\n", PresentationTextRole.Warning),
+        ]);
+    }
+
+    private bool FitsDisclosure(PresentationTextItem item)
+    {
+        var disclosure = item.Disclosure ?? throw new InvalidOperationException("Missing disclosure metadata.");
+        var chunks = string.Concat(item.Segments.Select(segment => segment.Text)).Split('\n')
+            .Sum(line => Math.Max(1L, ((long)line.Length + _limits.MaximumTranscriptLineCharacters - 1) / _limits.MaximumTranscriptLineCharacters));
+        return PresentationBytes(item) <= _byteBudget
+            && chunks + 2 + ((long)disclosure.Summary.Length / _limits.MaximumTranscriptLineCharacters) <= _lineBudget;
+    }
+
+    private bool FocusDisclosure(bool forward)
+    {
+        var headers = _disclosureHeaders.Where(pair => _clearBeforeId is null || pair.Key >= _clearBeforeId).OrderBy(pair => pair.Key).ToArray();
+        if (headers.Length == 0)
+        {
+            return false;
+        }
+
+        var current = Array.FindIndex(headers, pair => pair.Value == _focusedDisclosure);
+        var next = current < 0 ? (forward ? 0 : headers.Length - 1) : Math.Clamp(current + (forward ? 1 : -1), 0, headers.Length - 1);
+        _focusedDisclosure = headers[next].Value;
+        var row = FindFirstRow(headers[next].Key);
+        _top = Math.Clamp(_top, Math.Max(0, row - _height + 1), row);
+        AtBottom = false;
+        return true;
+    }
+
+    private bool ToggleDisclosure(string id)
+    {
+        if (!_items.OfType<PresentationTextItem>().Any(item => item.Disclosure?.Id == id))
+        {
+            return false;
+        }
+
+        var header = _disclosureHeaders.FirstOrDefault(pair => pair.Value == id).Key;
+        var offset = Math.Max(0, FindFirstRow(header) - _top);
+        if (!_expandedDisclosures.Add(id))
+        {
+            _expandedDisclosures.Remove(id);
+        }
+
+        ReprojectForWidth(TopId);
+        var newHeader = _disclosureHeaders.FirstOrDefault(pair => pair.Value == id).Key;
+        _top = Math.Max(0, FindFirstRow(newHeader) - offset);
+        AtBottom = false;
+        _focusedDisclosure = id;
+        return true;
+    }
+
+    private void RemoveDisclosure(PresentationItem item)
+    {
+        if (ReferenceEquals(item, _clearFirstItem))
+        {
+            _clearFirstItem = null;
+        }
+
+        if (item is not PresentationTextItem { Disclosure: { } disclosure })
+        {
+            return;
+        }
+
+        _expandedDisclosures.Remove(disclosure.Id);
+        if (_focusedDisclosure == disclosure.Id)
+        {
+            _focusedDisclosure = null;
+        }
+
+        for (var index = _lines.Count - 1; index >= 0; index--)
+        {
+            var line = _lines[index];
+            if (_disclosureLines.GetValueOrDefault(line.Id) != disclosure.Id)
+            {
+                continue;
+            }
+
+            _lines.RemoveAt(index);
+            RetainedBytes -= line.Bytes;
+            _styles.Remove(line.Id);
+            _disclosureLines.Remove(line.Id);
+            _disclosureHeaders.Remove(line.Id);
+            _top = Math.Max(0, _top - RemoveRows(line.Id));
+            Evicted++;
+            if (_anchor?.Line == line.Id || _end?.Line == line.Id)
+            {
+                _anchor = _end = null;
+            }
         }
     }
 
@@ -876,6 +1101,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             RetainedBytes -= first.Bytes;
             _lines.RemoveAt(0);
             _styles.Remove(first.Id);
+            _disclosureHeaders.Remove(first.Id);
+            _disclosureLines.Remove(first.Id);
             var removed = RemoveRows(first.Id);
             _top = Math.Max(0, _top - removed);
             Evicted++;

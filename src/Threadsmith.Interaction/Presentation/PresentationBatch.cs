@@ -19,7 +19,13 @@ public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment>
 
     /// <summary>Gets an optional transient echo for notification-capable frontends; the segments remain the output record.</summary>
     public PresentationNotification? Notification { get; init; }
+
+    /// <summary>Optional host-owned disclosure; Segments remain the complete output for noninteractive consumers.</summary>
+    public PresentationDisclosure? Disclosure { get; init; }
 }
+
+/// <summary>Stable identity and concise header for an expandable host output block.</summary>
+public sealed record PresentationDisclosure(string Id, string Summary, PresentationTextRole Role, int DetailsOffset);
 
 /// <summary>A brief host-authored notification accompanying ordinary output.</summary>
 /// <param name="Text">Short terminal-safe summary.</param>

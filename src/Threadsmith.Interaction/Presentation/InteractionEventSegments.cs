@@ -49,6 +49,9 @@ internal static class InteractionEventSegments
                         showOperationDurations),
                     compactionRole);
                 break;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: not null }:
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: not null }:
+                break;
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {
@@ -83,6 +86,57 @@ internal static class InteractionEventSegments
 
                 break;
         }
+    }
+
+    /// <summary>Marks host semantic evidence for optional interactive disclosure without changing its full output.</summary>
+    internal static PresentationDisclosure? CreateDisclosure(IDomainEvent domainEvent, IReadOnlyList<PresentationTextSegment> segments)
+    {
+        SourceEditAnalysis? analysis;
+        string id;
+        PresentationTextRole role;
+        var countsAvailable = true;
+        switch (domainEvent)
+        {
+            case SemanticCheckCompleted completed:
+                analysis = completed.Analysis;
+                id = $"semantic:{completed.SessionId.Value}:{completed.RunId.Value}:{completed.SemanticCheckId.Value}";
+                role = InteractionPresentationFormatter.GetSemanticFeedbackRole(analysis, completed.Outcome);
+                countsAvailable = completed.Outcome == SemanticCheckOutcome.Completed;
+                break;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } finalized } diagnostic:
+                analysis = finalized;
+                id = $"semantic-feedback:{diagnostic.SessionId.Value}:{finalized.EffectId}:{finalized.Revision}";
+                role = InteractionPresentationFormatter.GetFinalizedEditFeedbackRole(finalized);
+                break;
+            default:
+                return null;
+        }
+
+        var text = string.Concat(segments.Select(segment => segment.Text));
+        var header = text.Split('\n').FirstOrDefault(line => !string.IsNullOrWhiteSpace(line))?.Trim();
+        if (header is null)
+        {
+            return null;
+        }
+
+        var summary = analysis is null ? "details"
+            : analysis.Obsolete ? "obsolete evidence"
+            : analysis.Pending ? $"pending; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects"
+            : analysis.ProjectsAnalyzed == 0 ? "coverage unavailable"
+            : $"{(countsAvailable ? $"{analysis.CurrentErrors} errors in coverage" : "error totals unknown")}; {(analysis.CurrentWarnings is { } warnings ? $"{warnings} warnings" : "warnings unknown")}; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects";
+        if (analysis is { DiagnosticsTruncated: true })
+        {
+            summary += "; limited findings";
+        }
+
+        if (analysis is { OutputFiltered: true })
+        {
+            summary += "; exclusions apply";
+        }
+
+        var headerStart = text.IndexOf(header, StringComparison.Ordinal);
+        var newline = text.IndexOf('\n', headerStart);
+        return new PresentationDisclosure(id, header + " — " + summary, role, newline < 0 ? text.Length : newline + 1);
     }
 
     /// <summary>Adds a shared lifecycle block while preserving header and muted detail roles.</summary>
@@ -155,11 +209,17 @@ internal static class InteractionEventSegments
                 };
                 AppendLifecycleBlock(segments, text, skillRole);
                 return;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: not null }:
+                Add(segments, text, PresentationTextRole.Warning);
+                return;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } analysis }:
+                AppendLifecycleBlock(segments, text, InteractionPresentationFormatter.GetFinalizedEditFeedbackRole(analysis));
+                return;
             case SemanticCheckCompleted completed:
                 AppendLifecycleBlock(
                     segments,
                     text,
-                    GetSemanticCheckRole(completed.Outcome));
+                    InteractionPresentationFormatter.GetSemanticFeedbackRole(completed.Analysis, completed.Outcome));
                 return;
             case PlanProposed:
                 AppendLifecycleBlock(segments, text, PresentationTextRole.Status);
@@ -273,17 +333,6 @@ internal static class InteractionEventSegments
             OperationActivityOutcome.Completed => PresentationTextRole.ToolSuccess,
             OperationActivityOutcome.Failed or OperationActivityOutcome.Cancelled or OperationActivityOutcome.TimedOut => PresentationTextRole.ToolFailure,
             _ => completed.Succeeded ? PresentationTextRole.ToolSuccess : PresentationTextRole.ToolFailure,
-        };
-    }
-
-    private static PresentationTextRole GetSemanticCheckRole(SemanticCheckOutcome outcome)
-    {
-        return outcome switch
-        {
-            SemanticCheckOutcome.Completed or SemanticCheckOutcome.Skipped => PresentationTextRole.ToolSuccess,
-            SemanticCheckOutcome.Degraded => PresentationTextRole.Warning,
-            SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled => PresentationTextRole.ToolFailure,
-            _ => PresentationTextRole.Status,
         };
     }
 

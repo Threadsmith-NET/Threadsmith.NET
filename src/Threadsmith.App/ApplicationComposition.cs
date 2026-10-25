@@ -414,7 +414,8 @@ internal static class ApplicationComposition
             semantic.SemanticEngines,
             semantic.SemanticRefreshCoordinator,
             reviews: mutationCoordinator,
-            previews: mutationCoordinator);
+            previews: mutationCoordinator,
+            editAnalysisOptions: host.OperationalLimits.Semantic.EditAnalysis);
         var sourceEditTool = new SourceEditTool(sourceEdits, host.PromptLoader, host.OperationalLimits.Workspace);
         var sessionApplication = new SessionApplication(
             host.Events,

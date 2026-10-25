@@ -498,7 +498,7 @@ public sealed partial class SourceEditApplicationTests
             return new(root, workspaceId, events, workspaces, store, artifacts, limits);
         }
 
-        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null)
+        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null, EditAnalysisOptions? editOptions = null)
         {
             return new(
             _workspaces,
@@ -514,7 +514,8 @@ public sealed partial class SourceEditApplicationTests
             analyzer: analyzer,
             semanticRefresh: refresh,
             reviews: _workspaces,
-            previews: _workspaces);
+            previews: _workspaces,
+            editAnalysisOptions: editOptions);
         }
 
         public ApplySourceEditCommand Replace(string expected, string replacement, bool requireReview)

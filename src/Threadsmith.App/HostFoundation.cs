@@ -281,6 +281,21 @@ internal sealed class HostFoundation : IAsyncDisposable
             PolicyStores = (trustedConfiguration ?? configuration).GetSection("limits:policyStores")
                 .Get<PolicyStoreResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
         };
+        var editSection = supportedLimits.GetSection("semantic:editAnalysis");
+        var editOptions = limits.Semantic.EditAnalysis;
+        foreach (var child in editSection.GetChildren())
+        {
+            if (child.Key.Equals(nameof(EditAnalysisOptions.CompilerWarningIds), StringComparison.OrdinalIgnoreCase))
+            {
+                editOptions = editOptions with { CompilerWarningIds = child.Get<string[]>() ?? [] };
+            }
+            else if (child.Key.Equals(nameof(EditAnalysisOptions.ExcludedDiagnosticIds), StringComparison.OrdinalIgnoreCase))
+            {
+                editOptions = editOptions with { ExcludedDiagnosticIds = child.Get<string[]>() ?? [] };
+            }
+        }
+
+        limits = limits with { Semantic = limits.Semantic with { EditAnalysis = editOptions.Capture() } };
         limits.Validate();
         var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(
             "limits:workspace:maximumDiffLinesForLcs", new WorkspaceResourceLimits().MaximumDiffLinesForLcs);

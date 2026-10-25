@@ -161,6 +161,19 @@ internal sealed class ConversationTranscript
                     elapsed));
                 _answerActive = false;
                 return true;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: { } waitingEffect } diagnostic:
+                if (!_pendingSemanticChecks.Values.Any(check => check.EffectId == waitingEffect))
+                {
+                    return false;
+                }
+
+                AppendLifecycleBlock($"[{diagnostic.Code}] {diagnostic.Message}{Environment.NewLine}");
+                _answerActive = false;
+                return true;
+            case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } analysis }:
+                AppendLifecycleBlock(InteractionPresentationFormatter.FormatFinalizedEditFeedback(analysis, _limits));
+                _answerActive = false;
+                return true;
             case SemanticCheckStarted started:
                 _reasoningActive = false;
                 _answerActive = false;
@@ -459,7 +472,8 @@ internal sealed class ConversationTranscript
             _showOperationDurations,
             _inspectCodeExploreOutput(),
             progress,
-            _limits.MaximumToolInspectionCharacters));
+            _limits.MaximumToolInspectionCharacters,
+            _limits));
     }
 
     private void AppendSemanticCheckCompletion(
@@ -469,7 +483,8 @@ internal sealed class ConversationTranscript
         AppendLifecycleBlock(InteractionPresentationFormatter.FormatSemanticCheckCompletion(
             started,
             completed,
-            _showOperationDurations));
+            _showOperationDurations,
+            _limits));
     }
 
     private bool AppendSemanticRefreshCompletion(SemanticRefreshCompleted completed)

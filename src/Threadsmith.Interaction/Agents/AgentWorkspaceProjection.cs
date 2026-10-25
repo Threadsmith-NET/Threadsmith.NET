@@ -211,7 +211,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 {
                     await FlushAsync(child, cancellationToken);
                     var text = child.BlockSpacing.BeforeBlock()
-                        + InteractionPresentationFormatter.FormatToolCompletion(start, completed, _showOperationDurations, maximumInspectionCharacters: _limits.MaximumToolInspectionCharacters);
+                        + InteractionPresentationFormatter.FormatToolCompletion(start, completed, _showOperationDurations, maximumInspectionCharacters: _limits.MaximumToolInspectionCharacters, limits: _limits);
                     child.BlockSpacing.Observe(text);
                     var segments = new List<PresentationTextSegment>();
                     InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);

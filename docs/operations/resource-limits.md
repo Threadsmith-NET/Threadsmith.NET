@@ -116,6 +116,48 @@ Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.
 | `maximumModelResultCharacters` | `131072` | Inventory maximum model result characters. |
 | `maximumModelTargetFrameworks` | `12` | Inventory maximum model target frameworks. |
 
+### `limits:semantic:editAnalysis`
+
+These startup-captured settings govern the existing advisory edit analysis, across projects, target frameworks and sessions. Restart after changing them. The default warning IDs (`CS4014`, `CS8602`, `CS8604`, `CS8618`) highlight unawaited work and common nullable-reference mistakes. Effective project severity and suppression apply: a warning promoted to error is counted as an error. An empty `compilerWarningIds` list retains errors only. `excludedDiagnosticIds` defaults to `[]` (filter nothing), wins over warning selection and severity, and accepts complete IDs after trimming, case-insensitively. Duplicates collapse; empty/whitespace entries fail. Unknown IDs such as a future `CA2016` are permitted; wildcards have no special meaning.
+
+Exclusions filter structured advisory output before bounded finding selection. Receipts, deferred model feedback and semantic summaries show only reportable findings and reportable counts, plus an output-filtered indicator. Filtering is distinct from truncation and incomplete coverage and never counts an excluded error as repaired. Zero reportable errors does not establish build success. Compiler execution and internal error evidence remain intact; explicit build/test logs, exit status and authoritative validation are unaffected. Analyzer execution remains separate.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `compilerWarningIds` | `["CS4014", "CS8602", "CS8604", "CS8618"]` | Selected effective compiler warnings; empty disables warning inclusion. |
+| `excludedDiagnosticIds` | `[]` | Exact globally excluded advisory diagnostic IDs; empty filters nothing. |
+| `maximumRetainedDiagnostics` | `64` | Retained findings per project basis and aggregate candidate; errors precede new selected warnings, then unchanged warnings. |
+| `maximumReportedDiagnostics` | `8` | Receipt/model findings; must not exceed retention. |
+| `maximumCachedProjects` | `32` | Cached project bases and carried project scope. |
+| `maximumOmissions` | `16` | Distinct omission descriptions. |
+| `maximumDiagnosticMessageCharacters` | `384` | Message UTF-16 units. |
+| `maximumDiagnosticPathCharacters` | `256` | Path UTF-16 units. |
+| `maximumDiagnosticProjectCharacters` | `128` | Project name UTF-16 units. |
+| `maximumDiagnosticFrameworkCharacters` | `64` | Framework name UTF-16 units. |
+| `immediateObservationMilliseconds` | `500` | Immediate wait in milliseconds; zero returns without waiting. |
+| `finalFeedbackWaitMilliseconds` | `30000` | Wait before final completion for pending edit analysis; zero disables waiting. Timeout completes the turn with an advisory notice; still-current results can reach a later turn. |
+| `candidateLifetimeMilliseconds` | `30000` | Candidate lifetime in milliseconds; must be positive. |
+
+Numeric defaults preserve existing retention, text and timing bounds. All numeric values are positive signed 32-bit integers except the immediate and final waits, which allow zero. No additional ID-count or ID-length ceiling applies. Incomplete or truncated comparison evidence does not produce measured new/resolved counts. Warning totals appear only when project coverage supports them.
+
+The final feedback wait applies once per applied edit when the model is ready to finish. Both waiting and timeout notices use the ordinary advisory feedback text role. The waiting notice is correlated with the edit activity and is suppressed if that activity has already completed in the transcript, including during replay. Finalized feedback uses the detailed `SEMANTIC CHECKS: finalized edit feedback` block with the existing finding/omission limits, committed generation, and an explicit candidate-reuse note when applicable; it does not display another compiler-operation duration. After timeout, the running host retains one latest feedback reference per session; a later turn can receive the completed result while that edit remains current. This reference does not survive a host restart, and a newer semantic edit replaces it. Waiting does not run builds or tests.
+
+For user-wide defaults, merge into `~/.threadsmith/config.json`:
+
+```json
+{ "limits": { "semantic": { "editAnalysis": { "excludedDiagnosticIds": ["CS0246", "CS4014"] } } } }
+```
+
+For repository-specific preferences, the same structure goes in `<repo>/.threadsmith/config.json`, for example:
+
+```json
+{ "limits": { "semantic": { "editAnalysis": { "excludedDiagnosticIds": ["CS4014"] } } } }
+```
+
+These use the existing layered array semantics: trusted machine/user arrays replace lower trusted arrays; ordinary repository/session/CLI/environment indexed keys override matching indices and can retain lower-layer trailing indices. An empty array filters nothing when no lower indexed entries remain; it does not erase inherited indexed keys in ordinary merged layers. To remove inherited exclusions, change the defining layer. Configured warning lists replace the compiled warning defaults rather than appending to them.
+
+CLI: `--set:limits:semantic:editAnalysis:excludedDiagnosticIds:0=CS0246`. Environment: `THREADSMITH_limits__semantic__editAnalysis__excludedDiagnosticIds__0=CS0246`. Further entries use indices `1`, `2`, etc.; environment takes final precedence. These are reporting preferences, not permission grants, and use the ordinary settings workflow.
+
 ### `limits:git`
 
 Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
@@ -191,6 +233,9 @@ Ordinary configuration. Implementation: `src/Threadsmith.Interaction/Contracts/T
 
 | Field | Default | Purpose |
 |---|---:|---|
+| `maximumBuildDiagnostics` | `20` | Positive maximum explicit build diagnostic lines; errors precede warnings and informational findings. Extra diagnostics and truncated capture are disclosed. Restart to apply. |
+| `maximumEditAnalysisFindings` | `3` | Positive maximum advisory findings in each semantic completion. |
+| `maximumEditAnalysisOmissions` | `4` | Positive maximum advisory omission lines in each semantic completion. |
 | `maximumDraftBytes` | `1048576` | Maximum editable draft and pasted UTF-8 bytes. |
 | `maximumUndoBytes` | `1048576` | Maximum retained undo text bytes. |
 | `maximumUndoEntries` | `200` | Maximum retained undo operations. |

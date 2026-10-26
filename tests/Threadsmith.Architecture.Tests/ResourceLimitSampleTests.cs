@@ -13,6 +13,7 @@ public sealed class ResourceLimitSampleTests
     [Theory]
     [InlineData("limits", "Threadsmith.Core.OperationalLimits", "Threadsmith.Core")]
     [InlineData("limits:semantic:editAnalysis", "Threadsmith.Core.EditAnalysisOptions", "Threadsmith.Core")]
+    [InlineData("limits:semantic:editAnalysis:analyzers", "Threadsmith.Core.EditAnalyzerOptions", "Threadsmith.Core")]
     [InlineData("tui:limits", "Threadsmith.Interaction.Contracts.TuiResourceLimits", "Threadsmith.Interaction")]
     [InlineData("mcp:limits", "Threadsmith.Mcp.McpResourceLimits", "Threadsmith.Mcp")]
     [InlineData("hooks:limits", "Threadsmith.Hooks.HookResourceLimits", "Threadsmith.Hooks")]
@@ -54,6 +55,11 @@ public sealed class ResourceLimitSampleTests
         }
 
         Assert.NotNull(configured);
+        if (type == typeof(EditAnalyzerOptions))
+        {
+            Assert.Equal(new EditAnalyzerOptions().DiagnosticIds, HostFoundation.LoadOperationalLimits(configuration).Semantic.EditAnalysis.Analyzers.DiagnosticIds);
+        }
+
         var constructor = Assert.Single(type.GetConstructors(), candidate => candidate.GetParameters().All(parameter => parameter.HasDefaultValue));
         var defaults = constructor.Invoke([.. constructor.GetParameters().Select(parameter => parameter.DefaultValue)]);
         foreach (var property in type.GetProperties().Where(property => property.PropertyType.IsPrimitive))

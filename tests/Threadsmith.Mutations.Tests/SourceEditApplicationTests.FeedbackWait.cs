@@ -1,6 +1,7 @@
 namespace Threadsmith.Mutations.Tests;
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -63,11 +64,24 @@ public sealed partial class SourceEditApplicationTests
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
-        var provider = new CompletionProvider(1);
+        long feedbackReady = 0;
+        double? deliveryMilliseconds = null;
+        var provider = new CompletionProvider(1)
+        {
+            RequestObserved = request =>
+            {
+                if (feedbackReady != 0 && request.Messages.Any(message => message.SectionId == "source-edit-feedback"
+                    && message.GetModelVisibleContent().Contains("Late compiler finding", StringComparison.Ordinal)))
+                {
+                    deliveryMilliseconds ??= Stopwatch.GetElapsedTime(feedbackReady).TotalMilliseconds;
+                }
+            },
+        };
         var observed = new ConcurrentQueue<IDomainEvent>();
         var waitingNotice = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void CompleteAnalysis()
         {
+            feedbackReady = Stopwatch.GetTimestamp();
             var pending = analyzer.Latest!;
             analyzer.Publish(pending with
             {
@@ -135,6 +149,8 @@ public sealed partial class SourceEditApplicationTests
         Assert.Contains(provider.Requests[^1].Messages, message => message.SectionId == "source-edit-feedback"
             && message.GetModelVisibleContent().Contains("Late compiler finding", StringComparison.Ordinal));
         Assert.DoesNotContain(observed, item => item is BuildStarted or TestRunCompleted);
+        Assert.NotNull(deliveryMilliseconds);
+        TestContext.Current.TestOutputHelper?.WriteLine($"Analyzer experiment model-boundary delivery: timeout={timeout} elapsedMilliseconds={deliveryMilliseconds:F3}; scripted provider, no model inference latency.");
     }
 
     /// <summary>Cancellation ends the wait without being misreported as a timeout.</summary>

@@ -18,6 +18,9 @@ public sealed class SemanticFixtureAnalyzer : DiagnosticAnalyzer
         DiagnosticSeverity.Info,
         isEnabledByDefault: true);
 
+    private static readonly DiagnosticDescriptor CompilationRule = new(
+        "TS1171", "Compilation-only probe", "Compilation-only probe", "Compatibility", DiagnosticSeverity.Info, isEnabledByDefault: true, customTags: [WellKnownDiagnosticTags.CompilationEnd]);
+
     /// <summary>Initializes a new instance of the <see cref="SemanticFixtureAnalyzer"/> class.</summary>
 #pragma warning disable RS1035 // The test-only marker deterministically exercises analyzer construction failure.
     public SemanticFixtureAnalyzer()
@@ -33,19 +36,37 @@ public sealed class SemanticFixtureAnalyzer : DiagnosticAnalyzer
 #pragma warning restore RS1035
 
     /// <inheritdoc />
-    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [ProbeRule];
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [ProbeRule, CompilationRule];
 
     /// <inheritdoc />
     public override void Initialize(AnalysisContext context)
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
+        context.RegisterCompilationAction(end =>
+            end.ReportDiagnostic(Diagnostic.Create(CompilationRule, Location.None)));
         context.RegisterSyntaxNodeAction(
             static syntaxContext =>
             {
                 var declaration = (ClassDeclarationSyntax)syntaxContext.Node;
+#pragma warning disable RS1035 // Test-only execution barrier uses the existing fixture protocol.
+                if (declaration.Identifier.ValueText == "AnalyzerBarrier")
+                {
+                    SemanticFixtureConstruction.WaitForRelease(typeof(SemanticFixtureAnalyzer).Assembly.Location, "execution");
+                }
+#pragma warning restore RS1035
+                if (declaration.Identifier.ValueText == "AnalyzerFailure")
+                {
+                    throw new InvalidOperationException("Requested analyzer execution failure.");
+                }
+
                 if (declaration.Identifier.ValueText == "AnalyzerProbe")
                 {
+                    if (syntaxContext.Options.AdditionalFiles.Any(file => file.GetText(syntaxContext.CancellationToken)?.ToString() == "disable-probe"))
+                    {
+                        return;
+                    }
+
                     syntaxContext.ReportDiagnostic(Diagnostic.Create(ProbeRule, declaration.Identifier.GetLocation()));
                 }
             },

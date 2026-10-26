@@ -9,6 +9,29 @@ using Xunit;
 
 public static partial class SourceEditAnalysisTests
 {
+    /// <summary>Disabled analyzer feedback leaves ordinary edits on their existing compiler-only path.</summary>
+    [Fact]
+    public static async Task AutomaticEditDoesNotExecuteSelectedAnalyzers()
+    {
+        using var fixture = new TestSemanticSolution();
+        var ct = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false, DiagnosticIds = ["TS1170"] } } });
+        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
+        await engine.LoadAsync(request, ct);
+        await engine.WaitForWarmAsync(ct);
+        const string relative = "Contracts/Services.cs";
+        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
+        // The fixture analyzer throws on this declaration if its actions execute.
+        var changed = original + "\npublic class AnalyzerFailure {}";
+        var command = Command(request.SessionId, RunId.New(), request.WorkspaceId);
+        var result = await AnalyzeCompletedAsync(engine, events, command, fixture.Root, Snapshot(relative, original, changed), ct);
+        Assert.False(result.Pending);
+        Assert.Equal(result.ProjectsInScope, result.ProjectsAnalyzed);
+        Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code.StartsWith("TS117", StringComparison.Ordinal) || diagnostic.Code == "AD0001");
+        Assert.True(engine.EditAnalysisStatistics.DiagnosticPasses > 0);
+    }
+
     /// <summary>Checks mixed severities, exclusions, retention and compilation reuse.</summary>
     [Theory]
     [InlineData(false, false, false, 64, true)]

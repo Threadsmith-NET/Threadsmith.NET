@@ -28,9 +28,20 @@ public sealed class EditAnalysisConfigurationTests
             ["limits:semantic:editAnalysis:immediateObservationMilliseconds"] = "0",
             ["limits:semantic:editAnalysis:candidateLifetimeMilliseconds"] = "1234",
             ["limits:semantic:editAnalysis:finalFeedbackWaitMilliseconds"] = "4567",
+            ["limits:semantic:editAnalysis:analyzers:diagnosticIds:0"] = " ca2016 ",
+            ["limits:semantic:editAnalysis:analyzers:diagnosticIds:1"] = "CA2016",
+            ["limits:semantic:editAnalysis:analyzers:budgetMilliseconds"] = "2345",
+            ["limits:semantic:editAnalysis:analyzers:concurrentAnalysis"] = "true",
+            ["limits:semantic:editAnalysis:analyzers:enabled"] = "true",
         }).Build();
         var options = HostFoundation.LoadOperationalLimits(configuration).Semantic.EditAnalysis;
         Assert.Equal(["CS4014"], options.CompilerWarningIds);
+        Assert.Equal(["CA2016"], options.Analyzers.DiagnosticIds);
+        Assert.Equal(2345, options.Analyzers.BudgetMilliseconds);
+        Assert.True(options.Analyzers.ConcurrentAnalysis);
+        Assert.True(options.Analyzers.Enabled);
+        configuration["limits:semantic:editAnalysis:analyzers:diagnosticIds:0"] = "CA2012";
+        Assert.Equal(["CA2016"], options.Analyzers.DiagnosticIds);
         Assert.Equal(["CS0246", "CA2016"], options.ExcludedDiagnosticIds);
         Assert.Equal(2, options.MaximumRetainedDiagnostics);
         Assert.Equal(1, options.MaximumReportedDiagnostics);
@@ -53,11 +64,14 @@ public sealed class EditAnalysisConfigurationTests
     public void EmptyArraysDisableWarningsAndFilterNothing()
     {
         using var stream = new MemoryStream(Encoding.UTF8.GetBytes("""
-            {"limits":{"semantic":{"editAnalysis":{"compilerWarningIds":[],"excludedDiagnosticIds":[]}}}}
+            {"limits":{"semantic":{"editAnalysis":{"compilerWarningIds":[],"excludedDiagnosticIds":[],"analyzers":{"diagnosticIds":[]}}}}}
             """));
         var options = HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().AddJsonStream(stream).Build()).Semantic.EditAnalysis;
         Assert.Empty(options.CompilerWarningIds);
         Assert.Empty(options.ExcludedDiagnosticIds);
+        Assert.Empty(options.Analyzers.DiagnosticIds);
+        Assert.False(options.Analyzers.Enabled);
+        Assert.False(options.Analyzers.ConcurrentAnalysis);
         var policy = new DiagnosticReportingPolicy(options);
         Assert.True(policy.ShouldReport("CS0246", DiagnosticSeverity.Error));
         Assert.False(policy.ShouldReport("CS4014", DiagnosticSeverity.Warning));
@@ -74,6 +88,10 @@ public sealed class EditAnalysisConfigurationTests
     [InlineData("finalFeedbackWaitMilliseconds", "-1")]
     [InlineData("excludedDiagnosticIds:0", " ")]
     [InlineData("compilerWarningIds:0", "")]
+    [InlineData("analyzers:diagnosticIds:0", " ")]
+    [InlineData("analyzers:budgetMilliseconds", "0")]
+    [InlineData("analyzers:budgetMilliseconds", "-1")]
+    [InlineData("analyzers:unknown", "true")]
     public void InvalidNestedSettingsFailAtHostBinding(string setting, string value)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

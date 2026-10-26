@@ -315,10 +315,13 @@ public sealed partial class SourceEditApplicationTests
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
+        public Action<ModelStreamRequest>? RequestObserved { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
+            RequestObserved?.Invoke(request);
             await Task.Yield();
             _round++;
             if (_round > _editCount)

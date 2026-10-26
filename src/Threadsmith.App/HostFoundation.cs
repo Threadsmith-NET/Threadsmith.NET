@@ -295,6 +295,13 @@ internal sealed class HostFoundation : IAsyncDisposable
             }
         }
 
+        var analyzerIds = editSection.GetSection("analyzers").GetChildren()
+            .FirstOrDefault(child => child.Key.Equals(nameof(EditAnalyzerOptions.DiagnosticIds), StringComparison.OrdinalIgnoreCase));
+        if (analyzerIds is not null)
+        {
+            editOptions = editOptions with { Analyzers = editOptions.Analyzers with { DiagnosticIds = analyzerIds.Get<string[]>() ?? [] } };
+        }
+
         limits = limits with { Semantic = limits.Semantic with { EditAnalysis = editOptions.Capture() } };
         limits.Validate();
         var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(

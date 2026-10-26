@@ -22,6 +22,12 @@
     },
     "semantic": {
       "editAnalysis": {
+        "analyzers": {
+          "enabled": false,
+          "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"],
+          "budgetMilliseconds": 1000,
+          "concurrentAnalysis": false
+        },
         "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
         "excludedDiagnosticIds": [],
         "maximumRetainedDiagnostics": 64,

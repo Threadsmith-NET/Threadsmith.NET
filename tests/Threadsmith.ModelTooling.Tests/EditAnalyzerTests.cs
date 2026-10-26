@@ -131,15 +131,7 @@ public static partial class EditAnalyzerTests
     {
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
-        // The loader retains DLLs for process lifetime; use the established unique staging convention.
-        var staging = Path.Combine(AppContext.BaseDirectory, "plan117", "analyzer-execution", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(staging);
-        var analyzer = Path.Combine(staging, "Threadsmith.SemanticFixtures.Roslyn59.dll");
-        File.Copy(Path.Combine(TestSemanticSolution.SourceRoot, "Analyzers", Path.GetFileName(analyzer)), analyzer);
-        var projectPath = Path.Combine(fixture.Root, "Contracts", "Contracts.csproj");
-        var projectXml = XDocument.Load(projectPath);
-        projectXml.Descendants("Analyzer").Single(item => item.Attribute("Include")!.Value.EndsWith(Path.GetFileName(analyzer), StringComparison.Ordinal)).SetAttributeValue("Include", analyzer);
-        projectXml.Save(projectPath);
+        var analyzer = StageExecutionAnalyzer(fixture.Root);
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), TestContext.Current.CancellationToken);
@@ -297,6 +289,20 @@ public static partial class EditAnalyzerTests
         await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "AnalyzerCases.cs"), Violations, cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "analyzer-input.txt"), "enabled", cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n[*.cs]\n" + string.Join('\n', FixtureDiagnosticIds.Select(id => "dotnet_diagnostic." + id + ".severity = suggestion")), cancellationToken);
+    }
+
+    private static string StageExecutionAnalyzer(string root)
+    {
+        // The loader retains DLLs for process lifetime; each barrier needs its own staged assembly.
+        var staging = Path.Combine(AppContext.BaseDirectory, "plan117", "analyzer-execution", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+        var analyzer = Path.Combine(staging, "Threadsmith.SemanticFixtures.Roslyn59.dll");
+        File.Copy(Path.Combine(TestSemanticSolution.SourceRoot, "Analyzers", Path.GetFileName(analyzer)), analyzer);
+        var projectPath = Path.Combine(root, "Contracts", "Contracts.csproj");
+        var projectXml = XDocument.Load(projectPath);
+        projectXml.Descendants("Analyzer").Single(item => item.Attribute("Include")!.Value.EndsWith(Path.GetFileName(analyzer), StringComparison.Ordinal)).SetAttributeValue("Include", analyzer);
+        projectXml.Save(projectPath);
+        return analyzer;
     }
 
     private sealed record AnalyzerExperiment(string Target, string RepositoryRoot, string Selection, string File, string Find, string Replace,

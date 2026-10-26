@@ -133,6 +133,32 @@ public sealed class SemanticDisclosureTests
         Assert.DoesNotContain("0 errors", item.Disclosure.Summary, StringComparison.Ordinal);
     }
 
+    /// <summary>Compact feedback preserves independent analyzer evidence while compiler work remains pending.</summary>
+    [Fact]
+    public void AnalyzerSummaryDoesNotDependOnCompilerCompletion()
+    {
+        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Completed)
+        {
+            Analysis = new() { EffectId = Guid.NewGuid(), Pending = true, ProjectsInScope = 2, Analyzers = new() { Status = "completed", DocumentsInScope = 1, DocumentsAnalyzed = 1, ReportableFindings = 3, OutputFiltered = true } },
+        };
+        var item = ProjectEvent(completed);
+        Assert.Contains("analyzers completed; 1/1 documents; 3 analyzer findings", item.Disclosure!.Summary, StringComparison.Ordinal);
+        Assert.Contains("exclusions apply", item.Disclosure.Summary, StringComparison.Ordinal);
+    }
+
+    /// <summary>An optional failure cannot erase completed compiler counts in either shared presentation.</summary>
+    [Fact]
+    public void AnalyzerFailurePreservesCompilerCounts()
+    {
+        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Degraded)
+        {
+            Analysis = new() { EffectId = Guid.NewGuid(), ProjectsInScope = 2, ProjectsAnalyzed = 2, CurrentErrors = 1, Analyzers = new() { Status = "failed" } },
+        };
+        var item = ProjectEvent(completed);
+        Assert.Contains("1 errors in coverage", item.Disclosure!.Summary, StringComparison.Ordinal);
+        Assert.Contains("Reportable errors in analyzed coverage: 1 current", string.Concat(TranscriptView.Project(item, 160).Select(segment => segment.Text)), StringComparison.Ordinal);
+    }
+
     /// <summary>Reducing retention cannot turn a surviving detail row into a disclosure header.</summary>
     [Fact]
     public void ReducedBudgetKeepsRealHeaderAndDisclosesOmittedDetails()

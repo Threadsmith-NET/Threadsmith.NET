@@ -8,6 +8,24 @@ using Xunit;
 /// <summary>Verifies the model-facing edit receipt preserves evidence without claiming unmeasured success.</summary>
 public sealed class SourceEditToolTests
 {
+    /// <summary>Completed analyzer projection remains bounded and explicit while compiler totals are unknown.</summary>
+    [Fact]
+    public void PendingCompilerPreservesAnalyzerTruncationAndIdentity()
+    {
+        var analysis = new SourceEditAnalysis
+        {
+            EffectId = Guid.NewGuid(),
+            Pending = true,
+            Analyzers = new() { Status = "completed", DocumentsInScope = 1, DocumentsAnalyzed = 1, ReportableFindings = 9 },
+            Diagnostics = [new("CA2016", "Forward cancellation", "Example.cs", 1, "Example", "net10.0", "unknown") { Producer = "analyzer", AnalyzerIdentity = "qualified fixture" }],
+        };
+        var projected = SourceEditAnalysisProjection.Create(analysis);
+        Assert.True(projected["DiagnosticsTruncated"]!.GetValue<bool>());
+        Assert.False(projected.ContainsKey("CurrentErrors"));
+        Assert.Equal(9, projected["Analyzers"]!["ReportableFindings"]!.GetValue<int>());
+        Assert.Equal("analyzer", projected["Diagnostics"]![0]!["Producer"]!.GetValue<string>());
+    }
+
     /// <summary>User-visible feedback summarizes coverage without rendering serialized state or unknown error totals.</summary>
     [Theory]
     [InlineData(true, false, 0, "pending", false)]

@@ -50,12 +50,12 @@ public sealed class SemanticFixtureAnalyzer : DiagnosticAnalyzer
             {
                 var declaration = (ClassDeclarationSyntax)syntaxContext.Node;
 #pragma warning disable RS1035 // Test-only execution barrier uses the existing fixture protocol.
-                if (declaration.Identifier.ValueText == "AnalyzerBarrier")
+                if (declaration.Identifier.ValueText is "AnalyzerBarrier" or "AnalyzerBarrierFailure")
                 {
                     SemanticFixtureConstruction.WaitForRelease(typeof(SemanticFixtureAnalyzer).Assembly.Location, "execution");
                 }
 #pragma warning restore RS1035
-                if (declaration.Identifier.ValueText == "AnalyzerFailure")
+                if (declaration.Identifier.ValueText is "AnalyzerFailure" or "AnalyzerBarrierFailure")
                 {
                     throw new InvalidOperationException("Requested analyzer execution failure.");
                 }

@@ -161,7 +161,7 @@ Expected: exact symbol/path exploration is a read-only, repository-confined, gen
 
 **Retired.** Plan approval commands/settings cannot authorize source edits. Use Scenario AL for legacy configuration migration and MTP-068/MTP-069 for exact diff decisions.
 
-## MTP-241 — Advisory incremental compiler feedback
+## MTP-241 — Advisory incremental compiler and optional analyzer feedback
 
 1. Apply syntax-error and unresolved-symbol source edits; confirm applied writes plus advisory findings. Inspect `SEMANTIC CHECKS`: candidate/committed phase, completed syntax checks, affected project-instance coverage, measured errors and comparable new/resolved deltas, bounded diagnostic codes/locations/origins, and omissions must be visible. Errors must not change advisory completion into a write rejection.
 2. Perform rapid edits across independent projects, including a conflicted second edit.
@@ -170,10 +170,12 @@ Expected: exact symbol/path exploration is a read-only, repository-confined, gen
 5. Inspect pending, obsolete and unavailable receipts: model-facing error totals must be absent rather than zero. Verify user-visible advisory summaries show coverage and measured errors in plain text, without serialized analysis.
 6. Arrange findings that become ready during a final response. Confirm another permitted round receives them, the earlier response remains in history, and outdated validation claims can be corrected. Repeat at the model-round limit: expect a visible advisory notification and no extra request. Leave analysis pending and verify completion does not wait for it.
 7. Explicitly invoke build/test checks for authoritative validation and report failed or omitted checks honestly. End a separate edit-only response and confirm no automatic validation starts.
+8. Enable `limits:semantic:editAnalysis:analyzers:enabled`, restart, and introduce/repair CA2016 or VSTHRD002 in a project with qualified versions. Verify analyzer producer identity and independent coverage in receipt/deferred feedback. Exclude one ID, preserve another, and inspect reportable counts. Disabled/missing/unqualified/suppressed cases must remain distinguishable.
+9. Exercise Scenario AK's analyzer barrier, promotion, supersession and failure cases. Verify completed compiler counts remain visible, an independent query can run, final response completion does not wait for optional analysis, and current late revisions reach the next turn. Restart resets transient failure quarantine. Configuration/additional-file reloads must not reuse stale findings.
 
-8. Introduce a selected compiler warning beside an error. Confirm severity is visible, warning repairs do not resolve errors, suppressed warnings stay hidden, and warnings promoted to errors count as errors. New warnings follow errors and precede unchanged warnings in bounded output.
-9. Configure `limits:semantic:editAnalysis:excludedDiagnosticIds` with `CS0246` and a selected warning ID, restart, and repeat. Confirm excluded details and counts are absent from receipts, continuing-model feedback and semantic summaries; an unrelated finding remains visible, output is labeled reportable/filtered, and filtering alone does not imply truncation or repair. Explicit build still fails for the excluded nonsuppressible error.
-10. Change warning selection and retention/presentation settings through ordinary configuration and restart. Verify output follows the captured settings without a second diagnostic pass or approval; empty warning selection retains errors, and invalid/unknown settings fail startup.
+10. Introduce a selected compiler warning beside an error. Confirm severity is visible, warning repairs do not resolve errors, suppressed warnings stay hidden, and warnings promoted to errors count as errors. New warnings follow errors and precede unchanged warnings in bounded output.
+11. Configure `limits:semantic:editAnalysis:excludedDiagnosticIds` with `CS0246` and a selected warning ID, restart, and repeat. Confirm excluded details and counts are absent from receipts, continuing-model feedback and semantic summaries; an unrelated finding remains visible, output is labeled reportable/filtered, and filtering alone does not imply truncation or repair. Explicit build still fails for the excluded nonsuppressible error.
+12. Change warning selection and retention/presentation settings through ordinary configuration and restart. Verify output follows the captured settings without a second diagnostic pass or approval; empty warning selection retains errors, and invalid/unknown settings fail startup.
 
 ## MTP-240 — Tool and diff presentation
 

@@ -599,6 +599,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 9. Configure `limits:semantic:editAnalysis:excludedDiagnosticIds` with `CS0246` and a selected warning ID, restart, and repeat. Confirm excluded details and counts are absent from receipts, continuing-model feedback and semantic summaries; an unrelated finding remains visible, output is labeled reportable/filtered, and filtering alone does not imply truncation or repair. Explicit build still fails for the excluded nonsuppressible error.
 10. Change warning selection and retention/presentation settings through ordinary configuration and restart. Verify output follows the captured settings without a second diagnostic pass or approval; empty warning selection retains errors, and invalid/unknown settings fail startup.
 
+11. Enable qualified optional analyzers and introduce/repair a selected violation. Confirm independent analyzer coverage and producer identity in the receipt or next model boundary, without a build or extra approval. Exclude one selected ID and confirm its details and counts disappear while another remains. Pending analyzers must not hide completed compiler counts or delay final response completion; late current findings can reach the next turn.
+12. Hold an analyzer at a test barrier with two workers. Confirm compiler feedback and an interactive query proceed, matching promotion preserves work, and rapid replacements discard stale results. A timed-out/faulted analyzer is unavailable until restart; noncooperative work retains its admission slot until actual exit. Change configuration/additional inputs and verify refreshed coverage or explicit omissions with unknown baseline origins.
+
 **Verifies:** generation correctness, bounded coverage/cache ownership, advisory diagnostics and honest final acceptance.
 
 ## Scenario AL — Exact Authorization and Retired Configuration

@@ -225,6 +225,42 @@ public static class PromptFileNames
     /// <summary>Gets bounded versioned advisory edit feedback delivered at ordinary provider boundaries.</summary>
     public const string ContextSourceEditFeedback = "Context-SourceEdit-Feedback.md";
 
+    /// <summary>No selected owned document analyzer scope.</summary>
+    public const string ContextSourceEditAnalyzerSkipped = "Context-SourceEdit-AnalyzerSkipped.md";
+
+    /// <summary>Unavailable automatic admission after unidentified failure.</summary>
+    public const string ContextSourceEditAnalyzerUnavailable = "Context-SourceEdit-AnalyzerUnavailable.md";
+
+    /// <summary>Cancelled candidate analyzer coverage.</summary>
+    public const string ContextSourceEditAnalyzerCancelled = "Context-SourceEdit-AnalyzerCancelled.md";
+
+    /// <summary>Expired analyzer allowance and transient quarantine.</summary>
+    public const string ContextSourceEditAnalyzerTimedOut = "Context-SourceEdit-AnalyzerTimedOut.md";
+
+    /// <summary>Failed analyzer coverage and transient quarantine.</summary>
+    public const string ContextSourceEditAnalyzerFailed = "Context-SourceEdit-AnalyzerFailed.md";
+
+    /// <summary>Unknown analyzer origins and comparisons after graph replacement.</summary>
+    public const string ContextSourceEditAnalyzerGraphReplacement = "Context-SourceEdit-AnalyzerGraphReplacement.md";
+
+    /// <summary>Unavailable selected analyzer IDs.</summary>
+    public const string ContextSourceEditAnalyzerMissingIds = "Context-SourceEdit-AnalyzerMissingIds.md";
+
+    /// <summary>Transiently disabled analyzer identity.</summary>
+    public const string ContextSourceEditAnalyzerDisabledIdentity = "Context-SourceEdit-AnalyzerDisabledIdentity.md";
+
+    /// <summary>Unqualified analyzer implementation and version.</summary>
+    public const string ContextSourceEditAnalyzerUnqualifiedIdentity = "Context-SourceEdit-AnalyzerUnqualifiedIdentity.md";
+
+    /// <summary>Analyzer scope omitted to preserve applicable suppression.</summary>
+    public const string ContextSourceEditAnalyzerSuppressor = "Context-SourceEdit-AnalyzerSuppressor.md";
+
+    /// <summary>Whole-document analyzer coverage limitations.</summary>
+    public const string ContextSourceEditAnalyzerDocumentScope = "Context-SourceEdit-AnalyzerDocumentScope.md";
+
+    /// <summary>Selected analyzer instance execution and clean-result limits.</summary>
+    public const string ContextSourceEditAnalyzerInstanceScope = "Context-SourceEdit-AnalyzerInstanceScope.md";
+
     /// <summary>Gets the stable filename for the ContextSourceEditMembershipRefresh prompt asset.</summary>
     public const string ContextSourceEditMembershipRefresh = "Context-SourceEdit-MembershipRefresh.md";
 
@@ -1058,6 +1094,18 @@ public static class PromptFileNames
         ContextImageOnlyUserMessage,
         ContextActiveRunSteering,
         ContextSourceEditFeedback,
+        ContextSourceEditAnalyzerSkipped,
+        ContextSourceEditAnalyzerUnavailable,
+        ContextSourceEditAnalyzerCancelled,
+        ContextSourceEditAnalyzerTimedOut,
+        ContextSourceEditAnalyzerFailed,
+        ContextSourceEditAnalyzerGraphReplacement,
+        ContextSourceEditAnalyzerMissingIds,
+        ContextSourceEditAnalyzerDisabledIdentity,
+        ContextSourceEditAnalyzerUnqualifiedIdentity,
+        ContextSourceEditAnalyzerSuppressor,
+        ContextSourceEditAnalyzerDocumentScope,
+        ContextSourceEditAnalyzerInstanceScope,
         ContextSourceEditMembershipRefresh,
         ContextSourceEditNewSourceParseOptions,
         ContextSourceEditOmittedProjectCoverage,
@@ -1450,6 +1498,18 @@ public static class PromptAssetCatalog
             StringComparer.Ordinal);
         dotNetAssets.UnionWith(
         [
+            PromptFileNames.ContextSourceEditAnalyzerSkipped,
+            PromptFileNames.ContextSourceEditAnalyzerUnavailable,
+            PromptFileNames.ContextSourceEditAnalyzerCancelled,
+            PromptFileNames.ContextSourceEditAnalyzerTimedOut,
+            PromptFileNames.ContextSourceEditAnalyzerFailed,
+            PromptFileNames.ContextSourceEditAnalyzerGraphReplacement,
+            PromptFileNames.ContextSourceEditAnalyzerMissingIds,
+            PromptFileNames.ContextSourceEditAnalyzerDisabledIdentity,
+            PromptFileNames.ContextSourceEditAnalyzerUnqualifiedIdentity,
+            PromptFileNames.ContextSourceEditAnalyzerSuppressor,
+            PromptFileNames.ContextSourceEditAnalyzerDocumentScope,
+            PromptFileNames.ContextSourceEditAnalyzerInstanceScope,
             PromptFileNames.ContextSourceEditMembershipRefresh,
             PromptFileNames.ContextSourceEditNewSourceParseOptions,
             PromptFileNames.ContextSourceEditOmittedProjectCoverage,
@@ -1586,6 +1646,10 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.ContextSourceEditFeedback] = Set("FeedbackJson"),
+                    [PromptFileNames.ContextSourceEditAnalyzerMissingIds] = Set("DiagnosticIds"),
+                    [PromptFileNames.ContextSourceEditAnalyzerDisabledIdentity] = Set("AnalyzerIdentity"),
+                    [PromptFileNames.ContextSourceEditAnalyzerUnqualifiedIdentity] = Set("AnalyzerIdentity"),
+                    [PromptFileNames.ContextSourceEditAnalyzerSuppressor] = Set("Reason"),
                     [PromptFileNames.ContextSourceEditOmittedProjectCoverage] = Set("ProjectCount"),
                     [PromptFileNames.ContextRepositoryMemoryRefresh] = Set("Text"),
                     [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),

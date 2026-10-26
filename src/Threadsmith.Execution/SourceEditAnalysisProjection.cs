@@ -21,12 +21,21 @@ internal static class SourceEditAnalysisProjection
             status += $" {warnings} selected reportable warnings.";
         }
 
-        if (analysis.OutputFiltered)
+        if (analysis.OutputFiltered || analysis.Analyzers.OutputFiltered)
         {
             status += " Diagnostic exclusions filtered advisory output.";
         }
 
-        return status + " Compiler analysis does not establish build or test success.";
+        if (analysis.Analyzers.Status != "disabled")
+        {
+            status += $" Analyzers: {(analysis.Obsolete ? "obsolete" : analysis.Analyzers.Status)}; {analysis.Analyzers.DocumentsAnalyzed}/{analysis.Analyzers.DocumentsInScope} owned document instances checked.";
+            if (!analysis.Obsolete && analysis.Analyzers.Status is "completed" or "partial")
+            {
+                status += $" {analysis.Analyzers.ReportableFindings} reportable analyzer findings.";
+            }
+        }
+
+        return status + (analysis.Analyzers.Status == "disabled" ? " Compiler analysis does not establish build or test success." : " Advisory analysis does not establish build or test success.");
     }
 
     /// <summary>Keeps coverage and findings while omitting counts that cannot establish completed validation.</summary>
@@ -45,12 +54,16 @@ internal static class SourceEditAnalysisProjection
             result.Remove(nameof(analysis.CurrentErrors));
             result.Remove(nameof(analysis.NewErrors));
             result.Remove(nameof(analysis.ResolvedErrors));
-            result.Remove(nameof(analysis.DiagnosticsTruncated));
         }
 
         if (analysis.Obsolete)
         {
             result.Remove(nameof(analysis.SyntaxErrors));
+        }
+
+        if (analysis.Obsolete || ((analysis.Pending || analysis.ProjectsAnalyzed == 0) && analysis.Analyzers.Status is not ("completed" or "partial")))
+        {
+            result.Remove(nameof(analysis.DiagnosticsTruncated));
         }
 
         if (analysis.CurrentWarnings is null)
@@ -62,6 +75,26 @@ internal static class SourceEditAnalysisProjection
         {
             result.Remove(nameof(analysis.NewErrors));
             result.Remove(nameof(analysis.ResolvedErrors));
+        }
+
+        if (result[nameof(analysis.Analyzers)] is JsonObject analyzers)
+        {
+            if (analysis.Obsolete || analysis.Analyzers.Status is not ("completed" or "partial"))
+            {
+                analyzers.Remove(nameof(analysis.Analyzers.ReportableFindings));
+                analyzers.Remove(nameof(analysis.Analyzers.NewFindings));
+                analyzers.Remove(nameof(analysis.Analyzers.ResolvedFindings));
+            }
+            else if (analysis.Analyzers.NewFindings is null)
+            {
+                analyzers.Remove(nameof(analysis.Analyzers.NewFindings));
+                analyzers.Remove(nameof(analysis.Analyzers.ResolvedFindings));
+            }
+
+            if (analysis.Obsolete)
+            {
+                analyzers[nameof(analysis.Analyzers.Status)] = "obsolete";
+            }
         }
 
         return result;

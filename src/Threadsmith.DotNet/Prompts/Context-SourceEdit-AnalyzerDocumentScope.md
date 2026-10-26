@@ -1,0 +1,1 @@
+Whole changed documents only; other documents, additional-file actions, compilation and compilation-end diagnostics are omitted from scoped results.

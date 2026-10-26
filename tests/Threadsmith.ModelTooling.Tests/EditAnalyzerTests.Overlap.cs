@@ -243,5 +243,5 @@ public static partial class EditAnalyzerTests
     }
 
     private sealed record AnalyzerOverlapExperiment(string Target, string RepositoryRoot, string Selection, string File, string Find, string Replace,
-        int Repetitions, int Workers, bool Concurrent, int LatencyTargetMilliseconds, EditAnalyzerOptions Options, string OutputPath);
+        int Repetitions, int Workers, bool Concurrent, int LatencyTargetMilliseconds, EditAnalyzerOptions Options, string OutputPath, bool Substantive = false);
 }

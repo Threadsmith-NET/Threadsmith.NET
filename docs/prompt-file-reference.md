@@ -42,13 +42,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 28 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 40 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **294** | Complete deployed catalog. |
+| **Total** | **306** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -173,8 +173,20 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-CurrentTurn-HostAuthorizedUserUrl.md` | Host-authorized current-turn URL guidance. | [`Ordinal`](#placeholder-ordinal), [`UserUrlId`](#placeholder-userurlid) |
 
-| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler feedback, repair of introduced errors within the requested scope, explicit incomplete coverage, correction of stale validation claims, and accurate distinction between builds and separate analyzer checks. | [`FeedbackJson`](#placeholder-feedbackjson) |
+| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler and optional analyzer feedback, independent coverage and producer identity, repair within the requested scope, explicit unknown evidence, and correction of stale validation claims. | [`FeedbackJson`](#placeholder-feedbackjson) |
 | `Context-SourceEdit-MembershipRefresh.md` | Coverage omission for changed membership or non-source input. | `None` |
+| `Context-SourceEdit-AnalyzerSkipped.md` | No selected owned document analyzer scope. | `None` |
+| `Context-SourceEdit-AnalyzerUnavailable.md` | Unavailable automatic admission after unidentified failure. | `None` |
+| `Context-SourceEdit-AnalyzerCancelled.md` | Cancelled candidate analyzer coverage. | `None` |
+| `Context-SourceEdit-AnalyzerTimedOut.md` | Expired analyzer allowance and transient quarantine. | `None` |
+| `Context-SourceEdit-AnalyzerFailed.md` | Failed analyzer coverage and transient quarantine. | `None` |
+| `Context-SourceEdit-AnalyzerGraphReplacement.md` | Unknown analyzer origins and comparisons after graph replacement. | `None` |
+| `Context-SourceEdit-AnalyzerMissingIds.md` | Unavailable selected analyzer IDs. | [`DiagnosticIds`](#placeholder-diagnosticids) |
+| `Context-SourceEdit-AnalyzerDisabledIdentity.md` | Transiently disabled analyzer identity. | [`AnalyzerIdentity`](#placeholder-analyzeridentity) |
+| `Context-SourceEdit-AnalyzerUnqualifiedIdentity.md` | Unqualified analyzer implementation and version. | [`AnalyzerIdentity`](#placeholder-analyzeridentity) |
+| `Context-SourceEdit-AnalyzerSuppressor.md` | Analyzer scope omitted to preserve applicable suppression. | [`Reason`](#placeholder-reason) |
+| `Context-SourceEdit-AnalyzerDocumentScope.md` | Whole-document analyzer coverage limitations. | `None` |
+| `Context-SourceEdit-AnalyzerInstanceScope.md` | Selected analyzer instance execution and clean-result limits. | `None` |
 | `Context-SourceEdit-NewSourceParseOptions.md` | Default parsing and pending evaluated membership for new source. | `None` |
 | `Context-SourceEdit-OmittedProjectCoverage.md` | Explicit bounded omission of prior edited projects. | [`ProjectCount`](#placeholder-projectcount) |
 
@@ -847,6 +859,8 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-projectcount"></a>`ProjectCount` | Number of prior edited projects omitted from bounded source-edit coverage. |
 | <a id="placeholder-proof"></a>`Proof` | Compiler-derived proof or explanation for a call-flow edge. |
 | <a id="placeholder-reason"></a>`Reason` | Bounded explanation for the surrounding outcome, omission, or correction. |
+| <a id="placeholder-analyzeridentity"></a>`AnalyzerIdentity` | Host-selected analyzer implementation type, with version when explaining qualification; treated as data. |
+| <a id="placeholder-diagnosticids"></a>`DiagnosticIds` | Host-selected comma-separated unavailable or unqualified analyzer diagnostic IDs. |
 | <a id="placeholder-recentturns"></a>`RecentTurns` | Bounded recent conversation turns retained verbatim in the request. |
 | <a id="placeholder-rejectedquery"></a>`RejectedQuery` | Bounded query text that the host rejected. |
 | <a id="placeholder-relationship"></a>`Relationship` | Relationship between an artifact/symbol and its origin. |
@@ -924,7 +938,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 
 | <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned initial-survey-required phase, or final-review total/required-open/optional/blocked counts, preserved initial areas, pending reconciliation keys, invalid memory links and first-review indicator. Detailed investigation notes and paged pending proposal text remain available through the memories tool. |
 | <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
-| <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
+| <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with generation, independent compiler/analyzer status and coverage, diagnostic producer identities and omissions; pending, obsolete or unmeasured counts and unavailable comparisons are omitted. |
 
 Repository-intelligence coverage admission: `Context-RepositoryIntelligenceCollection.md` and `Context-RepositoryIntelligenceHistory.md` direct atomic initial survey submission through `memories initializeCoverage(survey)` before history advances. `Context-RepositoryIntelligenceCoverage.md` uses its existing `CoverageJson` token for either initial-survey recovery or final review, including preserved initial areas, pending reconciliation keys, and invalid memory links. `Tool-memories-Description.md` explains cumulative collection confirmations, unchanged-proposal metadata, pending-proposal inspection with `coverage(proposalKey[,proposalOffset])`, explicit `noMemoryReason`/`resolvedProposalKeys`, and evidence-backed `outOfScope` dispositions. These assets provide wording; code owns atomic admission, identity preservation, revision checks, bounded paging, and publication gates. No token names or asset filenames changed.
 

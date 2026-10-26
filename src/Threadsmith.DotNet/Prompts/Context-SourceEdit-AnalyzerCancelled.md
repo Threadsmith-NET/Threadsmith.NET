@@ -1,0 +1,1 @@
+Optional analyzer work was cancelled with its edit candidate; no clean result is available.

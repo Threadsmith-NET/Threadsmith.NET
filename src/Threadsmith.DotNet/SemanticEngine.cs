@@ -56,7 +56,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null,
-        SemanticStartupProgress? startupProgress = null)
+        SemanticStartupProgress? startupProgress = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
@@ -70,6 +71,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         _resourceLimits.Validate();
         _preparationLimits = new(_resourceLimits);
         _editOptions = _resourceLimits.EditAnalysis.Capture();
+        _advisorySlots = new(_editOptions.Analyzers.MaximumConcurrentOperations, _editOptions.Analyzers.MaximumConcurrentOperations);
+        _analyzerTimeProvider = timeProvider ?? TimeProvider.System;
         _diagnosticReporting = new(_editOptions);
         _prompts = prompts;
         _events = events;

@@ -9,10 +9,10 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
 internal static class InteractionPresentationFormatter
 {
+    private const string BlockOuterIndent = " ";
     private const int MaximumToolDetailLength = 240;
     private const int MaximumToolInspectionCharacters = 96 * 1024;
     private const int DiffContextLines = 2;
-    private const string BlockOuterIndent = " ";
 
     private enum TuiBlockLineKind
     {
@@ -204,7 +204,7 @@ internal static class InteractionPresentationFormatter
             lines.Add(new(TuiBlockLineKind.Item, "Evidence: candidate analysis reused; no additional compiler pass", PresentationTextRole.Muted));
         }
 
-        lines.AddRange(GetEditAnalysisLines(analysis, SemanticCheckPhase.PostMutation, SemanticCheckOutcome.Completed, limits));
+        lines.AddRange(GetEditAnalysisLines(analysis, SemanticCheckPhase.PostMutation, true, limits));
         var role = GetFinalizedEditFeedbackRole(analysis);
         return FormatBlock(new TuiBlockPresentation(
             new TuiBlockHeader("SEMANTIC CHECKS", "finalized edit feedback", state, null, role, role),
@@ -249,6 +249,7 @@ internal static class InteractionPresentationFormatter
         }
 
         if (analysis.Obsolete || analysis.Pending || analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
+            || analysis.Analyzers.Status is not ("disabled" or "completed" or "skipped")
             || analysis.CurrentWarnings is null or > 0 || analysis.DiagnosticsTruncated
             || analysis.Diagnostics.Any(item => item.Severity == DiagnosticSeverity.Warning))
         {
@@ -1418,10 +1419,10 @@ internal static class InteractionPresentationFormatter
             return [new(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)];
         }
 
-        return GetEditAnalysisLines(analysis, completed.Phase, completed.Outcome, limits);
+        return GetEditAnalysisLines(analysis, completed.Phase, completed.CheckName == "advisory edit analyzers" || completed.Outcome == SemanticCheckOutcome.Completed, limits);
     }
 
-    private static IReadOnlyList<TuiBlockLine> GetEditAnalysisLines(SourceEditAnalysis analysis, SemanticCheckPhase phase, SemanticCheckOutcome outcome, TuiResourceLimits limits)
+    private static IReadOnlyList<TuiBlockLine> GetEditAnalysisLines(SourceEditAnalysis analysis, SemanticCheckPhase phase, bool compilerCountsAvailable, TuiResourceLimits limits)
     {
         var lines = new List<TuiBlockLine>();
         var syntax = analysis.Obsolete ? "Syntax: results obsolete"
@@ -1438,7 +1439,7 @@ internal static class InteractionPresentationFormatter
             : $"Compiler: {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} affected project instances analyzed"
                 + (analysis.ProjectsAnalyzed < analysis.ProjectsInScope ? "; coverage incomplete" : string.Empty);
         lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
-        if (!analysis.Obsolete && !analysis.Pending && analysis.ProjectsAnalyzed > 0 && outcome == SemanticCheckOutcome.Completed)
+        if (!analysis.Obsolete && !analysis.Pending && analysis.ProjectsAnalyzed > 0 && compilerCountsAvailable)
         {
             var errors = $"Reportable errors in analyzed coverage: {analysis.CurrentErrors} current";
             errors += analysis.ErrorComparisonAvailable
@@ -1456,6 +1457,25 @@ internal static class InteractionPresentationFormatter
             lines.Add(new(TuiBlockLineKind.Item, $"Selected reportable warnings: {warnings}", PresentationTextRole.Muted));
         }
 
+        if (analysis.Analyzers.Status != "disabled")
+        {
+            var analyzers = analysis.Analyzers;
+            var status = analysis.Obsolete ? "obsolete" : analyzers.Status;
+            lines.Add(new(TuiBlockLineKind.Item, $"Analyzers: {status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} owned document instances checked", PresentationTextRole.Muted));
+            if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
+            {
+                var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}";
+                counts += analyzers.NewFindings is { } introduced && analyzers.ResolvedFindings is { } resolved
+                    ? $"; {introduced} new; {resolved} resolved" : "; before/after comparison unavailable";
+                lines.Add(new(TuiBlockLineKind.Item, counts, PresentationTextRole.Muted));
+            }
+
+            if (analyzers.OutputFiltered)
+            {
+                lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered analyzer output", PresentationTextRole.Muted));
+            }
+        }
+
         if (analysis.OutputFiltered)
         {
             lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered advisory output", PresentationTextRole.Muted));
@@ -1465,7 +1485,8 @@ internal static class InteractionPresentationFormatter
         {
             foreach (var diagnostic in analysis.Diagnostics.Take(limits.MaximumEditAnalysisFindings))
             {
-                lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, null, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, diagnostic.Message));
+                var message = diagnostic.Producer == "analyzer" ? "[analyzer: " + diagnostic.AnalyzerIdentity + "] " + diagnostic.Message : diagnostic.Message;
+                lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, null, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, message));
             }
 
             if (analysis.Diagnostics.Count > limits.MaximumEditAnalysisFindings || analysis.DiagnosticsTruncated)
@@ -1474,15 +1495,19 @@ internal static class InteractionPresentationFormatter
             }
         }
 
-        lines.Add(new(TuiBlockLineKind.Item, "Scope: reportable compiler errors and selected warnings; analyzer execution, build and tests are separate", PresentationTextRole.Muted));
-        foreach (var omission in analysis.Omissions.Take(limits.MaximumEditAnalysisOmissions))
+        var scope = analysis.Analyzers.Status == "disabled"
+            ? "Scope: reportable compiler errors and selected warnings; analyzer execution, build and tests are separate"
+            : "Scope: compiler errors, selected warnings and separately scoped optional analyzers; build and tests remain separate";
+        lines.Add(new(TuiBlockLineKind.Item, scope, PresentationTextRole.Muted));
+        var omissions = analysis.Omissions.Concat(analysis.Analyzers.Omissions).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var omission in omissions.Take(limits.MaximumEditAnalysisOmissions))
         {
             lines.Add(new(TuiBlockLineKind.Item, "Limit: " + TruncateForDisplay(omission), PresentationTextRole.Muted));
         }
 
-        if (analysis.Omissions.Count > limits.MaximumEditAnalysisOmissions)
+        if (omissions.Length > limits.MaximumEditAnalysisOmissions)
         {
-            lines.Add(new(TuiBlockLineKind.Item, $"Limits: {analysis.Omissions.Count - limits.MaximumEditAnalysisOmissions} additional omissions", PresentationTextRole.Muted));
+            lines.Add(new(TuiBlockLineKind.Item, $"Limits: {omissions.Length - limits.MaximumEditAnalysisOmissions} additional omissions", PresentationTextRole.Muted));
         }
 
         return lines;

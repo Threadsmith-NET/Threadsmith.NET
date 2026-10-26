@@ -12,6 +12,17 @@ using Xunit;
 /// <summary>Verifies configured bounds across admission and execution layers.</summary>
 public sealed class ConfigurableResourceLimitsTests
 {
+    /// <summary>Optional admission leaves interactive capacity and rejects invalid configured bounds.</summary>
+    [Fact]
+    public void AnalyzerAdmissionReservesAWorkerAndValidatesAllowances()
+    {
+        new SemanticResourceLimits { CompilationWorkers = 2, EditAnalysis = new() { Analyzers = new() { Enabled = true } } }.Validate();
+        Assert.Throws<ArgumentOutOfRangeException>(() => new EditAnalyzerOptions { ColdStartBudgetMilliseconds = 0 }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new EditAnalyzerOptions { MaximumConcurrentOperations = 0 }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SemanticResourceLimits { CompilationWorkers = 1, InitialPreparationFrontier = 1, EditAnalysis = new() { Analyzers = new() { Enabled = true } } }.Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() => new SemanticResourceLimits { CompilationWorkers = 2, EditAnalysis = new() { Analyzers = new() { MaximumConcurrentOperations = 3 } } }.Validate());
+    }
+
     /// <summary>Process timeout ceilings fit the runtime timer without changing the default.</summary>
     [Fact]
     public void ProcessTimeoutRejectsUnrepresentableTimerValues()

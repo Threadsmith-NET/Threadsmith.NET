@@ -54,7 +54,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
     private readonly Dictionary<ProjectId, Entry> _entries;
     private readonly Queue<ProjectId> _demand = new();
     private readonly Queue<ProjectId> _warm = new();
-    private readonly Queue<CompilerOperation> _operations = new();
+    private readonly LinkedList<CompilerOperation> _operations = new();
     private readonly Func<ProjectId, CancellationToken, Task<SemanticPreparationOutcome>> _prepare;
     private readonly Func<SemanticCompilationCoordinator, SemanticPreparationOutcome, CancellationToken, Task> _publish;
     private readonly Task[] _workers;
@@ -109,6 +109,9 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
     /// <summary>Gets the exact immutable solution prepared by this generation.</summary>
     internal Solution Solution { get; }
 
+    /// <summary>Gets whether this generation has retired its admission queue.</summary>
+    internal bool IsStopped => Volatile.Read(ref _stopped) != 0;
+
     /// <summary>Gets the beginning of this evaluated generation's preparation lifetime.</summary>
     internal long StartedAt { get; } = Stopwatch.GetTimestamp();
 
@@ -137,8 +140,20 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         return RunQueryAsync(operation, default, cancellationToken);
     }
 
+    /// <summary>Classifies optional work in the same queue; callers acquire advisory admission before enqueueing.</summary>
+    internal Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> operation, bool advisory, CancellationToken cancellationToken)
+    {
+        return RunQueryAsync(operation, advisory, default, cancellationToken);
+    }
+
     /// <summary>Bounds queue waiting by the query deadline while preserving partial results from started queries.</summary>
-    internal async Task<T> RunQueryAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken queryDeadline, CancellationToken cancellationToken)
+    internal Task<T> RunQueryAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken queryDeadline, CancellationToken cancellationToken)
+    {
+        return RunQueryAsync(operation, false, queryDeadline, cancellationToken);
+    }
+
+    /// <summary>Runs classified work while preserving the existing query deadline semantics.</summary>
+    internal async Task<T> RunQueryAsync<T>(Func<CancellationToken, Task<T>> operation, bool advisory, CancellationToken queryDeadline, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         queryDeadline.ThrowIfCancellationRequested();
@@ -163,7 +178,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 throw new InvalidOperationException("The semantic foreground compilation queue is full.");
             }
 
-            _operations.Enqueue(new(
+            _operations.AddLast(new CompilerOperation(
                 async token =>
                 {
                     if (Interlocked.CompareExchange(ref admissionState, 1, 0) != 0)
@@ -202,7 +217,8 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                     {
                         completion.TrySetException(new InvalidOperationException("The semantic compilation generation was superseded."));
                     }
-                }));
+                },
+                advisory));
             _available.Release();
             foreach (var running in _entries.Values.Where(entry => entry.State == PreparationState.Running && !entry.Demanded))
             {
@@ -289,9 +305,10 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 entry.Completion.TrySetResult(new(entry.Id, false, Obsolete: true));
             }
 
-            while (_operations.TryDequeue(out var operation))
+            while (_operations.First is { } operation)
             {
-                operation.Cancel(new CancellationToken(canceled: true));
+                _operations.RemoveFirst();
+                operation.Value.Cancel(new CancellationToken(canceled: true));
             }
         }
 
@@ -309,8 +326,14 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 CompilerOperation? operation;
                 lock (_gate)
                 {
-                    _operations.TryDequeue(out operation);
-                    entry = operation is null ? Take(_demand, PreparationState.Demand) ?? Take(_warm, PreparationState.Warm) : null;
+                    operation = TakeOperation(advisory: false);
+                    entry = operation is null ? Take(_demand, PreparationState.Demand) : null;
+                    if (operation is null && entry is null)
+                    {
+                        operation = TakeOperation(advisory: true);
+                        entry = operation is null ? Take(_warm, PreparationState.Warm) : null;
+                    }
+
                     if (entry is not null)
                     {
                         entry.State = PreparationState.Running;
@@ -465,7 +488,21 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         Terminal,
     }
 
-    private sealed record CompilerOperation(Func<CancellationToken, Task> Execute, Action<CancellationToken> Cancel);
+    private CompilerOperation? TakeOperation(bool advisory)
+    {
+        for (var node = _operations.First; node is not null; node = node.Next)
+        {
+            if (node.Value.Advisory == advisory)
+            {
+                _operations.Remove(node);
+                return node.Value;
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record CompilerOperation(Func<CancellationToken, Task> Execute, Action<CancellationToken> Cancel, bool Advisory);
 
     private sealed class Entry
     {

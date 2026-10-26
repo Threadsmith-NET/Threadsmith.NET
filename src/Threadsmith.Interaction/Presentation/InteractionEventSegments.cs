@@ -101,7 +101,7 @@ internal static class InteractionEventSegments
                 analysis = completed.Analysis;
                 id = $"semantic:{completed.SessionId.Value}:{completed.RunId.Value}:{completed.SemanticCheckId.Value}";
                 role = InteractionPresentationFormatter.GetSemanticFeedbackRole(analysis, completed.Outcome);
-                countsAvailable = completed.Outcome == SemanticCheckOutcome.Completed;
+                countsAvailable = completed.CheckName == "advisory edit analyzers" || completed.Outcome == SemanticCheckOutcome.Completed;
                 break;
             case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } finalized } diagnostic:
                 analysis = finalized;
@@ -124,12 +124,21 @@ internal static class InteractionEventSegments
             : analysis.Pending ? $"pending; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects"
             : analysis.ProjectsAnalyzed == 0 ? "coverage unavailable"
             : $"{(countsAvailable ? $"{analysis.CurrentErrors} errors in coverage" : "error totals unknown")}; {(analysis.CurrentWarnings is { } warnings ? $"{warnings} warnings" : "warnings unknown")}; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects";
+        if (analysis is { Obsolete: false, Analyzers.Status: not "disabled" })
+        {
+            summary += $"; analyzers {analysis.Analyzers.Status}; {analysis.Analyzers.DocumentsAnalyzed}/{analysis.Analyzers.DocumentsInScope} documents";
+            if (analysis.Analyzers.Status is "completed" or "partial")
+            {
+                summary += $"; {analysis.Analyzers.ReportableFindings} analyzer findings";
+            }
+        }
+
         if (analysis is { DiagnosticsTruncated: true })
         {
             summary += "; limited findings";
         }
 
-        if (analysis is { OutputFiltered: true })
+        if (analysis is { OutputFiltered: true } or { Analyzers.OutputFiltered: true })
         {
             summary += "; exclusions apply";
         }

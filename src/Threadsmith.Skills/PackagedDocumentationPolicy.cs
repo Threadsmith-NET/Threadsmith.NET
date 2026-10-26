@@ -1,5 +1,7 @@
 namespace Threadsmith.Skills;
 
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Threadsmith.Core;
@@ -30,10 +32,39 @@ public static class PackagedDocumentationPolicy
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(applicationBaseDirectory);
         var root = Path.GetFullPath(Path.Combine(applicationBaseDirectory, BundleDirectoryName));
+        var policy = context.SecurityPolicy;
+        if (policy is not null)
+        {
+            context.PolicyBinding?.Validate(policy);
+        }
+
+        string[] readTools = ["search", "read_file"];
+        var allowedTools = readTools.Where(toolId => context.AllowedToolIds.Count == 0
+            || context.AllowedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
         return context with
         {
             WorkspaceId = null,
             RepositoryPath = root,
+
+            // Preserve the live repository generation fence while deriving bundle-only read authority.
+            SecurityPolicy = policy is null ? null : policy with
+            {
+                ParentFingerprint = policy.Fingerprint,
+                Fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    policy.Fingerprint + ":" + SkillId + ":" + root))),
+                RepositoryPath = root,
+                AllowedTools = [.. allowedTools.Where(policy.AllowsTool)],
+                AllowedExecutables = [],
+                AllowedNetworkHosts = [],
+                NetworkHostRestriction = [],
+                WriteFolders = [],
+                EditableRoots = [],
+                MutationRoots = [],
+            },
+            AllowedToolIds = allowedTools,
+            DenyAllTools = context.DenyAllTools || allowedTools.Length == 0,
+            AllowDirectWrites = false,
+            Scratchpad = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured),
             ApprovedRoots = ["."],
             ProhibitedPaths =
             [

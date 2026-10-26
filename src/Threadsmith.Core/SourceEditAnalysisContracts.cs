@@ -1,6 +1,6 @@
 namespace Threadsmith.Core;
 
-/// <summary>One bounded compiler finding with its known origin across successive edits.</summary>
+/// <summary>One bounded compiler or analyzer finding with its known origin across successive edits.</summary>
 public sealed record SourceEditDiagnostic(
     string Code,
     string Message,
@@ -10,13 +10,53 @@ public sealed record SourceEditDiagnostic(
     string TargetFramework,
     string Origin)
 {
-    /// <summary>Effective compiler severity; older serialized findings remain errors.</summary>
+    /// <summary>Effective diagnostic severity; older serialized findings remain errors.</summary>
     public DiagnosticSeverity Severity { get; init; } = DiagnosticSeverity.Error;
+
+    /// <summary>Evidence producer; older findings remain compiler evidence.</summary>
+    public string Producer { get; init; } = "compiler";
+
+    /// <summary>Assembly, version and implementation identity for analyzer evidence.</summary>
+    public string? AnalyzerIdentity { get; init; }
+}
+
+/// <summary>Independent optional analyzer coverage; it never contributes to compiler totals or pending state.</summary>
+public sealed record SourceEditAnalyzerAnalysis
+{
+    /// <summary>Disabled, pending, completed, partial, unavailable, skipped, cancelled, timed-out or failed.</summary>
+    public string Status { get; init; } = "disabled";
+
+    /// <summary>Owned changed document instances selected for scoped checks.</summary>
+    public int DocumentsInScope { get; init; }
+
+    /// <summary>Document instances for which the selected analyzer comparison completed.</summary>
+    public int DocumentsAnalyzed { get; init; }
+
+    /// <summary>Reportable, unsuppressed selected findings after shared exclusions.</summary>
+    public int ReportableFindings { get; init; }
+
+    /// <summary>Introduced findings, or null when matching complete comparison is unavailable.</summary>
+    public int? NewFindings { get; init; }
+
+    /// <summary>Resolved findings, or null when matching complete comparison is unavailable.</summary>
+    public int? ResolvedFindings { get; init; }
+
+    /// <summary>Whether shared diagnostic exclusions filtered output.</summary>
+    public bool OutputFiltered { get; init; }
+
+    /// <summary>Whether retention or projection omitted reportable analyzer findings.</summary>
+    public bool Truncated { get; init; }
+
+    /// <summary>Bounded scope, qualification, failure and cancellation limitations.</summary>
+    public IReadOnlyList<string> Omissions { get; init; } = [];
 }
 
 /// <summary>Versioned advisory coverage, independent of write authorization and authoritative build/test results.</summary>
 public sealed record SourceEditAnalysis
 {
+    /// <summary>Separate optional analyzer coverage with backward-compatible disabled defaults.</summary>
+    public SourceEditAnalyzerAnalysis Analyzers { get; init; } = new();
+
     /// <summary>Exact edit whose bytes were analyzed.</summary>
     public required Guid EffectId { get; init; }
 
@@ -62,11 +102,12 @@ public sealed record SourceEditAnalysis
     /// <summary>Previously observed errors absent from matching completed coverage.</summary>
     public int ResolvedErrors { get; init; }
 
-    /// <summary>Bounded actionable compiler findings.</summary>
+    /// <summary>Bounded actionable findings distinguished by producer identity.</summary>
     public IReadOnlyList<SourceEditDiagnostic> Diagnostics { get; init; } = [];
 
     /// <summary>Whether bounded retention or compact projection omits reportable findings.</summary>
-    public bool DiagnosticsTruncated => FindingRetentionTruncated || FindingProjectionTruncated || CurrentErrors + (CurrentWarnings ?? 0) > Diagnostics.Count;
+    public bool DiagnosticsTruncated => FindingRetentionTruncated || FindingProjectionTruncated || Analyzers.Truncated
+        || CurrentErrors + (CurrentWarnings ?? 0) + Analyzers.ReportableFindings > Diagnostics.Count;
 
     /// <summary>Selected warning total in completed coverage, or null when not measured.</summary>
     public int? CurrentWarnings { get; init; }

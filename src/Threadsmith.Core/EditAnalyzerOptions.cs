@@ -1,16 +1,22 @@
 namespace Threadsmith.Core;
 
-/// <summary>Startup-captured controls for selected analyzer experiments; automatic execution is not wired yet.</summary>
+/// <summary>Startup-captured controls for qualified optional edit analyzers.</summary>
 public sealed record EditAnalyzerOptions
 {
-    /// <summary>Reserved automatic-feedback switch. This release performs measurement only.</summary>
+    /// <summary>Enables qualified analyzer feedback without extending the edit's immediate observation window.</summary>
     public bool Enabled { get; init; }
 
     /// <summary>Exact rule IDs used to select entire analyzer instances; empty selects none.</summary>
     public string[] DiagnosticIds { get; init; } = ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"];
 
-    /// <summary>End-to-end observation budget, including queue wait, in milliseconds.</summary>
+    /// <summary>Observation budget after advisory admission, including worker queue wait, in milliseconds.</summary>
     public int BudgetMilliseconds { get; init; } = 1000;
+
+    /// <summary>First-use allowance per analyzer identity; the effective allowance is at least the warm budget.</summary>
+    public int ColdStartBudgetMilliseconds { get; init; } = 10000;
+
+    /// <summary>Maximum physically running advisory operations, including abandoned work.</summary>
+    public int MaximumConcurrentOperations { get; init; } = 1;
 
     /// <summary>Allows Roslyn internal concurrency during explicit experiments; outer workers normally own admission.</summary>
     public bool ConcurrentAnalysis { get; init; }
@@ -25,6 +31,8 @@ public sealed record EditAnalyzerOptions
         }
 
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(BudgetMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ColdStartBudgetMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumConcurrentOperations);
     }
 
     /// <summary>Captures independent normalized ID storage.</summary>

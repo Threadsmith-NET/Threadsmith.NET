@@ -17,6 +17,61 @@ using Xunit;
 /// <summary>Parent-loop continuations through the public native registration and actual SDK HTTP serialization.</summary>
 public static class AnthropicConversationLoopTests
 {
+    /// <summary>Steering that cancels a native pending batch retains its prose through replay without adding a second copy.</summary>
+    [Fact]
+    public static async Task SteeringBeforeTools_RetainsCommentaryOnce()
+    {
+        const string commentary = "Starting the inspection.";
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var harness = new NativeLoopHarness(
+            ToolStream([("wire_cancelled", "deterministic_output", "{\"sequence\":1}")], commentary),
+            TextStream("Steering accepted."));
+        var paused = new TaskCompletionSource<RunSteeringPauseRequestResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.OnEvent = domainEvent =>
+        {
+            if (domainEvent is ModelOutputObserved output && harness.Model.Requests.Count == 1)
+            {
+                paused.TrySetResult(harness.Steering.RequestPause(output.SessionId, harness.Model.Requests[0].RunId));
+            }
+        };
+        var running = harness.RunToCompletionAsync();
+        var pause = await paused.Task.WaitAsync(cancellationToken);
+        var ready = await harness.Steering.WaitForPauseAsync(harness.SessionId, harness.RunId, pause.PauseId, cancellationToken);
+        Assert.Equal(RunSteeringPauseWaitStatus.Ready, ready.Status);
+        Assert.Equal(RunSteeringSubmissionStatus.Accepted, harness.Steering.Submit(harness.SessionId, harness.RunId, pause.PauseId, "Inspect the parser instead.").Status);
+        await running;
+
+        Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
+        var messages = harness.Model.Requests[1].Messages;
+        Assert.Single(messages, message => message.GetModelVisibleContent() == commentary);
+        Assert.Single(messages, message => message.SectionId == "run-user-steering");
+        Assert.Contains(messages, message => message.IsError == true && message.GetModelVisibleContent().Contains("cancelledByUserSteering", StringComparison.Ordinal));
+        AssertSignedReplay(harness.Handler.Requests[1]);
+    }
+
+    /// <summary>Canonical commentary participates in native history binding but is emitted only once on the wire.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ToolCommentary_IsRetainedAndReplayedExactlyOnce(bool rejectedCall)
+    {
+        const string commentary = "I have acknowledged the guidance and will inspect the parser.";
+        await using var harness = new NativeLoopHarness(
+            ToolStream([("wire_commentary", "deterministic_output", rejectedCall ? "{}" : "{\"sequence\":1}")], commentary),
+            TextStream("Done."));
+
+        await harness.RunToCompletionAsync();
+
+        var retained = Assert.Single(harness.Model.Requests[1].Messages, message => message.GetModelVisibleContent() == commentary);
+        Assert.Equal(ModelMessageRole.Assistant, retained.Role);
+        Assert.Equal(0, retained.ModelRound);
+        Assert.True(harness.Model.HadReplay[1]);
+        var assistant = Assert.Single(harness.Handler.Requests[1].GetProperty("messages").EnumerateArray(), message => message.GetProperty("role").GetString() == "assistant");
+        var text = Assert.Single(assistant.GetProperty("content").EnumerateArray(), block => block.GetProperty("type").GetString() == "text");
+        Assert.Equal(commentary, text.GetProperty("text").GetString());
+        AssertSignedReplay(harness.Handler.Requests[1]);
+    }
+
     /// <summary>Final preparation, submission, header accounting and inspection agree after multiple real tool rounds.</summary>
     [Fact]
     public static async Task ContextMapTracksFinalNativeContinuationAndKeepsPrivateReplaySizeOnly()
@@ -232,7 +287,7 @@ public static class AnthropicConversationLoopTests
         + End("end_turn");
     }
 
-    private static string ToolStream((string Id, string Name, string Arguments)[] calls)
+    private static string ToolStream((string Id, string Name, string Arguments)[] calls, string? commentary = null)
     {
         var stream = new StringBuilder(Start());
         stream.Append(Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = string.Empty, signature = string.Empty } }));
@@ -240,6 +295,14 @@ public static class AnthropicConversationLoopTests
         stream.Append(Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "signature_delta", signature = "signed-native-loop" } }));
         stream.Append(Event("content_block_stop", new { type = "content_block_stop", index = 0 }));
         var index = 1;
+        if (commentary is not null)
+        {
+            stream.Append(Event("content_block_start", new { type = "content_block_start", index, content_block = new { type = "text", text = string.Empty } }));
+            stream.Append(Event("content_block_delta", new { type = "content_block_delta", index, delta = new { type = "text_delta", text = commentary } }));
+            stream.Append(Event("content_block_stop", new { type = "content_block_stop", index }));
+            index++;
+        }
+
         foreach (var call in calls)
         {
             stream.Append(Event("content_block_start", new { type = "content_block_start", index, content_block = new { type = "tool_use", id = call.Id, name = call.Name, input = new { } } }));

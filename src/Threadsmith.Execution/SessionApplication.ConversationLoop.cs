@@ -154,16 +154,13 @@ public sealed partial class SessionApplication
                 if (!outcome.ToolInvoked
                     && !string.IsNullOrWhiteSpace(outcome.TextOutput))
                 {
-                    loopState.CommitStandaloneMessage(
-                        modelRound,
-                        CreateVisibleAssistantMessage(outcome.TextOutput),
-                        purgeAfterCorrection: false);
-                    await ArchiveVisibleMessageAsync(
-                        registration.SessionId,
-                        runId,
-                        ConversationRole.Assistant,
-                        outcome.TextOutput,
-                        cancellationToken);
+                    if (!outcome.TextRetainedInToolGroup)
+                    {
+                        loopState.CommitStandaloneMessage(
+                            modelRound,
+                            CreateVisibleAssistantMessage(outcome.TextOutput),
+                            purgeAfterCorrection: false);
+                    }
                 }
 
                 await CommitRunSteeringAsync(
@@ -190,7 +187,6 @@ public sealed partial class SessionApplication
                     if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
                     {
                         loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
-                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
                     }
 
                     loopState.CommitStandaloneMessage(
@@ -216,7 +212,6 @@ public sealed partial class SessionApplication
                     if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
                     {
                         loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
-                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
                     }
 
                     var checkpointContext = string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content);
@@ -248,12 +243,6 @@ public sealed partial class SessionApplication
                                 modelRound,
                                 CreateVisibleAssistantMessage(outcome.TextOutput),
                                 purgeAfterCorrection: false);
-                            await ArchiveVisibleMessageAsync(
-                                registration.SessionId,
-                                runId,
-                                ConversationRole.Assistant,
-                                outcome.TextOutput,
-                                cancellationToken);
                         }
 
                         continue;
@@ -262,12 +251,6 @@ public sealed partial class SessionApplication
 
                 if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
                 {
-                    await ArchiveVisibleMessageAsync(
-                        registration.SessionId,
-                        runId,
-                        ConversationRole.Assistant,
-                        outcome.TextOutput,
-                        cancellationToken);
                 }
 
                 return;
@@ -758,12 +741,13 @@ public sealed partial class SessionApplication
         CorrectiveTurnState correctiveTurns,
         CancellationToken cancellationToken)
     {
-        loopState.BeginCurrentGroup();
+        loopState.BeginCurrentGroup(round.ModelRequest.ToolContinuationRound);
         var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
         ModelRequestHookBoundary? modelHookBoundary = null;
         var originalToolSnapshot = round.InvocationContext?.ModelVisibleToolSnapshotId;
         BudgetStatus? modelWallClockBudget = null;
         IReadOnlyList<RunSteeringMessage> preToolSteering = [];
+        var textRetainedInToolGroup = false;
 
         try
         {
@@ -815,19 +799,48 @@ public sealed partial class SessionApplication
                 {
                     loopState.TransientState.ValidateHistory(round.ModelRequest);
                     streamState.BudgetUsage.Start(round.Registration.Budget, round.ModelRequest);
-                    await using var output = new ModelOutputCoalescer(
-                        _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken);
-                    await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
+                    var streamCompleted = false;
+                    try
                     {
-                        await ProcessModelChunkAsync(
-                            chunk,
-                            round,
-                            loopState,
-                            streamState,
-                            maximumModelRounds,
-                            correctiveTurns,
-                            output,
-                            output.Token);
+                        await using (var output = new ModelOutputCoalescer(
+                            _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken))
+                        {
+                            await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
+                            {
+                                await ProcessModelChunkAsync(
+                                    chunk,
+                                    round,
+                                    loopState,
+                                    streamState,
+                                    maximumModelRounds,
+                                    correctiveTurns,
+                                    output,
+                                    output.Token);
+                            }
+                        }
+
+                        streamCompleted = true;
+                    }
+                    finally
+                    {
+                        var visibleText = _conversationStore is null ? null : streamState.TextOutput.ToString();
+                        if (!string.IsNullOrWhiteSpace(visibleText))
+                        {
+                            try
+                            {
+                                // Accepted visible output survives cancellation and provider failure; it is not a success receipt.
+                                await ArchiveVisibleMessageAsync(
+                                    round.Registration.SessionId,
+                                    round.RunId,
+                                    ConversationRole.Assistant,
+                                    visibleText,
+                                    CancellationToken.None);
+                            }
+                            catch (Exception exception) when (!streamCompleted)
+                            {
+                                _logger.LogWarning(exception, "Could not archive interrupted assistant output for run {RunId}", round.RunId.Value);
+                            }
+                        }
                     }
                 }
                 catch (MalformedInvocationException exception)
@@ -945,7 +958,7 @@ public sealed partial class SessionApplication
             }
 
             loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
-            loopState.CommitCurrentGroup(
+            textRetainedInToolGroup = loopState.CommitCurrentGroup(
                 round.ModelRound,
                 streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses);
             if (!streamState.CorrectiveTurnRequested && streamState.GeneratedImages.Count > 0)
@@ -1026,7 +1039,8 @@ public sealed partial class SessionApplication
         return new ConversationRoundOutcome(
             streamState.TextOutput.ToString(),
             streamState.ToolInvoked,
-            preToolSteering);
+            preToolSteering,
+            textRetainedInToolGroup);
     }
 
     private async Task ProcessModelChunkAsync(
@@ -1100,6 +1114,7 @@ public sealed partial class SessionApplication
         {
             loopState.AddRetainedOutputCharacters(chunk.Text.Length);
             streamState.TextOutput.Append(chunk.Text);
+            loopState.AddCurrentAssistantText(chunk.Text);
             await output.AppendAsync(_sanitizer.Sanitize(chunk.Text), cancellationToken);
         }
 
@@ -2941,7 +2956,8 @@ public sealed partial class SessionApplication
     private sealed record ConversationRoundOutcome(
         string TextOutput,
         bool ToolInvoked,
-        IReadOnlyList<RunSteeringMessage> PreToolSteering);
+        IReadOnlyList<RunSteeringMessage> PreToolSteering,
+        bool TextRetainedInToolGroup);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,
@@ -3170,6 +3186,8 @@ public sealed partial class SessionApplication
     {
         private readonly int _maximumRetainedToolCalls;
         private readonly List<ModelMessage> _currentCalls = [];
+        private readonly List<ModelMessage> _currentAssistantMessages = [];
+        private readonly StringBuilder _currentAssistantText = new();
         private readonly Dictionary<string, ModelMessage> _currentResults =
             new(StringComparer.Ordinal);
 
@@ -3180,6 +3198,7 @@ public sealed partial class SessionApplication
         private readonly List<string> _pendingFilesRead = [];
         private readonly HashSet<long> _purgeableGroupSequences = [];
         private readonly List<PendingActiveTurnSource> _pendingSources = [];
+        private int _currentModelRound;
         private ActiveTurnSourceProjection? _sourceProjection;
         private string? _sourceProjectionAttemptIdentity;
         private int _retainedOutputCharacters;
@@ -3454,7 +3473,14 @@ public sealed partial class SessionApplication
                     "An active-turn group contains an invalid or duplicate assistant tool call.");
             }
 
+            FlushCurrentAssistantText();
             _currentCalls.Add(message);
+            _currentAssistantMessages.Add(message);
+        }
+
+        public void AddCurrentAssistantText(string text)
+        {
+            _currentAssistantText.Append(text);
         }
 
         public void AddCurrentToolResult(ModelMessage message)
@@ -3503,14 +3529,18 @@ public sealed partial class SessionApplication
         public void AbortCurrentGroup()
         {
             _currentCalls.Clear();
+            _currentAssistantMessages.Clear();
+            _currentAssistantText.Clear();
             _currentResults.Clear();
             _pendingSources.Clear();
             _pendingFilesRead.Clear();
         }
 
-        public void BeginCurrentGroup()
+        public void BeginCurrentGroup(int modelRound)
         {
             if (_currentCalls.Count > 0
+                || _currentAssistantMessages.Count > 0
+                || _currentAssistantText.Length > 0
                 || _currentResults.Count > 0
                 || _pendingSources.Count > 0
                 || _pendingFilesRead.Count > 0)
@@ -3518,9 +3548,11 @@ public sealed partial class SessionApplication
                 throw new InvalidOperationException(
                     "The prior active-turn tool group was not completed atomically.");
             }
+
+            _currentModelRound = modelRound;
         }
 
-        public void CommitCurrentGroup(int modelRound, bool purgeAfterCorrection = false)
+        public bool CommitCurrentGroup(int modelRound, bool purgeAfterCorrection = false)
         {
             if (_currentCalls.Count == 0)
             {
@@ -3532,7 +3564,10 @@ public sealed partial class SessionApplication
                         "The active-turn group contains result state without assistant tool calls.");
                 }
 
-                return;
+                // Text-only responses use the existing final-response or standalone continuation path.
+                _currentAssistantMessages.Clear();
+                _currentAssistantText.Clear();
+                return false;
             }
 
             if (_currentCalls.Count != _currentResults.Count)
@@ -3599,9 +3634,11 @@ public sealed partial class SessionApplication
                     invocationId,
                     evidenceId);
             }).ToArray();
+            FlushCurrentAssistantText();
             ModelMessage[] messages = purgeAfterCorrection
-                ? [.. _currentCalls.SelectMany((call, index) => new[] { call, results[index] })]
-                : [.. _currentCalls, .. results];
+                ? [.. _currentAssistantMessages.SelectMany(message => message.ToolCallId is { } callId
+                    ? new[] { message, _currentResults[callId] } : new[] { message })]
+                : [.. _currentAssistantMessages, .. results];
             var estimate = ModelWireEstimator.Estimate(
                 messages,
                 [],
@@ -3626,10 +3663,9 @@ public sealed partial class SessionApplication
                 _purgeableGroupSequences.Add(sequence);
             }
 
-            _currentCalls.Clear();
-            _currentResults.Clear();
-            _pendingSources.Clear();
-            _pendingFilesRead.Clear();
+            var retainedText = _currentAssistantMessages.Any(message => message.ToolCallId is null);
+            AbortCurrentGroup();
+            return retainedText;
         }
 
         public void SealCurrentReplayRound(int modelRound)
@@ -3639,7 +3675,8 @@ public sealed partial class SessionApplication
                 throw new ModelProviderException("Private model response did not produce a complete tool group.");
             }
 
-            TransientState.SealRound(modelRound, [.. _currentCalls, .. _currentResults.Values]);
+            FlushCurrentAssistantText();
+            TransientState.SealRound(modelRound, [.. _currentAssistantMessages, .. _currentResults.Values]);
         }
 
         public void Dispose()
@@ -3879,6 +3916,17 @@ public sealed partial class SessionApplication
         {
             ArgumentOutOfRangeException.ThrowIfNegative(rounds);
             BackoffRoundsRemaining = rounds;
+        }
+
+        private void FlushCurrentAssistantText()
+        {
+            if (_currentAssistantText.Length == 0)
+            {
+                return;
+            }
+
+            _currentAssistantMessages.Add(CreateVisibleAssistantMessage(_currentAssistantText.ToString()) with { ModelRound = _currentModelRound });
+            _currentAssistantText.Clear();
         }
 
         private static IEnumerable<EvidenceId> GetEvidenceIds(IEnumerable<ActiveTurnContinuationGroup> groups)

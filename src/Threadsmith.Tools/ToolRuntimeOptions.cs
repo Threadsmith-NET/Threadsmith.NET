@@ -26,7 +26,7 @@ public record ToolRuntimeOverride
     /// <summary>Maximum serialized result bytes.</summary>
     public int? MaximumOutputBytes { get; init; }
 
-    /// <summary>Maximum concurrent invocations admitted for the tool's source.</summary>
+    /// <summary>Maximum concurrent invocations per built-in tool or shared external source.</summary>
     public int? MaximumSourceConcurrency { get; init; }
 
     /// <summary>Rejects invalid overrides before tool registration.</summary>

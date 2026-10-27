@@ -3568,19 +3568,18 @@ public static partial class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var gate = new ParallelToolGate(4);
-            ITool[] tools = [.. Enumerable.Range(1, 5)
-                .Select(index => new BarrierReadTool($"parallel_{index}", gate))];
+            ITool[] tools = [new BarrierReadTool("parallel", gate)];
             var pipeline = CreatePipeline(
                 events,
                 tools,
                 new ToolParallelOptions { MaximumConcurrency = 8 });
             var context = CreateContext(repository);
             ToolBatchRequest[] requests = [.. Enumerable.Range(1, 5)
-                .Select(index => CreateBatchRequest(index, $"call-{index}", $"parallel_{index}", context))];
+                .Select(index => CreateBatchRequest(index, $"call-{index}", "parallel", context))];
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
-            await gate.AllEntered.Task.WaitAsync(timeout.Token);
+            var ct = TestContext.Current.CancellationToken;
+            var execution = pipeline.InvokeBatchAsync(requests, ct);
+            await gate.AllEntered.Task.WaitAsync(ct);
             Assert.Equal(4, gate.PeakActive);
             gate.Release.TrySetResult();
             var results = await execution;
@@ -3603,25 +3602,24 @@ public static partial class ToolRuntimeTests
         {
             await using var events = new DomainEventStream();
             var gate = new ParallelToolGate(4);
-            ITool[] tools = [.. Enumerable.Range(1, 8)
-                .Select(index => new BarrierReadTool($"parallel_{index}", gate))];
+            ITool[] tools = [new BarrierReadTool("parallel", gate)];
             var pipeline = CreatePipeline(
                 events,
                 tools,
                 new ToolParallelOptions { MaximumConcurrency = 8 });
             var context = CreateContext(repository);
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ct = TestContext.Current.CancellationToken;
             var first = pipeline.InvokeBatchAsync(
                 [.. Enumerable.Range(1, 4)
-                    .Select(index => CreateBatchRequest(index, $"first-{index}", $"parallel_{index}", context))],
-                timeout.Token);
+                    .Select(index => CreateBatchRequest(index, $"first-{index}", "parallel", context))],
+                ct);
             var second = pipeline.InvokeBatchAsync(
                 [.. Enumerable.Range(5, 4)
-                    .Select(index => CreateBatchRequest(index, $"second-{index}", $"parallel_{index}", context))],
-                timeout.Token);
+                    .Select(index => CreateBatchRequest(index, $"second-{index}", "parallel", context))],
+                ct);
 
-            await gate.AllEntered.Task.WaitAsync(timeout.Token);
+            await gate.AllEntered.Task.WaitAsync(ct);
             Assert.Equal(4, gate.PeakActive);
             gate.Release.TrySetResult();
             await Task.WhenAll(first, second);

@@ -196,7 +196,7 @@ public sealed record ToolSchedulingDescriptor
     /// <summary>Stable reviewed resolver identity.</summary>
     public string ClaimResolverId { get; init; } = "compatibility-serialized-v1";
 
-    /// <summary>Hard maximum for one source; one is conservative.</summary>
+    /// <summary>Hard maximum per built-in tool or shared external source; one is conservative.</summary>
     public int MaximumSourceConcurrency { get; init; } = 1;
 }
 

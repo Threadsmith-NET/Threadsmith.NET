@@ -1,5 +1,6 @@
 namespace Threadsmith.DotNet;
 
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using Microsoft.CodeAnalysis;
@@ -17,7 +18,7 @@ public sealed partial class SemanticEngine
         "Compiler diagnostics are advisory; unevaluated target frameworks, analyzers, build and tests remain separate.",
     ];
 
-    private readonly Dictionary<ProjectId, EditDiagnosticBasis> _editDiagnosticBases = [];
+    private readonly Dictionary<ProjectId, EditProjectBasis> _editDiagnosticBases = [];
     private readonly HashSet<ProjectId> _editedProjects = [];
     private EditCandidate? _editCandidate;
     private long _editDiagnosticPasses;
@@ -26,6 +27,20 @@ public sealed partial class SemanticEngine
 
     /// <summary>Gets aggregate counters without retaining source or model payloads.</summary>
     internal (long DiagnosticPasses, long CandidatePromotions) EditAnalysisStatistics => (Interlocked.Read(ref _editDiagnosticPasses), Interlocked.Read(ref _editCandidatePromotions));
+
+    /// <summary>Captures the exact current writer candidate for explicitly requested scoped analyzer measurements.</summary>
+    internal Solution CaptureEditCandidateSnapshot(Guid effectId)
+    {
+        lock (_gate)
+        {
+            if (_editCandidate is not { } candidate || candidate.Command.EffectId != effectId || !IsEditCandidateCurrent(candidate))
+            {
+                throw new InvalidOperationException("The edit candidate is no longer current.");
+            }
+
+            return candidate.Solution;
+        }
+    }
 
     /// <summary>Checks exact writer endpoints against the shared compiler input policy.</summary>
     internal bool HasSemanticInputs(string repositoryPath, MutationEffectSnapshot snapshot)
@@ -173,6 +188,7 @@ public sealed partial class SemanticEngine
                 _editOptions.CandidateLifetimeMilliseconds,
                 _engineLifetime.Token)
             {
+                AnalyzerInitialKnown = !_hasAppliedEdits,
                 PreviouslyEdited = [.. _editedProjects],
                 SyntaxOnly = syntaxOnly,
                 AppliedEndpoints = semanticEndpoints.ToDictionary(endpoint => Path.GetFullPath(endpoint.RelativePath, repositoryPath), endpoint => endpoint.AfterSha256, StringComparerForCurrentPlatform()),
@@ -183,6 +199,11 @@ public sealed partial class SemanticEngine
 
         previous?.Cancel();
         candidate.Work = AnalyzeEditCandidateAsync(candidate);
+        if (_editOptions.Analyzers.Enabled)
+        {
+            candidate.AnalyzerWork = AnalyzeAutomaticEditAnalyzersAsync(candidate);
+        }
+
         try
         {
 #pragma warning disable VSTHRD003 // The candidate owns its single continuation; this caller observes only the immediate allowance.
@@ -285,7 +306,7 @@ public sealed partial class SemanticEngine
                 _solution,
                 _solution,
                 [],
-                [],
+                [.. previous.AppliedEndpoints.Keys.SelectMany(path => _solution.GetDocumentIdsWithFilePath(Path.GetFullPath(path, previous.RepositoryPath))).Where(id => _solution.GetDocument(id) is not null).Distinct()],
                 [.. _solution.ProjectIds],
                 false,
                 new SourceEditAnalysis
@@ -311,6 +332,10 @@ public sealed partial class SemanticEngine
         }
 
         replacement.Work = AnalyzeEditCandidateAsync(replacement);
+        if (_editOptions.Analyzers.Enabled)
+        {
+            replacement.AnalyzerWork = AnalyzeAutomaticEditAnalyzersAsync(replacement);
+        }
     }
 
     private async Task AnalyzeEditCandidateAsync(EditCandidate candidate)
@@ -363,7 +388,7 @@ public sealed partial class SemanticEngine
             {
                 SyntaxDocumentsAnalyzed = candidate.CommittedOnly ? null : syntax.DocumentsAnalyzed,
                 SyntaxErrors = candidate.CommittedOnly ? null : syntax.Errors,
-                Diagnostics = syntax.Findings.Select(item => item.Diagnostic).Take(_editOptions.MaximumReportedDiagnostics).ToArray(),
+                Diagnostics = MergeEditDiagnostics(syntax.Findings.Select(item => item.Diagnostic), result.Diagnostics.Where(item => item.Producer == "analyzer")),
                 CurrentErrors = syntax.Errors,
                 OutputFiltered = syntax.Filtered,
             });
@@ -403,7 +428,7 @@ public sealed partial class SemanticEngine
                         NewErrors = results.Sum(item => item.New),
                         ResolvedErrors = results.Sum(item => item.Resolved),
                         ErrorComparisonAvailable = candidate.SyntaxOnly.Count == 0 && results.Length == candidate.Projects.Length && results.All(item => item.ComparisonAvailable),
-                        Diagnostics = OrderEditFindings(syntaxOnlyFindings.Concat(results.SelectMany(item => item.Current))).Select(item => item.Diagnostic).Take(_editOptions.MaximumReportedDiagnostics).ToArray(),
+                        Diagnostics = MergeEditDiagnostics(OrderEditFindings(syntaxOnlyFindings.Concat(results.SelectMany(item => item.Current))).Select(item => item.Diagnostic), candidate.Result.Diagnostics.Where(item => item.Producer == "analyzer")),
                         Omissions = candidate.Result.Omissions.Concat(results.SelectMany(item => item.Omissions)).Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).ToArray(),
                     };
                 }
@@ -447,8 +472,14 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private async Task<T> RunEditCompilerOperationAsync<T>(EditCandidate candidate, Func<CancellationToken, Task<T>> operation)
+    private async Task<T> RunEditCompilerOperationAsync<T>(
+        EditCandidate candidate,
+        Func<CancellationToken, Task<T>> operation,
+        bool advisory = false,
+        Action<Task>? actualCompletion = null,
+        CancellationToken cancellationToken = default)
     {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(candidate.Token, cancellationToken);
         while (true)
         {
             SemanticCompilationCoordinator preparation;
@@ -472,7 +503,11 @@ public sealed partial class SemanticEngine
                 {
                     try
                     {
-                        return await RunNonCooperativeAsync(operation, token, sourceSolution: source, retainedCandidateLifetime: candidate.Token, retainActualOperation: task => retained = task);
+                        return await RunNonCooperativeAsync(operation, token, sourceSolution: source, retainedCandidateLifetime: lifetime.Token, retainActualOperation: task =>
+                        {
+                            retained = task;
+                            actualCompletion?.Invoke(task);
+                        });
                     }
                     catch (SemanticOperationAbandonedException exception)
                     {
@@ -480,18 +515,19 @@ public sealed partial class SemanticEngine
                         throw;
                     }
                 },
-                    candidate.Token);
+                    advisory,
+                    lifetime.Token);
             }
             catch (Exception) when (retained is not null)
             {
 #pragma warning disable VSTHRD003 // The exact candidate owns this already-admitted compiler task across matching promotion.
-                return await retained.WaitAsync(candidate.Token);
+                return await retained.WaitAsync(lifetime.Token);
 #pragma warning restore VSTHRD003
             }
-            catch (InvalidOperationException) when (!candidate.Token.IsCancellationRequested && ReferenceEquals(source, candidate.Base))
+            catch (InvalidOperationException) when (!lifetime.IsCancellationRequested && preparation.IsStopped && ReferenceEquals(source, candidate.Base))
             {
 #pragma warning disable VSTHRD003 // Refresh resolves this candidate's promotion fence; denial or supersession cancels its owner.
-                await candidate.Promotion.Task.WaitAsync(candidate.Token);
+                await candidate.Promotion.Task.WaitAsync(lifetime.Token);
 #pragma warning restore VSTHRD003
             }
         }
@@ -511,7 +547,7 @@ public sealed partial class SemanticEngine
         EditDiagnosticBasis? basis;
         lock (_gate)
         {
-            _editDiagnosticBases.TryGetValue(id, out basis);
+            basis = _editDiagnosticBases.GetValueOrDefault(id)?.Compiler;
         }
 
         var before = basis?.Version == baselineVersion ? basis.Previous : await GetEditProjectFindingsAsync(baselineProject, candidate.RepositoryPath, null, token);
@@ -553,12 +589,8 @@ public sealed partial class SemanticEngine
         {
             if (IsEditCandidateCurrent(candidate))
             {
-                if (_editDiagnosticBases.Count >= _editOptions.MaximumCachedProjects && !_editDiagnosticBases.ContainsKey(id))
-                {
-                    _editDiagnosticBases.Remove(_editDiagnosticBases.Keys.First());
-                }
-
-                _editDiagnosticBases[id] = new(version, after, initial);
+                var retained = GetEditProjectBasis(id);
+                _editDiagnosticBases[id] = retained with { Compiler = new(version, after, initial) };
             }
         }
 
@@ -641,7 +673,7 @@ public sealed partial class SemanticEngine
                 BoundEditText(project, _editOptions.MaximumDiagnosticProjectCharacters),
                 BoundEditText(framework, _editOptions.MaximumDiagnosticFrameworkCharacters),
                 "unknown")
-            { Severity = severity };
+            { Severity = severity, Column = diagnostic.Location.IsInSource ? diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1 : null };
             var finding = new EditFinding(fingerprint, diagnosticProjection, New: !unchanged && before is { Truncated: false });
 
             // Keep memory bounded while retaining errors, then new warnings, then unchanged warnings.
@@ -664,9 +696,17 @@ public sealed partial class SemanticEngine
         return new([.. retained], errors, warnings, compilerErrors, filtered, errors + warnings > retained.Count);
     }
 
-    private static int EditFindingPriority(EditFinding finding) => finding.Diagnostic.Severity == Core.DiagnosticSeverity.Error ? 0 : finding.New ? 1 : 2;
+    private static int EditFindingPriority(EditFinding finding) => finding.Diagnostic.Severity == Core.DiagnosticSeverity.Error ? 0
+        : finding.Diagnostic.Severity == Core.DiagnosticSeverity.Warning ? finding.New ? 1 : 2
+        : finding.New ? 3 : 4;
 
     private static IOrderedEnumerable<EditFinding> OrderEditFindings(IEnumerable<EditFinding> findings) => findings.OrderBy(EditFindingPriority);
+
+    private SourceEditDiagnostic[] MergeEditDiagnostics(IEnumerable<SourceEditDiagnostic> compiler, IEnumerable<SourceEditDiagnostic> analyzers)
+    {
+        return [.. compiler.Concat(analyzers).OrderBy(item => item.Severity == Core.DiagnosticSeverity.Error ? 0 : item.Severity == Core.DiagnosticSeverity.Warning ? 1 : 2)
+            .ThenBy(item => item.Origin == "introduced" ? 0 : 1).Take(_editOptions.MaximumReportedDiagnostics)];
+    }
 
     private static string BoundEditText(string value, int maximum)
     {
@@ -717,12 +757,32 @@ public sealed partial class SemanticEngine
         }
     }
 
+    // Callers hold _gate. Compiler and analyzer evidence share admission, eviction and reset ownership.
+    private EditProjectBasis GetEditProjectBasis(ProjectId id)
+    {
+        if (_editDiagnosticBases.TryGetValue(id, out var basis))
+        {
+            return basis;
+        }
+
+        if (_editDiagnosticBases.Count >= _editOptions.MaximumCachedProjects)
+        {
+            _editDiagnosticBases.Remove(_editDiagnosticBases.Keys.First());
+        }
+
+        return new();
+    }
+
     private sealed record EditFinding(string Fingerprint, SourceEditDiagnostic Diagnostic, bool Unassigned = false, bool New = false);
 
     // Raw compiler error evidence remains internal; advisory exclusions never redefine validation success.
     private sealed record EditDiagnosticEvidence(EditFinding[] Findings, int Errors, int Warnings, int CompilerErrors, bool Filtered, bool Truncated);
 
     private sealed record EditDiagnosticBasis(VersionStamp Version, EditDiagnosticEvidence Previous, Dictionary<string, int>? Initial);
+
+    private sealed record EditProjectBasis(EditDiagnosticBasis? Compiler = null, EditAnalyzerBasis? AnalyzerBaseline = null,
+        EditAnalyzerBasis? AnalyzerCandidate = null, Dictionary<string, int>? AnalyzerInitial = null,
+        ImmutableHashSet<DocumentId>? AnalyzerInitialDocuments = null);
 
     private sealed record EditProjectResult(EditFinding[] Current, int Count, int Warnings, int New, int Resolved, bool ComparisonAvailable, bool Filtered, bool Truncated, IReadOnlyList<string> Omissions);
 
@@ -776,6 +836,8 @@ public sealed partial class SemanticEngine
 
         public bool CommittedOnly { get; init; }
 
+        public bool AnalyzerInitialKnown { get; init; }
+
         public long? VerifiedGraphGeneration { get; set; }
 
         public ProjectId[] Projects { get; }
@@ -791,6 +853,8 @@ public sealed partial class SemanticEngine
         public CancellationToken Token { get; }
 
         public Task Work { get; set; } = Task.CompletedTask;
+
+        public Task AnalyzerWork { get; set; } = Task.CompletedTask;
 
         public TaskCompletionSource Promotion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

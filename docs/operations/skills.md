@@ -107,6 +107,8 @@ They use the same manifest, hash, schema, content loader, model/tool, workflow, 
 
 When `invoke_skill` is available and this maintained package is compatible, ordinary model guidance prefers it for Threadsmith commands, configuration, context, providers, operations, troubleshooting, and authoring questions. No documentation-specific tool is added to ordinary requests. The local docs remain help evidence rather than policy; current host checks, user instructions, and repository instructions stay authoritative.
 
+Documentation reads use a bundle-scoped policy derived from the caller's current authority. Tool denials and the live repository policy generation still apply; the bundle scope grants no writes, process execution, network access, or session scratchpad access.
+
 ## Persistence and recovery
 
 SQLite migration 5 stores exact verification provenance, immutable pins, and versioned workflow checkpoints. Checkpoints retain invocation/session/run/workspace identity, scope/id/version/digest, catalog generation, canonical input, trust/phase, selected model/tools, effective budget, completed steps, attempt/generation, status, and next legal action.

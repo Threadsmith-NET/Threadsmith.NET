@@ -202,6 +202,13 @@ public sealed record SemanticResourceLimits
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumQueuedCompilerOperations, Array.MaxLength);
         ArgumentNullException.ThrowIfNull(EditAnalysis);
         EditAnalysis.Validate();
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(EditAnalysis.Analyzers.MaximumConcurrentOperations, CompilationWorkers);
+        if (EditAnalysis.Analyzers.Enabled)
+        {
+            // Optional work must leave a worker available for interactive operations.
+            ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(EditAnalysis.Analyzers.MaximumConcurrentOperations, CompilationWorkers);
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumGeneratedDocuments);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumGeneratedContentCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTraversalDepth);

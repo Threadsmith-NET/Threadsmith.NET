@@ -3,6 +3,9 @@ namespace Threadsmith.Core;
 /// <summary>Startup-captured compiler advisory policy and bounds; these do not suppress compilation or validation.</summary>
 public sealed record EditAnalysisOptions
 {
+    /// <summary>Selected analyzer measurement controls; automatic edits do not execute analyzers.</summary>
+    public EditAnalyzerOptions Analyzers { get; init; } = new();
+
     /// <summary>Selected effective warnings; an empty list includes only errors.</summary>
     public string[] CompilerWarningIds { get; init; } = ["CS4014", "CS8602", "CS8604", "CS8618"];
 
@@ -45,6 +48,8 @@ public sealed record EditAnalysisOptions
     /// <summary>Checks real API bounds and relationships without restricting the diagnostic ID vocabulary.</summary>
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(Analyzers);
+        Analyzers.Validate();
         ValidateIds(CompilerWarningIds);
         ValidateIds(ExcludedDiagnosticIds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumRetainedDiagnostics);
@@ -67,6 +72,7 @@ public sealed record EditAnalysisOptions
         Validate();
         return this with
         {
+            Analyzers = Analyzers.Capture(),
             CompilerWarningIds = [.. CompilerWarningIds.Select(id => id.Trim().ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase)],
             ExcludedDiagnosticIds = [.. ExcludedDiagnosticIds.Select(id => id.Trim().ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase)],
         };

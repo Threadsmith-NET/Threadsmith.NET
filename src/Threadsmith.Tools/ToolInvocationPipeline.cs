@@ -729,7 +729,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             using var admissionCancellation = new CancellationTokenSource(remaining, _timeProvider);
             using var waitingCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeoutCancellation.Token, admissionCancellation.Token);
             using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
-                source,
+                ToolConcurrencyScope.Create(source, tool.Definition.Id),
                 tool.Definition.Scheduling.MaximumSourceConcurrency,
                 waitingCancellation.Token);
             waitingCancellation.Token.ThrowIfCancellationRequested();

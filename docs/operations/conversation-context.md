@@ -4,6 +4,8 @@ Threadsmith preserves bounded cross-turn continuity without replaying an unbound
 
 ## Modes
 
+Visible assistant text is archived once when each model stream ends, including tool-call responses and partial output before cancellation or provider failure. This preserves saved replies for resume without treating an interrupted response as a successful run. Recent-turn assembly keeps the original request, steering, and saved responses together by run. The active run's own archive is excluded from prior-turn history because its live continuation already supplies that content. Existing mode, age, count, and token limits still apply.
+
 The compiled default is `ConversationAware`.
 
 | Mode | Current turn | Recent complete turns | Explicit repository memories |

@@ -225,6 +225,24 @@ public static class PromptFileNames
     /// <summary>Gets bounded versioned advisory edit feedback delivered at ordinary provider boundaries.</summary>
     public const string ContextSourceEditFeedback = "Context-SourceEdit-Feedback.md";
 
+    /// <summary>No selected owned document analyzer scope.</summary>
+    public const string ContextSourceEditAnalyzerSkipped = "Context-SourceEdit-AnalyzerSkipped.md";
+
+    /// <summary>Cancelled candidate analyzer coverage.</summary>
+    public const string ContextSourceEditAnalyzerCancelled = "Context-SourceEdit-AnalyzerCancelled.md";
+
+    /// <summary>Failed analyzer coverage and transient quarantine.</summary>
+    public const string ContextSourceEditAnalyzerFailed = "Context-SourceEdit-AnalyzerFailed.md";
+
+    /// <summary>Unknown analyzer origins and comparisons after graph replacement.</summary>
+    public const string ContextSourceEditAnalyzerGraphReplacement = "Context-SourceEdit-AnalyzerGraphReplacement.md";
+
+    /// <summary>Whole-document analyzer coverage limitations.</summary>
+    public const string ContextSourceEditAnalyzerDocumentScope = "Context-SourceEdit-AnalyzerDocumentScope.md";
+
+    /// <summary>Selected analyzer instance execution and clean-result limits.</summary>
+    public const string ContextSourceEditAnalyzerInstanceScope = "Context-SourceEdit-AnalyzerInstanceScope.md";
+
     /// <summary>Gets the stable filename for the ContextSourceEditMembershipRefresh prompt asset.</summary>
     public const string ContextSourceEditMembershipRefresh = "Context-SourceEdit-MembershipRefresh.md";
 
@@ -1058,6 +1076,12 @@ public static class PromptFileNames
         ContextImageOnlyUserMessage,
         ContextActiveRunSteering,
         ContextSourceEditFeedback,
+        ContextSourceEditAnalyzerSkipped,
+        ContextSourceEditAnalyzerCancelled,
+        ContextSourceEditAnalyzerFailed,
+        ContextSourceEditAnalyzerGraphReplacement,
+        ContextSourceEditAnalyzerDocumentScope,
+        ContextSourceEditAnalyzerInstanceScope,
         ContextSourceEditMembershipRefresh,
         ContextSourceEditNewSourceParseOptions,
         ContextSourceEditOmittedProjectCoverage,
@@ -1450,6 +1474,12 @@ public static class PromptAssetCatalog
             StringComparer.Ordinal);
         dotNetAssets.UnionWith(
         [
+            PromptFileNames.ContextSourceEditAnalyzerSkipped,
+            PromptFileNames.ContextSourceEditAnalyzerCancelled,
+            PromptFileNames.ContextSourceEditAnalyzerFailed,
+            PromptFileNames.ContextSourceEditAnalyzerGraphReplacement,
+            PromptFileNames.ContextSourceEditAnalyzerDocumentScope,
+            PromptFileNames.ContextSourceEditAnalyzerInstanceScope,
             PromptFileNames.ContextSourceEditMembershipRefresh,
             PromptFileNames.ContextSourceEditNewSourceParseOptions,
             PromptFileNames.ContextSourceEditOmittedProjectCoverage,

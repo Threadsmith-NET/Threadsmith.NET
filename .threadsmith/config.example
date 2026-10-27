@@ -40,6 +40,8 @@
       "maximumFallbackFiles": 10000,
       // Advisory output only; restart after changing. Empty warnings means errors only.
       "editAnalysis": {
+        // Measurement controls only; automatic analyzer feedback is not enabled in this release.
+        "analyzers": { "enabled": false, "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"], "budgetMilliseconds": 1000, "coldStartBudgetMilliseconds": 10000, "maximumConcurrentOperations": 1, "concurrentAnalysis": false },
         "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
         // Exact IDs, case-insensitive. Exclusions win even for compiler errors.
         "excludedDiagnosticIds": []

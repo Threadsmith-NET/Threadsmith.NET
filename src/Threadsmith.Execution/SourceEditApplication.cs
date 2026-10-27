@@ -237,7 +237,7 @@ public sealed class SourceEditApplication :
     /// <summary>Consumes a newer bounded advisory result at an ordinary provider boundary.</summary>
     public SourceEditAnalysis? TakeFeedback(SessionId sessionId, RunId runId)
     {
-        if (!_feedback.TryGetValue(sessionId, out var delivered) || (delivered.RunId != runId && !delivered.WaitTimedOut))
+        if (!_feedback.TryGetValue(sessionId, out var delivered) || (delivered.RunId != runId && !delivered.CarryForward))
         {
             return null;
         }
@@ -279,7 +279,7 @@ public sealed class SourceEditApplication :
             return null;
         }
 
-        if (delivered.RunId != runId && !latest.Pending)
+        if (delivered.RunId != runId && !latest.Pending && latest.Analyzers.Status != "pending")
         {
             return _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivered)) ? latest : null;
         }
@@ -323,7 +323,7 @@ public sealed class SourceEditApplication :
         {
             if (_feedback.TryGetValue(sessionId, out var timedOut) && timedOut.EffectId == delivery.EffectId)
             {
-                _feedback.TryUpdate(sessionId, timedOut with { WaitTimedOut = true }, timedOut);
+                _feedback.TryUpdate(sessionId, timedOut with { CarryForward = true }, timedOut);
             }
 
             await _events.PublishAsync(
@@ -339,11 +339,36 @@ public sealed class SourceEditApplication :
     /// <summary>Releases delivery bookkeeping when its ordinary conversation run ends.</summary>
     public void CompleteRun(RunId runId)
     {
-        if (_runs.TryRemove(runId, out var owner)
-            && _feedback.TryGetValue(owner.SessionId, out var delivery)
-            && delivery.RunId == runId && !delivery.WaitTimedOut)
+        if (!_runs.TryRemove(runId, out var owner))
         {
-            _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(owner.SessionId, delivery));
+            return;
+        }
+
+        while (_feedback.TryGetValue(owner.SessionId, out var delivery) && delivery.RunId == runId && !delivery.CarryForward)
+        {
+            bool optionalPending;
+            try
+            {
+                var latest = _analyzer?.GetLatestAnalysis(owner.SessionId, runId, delivery.WorkspaceId, delivery.EffectId);
+                optionalPending = latest is { Obsolete: false } && (latest.Analyzers.Status == "pending" || latest.Revision > delivery.Revision);
+            }
+            catch (Exception)
+            {
+                // A retired owner needs no retained feedback reference.
+                optionalPending = false;
+            }
+
+            if (optionalPending)
+            {
+                if (_feedback.TryUpdate(owner.SessionId, delivery with { CarryForward = true }, delivery))
+                {
+                    return;
+                }
+            }
+            else if (_feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(owner.SessionId, delivery)))
+            {
+                return;
+            }
         }
     }
 
@@ -764,7 +789,7 @@ public sealed class SourceEditApplication :
     {
         public bool FinalWaitAttempted { get; init; }
 
-        public bool WaitTimedOut { get; init; }
+        public bool CarryForward { get; init; }
     }
 
     private sealed class PendingEdit

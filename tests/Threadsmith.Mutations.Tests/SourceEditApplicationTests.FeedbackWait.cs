@@ -1,6 +1,7 @@
 namespace Threadsmith.Mutations.Tests;
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -12,6 +13,45 @@ using Xunit;
 
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>Optional work never extends the final wait and undelivered revisions survive completion.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OptionalAnalyzerFeedbackSurvivesRunCompletionWithoutWaiting(bool completesBeforeRunEnds)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([], pending: false);
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        analyzer.Publish(analyzer.Latest! with { Revision = analyzer.Latest!.Revision + 1, Analyzers = new() { Status = "pending", DocumentsInScope = 1 } });
+        var pending = await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, ct);
+        Assert.Equal("pending", pending!.Analyzers.Status);
+        Assert.False(pending.Pending);
+        void Complete() => analyzer.Publish(analyzer.Latest! with
+        {
+            Revision = analyzer.Latest!.Revision + 1,
+            Analyzers = new() { Status = "completed", DocumentsInScope = 1, DocumentsAnalyzed = 1, ReportableFindings = 1 },
+            Diagnostics = [new("CA2016", "Forward cancellation", "Example.cs", 1, "Example", "net10.0", "introduced") { Producer = "analyzer", AnalyzerIdentity = "qualified fixture", Severity = DiagnosticSeverity.Warning }],
+        });
+
+        if (completesBeforeRunEnds)
+        {
+            Complete();
+        }
+
+        edits.CompleteRun(fixture.RunId);
+        if (!completesBeforeRunEnds)
+        {
+            Complete();
+        }
+
+        var delivered = edits.TakeFeedback(fixture.SessionId, RunId.New());
+        Assert.Equal("completed", delivered!.Analyzers.Status);
+        Assert.Equal("analyzer", Assert.Single(delivered.Diagnostics).Producer);
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, RunId.New()));
+    }
+
     /// <summary>A result becoming ready during final-wait admission bypasses the waiting notice.</summary>
     [Fact]
     public async Task FinalFeedbackReadyDuringAdmissionDoesNotPublishWait()
@@ -63,11 +103,24 @@ public sealed partial class SourceEditApplicationTests
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
-        var provider = new CompletionProvider(1);
+        long feedbackReady = 0;
+        double? deliveryMilliseconds = null;
+        var provider = new CompletionProvider(1)
+        {
+            RequestObserved = request =>
+            {
+                if (feedbackReady != 0 && request.Messages.Any(message => message.SectionId == "source-edit-feedback"
+                    && message.GetModelVisibleContent().Contains("Late compiler finding", StringComparison.Ordinal)))
+                {
+                    deliveryMilliseconds ??= Stopwatch.GetElapsedTime(feedbackReady).TotalMilliseconds;
+                }
+            },
+        };
         var observed = new ConcurrentQueue<IDomainEvent>();
         var waitingNotice = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void CompleteAnalysis()
         {
+            feedbackReady = Stopwatch.GetTimestamp();
             var pending = analyzer.Latest!;
             analyzer.Publish(pending with
             {
@@ -135,6 +188,8 @@ public sealed partial class SourceEditApplicationTests
         Assert.Contains(provider.Requests[^1].Messages, message => message.SectionId == "source-edit-feedback"
             && message.GetModelVisibleContent().Contains("Late compiler finding", StringComparison.Ordinal));
         Assert.DoesNotContain(observed, item => item is BuildStarted or TestRunCompleted);
+        Assert.NotNull(deliveryMilliseconds);
+        TestContext.Current.TestOutputHelper?.WriteLine($"Analyzer experiment model-boundary delivery: timeout={timeout} elapsedMilliseconds={deliveryMilliseconds:F3}; scripted provider, no model inference latency.");
     }
 
     /// <summary>Cancellation ends the wait without being misreported as a timeout.</summary>

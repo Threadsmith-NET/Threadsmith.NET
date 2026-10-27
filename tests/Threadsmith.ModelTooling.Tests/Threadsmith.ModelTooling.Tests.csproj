@@ -45,6 +45,10 @@
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="CopySemanticFixtureAnalyzer" AfterTargets="Build">
+    <ItemGroup>
+      <ThreadingFixtureAnalyzer Include="@(Analyzer)" Condition="'%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers' Or '%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers.CSharp'" />
+    </ItemGroup>
+    <Copy SourceFiles="@(ThreadingFixtureAnalyzer)" DestinationFolder="$(OutDir)fixtures\semantic\SmallDotNetSolution\Analyzers" SkipUnchangedFiles="true" />
     <PropertyGroup>
       <SemanticFixtureAnalyzerPath>$(MSBuildThisFileDirectory)..\Threadsmith.SemanticFixtures.Roslyn59\bin\$(Configuration)\netstandard2.0\Threadsmith.SemanticFixtures.Roslyn59.dll</SemanticFixtureAnalyzerPath>
     </PropertyGroup>

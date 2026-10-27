@@ -43,7 +43,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                 new ConfiguredModelCatalog([profile]),
                 new InMemoryModelPreferenceSnapshotProvider());
             var assembler = CreateAssembler(events, evidence, resolver, sanitizer);
-            var model = new ToolsThenTextProvider { ToolRounds = 3 };
+            var model = new ToolsThenTextProvider { ToolRounds = 3, Commentary = "Inspecting source." };
             var policy = new ActiveTurnCompactionPolicy
             {
                 PressureTargetPercent = 1,
@@ -122,6 +122,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             Assert.Equal(128, compactionRequest.ProfileOutputReserveTokens);
             Assert.Equal(3, compactionRequest.ToolContinuationRound);
             var compactedGroup = Assert.Single(compactionRequest.EligiblePrefix);
+            Assert.Contains(compactedGroup.Messages, message => message.GetModelVisibleContent() == "Inspecting source.");
             Assert.True(compactedGroup.EstimatedTokens < policy.RetainedRecentTokens);
             Assert.True(compactedGroup.EstimatedTokens * 2 >= policy.RetainedRecentTokens);
             Assert.True(compactedGroup.WasDeliveredVerbatim);
@@ -1706,6 +1707,8 @@ public static partial class Plan80ActiveTurnContinuationTests
 
         public int ToolRounds { get; init; } = 2;
 
+        public string? Commentary { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -1715,6 +1718,11 @@ public static partial class Plan80ActiveTurnContinuationTests
             await Task.Yield();
             if (Requests.Count <= ToolRounds)
             {
+                if (Commentary is not null)
+                {
+                    yield return new ModelChunk { Text = Commentary };
+                }
+
                 yield return new ModelChunk
                 {
                     Output = new ToolRequestModelOutput(

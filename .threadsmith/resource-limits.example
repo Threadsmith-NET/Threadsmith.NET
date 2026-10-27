@@ -22,6 +22,14 @@
     },
     "semantic": {
       "editAnalysis": {
+        "analyzers": {
+          "enabled": false,
+          "diagnosticIds": [],
+          "budgetMilliseconds": 1000,
+          "coldStartBudgetMilliseconds": 10000,
+          "maximumConcurrentOperations": 1,
+          "concurrentAnalysis": false
+        },
         "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
         "excludedDiagnosticIds": [],
         "maximumRetainedDiagnostics": 64,

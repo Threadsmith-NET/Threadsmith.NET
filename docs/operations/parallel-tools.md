@@ -24,6 +24,8 @@ Parallel execution requires all of the following:
 
 A write, execute, external-effect, or exclusive access claim conflicts with another claim for the same resource. Path claims also conflict across ancestor/descendant identities. Unsupported metadata, code/process execution, semantic-workspace serialization, workflows, approval interaction, MCP, and extensions serialize.
 
+Built-in admission caps apply per tool ID across all callers of the pipeline, so a running process or semantic query does not consume file-read capacity. Tools from one MCP or extension source retain a shared cap. The planner and runtime use the same grouping; sibling conflict rules and batch wave limits still apply.
+
 ## Tool metadata and where to edit it
 
 The closed contracts are in `src/Threadsmith.Tools/ToolContracts.cs`:

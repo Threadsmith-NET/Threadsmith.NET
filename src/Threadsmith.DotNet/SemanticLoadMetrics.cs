@@ -70,6 +70,12 @@ internal static class SemanticLoadMetrics
     /// <summary>Gets completed scoped compiler diagnostic passes for exact edit candidates.</summary>
     internal static Counter<long> EditDiagnosticPasses { get; } = _meter.CreateCounter<long>("threadsmith.semantic.edit.diagnostic_passes");
 
+    /// <summary>Gets completed selected analyzer passes, separate from compiler feedback.</summary>
+    internal static Counter<long> EditAnalyzerPasses { get; } = _meter.CreateCounter<long>("threadsmith.semantic.edit.analyzer_passes");
+
+    /// <summary>Gets analyzer comparison availability including queue wait.</summary>
+    internal static Histogram<double> EditAnalyzerDuration { get; } = _meter.CreateHistogram<double>("threadsmith.semantic.edit.analyzer.duration", "ms");
+
     /// <summary>Gets exact candidate solutions reused by authoritative source publication.</summary>
     internal static Counter<long> EditCandidatePromotions { get; } = _meter.CreateCounter<long>("threadsmith.semantic.edit.candidate_promotions");
 

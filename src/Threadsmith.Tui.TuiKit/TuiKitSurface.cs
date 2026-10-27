@@ -151,6 +151,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             Layout = WorkspaceLayout.Create(_layoutSize),
             EnableMouseRouting = false,
             AutoRenderNotifications = false,
+            Hyperlinks = HyperlinkMode.Auto,
         };
         _app.Bind("title", new TextRow(() => "Threadsmith.NET", () => ResolveStyle(PresentationTextRole.TitleBarRole)));
         _app.Bind("tabs", _tabs);

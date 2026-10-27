@@ -136,7 +136,8 @@ public static class TuiKitFrontendTests
         Assert.Contains(segments, segment => segment.Text == "strike" && segment.Role == PresentationTextRole.MarkdownStrikethrough);
         Assert.Contains(segments, segment => segment.Text == "code" && segment.Role == PresentationTextRole.MarkdownCode);
         Assert.Contains(segments, segment => segment.Text == "link" && segment.Role == PresentationTextRole.Hyperlink);
-        Assert.Contains("https://example.com/", visible, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://example.com/", visible, StringComparison.Ordinal);
+        Assert.Contains(segments, segment => segment.Text == "link" && segment.LinkTarget?.AbsoluteUri == "https://example.com/");
     }
 
     /// <summary>Grapheme edits and undo preserve exact Unicode and multiline paste.</summary>

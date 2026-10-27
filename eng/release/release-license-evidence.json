@@ -765,19 +765,19 @@
     },
     {
       "id": "TUIKit",
-      "version": "1.1.1",
+      "version": "1.11.2",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/TUIKit/1.1.1",
-      "sourceRevision": "3496eeac430d1718e5acc34520565305e089d5ae",
-      "packageSha512": "h14+0hFTpE1TccfO13tMt7Bf5CklO9iTU1KnwBIFv1nSn3kZkH8Wv+kqe1Y3M7PGHk1o3yeztCGHsMZ8YJj4OQ==",
+      "provenance": "https://www.nuget.org/packages/TUIKit/1.11.2",
+      "sourceRevision": "62d090aa10f29f48165570934c0cc8fc80c462dc",
+      "packageSha512": "ILgrDUKsuSWyXwfFu3KFIUsnsBDhR8k/RvujifV4e9X9+n9LvwK9F1OrYZt6Sso7rigCk5kj1Do4TIhE6vWu7A==",
       "licenseExpression": "MIT",
       "licenseConcluded": "NOASSERTION",
-      "licenseText": "legal/TUIKit-1.1.1/TUIKit-LICENSE.txt",
+      "licenseText": "legal/TUIKit-1.11.2/TUIKit-LICENSE.txt",
       "additionalNotices": [
-        "legal/TUIKit-1.1.1/WTFPL-2.0.txt",
-        "legal/TUIKit-1.1.1/TUIKit-font-attribution.txt",
-        "legal/TUIKit-1.1.1/TUIKit-font-removed.txt",
-        "legal/TUIKit-1.1.1/TUIKit-font-headers.txt"
+        "legal/TUIKit-1.11.2/WTFPL-2.0.txt",
+        "legal/TUIKit-1.11.2/TUIKit-font-attribution.txt",
+        "legal/TUIKit-1.11.2/TUIKit-font-removed.txt",
+        "legal/TUIKit-1.11.2/TUIKit-font-headers.txt"
       ],
       "noticeTreatment": "Preserve the MIT code license and all embedded FIGlet font headers, attribution and permissive WTFPL v2 text. MIT is the declared package license; the mixed embedded font inventory is not relabeled MIT.",
       "reviewState": "approved",

@@ -15,6 +15,67 @@ using Xunit;
 /// <summary>Exercises direct editing through the real writer and durable effect store.</summary>
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>A delete-and-recreate batch reports its net disk effect rather than claiming the file is absent.</summary>
+    [Theory]
+    [InlineData("class Example { }", "Unchanged")]
+    [InlineData("class Changed { }", "Updated file")]
+    public async Task DeleteAndRecreateReceipt_ReportsFinalState(string replacement, string effect)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var command = fixture.Replace("Example", "Unused", false);
+        command = command with
+        {
+            Instructions = command.Instructions with
+            {
+                Mutations =
+                [
+                    new DeleteFileMutationProposal { RelativePath = "Example.cs" },
+                    new CreateFileMutationProposal { RelativePath = "Example.cs", Content = new() { Text = replacement } },
+                ],
+            },
+        };
+
+        var receipt = await fixture.Application.HandleAsync(command, ct);
+
+        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+        Assert.Equal(replacement, await File.ReadAllTextAsync(fixture.SourcePath, ct));
+        Assert.Contains($"{effect} \"Example.cs\"", receipt.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("Deleted entire file", receipt.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>Deletion receipts report the verified absence, including durable replay and interrupted delivery.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeleteReceipt_ReportsEntireFileRemoval(bool interrupted)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var command = fixture.Replace("Example", "Unused", false);
+        command = command with
+        {
+            Instructions = command.Instructions with
+            {
+                Mutations = [new DeleteFileMutationProposal { RelativePath = "Example.cs" }],
+            },
+        };
+        if (interrupted)
+        {
+            fixture.Commits.AfterCommit = () => throw new IOException("Interrupted after disk commit.");
+        }
+
+        var receipt = await fixture.Application.HandleAsync(command, ct);
+        var replay = await fixture.CreateApplication().HandleAsync(command, ct);
+
+        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+        Assert.False(File.Exists(fixture.SourcePath));
+        Assert.Contains("Deleted entire file \"Example.cs\" (file is absent)", receipt.Detail, StringComparison.Ordinal);
+        Assert.Contains(receipt.Detail, replay.Detail, StringComparison.Ordinal);
+        Assert.Equal(1, fixture.Commits.Count);
+        Assert.Equal(receipt.Detail, (await fixture.Store.GetEffectAsync(command.EffectId, ct))!.Receipt!.Detail);
+    }
+
     /// <summary>Temporary compiler errors apply and durable retry identity prevents duplicate effects.</summary>
     [Fact]
     public async Task Edit_AppliesTemporaryCompilerErrors_AndReplayCannotWriteTwice()
@@ -28,6 +89,7 @@ public sealed partial class SourceEditApplicationTests
         var repair = await fixture.Application.HandleAsync(fixture.Replace("class Example { Missing value;", "class Example { }", false), ct);
 
         Assert.Equal(SourceEditStatus.Applied, first.Status);
+        Assert.Contains("Updated file \"Example.cs\" (file is present)", first.Detail, StringComparison.Ordinal);
         Assert.Equal(first.MutationSetId, replay.MutationSetId);
         Assert.Equal(SourceEditStatus.Applied, repair.Status);
         Assert.Equal(2, fixture.Commits.Count);

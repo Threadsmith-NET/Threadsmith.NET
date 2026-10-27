@@ -7,9 +7,42 @@ using Threadsmith.Interaction.Presentation;
 internal static class TuiMarkdownLayout
 {
     /// <summary>Formats semantic Markdown using TUIKit's width model.</summary>
-    internal static IReadOnlyList<PresentationTextSegment> Format(MarkdownDocument document, int width)
+    internal static IReadOnlyList<PresentationTextSegment> Format(MarkdownDocument document, int width, string? source = null)
     {
-        return TerminalMarkdownLayout<TuiKitTextMetrics>.Format(document, width);
+        var segments = TerminalMarkdownLayout<TuiKitTextMetrics>.Format(document, width);
+        if (source is null)
+        {
+            return segments;
+        }
+
+        // Transcript separators are calculated from source line endings. Markdown layout
+        // must retain that boundary rather than replace it with its own final newline.
+        var result = segments.ToList();
+        while (result.Count > 0)
+        {
+            var last = result[^1];
+            var trimmed = last.Text.TrimEnd('\r', '\n');
+            if (trimmed.Length > 0)
+            {
+                result[^1] = last with { Text = trimmed };
+                break;
+            }
+
+            result.RemoveAt(result.Count - 1);
+        }
+
+        var endingStart = source.Length;
+        while (endingStart > 0 && source[endingStart - 1] is '\r' or '\n')
+        {
+            endingStart--;
+        }
+
+        if (endingStart < source.Length)
+        {
+            result.Add(new PresentationTextSegment(source[endingStart..], PresentationTextRole.Default));
+        }
+
+        return result;
     }
 }
 

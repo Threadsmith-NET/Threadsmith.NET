@@ -156,7 +156,8 @@ internal sealed class MutationMaterializer
         foreach (var mutation in proposal.Mutations)
         {
             var path = NormalizePath(mutation.RelativePath);
-            if (!currentByPath.TryGetValue(path, out var current))
+            var touchedEarlier = currentByPath.TryGetValue(path, out var current);
+            if (!touchedEarlier)
             {
                 current = await workspace.ReadBaselineTextAsync(path, cancellationToken);
             }
@@ -175,9 +176,12 @@ internal sealed class MutationMaterializer
 
             if (current is null)
             {
+                var missingState = touchedEarlier
+                    ? "is absent after earlier operations in this batch."
+                    : "was not present in the immutable baseline.";
                 throw CreateRepairableMutationFailure(
                     MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    $"ReplaceText target '{path}' was not present in the immutable baseline.");
+                    $"Operation {resolved.Count + 1} ({mutation.Type}) target '{path}' {missingState} No changes from this batch were applied.");
             }
 
             if (mutation.Type is MutationType.DeleteFile or MutationType.MoveFile)

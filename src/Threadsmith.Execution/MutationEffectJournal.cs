@@ -186,7 +186,8 @@ internal sealed class MutationEffectJournal
         try
         {
             var committed = await write(cancellationToken);
-            receipt = new(record.EffectId, committed.MutationSetId, SourceEditStatus.Applied, committed.ChangedFiles, "The authorized changes were applied and their exact bytes verified.") { Commit = committed };
+            var detail = "The authorized changes were applied and their exact bytes verified. " + FormatVerifiedEffects(snapshot);
+            receipt = new(record.EffectId, committed.MutationSetId, SourceEditStatus.Applied, committed.ChangedFiles, detail) { Commit = committed };
         }
         catch (WorkspaceConflictException)
         {
@@ -225,6 +226,25 @@ internal sealed class MutationEffectJournal
         return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command.Instructions)));
     }
 
+    /// <summary>Describes verified endpoint effects without inferring success from the model's rationale.</summary>
+    private static string FormatVerifiedEffects(MutationEffectSnapshot snapshot)
+    {
+        return "Verified disk effects: " + string.Join("; ", snapshot.Endpoints.Select(endpoint =>
+        {
+            var path = JsonSerializer.Serialize(endpoint.RelativePath);
+            if (endpoint.BeforeSha256 == endpoint.AfterSha256)
+            {
+                return $"Unchanged {path} (file remains {(endpoint.AfterSha256 is null ? "absent" : "present")})";
+            }
+
+            return endpoint.AfterSha256 is null
+                ? $"Deleted entire file {path} (file is absent)"
+                : endpoint.BeforeSha256 is null
+                    ? $"Created file {path} (file is present)"
+                    : $"Updated file {path} (file is present)";
+        })) + ".";
+    }
+
     private async Task<SourceEditReceipt> ReconcileEditAsync(
         MutationEffectRecord record,
         ITransactionalWorkspace workspace,
@@ -252,6 +272,11 @@ internal sealed class MutationEffectJournal
         var detail = status == SourceEditStatus.Applied ? "The interrupted edit's exact final bytes were verified; the effect was not replayed."
             : status == SourceEditStatus.NotApplied ? "The edit's exact original bytes remain present; the effect was not replayed."
             : "The repository matches neither the complete original nor final byte identities. Explicit recovery is required.";
+        if (status == SourceEditStatus.Applied)
+        {
+            detail += " " + FormatVerifiedEffects(snapshot);
+        }
+
         var receipt = new SourceEditReceipt(record.EffectId, record.MutationSetId, status, changed, detail)
         {
             Commit = status == SourceEditStatus.Applied

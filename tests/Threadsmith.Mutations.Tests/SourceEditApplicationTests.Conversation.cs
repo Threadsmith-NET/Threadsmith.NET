@@ -246,6 +246,19 @@ public sealed partial class SourceEditApplicationTests
             command = command with { Instructions = command.Instructions with { Mutations = [proposal] } };
             var receipt = await edits.HandleAsync(command, ct);
             Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+            var expectedEffect = proposal switch
+            {
+                CreateFileMutationProposal => $"Created file \"{name}\" (file is present)",
+                ReplaceTextMutationProposal => $"Updated file \"{name}\" (file is present)",
+                MoveFileMutationProposal => $"Created file \"{moved}\" (file is present)",
+                _ => $"Deleted entire file \"{moved}\" (file is absent)",
+            };
+            Assert.Contains(expectedEffect, receipt.Detail, StringComparison.Ordinal);
+            if (proposal is MoveFileMutationProposal)
+            {
+                Assert.Contains($"Deleted entire file \"{name}\" (file is absent)", receipt.Detail, StringComparison.Ordinal);
+            }
+
             Assert.Null(receipt.Analysis);
             Assert.False((await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct)).WasRefreshed);
         }

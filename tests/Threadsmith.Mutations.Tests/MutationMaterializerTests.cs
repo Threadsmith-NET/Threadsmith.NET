@@ -10,6 +10,40 @@ using Xunit;
 /// <summary>Verifies shared mutation materialization independently of model planning.</summary>
 public sealed class MutationMaterializerTests
 {
+    /// <summary>Missing targets identify the requested operation and the source of the missing state.</summary>
+    [Theory]
+    [InlineData(MutationType.DeleteFile, false)]
+    [InlineData(MutationType.MoveFile, false)]
+    [InlineData(MutationType.ReplaceText, false)]
+    [InlineData(MutationType.DeleteFile, true)]
+    [InlineData(MutationType.MoveFile, true)]
+    [InlineData(MutationType.ReplaceText, true)]
+    public static async Task MissingTarget_ReportsOperationAndBatchState(MutationType type, bool deleteFirst)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MaterializationFixture.CreateAsync("original", ct);
+        var path = deleteFirst ? "Example.cs" : "Missing.cs";
+        MutationProposalChange change = type switch
+        {
+            MutationType.DeleteFile => new DeleteFileMutationProposal { RelativePath = path },
+            MutationType.MoveFile => new MoveFileMutationProposal { RelativePath = path, DestinationRelativePath = "Moved.cs" },
+            _ => new ReplaceTextMutationProposal { RelativePath = path, ExpectedText = "original", ReplacementText = "changed" },
+        };
+        var instructions = new MutationProposalSet
+        {
+            Rationale = "Exercise missing targets without writing.",
+            Mutations = deleteFirst ? [new DeleteFileMutationProposal { RelativePath = path }, change] : [change],
+        };
+
+        var error = await Assert.ThrowsAsync<MutationInstructionException>(() => fixture.Materializer.MaterializeAsync(
+            instructions, fixture.SessionId, fixture.RunId, fixture.Workspace, ct));
+
+        Assert.Contains($"Operation {(deleteFirst ? 2 : 1)} ({type}) target '{path}'", error.Message, StringComparison.Ordinal);
+        Assert.Contains(deleteFirst ? "absent after earlier operations in this batch" : "not present in the immutable baseline", error.Message, StringComparison.Ordinal);
+        Assert.Contains("No changes from this batch were applied.", error.Message, StringComparison.Ordinal);
+        Assert.Equal("original", await File.ReadAllTextAsync(Path.Combine(fixture.Root, "Example.cs"), ct));
+    }
+
     /// <summary>Sequential edits use host identities and cannot inherit plan approval.</summary>
     [Fact]
     public static async Task MaterializeAsync_SequentialAnchors_UsesHostIdentityWithoutPlanAuthority()

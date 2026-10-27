@@ -89,6 +89,7 @@ public sealed class SourceEditToolTests
 
         Assert.Same(receipt, result.Value);
         using var modelResult = JsonDocument.Parse(Assert.IsType<string>(result.ModelResultContent));
+        Assert.Equal("Applied", modelResult.RootElement.GetProperty("Status").GetString());
         var projected = modelResult.RootElement.GetProperty("Analysis");
         Assert.Equal(status, projected.GetProperty("Status").GetString());
         Assert.Equal(hasCounts, projected.TryGetProperty("CurrentErrors", out var currentErrors));

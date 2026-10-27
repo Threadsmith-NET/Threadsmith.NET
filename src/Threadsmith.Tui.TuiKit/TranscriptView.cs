@@ -357,7 +357,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             case PresentationMarkdownItem markdown:
                 try
                 {
-                    segments = TuiMarkdownLayout.Format(markdown.Document, width);
+                    segments = TuiMarkdownLayout.Format(markdown.Document, width, markdown.RawSource);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {

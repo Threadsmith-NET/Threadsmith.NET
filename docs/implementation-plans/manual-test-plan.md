@@ -1779,6 +1779,7 @@ Before switching models, complete a request and run `/reasoning` with a differen
 2. Submit a request that reasons, invokes the tool, reasons again over the result, and streams a final answer.
 3. Observe the active status and transcript through every transition; record the displayed total-turn and tool durations alongside deterministic telemetry/event evidence.
 4. Repeat with whitespace-only leading chunks, model failure, malformed output, tool failure, timeout, cancellation, and immediate/slow status-surface completion.
+5. With reasoning display off, have the model emit ordinary commentary before invoking a tool. Repeat with commentary ending in no newline, one newline, and two newlines (LF and CRLF), with Markdown rendering on and off. Confirm exactly one blank line separates the commentary from the completed tool block, including after resizing; hidden reasoning must remain hidden.
 
 Expected: duration display defaults on. `THINKING` shows increasing total-turn elapsed, yields to live tool elapsed, resumes without resetting after tool completion, and disappears before final visible output or terminal host outcome. One tool marker reports the authoritative execution duration. No completed host-generated `THINKING`, duplicate status row, timer transcript flood, deadlock, cursor artifact, or fabricated duration remains. Displayed final duration aligns with the tool span/event boundary.
 

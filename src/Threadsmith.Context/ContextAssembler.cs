@@ -1002,7 +1002,8 @@ public sealed class ContextAssembler : IContextAssembler
         ConversationMessage[] allPriorMessages =
         [
             .. state.Messages.Where(message =>
-                request.CurrentMessageId is null || message.Id != request.CurrentMessageId),
+                message.RunId != request.RunId
+                && (request.CurrentMessageId is null || message.Id != request.CurrentMessageId)),
         ];
         var priorMessages = allPriorMessages.Where(message =>
             message.OccurredAt >= recentCutoff);
@@ -1135,18 +1136,26 @@ public sealed class ContextAssembler : IContextAssembler
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
         var pendingTurns = new Dictionary<RunId, List<ConversationMessage>>();
+        var includedRuns = new HashSet<RunId>();
         foreach (var message in ordered)
         {
             if (message.Role == ConversationRole.User)
             {
-                pendingTurns[message.RunId] = [message];
+                if (pendingTurns.TryGetValue(message.RunId, out var pending))
+                {
+                    pending.Add(message);
+                }
+                else
+                {
+                    pendingTurns[message.RunId] = [message];
+                }
             }
             else if (message.Role == ConversationRole.Assistant
                 && pendingTurns.TryGetValue(message.RunId, out var turn))
             {
                 // Overlapping runs may finish in a different order from their requests.
                 // A governed run can emit several receipts before its final response.
-                if (turn.Count == 1)
+                if (includedRuns.Add(message.RunId))
                 {
                     turns.Add(turn);
                 }

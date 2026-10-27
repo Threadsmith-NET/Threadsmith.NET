@@ -1,1 +1,1 @@
-No selected, non-excluded analyzers have owned changed documents to check.
+No changed owned documents or applicable project analyzers are available for this check.

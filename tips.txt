@@ -48,3 +48,4 @@ Both skill formats use Threadsmith’s governed execution path: enabling a skill
 Changing a Claude-style skill’s files invalidates its previous authorization—verify and enable the updated version before using it again.
 Threadsmith renders most Markdown right in the terminal.
 You can double-click the context usage meter in the upper-right of the TUI to open a visual view of your context usage.
+All your base are belong to us.

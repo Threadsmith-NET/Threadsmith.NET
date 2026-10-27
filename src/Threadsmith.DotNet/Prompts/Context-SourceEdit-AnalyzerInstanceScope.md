@@ -1,1 +1,1 @@
-Absence in scoped results is not a clean project check. All supported rules of selected instances execute under effective project configuration.
+Absence in scoped results is not a clean project check. Project analyzer rules execute under effective project configuration.

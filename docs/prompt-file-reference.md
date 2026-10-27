@@ -42,13 +42,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 40 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **306** | Complete deployed catalog. |
+| **Total** | **300** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -173,18 +173,12 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-CurrentTurn-HostAuthorizedUserUrl.md` | Host-authorized current-turn URL guidance. | [`Ordinal`](#placeholder-ordinal), [`UserUrlId`](#placeholder-userurlid) |
 
-| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler and optional analyzer feedback, independent coverage and producer identity, repair within the requested scope, explicit unknown evidence, and correction of stale validation claims. | [`FeedbackJson`](#placeholder-feedbackjson) |
+| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler and optional analyzer feedback, independent coverage and producer identity, repair of introduced errors and new work-related compiler or analyzer warnings before completion, assessment of unknown warning origins, explicit unknown evidence, and correction of stale validation claims. | [`FeedbackJson`](#placeholder-feedbackjson) |
 | `Context-SourceEdit-MembershipRefresh.md` | Coverage omission for changed membership or non-source input. | `None` |
 | `Context-SourceEdit-AnalyzerSkipped.md` | No selected owned document analyzer scope. | `None` |
-| `Context-SourceEdit-AnalyzerUnavailable.md` | Unavailable automatic admission after unidentified failure. | `None` |
 | `Context-SourceEdit-AnalyzerCancelled.md` | Cancelled candidate analyzer coverage. | `None` |
-| `Context-SourceEdit-AnalyzerTimedOut.md` | Expired analyzer allowance and transient quarantine. | `None` |
 | `Context-SourceEdit-AnalyzerFailed.md` | Failed analyzer coverage and transient quarantine. | `None` |
 | `Context-SourceEdit-AnalyzerGraphReplacement.md` | Unknown analyzer origins and comparisons after graph replacement. | `None` |
-| `Context-SourceEdit-AnalyzerMissingIds.md` | Unavailable selected analyzer IDs. | [`DiagnosticIds`](#placeholder-diagnosticids) |
-| `Context-SourceEdit-AnalyzerDisabledIdentity.md` | Transiently disabled analyzer identity. | [`AnalyzerIdentity`](#placeholder-analyzeridentity) |
-| `Context-SourceEdit-AnalyzerUnqualifiedIdentity.md` | Unqualified analyzer implementation and version. | [`AnalyzerIdentity`](#placeholder-analyzeridentity) |
-| `Context-SourceEdit-AnalyzerSuppressor.md` | Analyzer scope omitted to preserve applicable suppression. | [`Reason`](#placeholder-reason) |
 | `Context-SourceEdit-AnalyzerDocumentScope.md` | Whole-document analyzer coverage limitations. | `None` |
 | `Context-SourceEdit-AnalyzerInstanceScope.md` | Selected analyzer instance execution and clean-result limits. | `None` |
 | `Context-SourceEdit-NewSourceParseOptions.md` | Default parsing and pending evaluated membership for new source. | `None` |
@@ -490,7 +484,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Compiler findings do not gate writes; the model must repair introduced errors within the requested scope before finishing or explain a conflict with the request. Missing counts are unknown and incomplete coverage cannot establish clean validation. Builds/tests require explicit tool calls. | `None` |
+| `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Compiler findings do not gate writes; the model must repair introduced errors and treat new compiler or analyzer warnings related to the current work as errors for completion, fixing them before finishing or explaining a conflict with the request. Unknown warning origins require assessment against the changes; unrelated existing warnings remain out of scope. Missing counts are unknown and incomplete coverage cannot establish clean validation. Builds/tests require explicit tool calls. | `None` |
 | `Tool-delegate_agents-Description.md` | Delegation tool guidance for role selection including concrete Explorer tasks, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
@@ -859,8 +853,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-projectcount"></a>`ProjectCount` | Number of prior edited projects omitted from bounded source-edit coverage. |
 | <a id="placeholder-proof"></a>`Proof` | Compiler-derived proof or explanation for a call-flow edge. |
 | <a id="placeholder-reason"></a>`Reason` | Bounded explanation for the surrounding outcome, omission, or correction. |
-| <a id="placeholder-analyzeridentity"></a>`AnalyzerIdentity` | Host-selected analyzer implementation type, with version when explaining qualification; treated as data. |
-| <a id="placeholder-diagnosticids"></a>`DiagnosticIds` | Host-selected comma-separated unavailable or unqualified analyzer diagnostic IDs. |
 | <a id="placeholder-recentturns"></a>`RecentTurns` | Bounded recent conversation turns retained verbatim in the request. |
 | <a id="placeholder-rejectedquery"></a>`RejectedQuery` | Bounded query text that the host rejected. |
 | <a id="placeholder-relationship"></a>`Relationship` | Relationship between an artifact/symbol and its origin. |

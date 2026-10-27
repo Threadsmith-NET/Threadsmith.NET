@@ -9,6 +9,29 @@ using Xunit;
 
 public static partial class SourceEditAnalysisTests
 {
+    /// <summary>Warnings for separate nullable arguments on one line retain their source columns.</summary>
+    [Fact]
+    public static async Task SameLineWarningsRetainDistinctColumns()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new TestSemanticSolution();
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
+        await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        const string relative = "Contracts/Services.cs";
+        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
+        const string declaration = "public class NullableItems { public void M(string? first, string? second) { System.Collections.Generic.List<object> items = [first, second]; } }";
+        var changed = original + "\n#nullable enable\n" + declaration;
+
+        var analysis = await AnalyzeCompletedAsync(engine, events, command, fixture.Root, Snapshot(relative, original, changed), ct);
+
+        var findings = analysis.Diagnostics.Where(item => item.Code == "CS8604").ToArray();
+        Assert.Equal(2, findings.Length);
+        Assert.Equal(findings[0].Line, findings[1].Line);
+        Assert.Equal<int?>([declaration.IndexOf("[first", StringComparison.Ordinal) + 2, declaration.IndexOf("second]", StringComparison.Ordinal) + 1], findings.Select(item => item.Column).Order());
+    }
+
     /// <summary>Disabled analyzer feedback leaves ordinary edits on their existing compiler-only path.</summary>
     [Fact]
     public static async Task AutomaticEditDoesNotExecuteSelectedAnalyzers()

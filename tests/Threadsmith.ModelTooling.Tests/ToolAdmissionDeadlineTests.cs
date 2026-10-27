@@ -35,7 +35,10 @@ public static class ToolAdmissionDeadlineTests
 
             return Task.CompletedTask;
         });
-        var registry = new ToolRegistry([blocker, bounded], runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumSourceConcurrency = 1 } });
+        var registry = new ToolRegistry([], runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumSourceConcurrency = 1 } });
+        var sharedSource = new ToolActivitySource(ToolActivitySourceKind.Extension, "admission-fixture");
+        registry.RegisterOrReplace(blocker, sharedSource);
+        registry.RegisterOrReplace(bounded, sharedSource);
         registry.RegisterOrReplace(later, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "later-source"));
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock, parallelOptions: new ToolParallelOptions { MaximumConcurrency = 1 });
         Task first;

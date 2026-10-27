@@ -112,7 +112,6 @@ public static partial class EditAnalyzerTests
         var disabled = await engine.AnalyzeAnalyzerCandidateAsync(source, candidate, [document.Id], options, false, true, TestContext.Current.CancellationToken);
         Assert.Empty(Assert.Single(disabled.After).Diagnostics);
         Assert.Empty(Assert.Single(disabled.After).UnavailableIds);
-        Assert.Contains(Assert.Single(disabled.After).Configuration, rule => rule.Id == "TS1170" && rule.EffectiveSeverity == "Suppress");
 
         candidate = source.WithDocumentText(document.Id, SourceText.From("#pragma warning disable TS1170\npublic class AnalyzerProbe {}"));
         var suppressed = await engine.AnalyzeAnalyzerCandidateAsync(source, candidate, [document.Id], options, false, true, TestContext.Current.CancellationToken);
@@ -288,7 +287,7 @@ public static partial class EditAnalyzerTests
         project.Save(projectPath);
         await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "AnalyzerCases.cs"), Violations, cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "analyzer-input.txt"), "enabled", cancellationToken);
-        await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n[*.cs]\n" + string.Join('\n', FixtureDiagnosticIds.Select(id => "dotnet_diagnostic." + id + ".severity = suggestion")), cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n[*.cs]\ndotnet_analyzer_diagnostic.severity = none\n" + string.Join('\n', FixtureDiagnosticIds.Select(id => "dotnet_diagnostic." + id + ".severity = suggestion")), cancellationToken);
     }
 
     private static string StageExecutionAnalyzer(string root)

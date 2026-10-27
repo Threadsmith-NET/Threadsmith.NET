@@ -1,6 +1,5 @@
 namespace Threadsmith.DotNet;
 
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -11,13 +10,7 @@ public sealed partial class SemanticEngine
 {
     private readonly SemaphoreSlim _advisorySlots;
     private readonly TimeProvider _analyzerTimeProvider;
-    private readonly HashSet<string> _warmAnalyzerIdentities = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _disabledAnalyzerIdentities = new(StringComparer.Ordinal);
-    private bool _automaticAnalyzerFailure;
     private long _advisoryOperationsStarted;
-
-    /// <summary>Allows deterministic fixture identities in tests without broadening the production qualification catalog.</summary>
-    internal Func<EditAnalyzerIdentity, bool> AnalyzerQualification { get; init; } = IsQualifiedEditAnalyzer;
 
     /// <summary>Admitted physical operations, including work abandoned by its caller.</summary>
     internal int ActiveAdvisoryOperations => _editOptions.Analyzers.MaximumConcurrentOperations - _advisorySlots.CurrentCount;
@@ -25,28 +18,18 @@ public sealed partial class SemanticEngine
     /// <summary>Physical operation entries, used to verify coalescing independently of occupied permits.</summary>
     internal long GetAdvisoryOperationsStarted() => Interlocked.Read(ref _advisoryOperationsStarted);
 
-    private static bool IsQualifiedEditAnalyzer(EditAnalyzerIdentity identity)
-    {
-        return AnalyzerIdentityKey(identity) is
-            "Microsoft.CodeAnalysis.CSharp.NetAnalyzers/10.0.403.0/Microsoft.NetCore.CSharp.Analyzers.Runtime.CSharpForwardCancellationTokenToInvocationsAnalyzer"
-            or "Microsoft.CodeAnalysis.NetAnalyzers/10.0.403.0/Microsoft.NetCore.Analyzers.Tasks.UseValueTasksCorrectlyAnalyzer"
-            or "Microsoft.VisualStudio.Threading.Analyzers.CSharp/18.7.23.44529/Microsoft.VisualStudio.Threading.Analyzers.VSTHRD002UseJtfRunAnalyzer"
-            or "Microsoft.VisualStudio.Threading.Analyzers/18.7.23.44529/Microsoft.VisualStudio.Threading.Analyzers.VSTHRD100AsyncVoidMethodAnalyzer";
-    }
-
     private async Task AnalyzeAutomaticEditAnalyzersAsync(EditCandidate candidate)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var checkId = SemanticCheckId.New();
         var phase = candidate.CommittedOnly ? SemanticCheckPhase.PostMutation : SemanticCheckPhase.PreMutation;
         var outcome = SemanticCheckOutcome.Completed;
-        var options = _editOptions.Analyzers with { DiagnosticIds = [.. _editOptions.Analyzers.DiagnosticIds.Where(id => !_diagnosticReporting.IsExcluded(id))] };
-        var excluded = options.DiagnosticIds.Length != _editOptions.Analyzers.DiagnosticIds.Length;
-        var execution = new EditAnalyzerExecution(this, options);
+        var options = _editOptions.Analyzers;
+        var execution = new EditAnalyzerExecution(this);
         var admitted = false;
         UpdateEditResult(candidate, result => result with
         {
-            Analyzers = new() { Status = "pending", DocumentsInScope = candidate.Documents.Count, OutputFiltered = excluded },
+            Analyzers = new() { Status = "pending", DocumentsInScope = candidate.Documents.Count },
         });
         try
         {
@@ -54,21 +37,11 @@ public sealed partial class SemanticEngine
                 new SemanticCheckStarted(candidate.Command.SessionId, DateTimeOffset.UtcNow, candidate.Command.RunId, checkId, phase, "advisory edit analyzers") { EffectId = candidate.Command.EffectId },
                 CancellationToken.None);
             candidate.Token.ThrowIfCancellationRequested();
-            if (candidate.Documents.Count == 0 || options.DiagnosticIds.Length == 0)
+            if (candidate.Documents.Count == 0)
             {
                 SetAnalyzerOmission(candidate, "skipped", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerSkipped));
                 outcome = SemanticCheckOutcome.Skipped;
                 return;
-            }
-
-            lock (_gate)
-            {
-                if (_automaticAnalyzerFailure)
-                {
-                    SetAnalyzerOmission(candidate, "unavailable", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerUnavailable));
-                    outcome = SemanticCheckOutcome.Degraded;
-                    return;
-                }
             }
 
             // Await admission outside the worker pool. Cancelled candidates leave no queued advisory waiter.
@@ -82,8 +55,7 @@ public sealed partial class SemanticEngine
                     throw new OperationCanceledException(candidate.Token);
                 }
 
-                _warmAnalyzerIdentities.UnionWith(execution.Identities.Keys);
-                PublishAnalyzerComparison(candidate, comparison, excluded);
+                PublishAnalyzerComparison(candidate, comparison);
             }
         }
         catch (OperationCanceledException) when (candidate.Token.IsCancellationRequested)
@@ -94,26 +66,12 @@ public sealed partial class SemanticEngine
         catch (OperationCanceledException)
         {
             outcome = SemanticCheckOutcome.Cancelled;
-            lock (_gate)
-            {
-                // A driver executes a selected group; a timeout cannot identify the guilty callback safely.
-                _disabledAnalyzerIdentities.UnionWith(execution.Identities.Keys);
-                _automaticAnalyzerFailure |= execution.Started && execution.Identities.IsEmpty;
-            }
-
-            SetAnalyzerOmission(candidate, "timed-out", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerTimedOut));
+            SetAnalyzerOmission(candidate, "cancelled", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerCancelled));
         }
         catch (Exception exception)
         {
             _logger.LogWarning(exception, "Optional edit analyzer execution failed");
             outcome = SemanticCheckOutcome.Degraded;
-            lock (_gate)
-            {
-                var failed = execution.Failures.IsEmpty ? execution.Identities.Keys : execution.Failures.Keys;
-                _disabledAnalyzerIdentities.UnionWith(failed);
-                _automaticAnalyzerFailure |= execution.Started && execution.Identities.IsEmpty;
-            }
-
             SetAnalyzerOmission(candidate, "failed", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerFailed));
         }
         finally
@@ -161,7 +119,7 @@ public sealed partial class SemanticEngine
     }
 
     // Caller holds _gate; publish only complete, current comparison evidence into the existing revision stream.
-    private void PublishAnalyzerComparison(EditCandidate candidate, EditAnalyzerComparison comparison, bool excluded)
+    private void PublishAnalyzerComparison(EditCandidate candidate, EditAnalyzerComparison comparison)
     {
         var findings = new List<EditFinding>();
         var omissions = new List<string>();
@@ -175,7 +133,7 @@ public sealed partial class SemanticEngine
         var resolved = 0;
         var complete = true;
         var truncated = false;
-        var filtered = excluded;
+        var filtered = false;
         var groups = candidate.Documents.GroupBy(id => id.ProjectId).ToArray();
         for (var index = 0; index < comparison.After.Count; index++)
         {
@@ -187,10 +145,6 @@ public sealed partial class SemanticEngine
             filtered |= before.OutputFiltered || after.OutputFiltered;
             count += after.ReportableCount ?? after.Diagnostics.Count;
             omissions.AddRange(after.Omissions);
-            if (after.UnavailableIds.Count != 0)
-            {
-                omissions.Add(_prompts.Render(PromptFileNames.ContextSourceEditAnalyzerMissingIds, new Dictionary<string, string>(StringComparer.Ordinal) { ["DiagnosticIds"] = string.Join(", ", after.UnavailableIds) }));
-            }
 
             var preceding = before.Diagnostics.GroupBy(AnalyzerFingerprint, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
             var current = after.Diagnostics.GroupBy(AnalyzerFingerprint, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
@@ -231,6 +185,7 @@ public sealed partial class SemanticEngine
                     "unknown",
                     !comparable || initial is null ? "unknown" : original ? "initial" : "introduced")
                 {
+                    Column = finding.Column,
                     Severity = severity,
                     Producer = "analyzer",
                     AnalyzerIdentity = BoundEditText(finding.Producer, _editOptions.MaximumDiagnosticMessageCharacters),
@@ -240,7 +195,7 @@ public sealed partial class SemanticEngine
         }
 
         var retained = OrderEditFindings(findings).Take(_editOptions.MaximumRetainedDiagnostics).Select(item => item.Diagnostic).ToArray();
-        var status = comparison.After.All(project => project.Analyzers.Count == 0) ? "unavailable" : complete ? "completed" : "partial";
+        var status = comparison.After.All(project => project.Analyzers.Count == 0) ? "skipped" : complete ? "completed" : "partial";
         UpdateEditResult(candidate, result => result with
         {
             Analyzers = new()
@@ -264,62 +219,14 @@ public sealed partial class SemanticEngine
     private sealed class EditAnalyzerExecution
     {
         private readonly SemanticEngine _owner;
-        private readonly EditAnalyzerOptions _options;
-        private bool _cold;
         private int _admission;
 
-        public EditAnalyzerExecution(SemanticEngine owner, EditAnalyzerOptions options)
+        public EditAnalyzerExecution(SemanticEngine owner)
         {
             _owner = owner;
-            _options = options;
         }
-
-        public ConcurrentDictionary<string, byte> Identities { get; } = new(StringComparer.Ordinal);
-
-        public ConcurrentDictionary<string, byte> Failures { get; } = new(StringComparer.Ordinal);
-
-        public bool Started => Volatile.Read(ref _admission) is 1 or 2;
-
-        public int BudgetMilliseconds => _cold ? Math.Max(_options.ColdStartBudgetMilliseconds, _options.BudgetMilliseconds) : _options.BudgetMilliseconds;
 
         public int MaximumRetainedDiagnostics => _owner._editOptions.MaximumRetainedDiagnostics;
-
-        public string? Qualify(EditAnalyzerIdentity identity)
-        {
-            lock (_owner._gate)
-            {
-                if (_owner._disabledAnalyzerIdentities.Contains(AnalyzerIdentityKey(identity)))
-                {
-                    return _owner._prompts.Render(PromptFileNames.ContextSourceEditAnalyzerDisabledIdentity, new Dictionary<string, string>(StringComparer.Ordinal) { ["AnalyzerIdentity"] = identity.Type });
-                }
-            }
-
-            return _owner.AnalyzerQualification(identity) ? null : _owner._prompts.Render(PromptFileNames.ContextSourceEditAnalyzerUnqualifiedIdentity, new Dictionary<string, string>(StringComparer.Ordinal) { ["AnalyzerIdentity"] = identity.Type + " " + identity.Version });
-        }
-
-        public void Selected(IReadOnlyList<EditAnalyzerIdentity> identities)
-        {
-            lock (_owner._gate)
-            {
-                foreach (var identity in identities)
-                {
-                    var key = AnalyzerIdentityKey(identity);
-                    Identities.TryAdd(key, 0);
-                    _cold |= !_owner._warmAnalyzerIdentities.Contains(key);
-                }
-            }
-        }
-
-        public void Failed(EditAnalyzerIdentity identity)
-        {
-            var key = AnalyzerIdentityKey(identity);
-            Failures.TryAdd(key, 0);
-            lock (_owner._gate)
-            {
-                // A callback may fault after its observer was superseded; health outlives that result.
-                _owner._disabledAnalyzerIdentities.Add(key);
-            }
-        }
 
         public bool TryBegin()
         {
@@ -360,6 +267,6 @@ public sealed partial class SemanticEngine
         public bool IsExcluded(EditAnalyzerFinding finding) => _owner._diagnosticReporting.IsExcluded(finding.Id);
 
         public bool ShouldReport(EditAnalyzerFinding finding) => !finding.Suppressed && finding.Severity != "Hidden"
-            && _options.DiagnosticIds.Contains(finding.Id, StringComparer.OrdinalIgnoreCase) && !IsExcluded(finding);
+            && !IsExcluded(finding);
     }
 }

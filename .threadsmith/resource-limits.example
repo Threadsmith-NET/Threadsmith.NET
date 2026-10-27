@@ -24,7 +24,7 @@
       "editAnalysis": {
         "analyzers": {
           "enabled": false,
-          "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"],
+          "diagnosticIds": [],
           "budgetMilliseconds": 1000,
           "coldStartBudgetMilliseconds": 10000,
           "maximumConcurrentOperations": 1,

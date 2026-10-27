@@ -18,7 +18,7 @@ public static partial class EditAnalyzerTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public static async Task AutomaticFindingsAreQualifiedFilteredAndRepaired(bool exclude, bool asError)
+    public static async Task AutomaticProjectFindingsAreFilteredAndRepaired(bool exclude, bool asError)
     {
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new TestSemanticSolution();
@@ -44,7 +44,7 @@ public static partial class EditAnalyzerTests
         var first = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Violations, Violations + "\n// candidate", null, ct);
         Assert.Equal("completed", first.Analyzers.Status);
         var analyzerFindings = first.Diagnostics.Where(item => item.Producer == "analyzer").ToArray();
-        Assert.Equal(exclude ? 3 : 4, analyzerFindings.Select(item => item.Code).Distinct().Count());
+        Assert.Equal(exclude ? 4 : 5, analyzerFindings.Select(item => item.Code).Distinct().Count());
         Assert.Equal(analyzerFindings.Length, first.Analyzers.ReportableFindings);
         Assert.Equal(exclude, first.Analyzers.OutputFiltered);
         Assert.Equal(0, first.Analyzers.NewFindings);
@@ -72,7 +72,7 @@ public static partial class EditAnalyzerTests
     [InlineData(true, false, false)]
     [InlineData(false, true, false)]
     [InlineData(true, false, true)]
-    public static async Task AutomaticBlockedWorkSurvivesPromotionAndCoalescesReplacement(bool replace, bool timeout, bool lateFault)
+    public static async Task AutomaticBlockedWorkIgnoresDeadlineAndCoalescesReplacement(bool replace, bool advanceClock, bool lateFault)
     {
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new TestSemanticSolution();
@@ -88,10 +88,7 @@ public static partial class EditAnalyzerTests
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
             resourceLimits: new() { CompilationWorkers = 2, EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } },
-            timeProvider: clock)
-        {
-            AnalyzerQualification = identity => identity.Assembly == "Threadsmith.SemanticFixtures.Roslyn59",
-        };
+            timeProvider: clock);
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var pipeName = Guid.NewGuid().ToString("N")[..16];
@@ -126,14 +123,14 @@ public static partial class EditAnalyzerTests
             await engine.RefreshDocumentsAsync([new(file, blocked, AnalyzerHash(blocked))], ct);
             Assert.True(engine.GetLatestEditAnalysis(session, command.RunId, command.EffectId)!.CandidateReused);
             Task<SourceEditAnalysis>? replacement = null;
-            if (timeout)
+            if (advanceClock)
             {
                 clock.Expire();
-                Assert.Equal("timed-out", (await advisory.Task.WaitAsync(ct)).Analyzers.Status);
+                Assert.False(advisory.Task.IsCompleted);
                 Assert.Equal(1, engine.ActiveAdvisoryOperations);
             }
 
-            if (replace || timeout)
+            if (replace)
             {
                 var promoted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 replacement = ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, blocked, Repairs, promoted, ct);
@@ -154,12 +151,12 @@ public static partial class EditAnalyzerTests
                 var current = await replacement;
 #pragma warning restore VSTHRD003
                 Assert.False(current.Obsolete);
-                Assert.Equal(timeout ? "unavailable" : lateFault ? "failed" : "completed", current.Analyzers.Status);
+                Assert.Equal(lateFault ? "failed" : "completed", current.Analyzers.Status);
                 Assert.Equal(0, current.Analyzers.ReportableFindings);
                 if (lateFault)
                 {
-                    var quarantined = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Repairs, Repairs + "\n// after fault", null, ct);
-                    Assert.Equal("unavailable", quarantined.Analyzers.Status);
+                    var retried = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Repairs, Repairs + "\n// after fault", null, ct);
+                    Assert.Equal("completed", retried.Analyzers.Status);
                 }
             }
             else
@@ -177,10 +174,10 @@ public static partial class EditAnalyzerTests
         }
     }
 
-    /// <summary>Missing, unqualified, suppressed and faulted execution retain distinct statuses.</summary>
+    /// <summary>Project rules ignore legacy selection, honor suppression and remain enabled after failure.</summary>
     [Theory]
-    [InlineData("unqualified")]
-    [InlineData("missing")]
+    [InlineData("installed")]
+    [InlineData("legacy-selection")]
     [InlineData("suppressed")]
     [InlineData("fault")]
     public static async Task AutomaticUnavailableSuppressedAndFaultedEvidenceIsHonest(string scenario)
@@ -191,22 +188,34 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = scenario == "missing" ? ["MISSING"] : ["TS1170"], BudgetMilliseconds = int.MaxValue } } })
-        {
-            AnalyzerQualification = identity => scenario != "unqualified" && identity.Assembly == "Threadsmith.SemanticFixtures.Roslyn59",
-        };
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = scenario == "legacy-selection" ? ["MISSING"] : ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
-        var after = scenario == "fault" ? "public class AnalyzerFailure {}" : "#pragma warning disable TS1170\npublic class AnalyzerProbe {}";
+        var after = scenario is "installed" or "legacy-selection" ? "public class AnalyzerProbe {}" : scenario == "fault" ? "public class AnalyzerFailure {}" : "#pragma warning disable TS1170\npublic class AnalyzerProbe {}";
         var result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Violations, after, null, ct);
-        Assert.Equal(scenario == "suppressed" ? "completed" : scenario == "fault" ? "failed" : "unavailable", result.Analyzers.Status);
-        Assert.DoesNotContain(result.Diagnostics, item => item.Producer == "analyzer");
+        Assert.Equal(scenario == "fault" ? "failed" : "completed", result.Analyzers.Status);
+        if (scenario is "installed" or "legacy-selection")
+        {
+            var finding = Assert.Single(result.Diagnostics, item => item.Producer == "analyzer");
+            Assert.Equal("TS1170", finding.Code);
+            Assert.Equal(14, finding.Column);
+            Assert.StartsWith("Threadsmith.SemanticFixtures.Roslyn59/", finding.AnalyzerIdentity);
+        }
+        else
+        {
+            Assert.DoesNotContain(result.Diagnostics, item => item.Producer == "analyzer");
+        }
+
         if (scenario == "fault")
         {
+            // The failing source is still the next comparison's baseline. Once replaced,
+            // the following edit must run the same installed analyzer successfully.
             result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, after, Violations, null, ct);
-            Assert.Equal("unavailable", result.Analyzers.Status);
-            Assert.Contains(result.Analyzers.Omissions, omission => omission.Contains("disabled after failure", StringComparison.Ordinal));
+            Assert.Equal("failed", result.Analyzers.Status);
+            result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Violations, Violations + "\n// recovered", null, ct);
+            Assert.Equal("completed", result.Analyzers.Status);
+            Assert.Contains(result.Diagnostics, item => item.Code == "TS1170");
         }
     }
 
@@ -223,10 +232,7 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } })
-        {
-            AnalyzerQualification = identity => identity.Assembly == "Threadsmith.SemanticFixtures.Roslyn59",
-        };
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs"), Violations, Repairs, null, ct);
@@ -248,10 +254,7 @@ public static partial class EditAnalyzerTests
         var workspace = WorkspaceId.New();
         var logger = new AnalyzerTestLogger();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } })
-        {
-            AnalyzerQualification = identity => identity.Assembly == "Threadsmith.SemanticFixtures.Roslyn59",
-        };
+        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var project = engine.CaptureAdvancedSnapshot().Solution.Projects.Single(item => item.Name == "Contracts");
@@ -281,7 +284,7 @@ public static partial class EditAnalyzerTests
         var result = await completed.Task.WaitAsync(ct);
         Assert.True(result.Analyzers.Status == "partial", string.Join(Environment.NewLine, logger.Exceptions));
         Assert.Equal(1, result.Analyzers.DocumentsAnalyzed);
-        Assert.Equal(0, result.Analyzers.ReportableFindings);
+        Assert.DoesNotContain(result.Diagnostics, item => item.Producer == "analyzer" && item.Code == "TS1170");
         Assert.Null(result.Analyzers.NewFindings);
     }
 

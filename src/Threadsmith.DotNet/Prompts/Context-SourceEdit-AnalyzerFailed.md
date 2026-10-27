@@ -1,1 +1,1 @@
-Selected analyzer execution failed. Faulted identities are disabled until engine restart; no clean result is available.
+Analyzer execution failed for this edit; no clean result is available. Project analyzers remain enabled for subsequent edits.

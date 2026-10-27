@@ -286,8 +286,29 @@ public static class Plan35ConversationContextTests
         var firstOutcome = result.ModelInput.IndexOf("first outcome", StringComparison.Ordinal);
         Assert.True(secondRequest >= 0 && secondOutcome > secondRequest);
         Assert.True(firstRequest > secondOutcome && firstOutcome > firstRequest);
-        Assert.DoesNotContain("first initial steering", result.ModelInput, StringComparison.Ordinal);
-        Assert.Equal(4, result.Inspection.ConversationItems.Count(item => item.Included && item.Kind is "User" or "Assistant"));
+        var initialRequest = result.ModelInput.IndexOf("first initial steering", StringComparison.Ordinal);
+        Assert.True(initialRequest > secondOutcome && initialRequest < firstRequest);
+        Assert.Equal(5, result.Inspection.ConversationItems.Count(item => item.Included && item.Kind is "User" or "Assistant"));
+    }
+
+    /// <summary>Live run archives belong to active continuation, never a second copy in recent conversation history.</summary>
+    [Fact]
+    public static async Task Current_run_responses_and_steering_are_not_reinjected_as_prior_history()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var sessionId = SessionId.New();
+        var currentRunId = RunId.New();
+        var current = await ArchiveAsync(fixture, sessionId, ConversationRole.User, "current task", runId: currentRunId);
+        await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "live progress", runId: currentRunId);
+        await ArchiveAsync(fixture, sessionId, ConversationRole.User, "live steering", runId: currentRunId);
+        await ArchiveAsync(fixture, sessionId, ConversationRole.Assistant, "live acknowledgement", runId: currentRunId);
+        var assembler = CreateAssembler(fixture, events);
+
+        var result = await assembler.AssembleAsync(CreateRequest(fixture, sessionId, current, "current task") with { RunId = currentRunId });
+
+        Assert.DoesNotContain(result.Messages!, message => message.SectionId is "recent-user" or "recent-assistant");
+        Assert.Single(result.Messages!, message => message.SectionId == "current-user" && message.GetModelVisibleContent() == "current task");
     }
 
     /// <summary>Legacy clones retain one adjacent exchange when their copied messages lost a shared run identity.</summary>

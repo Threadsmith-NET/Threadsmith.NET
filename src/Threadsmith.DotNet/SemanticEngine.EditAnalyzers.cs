@@ -46,18 +46,10 @@ public sealed partial class SemanticEngine
             throw new ArgumentException("Matching baseline and candidate document coverage is required.", nameof(documents));
         }
 
-        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(execution is null ? captured.BudgetMilliseconds : Math.Max(captured.BudgetMilliseconds, captured.ColdStartBudgetMilliseconds)), _analyzerTimeProvider);
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        // Automatic work follows candidate cancellation only; it must not create an analyzer deadline timer.
+        using var deadline = execution is null ? new CancellationTokenSource(TimeSpan.FromMilliseconds(captured.BudgetMilliseconds), _analyzerTimeProvider) : null;
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline?.Token ?? CancellationToken.None);
         var started = Stopwatch.GetTimestamp();
-        void ObserveSelection(IReadOnlyList<EditAnalyzerIdentity> identities)
-        {
-            if (execution is not null)
-            {
-                execution.Selected(identities);
-                deadline.CancelAfter(TimeSpan.FromMilliseconds(Math.Max(1, execution.BudgetMilliseconds - Stopwatch.GetElapsedTime(started).TotalMilliseconds)));
-            }
-        }
-
         async Task<EditAnalyzerComparison> AnalyzeAsync(CancellationToken token)
         {
             if (execution?.TryBegin() == false)
@@ -79,15 +71,11 @@ public sealed partial class SemanticEngine
                         var basis = _editDiagnosticBases.GetValueOrDefault(group.Key);
                         retained = basis?.AnalyzerCandidate?.Match(source, scope, captured, execution is not null)
                             ?? basis?.AnalyzerBaseline?.Match(source, scope, captured, execution is not null);
-                        if (retained is not null && execution is not null && retained.Analyzers.Any(identity => execution.Qualify(identity) is not null))
-                        {
-                            retained = null;
-                        }
                     }
                 }
 
                 before.Add(retained is null
-                    ? await AnalyzeDocumentAnalyzersAsync(source.GetProject(group.Key) ?? throw new InvalidOperationException("Baseline project unavailable."), [.. group], captured, includeFullReference, execution, ObserveSelection, token)
+                    ? await AnalyzeDocumentAnalyzersAsync(source.GetProject(group.Key) ?? throw new InvalidOperationException("Baseline project unavailable."), [.. group], captured, includeFullReference, execution, token)
                     : retained with
                     {
                         Reused = true,
@@ -96,7 +84,7 @@ public sealed partial class SemanticEngine
                         Analyzers = retained.Analyzers.Select(analyzer => analyzer with { ExecutionMilliseconds = 0 }).ToImmutableArray(),
                     });
                 after.Add(owner is { CommittedOnly: true } && ReferenceEquals(source, candidate) ? before[^1]
-                    : await AnalyzeDocumentAnalyzersAsync(candidate.GetProject(group.Key) ?? throw new InvalidOperationException("Candidate project unavailable."), [.. group], captured, includeFullReference, execution, ObserveSelection, token));
+                    : await AnalyzeDocumentAnalyzersAsync(candidate.GetProject(group.Key) ?? throw new InvalidOperationException("Candidate project unavailable."), [.. group], captured, includeFullReference, execution, token));
             }
 
             token.ThrowIfCancellationRequested();
@@ -158,59 +146,35 @@ public sealed partial class SemanticEngine
         EditAnalyzerOptions options,
         bool includeFullReference,
         EditAnalyzerExecution? execution,
-        Action<IReadOnlyList<EditAnalyzerIdentity>> observeSelection,
         CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
         var requested = options.DiagnosticIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var available = project.AnalyzerReferences.SelectMany(reference => reference.GetAnalyzers(project.Language)).Distinct().ToArray();
-        var denied = new List<string>();
-        var selected = available
-            .Where(analyzer => analyzer.SupportedDiagnostics.Any(rule => requested.Contains(rule.Id)))
-            .Where(analyzer =>
-            {
-                var reason = execution?.Qualify(GetAnalyzerIdentity(analyzer));
-                if (reason is null)
-                {
-                    return true;
-                }
 
-                denied.Add(reason);
-                return false;
-            })
-            .ToArray();
+        // Automatic feedback follows the evaluated project's analyzer configuration. Rule selection
+        // is retained only for explicit performance experiments using this same execution path.
+        var selected = available.Where(analyzer => analyzer is not DiagnosticSuppressor
+            && (execution is not null || analyzer.SupportedDiagnostics.Any(rule => requested.Contains(rule.Id)))).ToArray();
         var executedIds = selected.SelectMany(analyzer => analyzer.SupportedDiagnostics.Select(rule => rule.Id)).ToHashSet(StringComparer.Ordinal);
         var suppressors = available.OfType<DiagnosticSuppressor>()
-            .Where(suppressor => suppressor.SupportedSuppressions.Any(rule => executedIds.Contains(rule.SuppressedDiagnosticId))).ToArray();
-        foreach (var suppressor in suppressors)
-        {
-            var reason = execution?.Qualify(GetAnalyzerIdentity(suppressor));
-            if (reason is not null)
-            {
-                denied.Add(_prompts.Render(PromptFileNames.ContextSourceEditAnalyzerSuppressor, new Dictionary<string, string>(StringComparer.Ordinal) { ["Reason"] = reason }));
-                selected = [];
-            }
-        }
-
-        var analyzers = selected.Length == 0 ? [] : selected.Concat(suppressors).ToImmutableArray();
-        observeSelection(analyzers.Select(GetAnalyzerIdentity).ToImmutableArray());
+            .Where(suppressor => suppressor.SupportedSuppressions.Any(rule => executedIds.Contains(rule.SuppressedDiagnosticId)));
+        var analyzers = selected.Concat(suppressors).ToImmutableArray();
         var producers = analyzers.SelectMany(analyzer => analyzer.SupportedDiagnostics.Select(rule => (rule.Id, Identity: AnalyzerIdentityKey(GetAnalyzerIdentity(analyzer)))))
             .GroupBy(item => item.Id, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.First().Identity, StringComparer.Ordinal);
-        var missing = requested.Except(analyzers.SelectMany(analyzer => analyzer.SupportedDiagnostics.Select(rule => rule.Id)), StringComparer.OrdinalIgnoreCase).ToArray();
+        var missing = execution is not null ? [] : requested.Except(analyzers.SelectMany(analyzer => analyzer.SupportedDiagnostics.Select(rule => rule.Id)), StringComparer.OrdinalIgnoreCase).ToArray();
         var identities = new List<EditAnalyzerIdentity>();
         var findings = new List<EditAnalyzerFinding>();
         var referenceFindings = new List<EditAnalyzerFinding>();
-        var configuration = new List<EditAnalyzerRuleConfiguration>();
         var omissions = new List<string>
         {
             _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerDocumentScope),
             _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerInstanceScope),
         };
-        omissions.AddRange(denied);
         if (analyzers.IsEmpty)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return new(project.Name, [], missing.ToImmutableArray(), [], [], [], omissions.ToImmutableArray(), 0, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            return new(project.Name, [], missing.ToImmutableArray(), [], [], omissions.ToImmutableArray(), 0, Stopwatch.GetElapsedTime(started).TotalMilliseconds);
         }
 
         var compilation = await project.GetCompilationAsync(cancellationToken)
@@ -219,11 +183,7 @@ public sealed partial class SemanticEngine
         var failures = new ConcurrentQueue<Exception>();
         var driver = compilation.WithAnalyzers(analyzers, new CompilationWithAnalyzersOptions(
             project.AnalyzerOptions,
-            (exception, analyzer, _) =>
-            {
-                execution?.Failed(GetAnalyzerIdentity(analyzer));
-                failures.Enqueue(exception);
-            },
+            (exception, _, _) => failures.Enqueue(exception),
             options.ConcurrentAnalysis,
             logAnalyzerExecutionTime: true,
             reportSuppressedDiagnostics: true));
@@ -233,18 +193,6 @@ public sealed partial class SemanticEngine
             var document = project.GetDocument(id) ?? throw new InvalidOperationException("Analyzer document is unavailable.");
             var tree = await document.GetSyntaxTreeAsync(cancellationToken)
                 ?? throw new InvalidOperationException("Analyzer syntax tree is unavailable.");
-            foreach (var rule in analyzers.SelectMany(analyzer => analyzer.SupportedDiagnostics).DistinctBy(rule => rule.Id))
-            {
-                var effective = rule.GetEffectiveSeverity(compilation.Options);
-                if (compilation.Options.SyntaxTreeOptionsProvider?.TryGetDiagnosticValue(tree, rule.Id, cancellationToken, out var treeSeverity) == true)
-                {
-                    effective = treeSeverity;
-                }
-
-                project.AnalyzerOptions.AnalyzerConfigOptionsProvider.GetOptions(tree).TryGetValue("dotnet_diagnostic." + rule.Id + ".severity", out var configured);
-                configuration.Add(new(document.FilePath ?? document.Name, rule.Id, effective.ToString(), configured));
-            }
-
             findings.AddRange((await driver.GetAnalyzerSyntaxDiagnosticsAsync(tree, cancellationToken)).Select(diagnostic => ToAnalyzerFinding(diagnostic, producers)));
             findings.AddRange((await driver.GetAnalyzerSemanticDiagnosticsAsync(compilation.GetSemanticModel(tree), null, cancellationToken)).Select(diagnostic => ToAnalyzerFinding(diagnostic, producers)));
         }
@@ -302,7 +250,7 @@ public sealed partial class SemanticEngine
         var unique = findings.Distinct().ToArray();
         var reportable = execution is null ? unique : [.. unique.Where(execution.ShouldReport)];
         var retainedFindings = execution is null ? reportable : [.. reportable.OrderBy(finding => finding.Severity == "Error" ? 0 : finding.Severity == "Warning" ? 1 : 2).Take(execution.MaximumRetainedDiagnostics)];
-        return new(project.Name, identities.ToImmutableArray(), missing.ToImmutableArray(), retainedFindings.ToImmutableArray(), referenceFindings.Distinct().ToImmutableArray(), configuration.ToImmutableArray(), omissions.ToImmutableArray(), preparationMilliseconds, analysisMilliseconds)
+        return new(project.Name, identities.ToImmutableArray(), missing.ToImmutableArray(), retainedFindings.ToImmutableArray(), referenceFindings.Distinct().ToImmutableArray(), omissions.ToImmutableArray(), preparationMilliseconds, analysisMilliseconds)
         {
             ReportableCount = execution is null ? null : reportable.Length,
             OutputFiltered = execution is not null && unique.Any(execution.IsExcluded),
@@ -352,7 +300,7 @@ internal sealed record EditAnalyzerComparison(IReadOnlyList<EditAnalyzerProjectR
 /// <summary>Whole-document coverage and unfiltered evidence for every executed analyzer instance.</summary>
 internal sealed record EditAnalyzerProjectResult(string Project, IReadOnlyList<EditAnalyzerIdentity> Analyzers, IReadOnlyList<string> UnavailableIds,
     IReadOnlyList<EditAnalyzerFinding> Diagnostics, IReadOnlyList<EditAnalyzerFinding> FullReferenceDiagnostics,
-    IReadOnlyList<EditAnalyzerRuleConfiguration> Configuration, IReadOnlyList<string> Omissions, double PreparationMilliseconds, double AnalysisMilliseconds)
+    IReadOnlyList<string> Omissions, double PreparationMilliseconds, double AnalysisMilliseconds)
 {
     /// <summary>Gets whether evidence was reused without a new baseline pass; execution timings are zero in that case.</summary>
     public bool Reused { get; init; }
@@ -370,12 +318,9 @@ internal sealed record EditAnalyzerProjectResult(string Project, IReadOnlyList<E
 /// <summary>Identity and registered action telemetry for the entire selected instance.</summary>
 internal sealed record EditAnalyzerIdentity(string Assembly, string Version, string Type, IReadOnlyList<string> SupportedIds, IReadOnlyList<string> Suppressions, IReadOnlyDictionary<string, int> Actions, double ExecutionMilliseconds);
 
-/// <summary>Effective configuration per supported rule and checked document.</summary>
-internal sealed record EditAnalyzerRuleConfiguration(string Document, string Id, string EffectiveSeverity, string? EditorConfigSeverity);
-
 /// <summary>Unfiltered experiment finding with effective severity and suppression state.</summary>
 internal sealed record EditAnalyzerFinding(string Id, string Severity, bool Suppressed, string Path, int Line, int Column, string Message)
 {
-    /// <summary>Gets the qualified analyzer implementation identity.</summary>
+    /// <summary>Gets the analyzer implementation identity.</summary>
     public string Producer { get; init; } = "unknown";
 }

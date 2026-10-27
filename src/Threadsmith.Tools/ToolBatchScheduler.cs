@@ -105,15 +105,23 @@ internal sealed record PlannedToolInvocation(
     IReadOnlyList<ToolResourceClaim> Claims,
     string? PreparationError = null);
 
+/// <summary>Built-ins have independent registration caps; external providers retain shared source caps.</summary>
+internal sealed record ToolConcurrencyScope(ToolActivitySource Source, string? BuiltInToolId)
+{
+    /// <summary>Resolves the same admission scope for planning and execution, across registration replacement.</summary>
+    public static ToolConcurrencyScope Create(ToolActivitySource source, string toolId) =>
+        new(source, source.Kind == ToolActivitySourceKind.BuiltIn ? toolId.ToUpperInvariant() : null);
+}
+
 /// <summary>Enforces registration-declared source caps across every caller of one pipeline.</summary>
 internal sealed class ToolSourceConcurrencyLimiter
 {
-    private readonly Dictionary<ToolActivitySource, SourceState> _states = [];
+    private readonly Dictionary<ToolConcurrencyScope, SourceState> _states = [];
     private readonly Lock _sync = new();
 
     /// <summary>Waits until the source can admit an invocation without broadening any active cap.</summary>
     public async ValueTask<IDisposable> AcquireAsync(
-        ToolActivitySource source,
+        ToolConcurrencyScope source,
         int maximumConcurrency,
         CancellationToken cancellationToken)
     {
@@ -144,7 +152,7 @@ internal sealed class ToolSourceConcurrencyLimiter
         }
     }
 
-    private void Release(ToolActivitySource source, int maximumConcurrency)
+    private void Release(ToolConcurrencyScope source, int maximumConcurrency)
     {
         lock (_sync)
         {
@@ -173,10 +181,10 @@ internal sealed class ToolSourceConcurrencyLimiter
     {
         private readonly int _maximumConcurrency;
         private readonly ToolSourceConcurrencyLimiter _owner;
-        private readonly ToolActivitySource _source;
+        private readonly ToolConcurrencyScope _source;
         private int _released;
 
-        public Lease(ToolSourceConcurrencyLimiter owner, ToolActivitySource source, int maximumConcurrency)
+        public Lease(ToolSourceConcurrencyLimiter owner, ToolConcurrencyScope source, int maximumConcurrency)
         {
             _owner = owner;
             _source = source;
@@ -301,8 +309,9 @@ internal sealed class ToolConflictPlanner
             return false;
         }
 
-        var source = planned.Registration.Source;
-        PlannedToolInvocation[] sameSource = [.. wave.Where(existing => existing.Registration?.Source == source)];
+        var source = ToolConcurrencyScope.Create(planned.Registration.Source, planned.Registration.Tool.Definition.Id);
+        PlannedToolInvocation[] sameSource = [.. wave.Where(existing => existing.Registration is { } registration
+            && ToolConcurrencyScope.Create(registration.Source, registration.Tool.Definition.Id) == source)];
         var sourceCount = sameSource.Length + 1;
         return sourceCount <= planned.Registration.Tool.Definition.Scheduling.MaximumSourceConcurrency
             && sameSource.All(existing => existing.Registration is { } registration

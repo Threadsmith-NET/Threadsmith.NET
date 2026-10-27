@@ -1,1 +1,0 @@
-Automatic analyzer admission is disabled after an unidentified failure; restart resets this transient state.

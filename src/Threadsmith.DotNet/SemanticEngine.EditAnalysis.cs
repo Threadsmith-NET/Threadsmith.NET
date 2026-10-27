@@ -673,7 +673,7 @@ public sealed partial class SemanticEngine
                 BoundEditText(project, _editOptions.MaximumDiagnosticProjectCharacters),
                 BoundEditText(framework, _editOptions.MaximumDiagnosticFrameworkCharacters),
                 "unknown")
-            { Severity = severity };
+            { Severity = severity, Column = diagnostic.Location.IsInSource ? diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1 : null };
             var finding = new EditFinding(fingerprint, diagnosticProjection, New: !unchanged && before is { Truncated: false });
 
             // Keep memory bounded while retaining errors, then new warnings, then unchanged warnings.

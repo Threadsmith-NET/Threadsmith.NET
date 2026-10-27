@@ -10,6 +10,9 @@ public sealed record SourceEditDiagnostic(
     string TargetFramework,
     string Origin)
 {
+    /// <summary>One-based source column, or null when unavailable (including older serialized findings).</summary>
+    public int? Column { get; init; }
+
     /// <summary>Effective diagnostic severity; older serialized findings remain errors.</summary>
     public DiagnosticSeverity Severity { get; init; } = DiagnosticSeverity.Error;
 
@@ -47,7 +50,7 @@ public sealed record SourceEditAnalyzerAnalysis
     /// <summary>Whether retention or projection omitted reportable analyzer findings.</summary>
     public bool Truncated { get; init; }
 
-    /// <summary>Bounded scope, qualification, failure and cancellation limitations.</summary>
+    /// <summary>Bounded scope, availability, failure and cancellation limitations.</summary>
     public IReadOnlyList<string> Omissions { get; init; } = [];
 }
 

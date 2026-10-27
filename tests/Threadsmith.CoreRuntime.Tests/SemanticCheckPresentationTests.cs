@@ -10,6 +10,35 @@ using Xunit;
 /// <summary>Exercises advisory completion projection, incomplete evidence and durable replay.</summary>
 public static class SemanticCheckPresentationTests
 {
+    /// <summary>Compiler and analyzer locations survive serialization and use the shared column display.</summary>
+    [Theory]
+    [InlineData("compiler")]
+    [InlineData("analyzer")]
+    public static void FindingColumnsSurviveReplayAndDistinguishSameLineLocations(string producer)
+    {
+        var feedback = new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Feedback")
+        {
+            EditAnalysis = new()
+            {
+                EffectId = Guid.NewGuid(),
+                ProjectsAnalyzed = 1,
+                ProjectsInScope = 1,
+                Diagnostics = [
+                    new("CS8604", "Nullable item", "Example.cs", 108, "Example", "net10.0", "unknown") { Column = 46, Producer = producer },
+                    new("CS8604", "Nullable item", "Example.cs", 108, "Example", "net10.0", "unknown") { Column = 76, Producer = producer },
+                    new("CS8604", "Legacy finding", "Example.cs", 191, "Example", "net10.0", "unknown"),
+                ],
+            },
+        };
+        var restored = DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(feedback), 1, DomainEventJson.Serialize(feedback));
+        var transcript = new ConversationTranscript(string.Empty);
+        transcript.Apply(restored);
+
+        Assert.Contains("Example.cs:108:46 [", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Example.cs:108:76 [", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Example.cs:191 [", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>A completion rendered before a correlated wait suppresses that stale notice in live and replay projections.</summary>
     [Theory]
     [InlineData(false)]

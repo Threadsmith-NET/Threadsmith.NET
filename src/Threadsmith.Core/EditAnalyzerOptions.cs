@@ -1,18 +1,18 @@
 namespace Threadsmith.Core;
 
-/// <summary>Startup-captured controls for qualified optional edit analyzers.</summary>
+/// <summary>Startup-captured controls for project-provided optional edit analyzers.</summary>
 public sealed record EditAnalyzerOptions
 {
-    /// <summary>Enables qualified analyzer feedback without extending the edit's immediate observation window.</summary>
+    /// <summary>Enables project-provided analyzer feedback without extending the edit's immediate observation window.</summary>
     public bool Enabled { get; init; }
 
-    /// <summary>Exact rule IDs used to select entire analyzer instances; empty selects none.</summary>
-    public string[] DiagnosticIds { get; init; } = ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"];
+    /// <summary>Rule selection for explicit performance experiments only; automatic feedback uses project configuration.</summary>
+    public string[] DiagnosticIds { get; init; } = [];
 
-    /// <summary>Observation budget after advisory admission, including worker queue wait, in milliseconds.</summary>
+    /// <summary>Deadline for explicit performance experiments only; automatic feedback has no analyzer time budget.</summary>
     public int BudgetMilliseconds { get; init; } = 1000;
 
-    /// <summary>First-use allowance per analyzer identity; the effective allowance is at least the warm budget.</summary>
+    /// <summary>Legacy configuration retained for compatibility; automatic feedback does not impose a first-use deadline.</summary>
     public int ColdStartBudgetMilliseconds { get; init; } = 10000;
 
     /// <summary>Maximum physically running advisory operations, including abandoned work.</summary>

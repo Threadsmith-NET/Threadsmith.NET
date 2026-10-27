@@ -1486,7 +1486,7 @@ internal static class InteractionPresentationFormatter
             foreach (var diagnostic in analysis.Diagnostics.Take(limits.MaximumEditAnalysisFindings))
             {
                 var message = diagnostic.Producer == "analyzer" ? "[analyzer: " + diagnostic.AnalyzerIdentity + "] " + diagnostic.Message : diagnostic.Message;
-                lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, null, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, message));
+                lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, diagnostic.Column, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, message));
             }
 
             if (analysis.Diagnostics.Count > limits.MaximumEditAnalysisFindings || analysis.DiagnosticsTruncated)

@@ -21,7 +21,7 @@ public enum ConversationRole
     /// <summary>A request accepted from the user.</summary>
     User,
 
-    /// <summary>A final response visible to the user.</summary>
+    /// <summary>A visible assistant response, including preserved interrupted output.</summary>
     Assistant,
 }
 

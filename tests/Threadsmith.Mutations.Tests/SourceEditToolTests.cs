@@ -17,13 +17,14 @@ public sealed class SourceEditToolTests
             EffectId = Guid.NewGuid(),
             Pending = true,
             Analyzers = new() { Status = "completed", DocumentsInScope = 1, DocumentsAnalyzed = 1, ReportableFindings = 9 },
-            Diagnostics = [new("CA2016", "Forward cancellation", "Example.cs", 1, "Example", "net10.0", "unknown") { Producer = "analyzer", AnalyzerIdentity = "qualified fixture" }],
+            Diagnostics = [new("CA2016", "Forward cancellation", "Example.cs", 1, "Example", "net10.0", "unknown") { Column = 14, Producer = "analyzer", AnalyzerIdentity = "qualified fixture" }],
         };
         var projected = SourceEditAnalysisProjection.Create(analysis);
         Assert.True(projected["DiagnosticsTruncated"]!.GetValue<bool>());
         Assert.False(projected.ContainsKey("CurrentErrors"));
         Assert.Equal(9, projected["Analyzers"]!["ReportableFindings"]!.GetValue<int>());
         Assert.Equal("analyzer", projected["Diagnostics"]![0]!["Producer"]!.GetValue<string>());
+        Assert.Equal(14, projected["Diagnostics"]![0]!["Column"]!.GetValue<int>());
     }
 
     /// <summary>User-visible feedback summarizes coverage without rendering serialized state or unknown error totals.</summary>
@@ -77,7 +78,7 @@ public sealed class SourceEditToolTests
             ErrorComparisonAvailable = true,
             CurrentWarnings = 1,
             Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial"),
-                new("CS8602", "Possible null reference", "Example.cs", 1, "Example", "net10.0", "introduced") { Severity = DiagnosticSeverity.Warning }],
+                new("CS8602", "Possible null reference", "Example.cs", 1, "Example", "net10.0", "introduced") { Severity = DiagnosticSeverity.Warning, Column = 25 }],
         };
         var receipt = new SourceEditReceipt(analysis.EffectId, MutationSetId.New(), SourceEditStatus.Applied, ["Example.cs"], "Applied") { Analysis = analysis };
         var tool = new SourceEditTool(new ReceiptHandler(receipt), TestPromptLoader.Instance);
@@ -100,6 +101,7 @@ public sealed class SourceEditToolTests
 
         Assert.Equal(hasCounts, projected.TryGetProperty("CurrentWarnings", out _));
         Assert.Equal((int)DiagnosticSeverity.Warning, projected.GetProperty("Diagnostics")[1].GetProperty("Severity").GetInt32());
+        Assert.Equal(25, projected.GetProperty("Diagnostics")[1].GetProperty("Column").GetInt32());
         Assert.Equal("reportable", projected.GetProperty("CountScope").GetString());
         Assert.Equal("initial", projected.GetProperty("Diagnostics")[0].GetProperty("Origin").GetString());
     }
@@ -157,6 +159,7 @@ public sealed class SourceEditToolTests
             {"Code":"CS0246","Message":"Missing type","Project":"Example","TargetFramework":"net10.0","Origin":"initial"}
             """);
         Assert.Equal(DiagnosticSeverity.Error, finding!.Severity);
+        Assert.Null(finding.Column);
     }
 
     private sealed class ReceiptHandler : ICommandHandler<ApplySourceEditCommand, SourceEditReceipt>

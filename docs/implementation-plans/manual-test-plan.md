@@ -839,6 +839,10 @@ Expected:
 1. Inspect source and call `edit_source` in one conversation.
 2. Verify reasoning display policy, normal tool activity, exact review, transaction events and semantic progress remain correlated and visible.
 3. Confirm no plan-generation activity is required and declined edits remain non-applied.
+4. With a controlled provider emitting synthetic credential canaries across chunks, interleave public reasoning and ordinary text. Check interactive output, redirected output, and persisted output events: complete credentials must be redacted, including multiline values. Repeat with cancellation, provider failure, and tool continuation. Reasoning must remain transient.
+5. Pause after an incomplete line, then finish it. Confirm safe complete lines can appear before response completion, while incomplete or potentially sensitive suffixes wait for completion/interruption. A normal line longer than 16 KiB must remain intact in the main answer. Repeat with `execution:maxStructuredOutputCharacters` set to zero and a negative value; both disable that cap.
+
+Expected: sanitization precedes publication regardless of provider chunk boundaries. Safe accepted output drains before run completion and tool execution. Physical-terminal cadence and live provider behavior require manual verification; synthetic canaries must never be real credentials.
 
 ### MTP-049A — Ordinary responses and source-edit continuation
 

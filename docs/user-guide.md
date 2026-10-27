@@ -1485,7 +1485,9 @@ Ordinary interactive model answers render as complete semantic Markdown document
 
 Raw Markdown remains authoritative for conversation state, persistence, context, restoration, and headless output. Markdig is used only inside the TUI parser; HTML is inert, unsafe link schemes are plain visible text, parser/size failures fall back once to visibly escaped source, and terminal controls never pass through the interactive source or fallback path unchanged.
 
-Set `tui:renderMarkdown=false` to restore terminal-safe model-source chunk cadence:
+Streaming answer text and public reasoning are sanitized across provider chunks before publication. Safe complete lines can appear during streaming; incomplete lines and potentially sensitive suffixes wait until the response ends or is interrupted. This can delay visible text even when Markdown rendering is disabled. The main answer retains long lines under the existing output budget; `execution:maxStructuredOutputCharacters` values of zero or less disable that budget.
+
+Set `tui:renderMarkdown=false` to display terminal-safe model-source batches:
 
 ```json
 {

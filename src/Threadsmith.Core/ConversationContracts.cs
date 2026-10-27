@@ -259,6 +259,12 @@ public interface IConversationStore
         ConversationHistoryWindow? historyWindow = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Loads complete bodies for selected messages in session order, using the archive's normal integrity checks.</summary>
+    Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
+        SessionId sessionId,
+        IReadOnlyCollection<ConversationMessageId> messageIds,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Removes retained message bodies while preserving metadata and provenance.</summary>
     Task<int> RemoveMessageBodiesOlderThanAsync(
         DateTimeOffset cutoff,

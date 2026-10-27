@@ -742,7 +742,7 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         loopState.BeginCurrentGroup(round.ModelRequest.ToolContinuationRound);
-        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
+        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters, _sanitizer);
         ModelRequestHookBoundary? modelHookBoundary = null;
         var originalToolSnapshot = round.InvocationContext?.ModelVisibleToolSnapshotId;
         BudgetStatus? modelWallClockBudget = null;
@@ -805,17 +805,44 @@ public sealed partial class SessionApplication
                         await using (var output = new ModelOutputCoalescer(
                             _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken))
                         {
-                            await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
+                            var streamExhausted = false;
+                            try
                             {
-                                await ProcessModelChunkAsync(
-                                    chunk,
-                                    round,
-                                    loopState,
-                                    streamState,
-                                    maximumModelRounds,
-                                    correctiveTurns,
-                                    output,
-                                    output.Token);
+                                await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
+                                {
+                                    await ProcessModelChunkAsync(
+                                        chunk,
+                                        round,
+                                        loopState,
+                                        streamState,
+                                        maximumModelRounds,
+                                        correctiveTurns,
+                                        output,
+                                        output.Token);
+                                }
+
+                                streamExhausted = true;
+                            }
+                            finally
+                            {
+                                // A provider failure or cancellation still ends these display units. Never
+                                // flush raw suffixes at usage, reasoning, or timer boundaries.
+                                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+                                // Successful draining may contain an entire long response; only
+                                // interruption cleanup has a separate wall-clock bound.
+                                var drainToken = streamExhausted && !cancellationToken.IsCancellationRequested
+                                    ? cancellationToken : cleanup.Token;
+                                await output.FlushAsync(drainToken);
+                                var reasoning = streamState.DisplayReasoning.Complete();
+                                if (reasoning.Length > 0)
+                                {
+                                    await _events.PublishAsync(
+                                        new ModelReasoningObserved(round.Registration.SessionId, DateTimeOffset.UtcNow, reasoning),
+                                        drainToken);
+                                }
+
+                                await output.AppendAsync(streamState.DisplayText.Complete(), drainToken);
                             }
                         }
 
@@ -1074,12 +1101,12 @@ public sealed partial class SessionApplication
         if (chunk.Reasoning is not null)
         {
             loopState.AddRetainedOutputCharacters(chunk.Reasoning.Length);
-            await _events.PublishAsync(
-                new ModelReasoningObserved(
-                    round.Registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    _sanitizer.Sanitize(chunk.Reasoning)),
-                cancellationToken);
+            foreach (var safe in streamState.DisplayReasoning.Append(chunk.Reasoning))
+            {
+                await _events.PublishAsync(
+                    new ModelReasoningObserved(round.Registration.SessionId, DateTimeOffset.UtcNow, safe),
+                    cancellationToken);
+            }
         }
 
         if (chunk.FinishReason is { } finishReason)
@@ -1115,7 +1142,10 @@ public sealed partial class SessionApplication
             loopState.AddRetainedOutputCharacters(chunk.Text.Length);
             streamState.TextOutput.Append(chunk.Text);
             loopState.AddCurrentAssistantText(chunk.Text);
-            await output.AppendAsync(_sanitizer.Sanitize(chunk.Text), cancellationToken);
+            foreach (var safe in streamState.DisplayText.Append(chunk.Text))
+            {
+                await output.AppendAsync(safe, cancellationToken);
+            }
         }
 
         if (chunk.Output is not null || chunk.FinishReason is not null)
@@ -3954,10 +3984,20 @@ public sealed partial class SessionApplication
 
     private sealed class ModelRoundStreamState
     {
-        public ModelRoundStreamState(int maximumOutputCharacters)
+        public ModelRoundStreamState(int maximumOutputCharacters, IOutputSanitizer sanitizer)
         {
-            TextOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
+            TextOutput = new StringBuilder(maximumOutputCharacters > 0 ? Math.Min(maximumOutputCharacters, 16 * 1024) : 16 * 1024);
+
+            // Main output already has an aggregate retention budget; do not impose the
+            // child display's lossy line cap on an otherwise accepted answer.
+            var displayCapacity = maximumOutputCharacters > 0 ? maximumOutputCharacters : int.MaxValue;
+            DisplayText = new StreamingDisplaySanitizer(sanitizer, displayCapacity);
+            DisplayReasoning = new StreamingDisplaySanitizer(sanitizer, displayCapacity);
         }
+
+        public StreamingDisplaySanitizer DisplayText { get; }
+
+        public StreamingDisplaySanitizer DisplayReasoning { get; }
 
         public bool CorrectiveTurnRequested { get; private set; }
 

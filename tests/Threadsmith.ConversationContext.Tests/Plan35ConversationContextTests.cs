@@ -7,12 +7,77 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Models;
+using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Plan 35 conversation modes, assembly, pressure, inspection, and command tests.</summary>
 public static class Plan35ConversationContextTests
 {
+    /// <summary>Artifact reads follow complete-turn eligibility before the rendered token budget is applied.</summary>
+    [Theory]
+    [InlineData(ConversationContextMode.ConversationAware, 8000)]
+    [InlineData(ConversationContextMode.ConversationAware, 1)]
+    [InlineData(ConversationContextMode.GovernedMemoryOnly, 8000)]
+    [InlineData(ConversationContextMode.Stateless, 8000)]
+    public static async Task Assembly_loads_only_current_and_candidate_complete_turn_bodies(ConversationContextMode mode, int tokenBudget)
+    {
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
+        await using var events = new DomainEventStream();
+        var session = SessionId.New();
+        var olderRun = RunId.New();
+        await ArchiveAsync(fixture, session, ConversationRole.User, "older question outside count", runId: olderRun);
+        await ArchiveAsync(fixture, session, ConversationRole.Assistant, "older answer outside count", runId: olderRun);
+        var selectedRun = RunId.New();
+        var question = await ArchiveAsync(fixture, session, ConversationRole.User, "selected question", runId: selectedRun);
+        var receipt = await ArchiveAsync(fixture, session, ConversationRole.Assistant, "selected first receipt", runId: selectedRun);
+        var answer = await ArchiveAsync(fixture, session, ConversationRole.Assistant, "selected final answer", runId: selectedRun);
+        // A newer expired pair and an incomplete run must not displace the eligible turn.
+        var expiredRun = RunId.New();
+        await ArchiveAsync(fixture, session, ConversationRole.User, "expired question", runId: expiredRun, occurredAt: DateTimeOffset.UtcNow.AddDays(-30));
+        await ArchiveAsync(fixture, session, ConversationRole.Assistant, "expired answer", runId: expiredRun, occurredAt: DateTimeOffset.UtcNow.AddDays(-30));
+        await ArchiveAsync(fixture, session, ConversationRole.User, "incomplete question");
+        var current = await ArchiveAsync(fixture, session, ConversationRole.User, "current question from archive");
+        var reads = new CountingArtifactStore(fixture.Artifacts);
+        var store = new SqliteConversationStore(fixture.ConnectionString, reads, new SecretOutputSanitizer());
+        await store.SetModeAsync(session, mode, TestContext.Current.CancellationToken);
+        var assembler = CreateAssembler(
+            fixture,
+            events,
+            new ConversationContextPolicy
+            {
+                RecentTurnCount = 1,
+                RecentTurnTokens = tokenBudget,
+            },
+            conversationStore: store);
+
+        var result = await assembler.AssembleAsync(
+            CreateRequest(fixture, session, current, "fallback must not replace current"), TestContext.Current.CancellationToken);
+
+        string?[] expected = mode == ConversationContextMode.ConversationAware
+            ? [question.ArtifactId, receipt.ArtifactId, answer.ArtifactId, current.ArtifactId]
+            : [current.ArtifactId];
+        Assert.Equal(expected, reads.Reads);
+        Assert.Contains("current question from archive", result.ModelInput, StringComparison.Ordinal);
+        var currentMessage = Assert.Single(result.Messages!, message => message.SectionId == "current-user");
+        Assert.Contains("current question from archive", currentMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.DoesNotContain("fallback must not replace current", currentMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.DoesNotContain("older question", result.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("expired question", result.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("incomplete question", result.ModelInput, StringComparison.Ordinal);
+        if (mode == ConversationContextMode.ConversationAware && tokenBudget > 1)
+        {
+            Assert.Contains("selected question", result.ModelInput, StringComparison.Ordinal);
+            Assert.Contains("selected first receipt", result.ModelInput, StringComparison.Ordinal);
+            Assert.Contains("selected final answer", result.ModelInput, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.DoesNotContain("selected question", result.ModelInput, StringComparison.Ordinal);
+            Assert.DoesNotContain("selected final answer", result.ModelInput, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Stable instructions precede history, while changing host state follows completed turns.</summary>
     [Fact]
     public static async Task Canonical_request_keeps_history_before_governed_state_and_instructions_in_prefix()
@@ -724,7 +789,8 @@ public static class Plan35ConversationContextTests
         ConversationRole role,
         string content,
         ConversationSensitivity sensitivity = ConversationSensitivity.None,
-        RunId? runId = null)
+        RunId? runId = null,
+        DateTimeOffset? occurredAt = null)
     {
         return await fixture.Store.ArchiveMessageAsync(new ConversationMessage
         {
@@ -737,7 +803,7 @@ public static class Plan35ConversationContextTests
             ContentHash = "pending",
             EstimatedTokens = 1,
             Sensitivity = sensitivity,
-            OccurredAt = DateTimeOffset.UtcNow,
+            OccurredAt = occurredAt ?? DateTimeOffset.UtcNow,
         });
     }
 
@@ -761,7 +827,8 @@ public static class Plan35ConversationContextTests
         IDomainEventStream events,
         ConversationContextPolicy? policy = null,
         int maximumTokens = 32_000,
-        IModelResolver? modelResolver = null)
+        IModelResolver? modelResolver = null,
+        IConversationStore? conversationStore = null)
     {
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
@@ -779,7 +846,7 @@ public static class Plan35ConversationContextTests
                 Conversation = policy ?? new ConversationContextPolicy(),
             },
             modelResolver,
-            conversationStore: fixture.Store);
+            conversationStore: conversationStore ?? fixture.Store);
     }
 
     private static ContextAssemblyRequest CreateRequest(
@@ -797,6 +864,36 @@ public static class Plan35ConversationContextTests
             RepositoryPath = fixture.DirectoryPath,
             CurrentMessageId = current.Id,
         };
+    }
+
+    private sealed class CountingArtifactStore : IArtifactStore
+    {
+        private readonly IArtifactStore _inner;
+
+        public CountingArtifactStore(IArtifactStore inner)
+        {
+            _inner = inner;
+        }
+
+        public List<string> Reads { get; } = [];
+
+        public Task<string?> ReadAsync(string contentHash, CancellationToken cancellationToken = default)
+        {
+            Reads.Add(contentHash);
+            return _inner.ReadAsync(contentHash, cancellationToken);
+        }
+
+        public Task<ArtifactMetadata> StoreAsync(string content, string kind, SessionId? sessionId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(string contentHash, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ArtifactMetadata>> ListAsync(SessionId? sessionId, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
     }
 
     private sealed class RecordingDispatcher : ICommandDispatcher

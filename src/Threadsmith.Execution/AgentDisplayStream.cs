@@ -1,6 +1,5 @@
 namespace Threadsmith.Execution;
 
-using System.Text;
 using Threadsmith.Core;
 
 /// <summary>A sanitized transient display fragment, never a durable event or provider replay block.</summary>
@@ -91,23 +90,19 @@ public sealed class AgentDisplayStream
 /// <summary>Sanitizes whole lines before emitting, including credentials split across provider chunks.</summary>
 internal sealed class AgentDisplayTextWriter
 {
-    private const int MaximumLine = 16384;
     private readonly AgentDisplayStream? _stream;
-    private readonly IOutputSanitizer _sanitizer;
+    private readonly StreamingDisplaySanitizer _sanitizer;
     private readonly SessionId _session;
     private readonly RunId _run;
     private readonly bool _reasoning;
     private readonly bool _displayEligible;
     private readonly Guid _responseId = Guid.NewGuid();
-    private readonly StringBuilder _line = new();
-    private bool _lineOmitted;
-    private bool _holdRemainder;
 
     /// <summary>Initializes a new instance of the <see cref="AgentDisplayTextWriter"/> class.</summary>
     internal AgentDisplayTextWriter(AgentDisplayStream? stream, IOutputSanitizer sanitizer, SessionId session, RunId run, bool reasoning)
     {
         _stream = stream;
-        _sanitizer = sanitizer;
+        _sanitizer = new StreamingDisplaySanitizer(sanitizer, stream?.Limits.MaxAgentDisplayLineCharacters ?? 16384);
         _session = session;
         _run = run;
         _reasoning = reasoning;
@@ -122,28 +117,9 @@ internal sealed class AgentDisplayTextWriter
             return;
         }
 
-        foreach (var character in text)
+        foreach (var safe in _sanitizer.Append(text))
         {
-            if (_line.Length < _stream.Limits.MaxAgentDisplayLineCharacters && !_lineOmitted)
-            {
-                _line.Append(character);
-            }
-            else
-            {
-                _lineOmitted = true;
-            }
-
-            if (character == '\n' && !_holdRemainder && !_lineOmitted)
-            {
-                if (_sanitizer is IStreamingOutputSanitizer streaming && streaming.CanFlushStandalone(_line.ToString()))
-                {
-                    Flush(false);
-                }
-                else
-                {
-                    _holdRemainder = true;
-                }
-            }
+            Publish(safe);
         }
     }
 
@@ -155,10 +131,21 @@ internal sealed class AgentDisplayTextWriter
             return;
         }
 
-        var safe = _lineOmitted ? "[Oversized sensitive display suffix omitted]\n" : _sanitizer.Sanitize(_line.ToString());
-        _line.Clear();
-        _lineOmitted = false;
-        _holdRemainder = false;
+        Publish(_sanitizer.Complete());
+
+        if (completesResponse)
+        {
+            _stream.Publish(new(_session, _run, string.Empty, _reasoning, true, _responseId));
+        }
+    }
+
+    private void Publish(string safe)
+    {
+        if (_stream is null)
+        {
+            return;
+        }
+
         for (var offset = 0; offset < safe.Length;)
         {
             var length = Math.Min(_stream.Limits.MaxAgentDisplayFragmentCharacters, safe.Length - offset);
@@ -171,11 +158,6 @@ internal sealed class AgentDisplayTextWriter
 
             _stream.Publish(new(_session, _run, safe.Substring(offset, length), _reasoning, ResponseId: _responseId));
             offset += length;
-        }
-
-        if (completesResponse)
-        {
-            _stream.Publish(new(_session, _run, string.Empty, _reasoning, true, _responseId));
         }
     }
 }

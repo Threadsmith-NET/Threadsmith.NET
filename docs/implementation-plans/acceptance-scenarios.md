@@ -46,6 +46,15 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 **Verifies:** ordinary provider/tool correction preserves replay and authority while compiler feedback stays advisory.
 
+## Scenario C3 — Streaming Output Redaction
+
+1. Emit synthetic credentials split across provider chunks in answer text and public reasoning, including multiline values and interleaved channels.
+2. Confirm no unredacted credential reaches display or persisted output events. Reasoning remains transient.
+3. Complete, cancel, and fail the provider response; accepted safe output drains before the terminal event without exposing buffered raw suffixes.
+4. Emit an ordinary line longer than 16 KiB. Confirm main output remains intact, with safe complete lines available during streaming and incomplete or potentially sensitive suffixes delayed until response termination.
+
+**Verifies:** shared parent/child sanitization semantics, safe publication boundaries, and intact main answers under existing output accounting.
+
 ## Scenario D — Drop-In Extension
 
 1. User copies an extension package into the configured directory.

@@ -439,6 +439,9 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
 
     private sealed class UnusedConversationStore : IConversationStore
     {
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();

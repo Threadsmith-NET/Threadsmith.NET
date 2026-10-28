@@ -314,13 +314,18 @@ public static class AnthropicConversationLoopTests
         return stream.Append(End("tool_use")).ToString();
     }
 
-    private sealed class NativeLoopHarness : IAsyncDisposable
+    internal sealed class NativeLoopHarness : IAsyncDisposable
     {
         private readonly HttpClient _client;
         private readonly string _root;
         private readonly EffectiveModelProviderCatalog _catalog;
 
         internal NativeLoopHarness(params string[] responses)
+            : this(null, responses)
+        {
+        }
+
+        internal NativeLoopHarness(EffectiveModelProviderCatalog? catalog, params string[] responses)
         {
             _root = Path.Combine(Path.GetTempPath(), "threadsmith-native-loop-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
@@ -330,7 +335,7 @@ public static class AnthropicConversationLoopTests
                 new AnthropicProviderConfiguration { Id = "native", Name = "Native", SecretKeyReference = "secrets:models:native", Models = [] },
                 [new AnthropicDiscoveredModel { ModelId = "claude-opus-5", DisplayName = "Native", MaximumInputTokens = 200000, MaximumOutputTokens = 32000 }],
                 AnthropicReviewedModels.All);
-            _catalog = new EffectiveModelProviderCatalog(
+            _catalog = catalog ?? new EffectiveModelProviderCatalog(
                 new ModelProviderCatalogConfiguration { Providers = [provider], DefaultModelId = provider.Models[0].Id },
                 new ModelProviderRegistry([new AnthropicProviderRegistration()]));
             Model = new CapturingProvider(new ConfiguredModelProvider(_client, _catalog, static (_, _) => Task.FromResult<string?>("fixture-native-key")));
@@ -366,7 +371,7 @@ public static class AnthropicConversationLoopTests
             Directory.Delete(_root, recursive: true);
         }
 
-        internal async Task RunToCompletionAsync()
+        internal async Task RunToCompletionAsync(bool cancelAfterTool = false)
         {
             await using var capture = Events.Subscribe((domainEvent, _) =>
             {
@@ -378,7 +383,7 @@ public static class AnthropicConversationLoopTests
             var registry = new ToolRegistry([new TestDeterministicOutputTool("Tool evidence collected.")]);
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance);
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
-            var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver);
+            var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
             Assembler = assembler;
             var projections = new InMemoryProjectionStore();
             await using var project = Events.Subscribe(projections.ApplyAsync);
@@ -400,16 +405,30 @@ public static class AnthropicConversationLoopTests
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
+            await using var cancel = Events.Subscribe(async (item, ct) =>
+            {
+                if (cancelAfterTool && item is ToolInvocationCompleted tool)
+                {
+                    await dispatcher.DispatchAsync(new CancelRunCommand(tool.SessionId, tool.RunId), ct);
+                }
+            });
             SessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("native loop integration"));
             RunId = await dispatcher.DispatchAsync(new SubmitRequestCommand(SessionId, "Inspect the repository and report."));
             var ct = TestContext.Current.CancellationToken;
-            var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct);
-            var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), ct);
-            Assert.True(succeeded, projection?.Error);
+            if (cancelAfterTool)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct));
+            }
+            else
+            {
+                var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct);
+                var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), ct);
+                Assert.True(succeeded, projection?.Error);
+            }
         }
     }
 
-    private sealed class CapturingProvider : IModelProvider, IModelRequestPreparationResolver
+    internal sealed class CapturingProvider : IModelProvider, IModelRequestPreparationResolver
     {
         private readonly ConfiguredModelProvider _inner;
 
@@ -438,7 +457,7 @@ public static class AnthropicConversationLoopTests
         }
     }
 
-    private sealed class NativeHandler : HttpMessageHandler
+    internal sealed class NativeHandler : HttpMessageHandler
     {
         private readonly string[] _responses;
 
@@ -449,13 +468,19 @@ public static class AnthropicConversationLoopTests
 
         internal List<JsonElement> Requests { get; } = [];
 
+        internal bool FragmentResponses { get; set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var content = await request.Content!.ReadAsStringAsync(cancellationToken);
             using var json = JsonDocument.Parse(content);
             Requests.Add(json.RootElement.Clone());
             Assert.True(Requests.Count <= _responses.Length, "Unexpected native retry or extra model round.");
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_responses[Requests.Count - 1], Encoding.UTF8, "text/event-stream") };
+            var response = _responses[Requests.Count - 1];
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = FragmentResponses ? ReasoningReplayFixture.FragmentedContent(response) : new StringContent(response, Encoding.UTF8, "text/event-stream"),
+            };
         }
     }
 }

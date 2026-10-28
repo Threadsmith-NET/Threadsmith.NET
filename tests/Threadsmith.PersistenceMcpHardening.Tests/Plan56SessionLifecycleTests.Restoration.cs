@@ -7,6 +7,20 @@ using Xunit;
 
 public static partial class Plan56SessionLifecycleTests
 {
+    /// <summary>Version-three receipts retain the operation and destination needed by restored history.</summary>
+    [Fact]
+    public static void VersionThreeMutationReceiptRetainsOperation()
+    {
+        var receipt = new MutationApplied(SessionId.New(), DateTimeOffset.UtcNow, MutationId.New(), MutationSetId.New(), "source.cs")
+        {
+            SchemaVersion = 3,
+            Type = MutationType.MoveFile,
+            DestinationRelativePath = "moved.cs",
+        };
+        var restored = Assert.IsType<MutationApplied>(DomainEventJson.Deserialize("mutationApplied", 3, DomainEventJson.Serialize(receipt)));
+        Assert.Equal(receipt, restored);
+    }
+
     /// <summary>The migration registry shares the event reader's allow-list for compatible per-event schemas.</summary>
     [Theory]
     [InlineData("repositoryOpened")]
@@ -20,12 +34,13 @@ public static partial class Plan56SessionLifecycleTests
         Assert.True(DomainEventJson.SupportsSchemaVersion(discriminator, 2));
         Assert.Equal(LegacyState.Current, registry.Classify(discriminator, 2, "{}").State);
         Assert.Equal(LegacyState.Current, registry.Classify(discriminator, 1, "{}").State);
-        Assert.Equal(LegacyState.Legacy, registry.Classify(discriminator, 3, "{}").State);
+        Assert.Equal(discriminator == "mutationApplied" ? LegacyState.Current : LegacyState.Legacy, registry.Classify(discriminator, 3, "{}").State);
+        Assert.Equal(LegacyState.Legacy, registry.Classify(discriminator, 4, "{}").State);
         Assert.Equal(LegacyState.Legacy, registry.Classify("sessionCreated", 2, "{}").State);
         Assert.Equal(LegacyState.Legacy, registry.Classify("unknownEvent", 2, "{}").State);
     }
 
-    /// <summary>Real durable replay restores supported schema-2 history and repairs an earlier read-only catalog mark.</summary>
+    /// <summary>Real durable replay restores supported history, including schema-3 mutation receipts, and repairs an earlier read-only catalog mark.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -58,6 +73,7 @@ public static partial class Plan56SessionLifecycleTests
             new MutationSetProposed(sessionId, now, mutationId, new(mutationId, "historical diff", [], 1, 0), ApprovalId: approvalId) { SchemaVersion = 2 },
             new ApprovalRequested(sessionId, now, approvalId, "Historical review", ApprovalRequestKind.MutationSet) { SchemaVersion = 2 },
             new ApprovalDenied(sessionId, now, approvalId, "Cancelled"),
+            new MutationApplied(sessionId, now, MutationId.New(), mutationId, "source.cs") { SchemaVersion = 3, Type = MutationType.MoveFile, DestinationRelativePath = "moved.cs" },
             new MutationSetRolledBack(sessionId, now, mutationId, []),
         ];
         foreach (var item in history)

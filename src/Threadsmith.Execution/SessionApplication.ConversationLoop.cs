@@ -3313,8 +3313,15 @@ public sealed partial class SessionApplication
                 throw new ModelProviderException("Context refresh changed active continuation authority; start a fresh turn.");
             }
 
-            var intelligenceAffected = (previous.Messages ?? []).Concat(refreshed.Messages ?? [])
-                .Any(message => message.SectionId == "host-policy" && message.GetModelVisibleContent().EndsWith(intelligenceSuffix, StringComparison.Ordinal));
+            var previousIntelligence = HasIntelligenceGuidance(previous);
+            var refreshedIntelligence = HasIntelligenceGuidance(refreshed);
+
+            // A recall lookup is not itself a history rewrite. Preserve the delivered prefix and
+            // private responses when guidance and the selected memory snapshot are unchanged.
+            var intelligenceAffected = previousIntelligence != refreshedIntelligence
+                || ((previousIntelligence || refreshedIntelligence)
+                    && (!string.Equals(_memoryContextText, memoryText, StringComparison.Ordinal)
+                        || !(previous.RepositoryMemoryInclusions ?? []).SequenceEqual(refreshed.RepositoryMemoryInclusions ?? [])));
             if (!intelligenceAffected)
             {
                 if (!string.Equals(_memoryContextText, memoryText, StringComparison.Ordinal))
@@ -3358,6 +3365,10 @@ public sealed partial class SessionApplication
             // or enabled-only guidance in an earlier delivered prefix. Completed tool groups survive.
             ReleaseCompletedReplay();
             return refreshed;
+
+            bool HasIntelligenceGuidance(ContextAssemblyResult context) =>
+                (context.Messages ?? []).Any(message => message.SectionId == "host-policy"
+                    && message.GetModelVisibleContent().EndsWith(intelligenceSuffix, StringComparison.Ordinal));
 
             IEnumerable<(ModelMessageRole Role, string SectionId, string Content)> Instructions(ContextAssemblyResult context) =>
                 (context.Messages ?? []).Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)

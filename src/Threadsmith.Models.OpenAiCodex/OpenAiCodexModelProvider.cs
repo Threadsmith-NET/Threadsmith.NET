@@ -116,6 +116,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         int profileOutputLimit,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        request = request with { ResolvedProfileId = request.ResolvedProfileId ?? _profile.Id };
+        if (request.ResolvedProfileId != _profile.Id)
+        {
+            throw new ModelProviderException("Resolved model profile does not match the Codex adapter.");
+        }
+
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
 
         // Codex cannot enforce a per-request token limit. Reserve input capacity here;
@@ -136,6 +142,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         while (true)
         {
             attempt++;
+            ProviderResponseReplay.Validate(request, _profile, accessToken, "openai-codex-reasoning");
             using var message = CreateRequest(
                 request,
                 accessToken,
@@ -168,7 +175,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 if (response.IsSuccessStatusCode)
                 {
                     await using var chunks = ReadResponseAsync(
-                        response, toolNameMap, profileOutputLimit, timeout.Token).GetAsyncEnumerator(timeout.Token);
+                        response, request, accessToken, toolNameMap, profileOutputLimit, timeout.Token).GetAsyncEnumerator(timeout.Token);
                     var deliveredOutput = false;
                     var deliveredReasoning = false;
                     var retry = false;
@@ -262,6 +269,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private async IAsyncEnumerable<ModelChunk> ReadResponseAsync(
         HttpResponseMessage response,
+        ModelStreamRequest request,
+        string accessToken,
         ModelToolWireNameMap toolNameMap,
         int profileOutputLimit,
         [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -270,6 +279,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         using var reader = new StreamReader(stream);
         await foreach (var chunk in ReadEventsAsync(
             reader,
+            request,
+            accessToken,
             toolNameMap,
             profileOutputLimit,
             _profile.MaximumStreamedBytes,
@@ -390,8 +401,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             stablePrefixMessageCount,
             outputReserveTokens,
             providerInstructions);
+        var replayEstimate = ProviderResponseReplay.IncludeAllowance(request, expectedEstimate);
+
+        // Direct adapter callers may supply the neutral estimate; catalog callers supply prepared capacity.
+        var suppliedInputTokens = request.Preparation is null ? expectedEstimate.WireInputTokens : replayEstimate.WireInputTokens;
         if (suppliedEstimate.LogicalTokens != expectedEstimate.LogicalTokens
-            || suppliedEstimate.WireInputTokens != expectedEstimate.WireInputTokens
+            || suppliedEstimate.WireInputTokens != suppliedInputTokens
             || suppliedEstimate.StablePrefixTokens != expectedEstimate.StablePrefixTokens
             || suppliedEstimate.StablePrefixComponentCount != expectedEstimate.StablePrefixComponentCount
             || suppliedEstimate.NativeToolTokens != expectedEstimate.NativeToolTokens
@@ -408,10 +423,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 "The Codex request provider-wire capacity estimate does not match its provider-visible content.");
         }
 
-        if (expectedEstimate.TotalCapacityTokens > _profile.ContextWindow)
+        var requiredTokens = replayEstimate.TotalCapacityTokens;
+        if (requiredTokens > _profile.ContextWindow)
         {
             throw new ModelProviderException(
-                $"The complete Codex request requires {expectedEstimate.TotalCapacityTokens} tokens but profile "
+                $"The complete Codex request requires {requiredTokens} tokens but profile "
                 + $"'{_profile.Name}' permits {_profile.ContextWindow}.");
         }
     }
@@ -436,8 +452,24 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         JsonArray input = [];
-        foreach (var message in request.Messages)
+        var replay = request.TransientState?.Responses.ToDictionary(item => item.Binding.ModelRound) ?? [];
+        var usedReplay = new HashSet<int>();
+        for (var messageIndex = 0; messageIndex < request.Messages.Count; messageIndex++)
         {
+            var message = request.Messages[messageIndex];
+            if (message.Role == ModelMessageRole.Assistant && message.ModelRound is { } round && replay.TryGetValue(round, out var envelope))
+            {
+                if (usedReplay.Add(round))
+                {
+                    foreach (var item in ProviderResponseReplay.Read(envelope, request, messageIndex).AsArray())
+                    {
+                        input.Add(item?.DeepClone());
+                    }
+                }
+
+                continue;
+            }
+
             var content = message.GetModelVisibleContent();
             if (message.Role == ModelMessageRole.Assistant
                 && message.ToolCallId is not null
@@ -458,7 +490,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 input.Add(new JsonObject
                 {
                     ["type"] = "function_call_output",
-                    ["call_id"] = message.ToolCallId,
+                    ["call_id"] = message.ModelRound is { } resultRound && replay.ContainsKey(resultRound)
+                        ? request.TransientState?.GetWireToolCallId(resultRound, message.ToolCallId) : message.ToolCallId,
                     ["output"] = message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
                         ? CreateContent(request, message, "input_text") : JsonValue.Create(content),
                 });
@@ -487,6 +520,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             });
         }
 
+        if (usedReplay.Count != replay.Count)
+        {
+            throw new ModelProviderException("Private response has no chronological history position.");
+        }
+
         return input;
     }
 
@@ -497,17 +535,19 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             : new JsonObject { ["type"] = textType, ["text"] = part.Content })).ToArray());
     }
 
-    private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
+    private async IAsyncEnumerable<ModelChunk> ReadEventsAsync(
         StreamReader reader,
+        ModelStreamRequest request,
+        string accessToken,
         ModelToolWireNameMap toolNameMap,
         int maximumOutputTokens,
         long maximumStreamedBytes,
         int maximumToolCalls,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var pendingToolCalls = new List<PendingCodexToolCall>();
+        var completedItems = new SortedDictionary<int, JsonElement>();
+        long retainedItemBytes = 0;
         long streamedOutputBytes = 0;
-        long toolCallCount = 0;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
@@ -544,20 +584,19 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
                     break;
                 case "response.output_item.done":
-                    if (root.TryGetProperty("item", out var item)
-                        && string.Equals(GetString(item, "type"), "function_call", StringComparison.Ordinal))
+                    if (root.TryGetProperty("item", out var item))
                     {
-                        var name = GetString(item, "name");
-                        var arguments = GetString(item, "arguments");
-                        AddStreamedOutput(name);
-                        AddStreamedOutput(arguments);
-                        toolCallCount++;
-                        if (maximumToolCalls > 0 && toolCallCount > maximumToolCalls)
+                        var index = root.TryGetProperty("output_index", out var outputIndex) ? outputIndex.GetInt32() : completedItems.Count;
+                        if (index < 0 || (completedItems.TryGetValue(index, out var existing) && !JsonElement.DeepEquals(existing, item)))
                         {
-                            throw new ModelProviderException("The Codex response exceeded the configured tool-call limit.");
+                            throw new MalformedModelOutputException("Conflicting completed Codex output items.");
                         }
 
-                        pendingToolCalls.Add(new PendingCodexToolCall(name, arguments));
+                        if (!completedItems.ContainsKey(index))
+                        {
+                            RetainItem(item);
+                            completedItems.Add(index, item.Clone());
+                        }
                     }
 
                     break;
@@ -573,7 +612,57 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                         }
                     }
 
+                    // Completed response output is authoritative when supplied; added/delta events
+                    // are not substitutes for the endpoint's final opaque reasoning items.
+                    if (root.TryGetProperty("response", out var finalResponse)
+                        && finalResponse.TryGetProperty("output", out var finalOutput) && finalOutput.ValueKind == JsonValueKind.Array)
+                    {
+                        completedItems.Clear();
+                        retainedItemBytes = 0;
+                        foreach (var outputItem in finalOutput.EnumerateArray())
+                        {
+                            RetainItem(outputItem);
+                            completedItems.Add(completedItems.Count, outputItem.Clone());
+                        }
+                    }
+
+                    var calls = completedItems.Values.Where(value => GetString(value, "type") == "function_call").ToArray();
+                    if (maximumToolCalls > 0 && calls.Length > maximumToolCalls)
+                    {
+                        throw new ModelProviderException("The Codex response exceeded the configured tool-call limit.");
+                    }
+
+                    foreach (var call in calls)
+                    {
+                        AddStreamedOutput(GetString(call, "name"));
+                        AddStreamedOutput(GetString(call, "arguments"));
+                    }
+
+                    foreach (var reasoningItem in completedItems.Values.Where(value => GetString(value, "type") == "reasoning"))
+                    {
+                        AddStreamedOutput(GetString(reasoningItem, "encrypted_content"));
+                    }
+
+                    var pendingToolCalls = calls.Select(call => new PendingCodexToolCall(GetString(call, "name"), GetString(call, "arguments"))).ToArray();
                     var toolOutputs = CreateCodexToolOutputs(pendingToolCalls, toolNameMap);
+                    if (toolOutputs.Count > 0 && completedItems.Values.Any(value => GetString(value, "type") == "reasoning"))
+                    {
+                        var responseItems = new JsonArray([.. completedItems.Values.Select(value => JsonNode.Parse(value.GetRawText()))]);
+                        var callIds = calls.Select(call => GetString(call, "call_id") ?? string.Empty).ToArray();
+                        var replay = ProviderResponseReplay.Create(request, _profile, accessToken, "openai-codex-reasoning", responseItems, callIds, usage?.OutputTokens ?? 0);
+                        try
+                        {
+                            yield return new ModelChunk { ResponseEnvelope = replay };
+                        }
+                        finally
+                        {
+                            if (!replay.IsRetained)
+                            {
+                                replay.Dispose();
+                            }
+                        }
+                    }
+
                     foreach (var output in toolOutputs)
                     {
                         yield return new ModelChunk { Output = output };
@@ -593,6 +682,15 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         }
 
         throw new TransientModelException("The Codex Responses connection ended without a completed response.");
+
+        void RetainItem(JsonElement item)
+        {
+            retainedItemBytes = checked(retainedItemBytes + Encoding.UTF8.GetByteCount(item.GetRawText()));
+            if (retainedItemBytes > ModelProfile.DefaultMaximumStreamedBytes)
+            {
+                throw new ModelProviderException("The Codex response exceeded the private item retention limit.");
+            }
+        }
 
         void AddStreamedOutput(string? value)
         {

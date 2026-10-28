@@ -1011,7 +1011,8 @@ public static class DomainEventJson
             && (schemaVersion <= 1
                 || (schemaVersion == 2
                     && discriminator is "repositoryOpened" or "planProposed" or "approvalRequested"
-                        or "mutationSetProposed" or "mutationApplied"));
+                        or "mutationSetProposed" or "mutationApplied")
+                || (schemaVersion == 3 && discriminator == "mutationApplied"));
     }
 
     /// <summary>Deserializes an allow-listed event with a supported schema version.</summary>

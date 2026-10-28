@@ -19,7 +19,7 @@ public sealed record OpenAiCodexModelConfiguration : ModelConfiguration
 }
 
 /// <summary>Registers native Codex Responses models discovered after authentication.</summary>
-public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
+public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration, IModelRequestPreparation
 {
     /// <summary>Default total deadline for one native Codex model request, in seconds.</summary>
     public const int DefaultTimeoutSeconds = 600;
@@ -51,6 +51,9 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
 
     /// <inheritdoc />
     public Type ModelConfigurationType => typeof(OpenAiCodexModelConfiguration);
+
+    /// <inheritdoc />
+    public ModelRequestPreparationResult Prepare(ModelRequestPreparationContext context) => ProviderResponseReplay.Prepare(context);
 
     /// <inheritdoc />
     public void Validate(ModelProviderConfiguration provider)

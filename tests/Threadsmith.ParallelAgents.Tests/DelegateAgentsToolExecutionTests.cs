@@ -9,7 +9,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Verifies the Plan 91 public tool definition and durable fork/join behavior.</summary>
-public sealed class DelegateAgentsToolExecutionTests
+public sealed partial class DelegateAgentsToolExecutionTests
 {
     /// <summary>The projector and tool definitions retain their exact production byte bounds.</summary>
     [Fact]

@@ -281,9 +281,8 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         };
         var context = new JsonObject
         {
-            ["type"] = "string",
-            ["minLength"] = 1,
-            ["description"] = "All known files, symbols, evidence, constraints, and stopping guidance relevant to this child.",
+            ["type"] = CreateStringArray("string", "null"),
+            ["description"] = "Optional context unique to this child, appended after sharedContext. Put common files, evidence, constraints, and response instructions in sharedContext once. Each child needs non-empty sharedContext or context.",
         };
         var agents = new JsonObject
         {
@@ -293,7 +292,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             {
                 ["type"] = "object",
                 ["additionalProperties"] = false,
-                ["required"] = CreateStringArray("task", "context", "toolAccess"),
+                ["required"] = CreateStringArray("task", "toolAccess"),
                 ["properties"] = new JsonObject
                 {
                     ["role"] = new JsonObject
@@ -320,6 +319,11 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             ["required"] = CreateStringArray("agents"),
             ["properties"] = new JsonObject
             {
+                ["sharedContext"] = new JsonObject
+                {
+                    ["type"] = CreateStringArray("string", "null"),
+                    ["description"] = "Optional common context supplied once to all children before their individual context: target identity, evidence IDs, source-access instructions, requirements, constraints, and common response instructions. The host includes it in every assignment as untrusted task data. Each child needs non-empty sharedContext or context.",
+                },
                 ["agents"] = agents,
             },
         };

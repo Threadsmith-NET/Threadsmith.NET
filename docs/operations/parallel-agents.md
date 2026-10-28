@@ -21,23 +21,25 @@ Ask Threadsmith for parallel work in a trusted repository with a selected semant
 
 ```json
 {
+  "sharedContext": "Inspect the current execution implementation. Cite exact files, report uncertainty, and do not edit files.",
   "agents": [
     {
       "task": "Trace scheduler admission and join behavior.",
-      "context": "Inspect the current execution implementation and cite exact files.",
       "toolAccess": "readOnly"
     },
     {
       "role": "testReviewer",
       "task": "Check cancellation and durable checkpoint coverage.",
-      "context": "Report gaps and uncertainty; do not edit files.",
+      "context": "Identify relevant tests; report unavailable execution explicitly.",
       "toolAccess": "inherit"
     }
   ]
 }
 ```
 
-Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitting `role` preserves `explorer` behavior. Role names are exact and case-sensitive. Unknown roles or fields, empty or oversized text, unsupported access values, and excess children fail before scheduling. The model cannot choose child models, reasoning, budgets, deadlines, trust, roots, tool IDs, approvals, or concurrency.
+Each child requires `task` and `toolAccess`, with optional `role` and `context`. Optional top-level `sharedContext` holds common target identity, captured evidence IDs, source-access instructions, requirements, workspace preservation rules, and response instructions once. Each child needs nonempty `sharedContext` or individual `context`; either field may otherwise be omitted, null, or blank. The host trims outer whitespace, joins shared then individual context with a blank line, and freezes the result through the ordinary assignment path. Existing calls with individual contexts continue working. Shared text remains untrusted task data and grants no additional tools, permissions, or evidence access. Every child receives the combined context in its own input, so this saves repetition in the lead's generated tool call rather than eliminating child input costs.
+
+Omitting `role` preserves `explorer` behavior. Role names are exact and case-sensitive. Unknown roles or fields, empty tasks or missing effective context, unsupported access values, and excess children fail before scheduling. The model cannot choose child models, reasoning, budgets, deadlines, trust, roots, tool IDs, approvals, or concurrency.
 
 | Role | Instruction focus |
 |---|---|
@@ -49,7 +51,7 @@ Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitti
 | `architectureReviewer` | Review ownership, dependencies, and contracts. |
 | `bugReviewer` | Compare implementation with requirements and acceptance criteria; find functional bugs and regressions. |
 
-Pass ticket details, including Jira acceptance criteria, in the ordinary delegation `task` and `context` fields. The lead can retrieve those details with its enabled tools; BugReviewer uses the same child execution path and model-selection fallback as the other roles.
+Pass common ticket details, including Jira acceptance criteria, in `sharedContext`, with individual objectives in `task` and additional details in each child's optional `context`. The lead can retrieve those details with its enabled tools; BugReviewer uses the same child execution path and model-selection fallback as the other roles.
 
 Children use the shared tool-call history to reject an identical tool name and argument payload, including duplicate siblings in one batch. Rejected batches return correlated error responses to the same child model before any call in the batch executes. Children reuse the parent conversation's corrective-turn state and message factory, including `execution:maxCorrectiveTurns`; accepted tool batches reset the consecutive correction count. Ordinary tool execution failures also return to the model as tool results. A single duplicate does not terminate the child when correction attempts remain. Duplicate protection stays active when operational budgets are disabled and survives context compaction. Rejected batches are not recorded, so the child can correct and resubmit them. Each child has its own history and correction state; cancellation and exhausted correction/resource limits retain their normal terminal behavior.
 
@@ -59,7 +61,7 @@ For change reviews, that shared asset anchors all reviewer roles to the changed 
 
 Each role is a system-prompt amendment combined with its selected model and eligible tools, not an output template. A child may return any final body, including plain text, JSON, whitespace, or an empty response. No role fields, citation GUIDs, or response-format repair are required. Reviewers can run tests or save results when the corresponding tools and permissions are inherited. A proposed check or a claim that checks passed is not host verification that those checks ran; inspect the actual tool results.
 
-Give each child a distinct task and include the relevant files, symbols, evidence, and constraints in `context`. Role prompts encourage focused inspection and batching independent reads when useful. Tool progress reports distinguish new source coverage from repeated or different payloads; they do not grade the answer. Rejected tool calls remain in the conversation with their error results, so the child can see what failed and decide how to proceed.
+Give each child a distinct task. Put common files, evidence references, and constraints in `sharedContext` and unique details in the child's `context`. Reference captured evidence instead of repeating inventories or source contents, and rely on the existing role guidance. The maintained review skill supplies one shared handoff to all five specialists; TestReviewer alone owns build/test execution. Role prompts encourage focused inspection and batching independent reads when useful. Tool progress reports distinguish new source coverage from repeated or different payloads; they do not grade the answer. Rejected tool calls remain in the conversation with their error results, so the child can see what failed and decide how to proceed.
 
 `inherit` retains the parent's enabled, permitted advertised tools, including process/code execution and file writes. Tools marked `SubagentAvailable = false` are excluded from both inherited and explicitly read-only child inventories; the default is `true`. `delegate_agents`, `invoke_skill`, and `pr_fetch` are excluded. Trust, approved roots, prohibited paths, executable/network allowlists, approval requirements, and tool policy remain effective. `readOnly` explicitly selects only approval-free, non-network read tools and excludes workflow, process/code execution, and writes. Retained inspection tools can use their declared executable dependencies under the caller's allowlist. Inheritance never grants authority the parent did not have.
 

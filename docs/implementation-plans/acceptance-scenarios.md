@@ -166,6 +166,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 ## Scenario L — Bounded Parallel Research and Review
 
 1. Ask the model to delegate independent inspection/review questions in one `delegate_agents` call.
+   Supply common target/evidence references and constraints once in `sharedContext`, with distinct tasks and optional individual context. Confirm each child receives the shared text and only its own additions. Existing calls with individual context alone continue working; a child with neither shared nor individual context is rejected before scheduling.
 2. Confirm validated children are visible, bounded and confined to the actual inherited advertised tools; ordinary children cannot call `edit_source`.
 3. Confirm cancellation, progress, joins, provider/model provenance and partial results remain observable.
 4. Apply resulting advice through the parent's ordinary source-edit path with exact authorization and configured validation.

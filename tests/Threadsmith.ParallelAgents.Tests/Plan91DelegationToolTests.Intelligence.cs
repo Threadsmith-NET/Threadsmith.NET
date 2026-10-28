@@ -12,6 +12,39 @@ using Xunit;
 
 public sealed partial class Plan91DelegationToolTests
 {
+    /// <summary>The existing investigator brief limit covers expanded shared and individual context.</summary>
+    [Theory]
+    [InlineData(8188, "c", true)]
+    [InlineData(8189, "c", false)]
+    [InlineData(8191, null, true)]
+    [InlineData(8192, null, false)]
+    public async Task IntelligenceDelegation_SharedContextCountsAgainstCombinedBriefLimit(
+        int sharedCharacters, string? individualContext, bool allowed)
+    {
+        var registry = new ToolRegistry([]);
+        var snapshots = new ConversationToolSnapshotStore();
+        var workspace = WorkspaceId.New();
+        var context = CreateExecutionContext(workspace, ConversationSensitivity.None, registry, snapshots);
+        await using var intelligence = new InvestigatorIntelligenceRun();
+        context = context with { Invocation = context.Invocation with { IntelligenceRun = intelligence } };
+        var factory = CreateIntelligencePlanFactory(workspace, snapshots);
+        var input = new DelegateAgentsInput
+        {
+            SharedContext = new string('s', sharedCharacters),
+            Agents = [InvestigationRequest() with { Task = "t", Context = individualContext }],
+        };
+
+        if (allowed)
+        {
+            var assignment = Assert.Single(factory.Create(input, context).Assignments);
+            Assert.Equal(8192, assignment.Objective.Length + assignment.InitialContext.Length);
+        }
+        else
+        {
+            Assert.Throws<ArgumentException>(() => factory.Create(input, context));
+        }
+    }
+
     /// <summary>Only final onboarding coverage admits investigators through both boundaries.</summary>
     [Theory]
     [InlineData(RepositoryIntelligenceOperation.Onboard, true, true)]

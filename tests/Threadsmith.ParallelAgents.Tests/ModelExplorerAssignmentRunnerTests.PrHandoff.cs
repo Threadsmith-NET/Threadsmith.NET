@@ -13,8 +13,18 @@ using Xunit;
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>A child can read bounded portions of its parent's captured PR without a provider tool.</summary>
-    [Fact]
-    public async Task RunAsync_CapturedPrEvidence_ReachesChildWithoutRefetch()
+    [Theory]
+    [InlineData(AgentRole.SecurityReviewer, false)]
+    [InlineData(AgentRole.SecurityReviewer, true)]
+    [InlineData(AgentRole.BugReviewer, false)]
+    [InlineData(AgentRole.BugReviewer, true)]
+    [InlineData(AgentRole.TestReviewer, false)]
+    [InlineData(AgentRole.TestReviewer, true)]
+    [InlineData(AgentRole.PerformanceReviewer, false)]
+    [InlineData(AgentRole.PerformanceReviewer, true)]
+    [InlineData(AgentRole.ArchitectureReviewer, false)]
+    [InlineData(AgentRole.ArchitectureReviewer, true)]
+    public async Task RunAsync_CapturedPrEvidence_ReachesChildWithoutRefetch(AgentRole role, bool explicitAllowlist)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -23,14 +33,30 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var evidence = new EvidenceStore(events, sanitizer);
         var inspect = new InspectMetadataTool();
         var registry = new ToolRegistry([inspect]);
-        var profile = CreateProfile();
-        var assignment = CreateAssignment(profile.Id, [inspect.Definition.Id]);
+        var profile = CreateRoleProfile();
+        var assignment = CreateAssignment(profile.Id, [inspect.Definition.Id]) with
+        {
+            Role = role,
+            Mode = AgentRunMode.ReadOnlyReview,
+        };
         var plan = CreatePlan(assignment);
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = Environment.CurrentDirectory,
+            Fingerprint = "pr-review-policy",
+            AllowedTools = explicitAllowlist ? [inspect.Definition.Id, ChildAgentEvidenceTool.ToolId] : default,
+        };
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
         var parent = CreateParentContext(plan, [inspect.Definition.Id]) with
         {
             Invocation = CreateParentContext(plan, [inspect.Definition.Id]).Invocation with
             {
                 OperationScope = scope,
+                SecurityPolicy = policy,
+                PolicyBinding = binding,
             },
         };
         var snapshotId = Guid.NewGuid();
@@ -69,7 +95,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
 
         // Act
-        var outcome = await runner.RunAsync(plan, assignment);
+        var outcome = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
 
         // Assert
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
@@ -79,6 +105,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             message.SectionId == "child-assignment"
             && message.GetModelVisibleContent().Contains(snapshotId.ToString("D"), StringComparison.Ordinal));
         Assert.DoesNotContain(provider.Requests[0].Tools, tool => tool.Name == "pr_fetch");
+        Assert.Contains(provider.Requests[0].Tools, tool => tool.Name == ChildAgentEvidenceTool.ToolId);
         var toolResult = Assert.Single(provider.Requests[1].Messages, message =>
             message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
         Assert.Contains(diff[..100], toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
@@ -114,6 +141,71 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             childContext with { RunId = RunId.New() }));
         Assert.Empty(scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
             .Snapshot(plan.Provenance.SessionId, RunId.New()));
+    }
+
+    /// <summary>Explicit restrictions remove the shared local reader from both presentation and execution.</summary>
+    [Theory]
+    [InlineData("security-deny")]
+    [InlineData("security-allowlist")]
+    [InlineData("context-deny")]
+    [InlineData("assignment-deny")]
+    [InlineData("deny-all")]
+    [InlineData("empty-assignment")]
+    public async Task RunAsync_EvidenceReader_ExplicitRestrictionsPreventAdvertisementAndExecution(string restriction)
+    {
+        // Arrange: the fake model attempts the reader even when it is absent from its catalog.
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var inspect = new InspectMetadataTool();
+        var registry = new ToolRegistry([inspect]);
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, restriction == "empty-assignment" ? [] : [inspect.Definition.Id]);
+        if (restriction == "assignment-deny")
+        {
+            assignment = assignment with { Policy = assignment.Policy with { DeniedToolIds = [ChildAgentEvidenceTool.ToolId] } };
+        }
+
+        var plan = CreatePlan(assignment);
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = Environment.CurrentDirectory,
+            Fingerprint = "restricted-child-policy",
+            AllowedTools = restriction == "security-allowlist" ? [inspect.Definition.Id] : default,
+            DeniedTools = restriction == "security-deny" ? [ChildAgentEvidenceTool.ToolId] : [],
+        };
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        var parent = CreateParentContext(plan, [inspect.Definition.Id]);
+        parent = parent with
+        {
+            Invocation = parent.Invocation with
+            {
+                SecurityPolicy = policy,
+                PolicyBinding = binding,
+                DenyAllTools = restriction == "deny-all",
+                DeniedToolIds = restriction == "context-deny" ? [ChildAgentEvidenceTool.ToolId] : [],
+            },
+        };
+        var provider = new CapturedPrReadProvider(Guid.NewGuid());
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            parent,
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        // Act / Assert: the normal correction path rejects the unadvertised call before execution.
+        var outcome = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
+        Assert.Equal(1, outcome.Usage.Corrections);
+        Assert.Equal(0, outcome.Usage.ToolCalls);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.All(provider.Requests, request => Assert.DoesNotContain(request.Tools, tool => tool.Name == ChildAgentEvidenceTool.ToolId));
+        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
     }
 
     private sealed class CapturedPrReadProvider : IModelProvider

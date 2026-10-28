@@ -9,11 +9,14 @@ using Threadsmith.Core;
 public static class AgentToolPolicy
 {
     /// <summary>Applies child tool, trust, network, root, and requester ceilings.</summary>
+    /// <remarks>Host-provided request-local tools are admitted independently of the inherited catalog,
+    /// but remain subject to explicit denials and the parent's immutable security ceiling.</remarks>
     public static ToolInvocationContext Scope(
         ToolInvocationContext parent,
         DelegationPlan plan,
         AgentAssignment assignment,
-        string repositoryPath)
+        string repositoryPath,
+        IReadOnlyList<string>? requestLocalToolIds = null)
     {
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(plan);
@@ -46,6 +49,14 @@ public static class AgentToolPolicy
                 .Concat(frozenAssignment.Policy.DeniedToolIds)
                 .Distinct(StringComparer.OrdinalIgnoreCase),
         ];
+        string[] allowed =
+        [
+            .. parentAllowed.Concat((requestLocalToolIds ?? []).Where(toolId =>
+                !denyAllTools
+                && !denied.Contains(toolId, StringComparer.OrdinalIgnoreCase)
+                && (parent.SecurityPolicy?.AllowsTool(toolId) ?? true)))
+                .Distinct(StringComparer.OrdinalIgnoreCase),
+        ];
         string[] allowedNetworkToolIds = frozenAssignment.Policy.AllowNetwork
             ? [.. frozenAssignment.Policy.AllowedNetworkToolIds.Intersect(parentAllowed, StringComparer.OrdinalIgnoreCase)]
             : [];
@@ -75,7 +86,7 @@ public static class AgentToolPolicy
             RepositoryPath = Path.GetFullPath(repositoryPath),
             TrustLevel = trust,
             ApprovedRoots = approvedRoots,
-            AllowedToolIds = parentAllowed,
+            AllowedToolIds = allowed,
             DenyAllTools = denyAllTools,
             DeniedToolIds = denied,
             ProhibitedPaths = parent.ProhibitedPaths
@@ -120,7 +131,7 @@ public static class AgentToolPolicy
                     policy.Fingerprint + ":" + plan.DelegationId.Value + ":" + frozenAssignment.AssignmentId.Value))),
                 RepositoryPath = childRoot,
                 AllowedTools = denyAllTools ? [] : policy.AllowedTools.IsDefault
-                    ? [.. parentAllowed] : [.. policy.AllowedTools.Intersect(parentAllowed, StringComparer.OrdinalIgnoreCase)],
+                    ? [.. allowed] : [.. policy.AllowedTools.Intersect(allowed, StringComparer.OrdinalIgnoreCase)],
                 DeniedTools = [.. policy.DeniedTools.Concat(denied).Distinct(StringComparer.OrdinalIgnoreCase)],
                 ProhibitedPaths = [.. policy.ProhibitedPaths.Concat(frozenAssignment.Policy.ProhibitedPaths).Distinct(StringComparer.Ordinal)],
                 WriteFolders = parent.AllowDirectWrites && frozenAssignment.Mode == AgentRunMode.SharedWorkspace ? NarrowRoots(policy.WriteFolders) : [],

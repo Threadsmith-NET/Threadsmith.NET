@@ -112,15 +112,13 @@ internal sealed class ChildAgentModelLoop
             .Where(registration => registration.Implementation is not IRepositoryFeatureTool feature
                 || feature.CaptureAvailability(childToolContext.RepositoryPath).Ready).ToList();
         if (!childToolContext.DenyAllTools
-            && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase))
+            && childToolContext.AllowedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase)
+            && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase)
+            && (childToolContext.SecurityPolicy?.AllowsTool(ChildAgentEvidenceTool.ToolId) ?? true))
         {
             registrations.Add(new ToolRegistration(
                 new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts, capturedById, capturedRegistry, plan.Provenance.ParentRunId),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "child-evidence")));
-            childToolContext = childToolContext with
-            {
-                AllowedToolIds = [.. childToolContext.AllowedToolIds, ChildAgentEvidenceTool.ToolId],
-            };
         }
 
         var toolDefinitions = ModelToolCanonicalizer.Canonicalize(

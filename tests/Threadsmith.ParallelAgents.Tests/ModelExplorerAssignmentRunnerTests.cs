@@ -1,6 +1,7 @@
 namespace Threadsmith.ParallelAgents.Tests;
 
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -166,8 +167,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     }
 
     /// <summary>Structured child tool output is embedded as JSON instead of an escaped JSON string.</summary>
-    [Fact]
-    public async Task RunAsync_JsonToolResult_EmbedsStructuredContentWithoutNestedSerialization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_JsonToolResult_EmbedsStructuredContentWithoutNestedSerialization(bool withSecurityPolicy)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -179,13 +182,29 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         var plan = CreatePlan(assignment);
         var provider = new ToolThenFindingProvider(tool.Definition.Id, retrieveEvidence: true);
+        var parent = CreateParentContext(plan, [tool.Definition.Id]);
+        if (withSecurityPolicy)
+        {
+            var policy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = Environment.CurrentDirectory,
+                Fingerprint = "child-evidence-policy",
+                ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:parallel:maximumConcurrency", 4),
+            };
+            var binding = new SessionPolicyBinding();
+            binding.Publish(policy);
+            parent = parent with { Invocation = parent.Invocation with { SecurityPolicy = policy, PolicyBinding = binding } };
+        }
+
         var runner = CreateRunner(
             provider,
             CreatePipeline(registry, events, sanitizer),
             evidence,
             sanitizer,
             profile,
-            CreateParentContext(plan, [tool.Definition.Id]),
+            parent,
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
 
         // Act

@@ -18,7 +18,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RunAsync_NativeThinkingTools_PreservesSignedRoundsAndPrivateState(bool repeatCall)
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    public async Task RunAsync_NativeThinkingTools_PreservesSignedRoundsAndPrivateState(bool repeatCall, int ordinaryRound = -1)
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -72,7 +75,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             new ModelProviderCatalogConfiguration { Providers = [configuration] },
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
-        using var handler = new NativeChildHandler(tool.Definition.Id) { RepeatCall = repeatCall };
+        using var handler = new NativeChildHandler(tool.Definition.Id) { RepeatCall = repeatCall, OrdinaryRound = ordinaryRound };
         using var client = new HttpClient(handler);
         var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"));
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
@@ -104,8 +107,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var secondRound = handler.Requests[1].GetProperty("messages").EnumerateArray().ToArray();
         var replay = Assert.Single(secondRound, message => message.GetProperty("role").GetString() == "assistant");
         var blocks = replay.GetProperty("content").EnumerateArray().ToArray();
-        Assert.Equal("private-child-signature-0", blocks[0].GetProperty("signature").GetString());
-        Assert.Equal(new[] { "native_one", "native_two" }, blocks.Skip(1).Select(block => block.GetProperty("id").GetString()));
+        if (ordinaryRound != 0)
+        {
+            Assert.Equal("private-child-signature-0", blocks[0].GetProperty("signature").GetString());
+        }
+
+        Assert.Equal(new[] { "native_one", "native_two" }, blocks.Where(block => block.GetProperty("type").GetString() == "tool_use").Select(block => block.GetProperty("id").GetString()));
         var results = secondRound.Last().GetProperty("content").EnumerateArray().ToArray();
         Assert.Equal(new[] { "native_one", "native_two" }, results.Take(2).Select(block => block.GetProperty("tool_use_id").GetString()));
         Assert.All(results.Take(2), block => Assert.False(block.GetProperty("is_error").GetBoolean()));
@@ -113,7 +120,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             .Where(message => message.GetProperty("role").GetString() == "assistant").ToArray();
         Assert.Equal(2, lastRound.Length);
         Assert.True(JsonElement.DeepEquals(replay, lastRound[0]));
-        Assert.Equal("private-child-signature-1", lastRound[1].GetProperty("content")[0].GetProperty("signature").GetString());
+        if (ordinaryRound != 1)
+        {
+            Assert.Equal("private-child-signature-1", lastRound[1].GetProperty("content")[0].GetProperty("signature").GetString());
+        }
+
         var thirdResult = handler.Requests[2].GetProperty("messages").EnumerateArray()
             .SelectMany(message => message.GetProperty("content").EnumerateArray())
             .Single(block => block.GetProperty("type").GetString() == "tool_result"
@@ -141,6 +152,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public bool RepeatCall { get; init; }
 
+        public int OrdinaryRound { get; init; } = -1;
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
@@ -153,14 +166,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }));
             if (round < 2)
             {
-                stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = "private-child-summary", signature = "private-child-signature-" + round } }));
-                stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = 0 }));
+                var firstToolIndex = round == OrdinaryRound ? 0 : 1;
+                if (round != OrdinaryRound)
+                {
+                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = "private-child-summary", signature = "private-child-signature-" + round } }));
+                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = 0 }));
+                }
+
                 for (var ordinal = 0; ordinal < (round == 0 ? 2 : 1); ordinal++)
                 {
                     var wireId = round == 1 ? "native_third" : ordinal == 0 ? "native_one" : "native_two";
                     var path = round == 1 && RepeatCall ? "src/native_one.cs" : $"src/{wireId}.cs";
-                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + 1, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { path } } }));
-                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = ordinal + 1 }));
+                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + firstToolIndex, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { path } } }));
+                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = ordinal + firstToolIndex }));
                 }
             }
             else

@@ -502,7 +502,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             IsError = result is null || !result.Succeeded,
                             Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
                         });
-                        if (transientState.HasResponses)
+                        if (receivedEnvelope)
                         {
                             transientState.BindToolCall(round, batchRequest.Ordinal, toolCallId);
                         }
@@ -522,7 +522,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         throw interruptedBatch;
                     }
 
-                    if (transientState.HasResponses)
+                    if (receivedEnvelope)
                     {
                         transientState.SealRound(round, messages.ToArray());
                     }

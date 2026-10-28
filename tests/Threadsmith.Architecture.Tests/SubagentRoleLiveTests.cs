@@ -11,6 +11,8 @@ using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Models.Anthropic;
+using Threadsmith.Models.OpenAiCodex;
 using Threadsmith.Models.OpenAiCompatible;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -43,17 +45,16 @@ public sealed partial class SubagentRoleLiveTests
             var paths = ConfigurationBootstrap.ResolvePaths(root);
             var configuration = ConfigurationBootstrap.BuildTrusted(paths);
             using var ownedConfiguration = configuration as IDisposable;
-            var providers = ModelProviderConfigurationLoader.Load(
+            var providers = ModelProviderConfigurationLoader.LoadDescriptor(
                 paths.UserProviderCatalog,
                 paths.RepositoryProviderCatalog,
-                new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]),
-                enforceHttps: configuration.GetValue("model:enforceModelEndpointHttps", true),
+                new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration(), new OpenAiCodexProviderRegistration(), new AnthropicProviderRegistration()]),
                 includeRepository: false);
             var profileId = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_PROFILE") is { Length: > 0 } configuredId
                 ? new ModelProfileId(Guid.Parse(configuredId))
                 : providers.DefaultModelId ?? throw new InvalidOperationException("Configure a default provider model first.");
             var providerId = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_PROVIDER")
-                ?? providers.Get(profileId).ProviderId;
+                ?? providers.Providers.Single(provider => provider.Models.Any(model => model.Id == profileId)).Id;
             var roleSettings = new Dictionary<string, string?>();
             foreach (var role in Enum.GetValues<AgentRole>())
             {
@@ -324,6 +325,8 @@ public sealed partial class SubagentRoleLiveTests
             inspectedPaths,
             recorded.ToolCalls,
             recorded.ToolErrors.ToArray(),
+            recorded.ReplayRounds,
+            recorded.OrdinaryToolRounds,
             evidence.Snapshot(plan.Provenance.SessionId)
                 .Where(item => item.RunId == assignment.ChildRunId)
                 .Select(item => new LiveEvidence(item.EvidenceId.Value, item.Provenance.SourcePath, item.Content)).ToArray(),
@@ -349,6 +352,8 @@ public sealed partial class SubagentRoleLiveTests
         IReadOnlyList<string> InspectedPaths,
         IReadOnlyList<string> ToolRequests,
         IReadOnlyList<string> ToolErrors,
+        IReadOnlyList<int> ReplayRounds,
+        IReadOnlyList<int> OrdinaryToolRounds,
         IReadOnlyList<LiveEvidence> Evidence,
         AgentRunOutcome Outcome,
         bool Joined,
@@ -357,7 +362,7 @@ public sealed partial class SubagentRoleLiveTests
 
     private sealed record LiveEvidence(Guid Id, string? Path, string Content);
 
-    private sealed class RecordingProvider : IModelProvider
+    private sealed class RecordingProvider : IModelProvider, IModelRequestPreparationResolver
     {
         private readonly IModelProvider _inner;
 
@@ -374,6 +379,17 @@ public sealed partial class SubagentRoleLiveTests
 
         public HashSet<string> ToolErrors { get; } = [];
 
+        public List<int> ReplayRounds { get; } = [];
+
+        public List<int> OrdinaryToolRounds { get; } = [];
+
+        public ModelStreamRequest Prepare(ModelStreamRequest request)
+        {
+            return _inner is IModelRequestPreparationResolver preparation
+                ? preparation.Prepare(request)
+                : request;
+        }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -383,14 +399,27 @@ public sealed partial class SubagentRoleLiveTests
             MaximumInputTokens = Math.Max(MaximumInputTokens, request.WireEstimate?.WireInputTokens ?? 0);
             ToolErrors.UnionWith(request.Messages.Where(message => message.SectionId == "child-tool-error")
                 .Select(message => message.GetModelVisibleContent()));
+            var initialToolCount = ToolCalls.Count;
+            var receivedEnvelope = false;
             await foreach (var chunk in _inner.StreamAsync(request, cancellationToken))
             {
+                if (chunk.ResponseEnvelope is not null)
+                {
+                    receivedEnvelope = true;
+                    ReplayRounds.Add(request.ToolContinuationRound);
+                }
+
                 if (chunk.Output is ToolRequestModelOutput tool)
                 {
                     ToolCalls.Add(tool.ToolName + ":" + tool.ArgumentsJson);
                 }
 
                 yield return chunk;
+            }
+
+            if (!receivedEnvelope && ToolCalls.Count > initialToolCount)
+            {
+                OrdinaryToolRounds.Add(request.ToolContinuationRound);
             }
         }
     }

@@ -249,7 +249,7 @@ internal sealed class ChildAgentModelLoop
                     if (response.InvocationFailure is { } failure)
                     {
                         var correctionStart = messages.Count;
-                        AddCorrection(messages, ledger, failure, correctiveTurns, [], registrationById, assignment, round, transientState);
+                        AddCorrection(messages, ledger, failure, correctiveTurns, [], registrationById, assignment, round, response.HasResponseEnvelope, transientState);
                         history.RecordExchange(correctionStart, round, []);
                         continue;
                     }
@@ -273,6 +273,7 @@ internal sealed class ChildAgentModelLoop
                                 toolCalls,
                                 toolDefinitions,
                                 round,
+                                response.HasResponseEnvelope,
                                 transientState,
                                 cancellationToken);
                             messages.AddRange(continuation.Messages);
@@ -306,6 +307,7 @@ internal sealed class ChildAgentModelLoop
                                 registrationById,
                                 assignment,
                                 round,
+                                response.HasResponseEnvelope,
                                 transientState);
                         }
 
@@ -488,6 +490,7 @@ internal sealed class ChildAgentModelLoop
         var toolRequestTokens = 0;
         ModelUsage? usage = null;
         MalformedInvocationDiagnostic? invocationFailure = null;
+        var receivedEnvelope = false;
         var usageRequestId = new ModelRequestUsageId(
             assignment.ChildRunId,
             "delegate-agent",
@@ -509,6 +512,7 @@ internal sealed class ChildAgentModelLoop
                 if (chunk.ResponseEnvelope is { } envelope)
                 {
                     transientState.Accept(request, envelope);
+                    receivedEnvelope = true;
                 }
 
                 if (chunk.Text is { } delta)
@@ -577,7 +581,7 @@ internal sealed class ChildAgentModelLoop
                 }
             }
         }
-        catch (MalformedInvocationException exception) when (!transientState.HasResponses)
+        catch (MalformedInvocationException exception) when (!receivedEnvelope)
         {
             // Unsigned malformed responses have no replay envelope to preserve. Discard the
             // entire pending batch and use the same accounted correction path as tool validation.
@@ -609,7 +613,7 @@ internal sealed class ChildAgentModelLoop
             throw new InvalidDataException("The child provider returned invalid usage.");
         }
 
-        return new ModelRoundResponse(responseText, toolRequests, modelTokens, invocationFailure);
+        return new ModelRoundResponse(responseText, toolRequests, modelTokens, invocationFailure, receivedEnvelope);
     }
 
     private static int ResolveDesiredOutputTokens(AgentModelSelection model)
@@ -643,6 +647,7 @@ internal sealed class ChildAgentModelLoop
         ToolCallHistory toolCalls,
         IReadOnlyList<ModelToolDefinition> toolDefinitions,
         int round,
+        bool hasResponseEnvelope,
         ModelRequestTransientState transientState,
         CancellationToken cancellationToken)
     {
@@ -758,7 +763,7 @@ internal sealed class ChildAgentModelLoop
         {
             var result = batchResult with { Result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages) };
             var request = requests[result.Ordinal];
-            if (transientState.HasResponses)
+            if (hasResponseEnvelope)
             {
                 transientState.BindToolCall(round, result.Ordinal, result.CorrelationId);
             }
@@ -787,7 +792,7 @@ internal sealed class ChildAgentModelLoop
                 result.Result.Images));
         }
 
-        if (transientState.HasResponses)
+        if (hasResponseEnvelope)
         {
             transientState.SealRound(round, messages.ToArray());
         }
@@ -921,6 +926,7 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyDictionary<string, ToolRegistration> registrations,
         AgentAssignment assignment,
         int round,
+        bool hasResponseEnvelope,
         ModelRequestTransientState transientState)
     {
         diagnostic = diagnostic with
@@ -938,14 +944,14 @@ internal sealed class ChildAgentModelLoop
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
             var request = requests[ordinal];
-            if (!transientState.HasResponses
+            if (!hasResponseEnvelope
                 && !registrations.ContainsKey(request.ToolName))
             {
                 continue;
             }
 
             var correlationId = CreateToolCallId(assignment, round, ordinal);
-            if (transientState.HasResponses)
+            if (hasResponseEnvelope)
             {
                 transientState.BindToolCall(round, ordinal, correlationId);
             }
@@ -962,7 +968,7 @@ internal sealed class ChildAgentModelLoop
             resultsAdded = true;
         }
 
-        if (transientState.HasResponses)
+        if (hasResponseEnvelope)
         {
             transientState.SealRound(round, messages.ToArray());
         }
@@ -988,7 +994,8 @@ internal sealed class ChildAgentModelLoop
         string Text,
         IReadOnlyList<ToolRequestModelOutput> ToolRequests,
         long ModelTokens,
-        MalformedInvocationDiagnostic? InvocationFailure);
+        MalformedInvocationDiagnostic? InvocationFailure,
+        bool HasResponseEnvelope);
 
     private sealed record StoredToolEvidence(EvidenceId EvidenceId, string Content);
 

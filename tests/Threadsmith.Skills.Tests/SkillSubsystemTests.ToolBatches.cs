@@ -19,7 +19,15 @@ public sealed partial class SkillSubsystemTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task SkillToolBatch_InvocationCompletesForNativeAndClaude(bool claude, bool direct)
+    [InlineData(false, false, 5)]
+    [InlineData(true, false, 5)]
+    [InlineData(false, true, 5)]
+    [InlineData(true, true, 5)]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 1)]
+    [InlineData(false, true, 1)]
+    [InlineData(true, true, 1)]
+    public async Task SkillToolBatch_InvocationCompletesForNativeAndClaude(bool claude, bool direct, int replayRoundMask = 7)
     {
         using var package = TemporaryPackage.CopyMaintained("review");
         await File.WriteAllTextAsync(Path.Combine(package.Root, "evidence.txt"), "batch evidence");
@@ -47,6 +55,7 @@ public sealed partial class SkillSubsystemTests
                 [new("list_files", "{}"), new("read_file", "{\"path\":\"review.txt\"}")],
             ],
             Replay = true,
+            ReplayRoundMask = replayRoundMask,
         };
         var sanitizer = new SecretOutputSanitizer();
         var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, sanitizer)]);
@@ -109,7 +118,14 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("$.path", results[2].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains("review evidence", results[4].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal(5, results.Select(message => message.ToolCallId).Distinct().Count());
-        Assert.Equal(new[] { "wire-0", "wire-0", "wire-1", "wire-0", "wire-1" }, model.ReplayedWireIds);
+        Assert.Equal(
+            replayRoundMask switch
+            {
+                1 => ["wire-0"],
+                5 => ["wire-0", "wire-0", "wire-1"],
+                _ => new[] { "wire-0", "wire-0", "wire-1", "wire-0", "wire-1" },
+            },
+            model.ReplayedWireIds);
         Assert.Equal(direct ? 3 : 4, observed.OfType<ToolInvocationStarted>().Count());
         Assert.Equal(direct ? 3 : 4, observed.OfType<ToolInvocationCompleted>().Count());
         Assert.All(observed.OfType<ToolInvocationCompleted>(), item => Assert.True(item.Succeeded));
@@ -380,6 +396,8 @@ public sealed partial class SkillSubsystemTests
 
         public bool Replay { get; init; }
 
+        public int ReplayRoundMask { get; init; } = int.MaxValue;
+
         public Exception? FinalException { get; init; }
 
         public IReadOnlyList<string> FinalResponses { get; init; } = [];
@@ -398,7 +416,9 @@ public sealed partial class SkillSubsystemTests
             if (Replay && Requests.Count > 1)
             {
                 ReplayedWireIds.Clear();
-                ReplayedWireIds.AddRange(request.Messages.Where(message => message.Role == ModelMessageRole.Tool)
+                request.TransientState!.ValidateHistory(request);
+                ReplayedWireIds.AddRange(request.Messages.Where(message => message.Role == ModelMessageRole.Tool
+                    && request.TransientState.Responses.Any(envelope => envelope.Binding.ModelRound == message.ModelRound))
                     .Select(message => request.TransientState!.GetWireToolCallId(message.ModelRound!.Value, message.ToolCallId!)));
             }
 
@@ -410,7 +430,7 @@ public sealed partial class SkillSubsystemTests
                     yield return new ModelChunk { Output = call };
                 }
 
-                if (Replay)
+                if (Replay && (ReplayRoundMask & (1 << request.ToolContinuationRound)) != 0)
                 {
                     yield return new ModelChunk
                     {

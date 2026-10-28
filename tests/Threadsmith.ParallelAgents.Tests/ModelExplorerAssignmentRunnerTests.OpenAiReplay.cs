@@ -102,6 +102,86 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.All(provider.Requests, request => Assert.False(request.TransientState?.HasResponses));
     }
 
+    /// <summary>Replay state from other rounds cannot require an envelope on an ordinary or rejected response.</summary>
+    [Theory]
+    [InlineData(false, 0, "success")]
+    [InlineData(true, 0, "success")]
+    [InlineData(false, 1, "success")]
+    [InlineData(true, 1, "success")]
+    [InlineData(false, 1, "duplicate")]
+    [InlineData(true, 1, "duplicate")]
+    [InlineData(false, 1, "malformed")]
+    [InlineData(true, 1, "malformed")]
+    public async Task RunAsync_MixedReplayRounds_PreserveHistoryAndCorrections(bool codex, int ordinaryRound, string outcome)
+    {
+        // Arrange: three tool rounds, including one without private reasoning, then a final answer.
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var tool = new InspectMetadataTool();
+        var registry = new ToolRegistry([tool]);
+        var catalog = ReasoningReplayFixture.Catalog(codex);
+        var profile = Assert.Single(catalog.ModelCatalog.Profiles);
+        using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id)
+        {
+            ToolRounds = 3,
+            OrdinaryRound = ordinaryRound,
+            OrdinaryOutcome = outcome,
+        };
+        using var client = new HttpClient(handler);
+        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key")));
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = "low" } };
+        var plan = CreatePlan(assignment);
+        var runner = new ModelExplorerAssignmentRunner(
+            new AgentContextAssembler(evidence),
+            new AgentFindingAdmission(evidence),
+            new AgentModelSelector(catalog.ModelCatalog, new DefaultModelSelectionPolicy(catalog.ModelCatalog), new ReasoningReplayFixture.InstructionResolver(catalog)),
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            new StubInstructionProvider(),
+            sanitizer,
+            CreateOptions(),
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId),
+            TestPromptLoader.Instance);
+
+        // Act.
+        var result = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
+
+        // Assert: retained rounds still use original wire IDs, ordinary rounds use host IDs.
+        Assert.Equal("Inspection complete.", result.Response);
+        Assert.Equal(outcome == "success" ? 0 : 1, result.Usage.Corrections);
+        Assert.Equal(4, handler.Requests.Count);
+        var messages = provider.Requests[^1].Messages;
+        var calls = messages.Where(message => message.Role == ModelMessageRole.Assistant && message.ToolCallId is not null).ToArray();
+        Assert.Equal(outcome == "malformed" ? 2 : 3, calls.Length);
+        var expectedIds = calls.Select(message => message.ModelRound == ordinaryRound ? message.ToolCallId : $"wire-{message.ModelRound}").ToArray();
+        var wire = handler.Requests[^1];
+        if (codex)
+        {
+            var items = wire.GetProperty("input").EnumerateArray().Where(item => item.TryGetProperty("type", out _)).ToArray();
+            Assert.Equal(expectedIds, items.Where(item => item.GetProperty("type").GetString() == "function_call").Select(item => item.GetProperty("call_id").GetString()));
+            Assert.Equal(expectedIds, items.Where(item => item.GetProperty("type").GetString() == "function_call_output").Select(item => item.GetProperty("call_id").GetString()));
+            Assert.Equal(
+                Enumerable.Range(0, 3).Where(round => round != ordinaryRound).Select(round => $"opaque-{round}-state"),
+                items.Where(item => item.GetProperty("type").GetString() == "reasoning").Select(item => item.GetProperty("encrypted_content").GetString()));
+        }
+        else
+        {
+            var items = wire.GetProperty("messages").EnumerateArray().ToArray();
+            Assert.Equal(expectedIds, items.Where(item => item.TryGetProperty("tool_calls", out _)).SelectMany(item => item.GetProperty("tool_calls").EnumerateArray()).Select(item => item.GetProperty("id").GetString()));
+            Assert.Equal(expectedIds, items.Where(item => item.GetProperty("role").GetString() == "tool").Select(item => item.GetProperty("tool_call_id").GetString()));
+            Assert.Equal(
+                Enumerable.Range(0, 3).Where(round => round != ordinaryRound).Select(round => $"private-{round}-state"),
+                items.Where(item => item.TryGetProperty("reasoning_content", out _)).Select(item => item.GetProperty("reasoning_content").GetString()));
+        }
+
+        Assert.Equal(outcome == "duplicate" ? 1 : 0, messages.Count(message => message.Role == ModelMessageRole.Tool && message.IsError == true));
+        Assert.All(provider.Requests, request => Assert.False(request.TransientState?.HasResponses));
+    }
+
     private sealed class ReplayTrackingProvider : IModelProvider, IModelRequestPreparationResolver
     {
         private readonly ConfiguredModelProvider _inner;
@@ -149,14 +229,23 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         internal bool ReasoningAlias { get; init; }
 
+        internal int ToolRounds { get; init; } = 2;
+
+        internal int OrdinaryRound { get; init; } = -1;
+
+        internal string OrdinaryOutcome { get; init; } = "success";
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
             Requests.Add(document.RootElement.Clone());
-            Assert.True(Requests.Count <= 3, "Unexpected retry or extra model round.");
+            Assert.True(Requests.Count <= ToolRounds + 1, "Unexpected retry or extra model round.");
             var round = Requests.Count - 1;
-            var stream = round < 2
-                ? ReasoningReplayFixture.Stream(_codex, round, _tool, JsonSerializer.Serialize(new { path = $"src/round-{round}.cs" }))
+            var arguments = round == OrdinaryRound && OrdinaryOutcome == "malformed"
+                ? "{invalid"
+                : JsonSerializer.Serialize(new { path = $"src/round-{(round == OrdinaryRound && OrdinaryOutcome == "duplicate" ? 0 : round)}.cs" });
+            var stream = round < ToolRounds
+                ? ReasoningReplayFixture.Stream(_codex, round, _tool, arguments, reasoning: round != OrdinaryRound)
                 : ReasoningReplayFixture.Final(_codex);
             stream = stream.Replace("reasoning_content", ReasoningAlias ? "reasoning" : "reasoning_content", StringComparison.Ordinal);
             if (ExceedCapacity)

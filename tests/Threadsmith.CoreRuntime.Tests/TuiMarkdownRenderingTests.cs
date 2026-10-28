@@ -4,11 +4,100 @@ using Microsoft.Extensions.Configuration;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
+using TUIKit;
+using TUIKit.Rendering;
+using TUIKit.Terminal;
 using Xunit;
 
 /// <summary>Verifies bounded semantic Markdown parsing, layout, fallback, and display configuration.</summary>
 public static class TuiMarkdownRenderingTests
 {
+    /// <summary>Actual transcript cells emit native targets only when the terminal supports them.</summary>
+    [Theory]
+    [InlineData(true, HyperlinkMode.Auto, true)]
+    [InlineData(false, HyperlinkMode.Auto, false)]
+    [InlineData(true, HyperlinkMode.Never, false)]
+    public static void Render_LabeledLinks_UsesNativeTargets(bool supported, HyperlinkMode mode, bool emitsLinks)
+    {
+        const string source = "[View pull request #771](https://example.com/pr/771) plain";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+        var capabilities = new TerminalCapabilities(TerminalColorDepth.None, false, false, supported, false, false, false, false, false);
+        using var backend = new HeadlessBackend(80, 6, capabilities);
+        var renderer = new TerminalRenderer(80, 6, TerminalColorDepth.None) { Hyperlinks = mode };
+        var cells = new CellBuffer(80, 6);
+
+        view.Render(new BufferSurface(cells));
+        renderer.Render(backend, view.Render);
+        var output = backend.TakeOutput();
+
+        Assert.Contains("View pull request #771 plain", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        Assert.All(
+            Enumerable.Range(0, "View pull request #771".Length).Select(x => cells.Get(x, 1)),
+            cell => Assert.Equal("https://example.com/pr/771", cell.Style.Hyperlink?.AbsoluteUri));
+        Assert.Null(cells.Get("View pull request #771".Length, 1).Style.Hyperlink);
+        Assert.DoesNotContain(" (https://", output, StringComparison.Ordinal);
+        Assert.Equal(emitsLinks, output.Contains("\u001b]8;", StringComparison.Ordinal));
+        Assert.Equal(emitsLinks, output.Contains("https://example.com/pr/771", StringComparison.Ordinal));
+        if (emitsLinks)
+        {
+            Assert.Contains(Ansi.CloseHyperlink, output, StringComparison.Ordinal);
+        }
+
+        Assert.Equal("https://example.com/pr/771", Assert.Single(view.Links).AbsoluteUri);
+    }
+
+    /// <summary>Wrapping, adjacent fragment targets, and clearing preserve exact cell ownership.</summary>
+    [Fact]
+    public static void Render_WrappedUnicodeLinks_ClearTargetsWithViewport()
+    {
+        const string source = "[界abcdef](https://example.com/#one)[two](https://example.com/#two) plain";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+        var cells = new CellBuffer(6, 12);
+
+        view.Render(new BufferSurface(cells));
+
+        Assert.Equal("https://example.com/#one", cells.Get(0, 1).Style.Hyperlink?.AbsoluteUri);
+        Assert.Equal(cells.Get(0, 1).Style.Hyperlink, cells.Get(1, 1).Style.Hyperlink);
+        var targets = Enumerable.Range(0, 12).SelectMany(y => Enumerable.Range(0, 6)
+            .Select(x => cells.Get(x, y).Style.Hyperlink?.AbsoluteUri)).OfType<string>().Distinct().ToArray();
+        Assert.Equal(["https://example.com/#one", "https://example.com/#two"], targets);
+        view.ClearView();
+        view.Render(new BufferSurface(cells));
+        Assert.All(
+            Enumerable.Range(0, 12).SelectMany(y => Enumerable.Range(0, 6).Select(x => cells.Get(x, y))),
+            cell => Assert.Null(cell.Style.Hyperlink));
+        Assert.Equal(2, view.Links.Count);
+    }
+
+    /// <summary>Reusing renderer cells cannot retain a prior target when only the destination changes.</summary>
+    [Fact]
+    public static void Render_ReusedCells_ReplaceAndRemoveNativeTargets()
+    {
+        using var backend = new HeadlessBackend(20, 4, TerminalCapabilities.Full);
+        var renderer = new TerminalRenderer(20, 4, TerminalColorDepth.TrueColor);
+        foreach (var target in new[] { "https://example.com/#one", "https://example.com/#two" })
+        {
+            var source = $"[same label]({target})";
+            var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+            var view = new TranscriptView();
+            view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+            renderer.Render(backend, view.Render);
+            Assert.Contains(target, backend.TakeOutput(), StringComparison.Ordinal);
+        }
+
+        var plain = new TranscriptView();
+        plain.Present(new PresentationBatch([new PresentationTextItem([new("same label", PresentationTextRole.Default)])]));
+        renderer.Render(backend, plain.Render);
+        var output = backend.TakeOutput();
+        Assert.Contains("same label", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://", output, StringComparison.Ordinal);
+        Assert.Empty(plain.Links);
+    }
+
     /// <summary>URL labels already expose the destination and must not duplicate it.</summary>
     [Theory]
     [InlineData("<https://example.com/docs>")]
@@ -48,7 +137,7 @@ public static class TuiMarkdownRenderingTests
         var segments = TuiMarkdownLayout.Format(document, 120);
 
         Assert.Equal(
-            "one (https://example.com/docs#one)two (https://example.com/docs#two)\n",
+            "onetwo\n",
             string.Concat(segments.Select(segment => segment.Text)));
         var view = new TranscriptView();
         view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
@@ -86,7 +175,7 @@ public static class TuiMarkdownRenderingTests
             ["https://example.com/docs?q=a&b=c#one", "https://example.com/docs?q=a&b=c#two"],
             view.Links.Select(link => link.AbsoluteUri));
         var visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
-        Assert.Contains("one & two (https://example.com/docs?q=a&b=c#one)", visible, StringComparison.Ordinal);
+        Assert.Contains("one & two", visible, StringComparison.Ordinal);
     }
 
     /// <summary>Configuration cannot raise recursive traversal beyond its stack-safety ceiling.</summary>
@@ -151,7 +240,8 @@ public static class TuiMarkdownRenderingTests
         Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
         Assert.Contains(paragraph.Spans, span => span.LinkTarget?.Host == "example.com");
         var layout = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
-        Assert.Contains("link (https://example.com/path)", layout, StringComparison.Ordinal);
+        Assert.Contains("link.", layout, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://example.com/path", layout, StringComparison.Ordinal);
     }
 
     /// <summary>Renders heading text without exposing ATX source delimiters.</summary>
@@ -252,9 +342,13 @@ public static class TuiMarkdownRenderingTests
         const string source = "| Resource |\n| --- |\n| [docs](https://example.com/docs) |";
         var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
 
-        var visible = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
+        var segments = TuiMarkdownLayout.Format(document, 120);
+        var visible = string.Concat(segments.Select(segment => segment.Text));
 
-        Assert.Contains("docs (https://example.com/docs)", visible, StringComparison.Ordinal);
+        Assert.Contains("docs", visible, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://", visible, StringComparison.Ordinal);
+        Assert.Contains(segments, segment => segment.Text.Contains("docs", StringComparison.Ordinal)
+            && segment.LinkTarget?.AbsoluteUri == "https://example.com/docs");
     }
 
     /// <summary>Wraps an oversized header-only table through the same bounded responsive layout as data rows.</summary>

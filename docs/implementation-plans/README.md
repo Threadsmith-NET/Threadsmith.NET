@@ -207,6 +207,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-semantic-input-relevance.md](maintenance-semantic-input-relevance.md) | Shared compiler-input relevance for refresh and edit diagnostics |
 | Maintenance | [maintenance-semantic-check-results-presentation.md](maintenance-semantic-check-results-presentation.md) | Show advisory checks, results, coverage and committed candidate reuse |
 | Maintenance | `maintenance-model-output-coalescing.md` | Bound main-chat text batching through the shared durable event stream |
+| Maintenance | [maintenance-native-transcript-hyperlinks.md](maintenance-native-transcript-hyperlinks.md) | TUIKit upgrade and native transcript hyperlinks |
+| Maintenance | [maintenance-streaming-run-history-fixes.md](maintenance-streaming-run-history-fixes.md) | Streaming redaction, cancellation lifetime, selective history reads, and disabled output limits |
 | Maintenance | `maintenance-semantic-validation-reconciliation.md` | Reuse proven semantic snapshots and bound validation reconciliation work |
 | Maintenance | [maintenance-semantic-startup-progress.md](maintenance-semantic-startup-progress.md) | Early startup presentation and timed semantic initialization status |
 | Maintenance | [maintenance-resumed-conversation-output.md](maintenance-resumed-conversation-output.md) | Replace resumed output with saved conversation at the latest exchange |
@@ -218,6 +220,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-memory-intelligence-routing.md](maintenance-memory-intelligence-routing.md) | Independent intelligence routing and situational concept eligibility |
 | Maintenance | [Threadsmith-security-policy-implementation-plan.md](Threadsmith-security-policy-implementation-plan.md) | Source-aware configuration authority and session policy |
 | Maintenance | [maintenance-fixed-repository-scratchpad.md](maintenance-fixed-repository-scratchpad.md) | Fixed repository scratchpad with boolean enablement |
+| Maintenance | [maintenance-delegation-shared-context.md](maintenance-delegation-shared-context.md) | Shared delegation handoff with focused child assignments |
 
 ## Update discipline
 

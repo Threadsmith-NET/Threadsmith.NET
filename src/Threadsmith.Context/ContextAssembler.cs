@@ -981,7 +981,7 @@ public sealed class ContextAssembler : IContextAssembler
             ? new ConversationStateSnapshot { SessionId = request.SessionId }
             : await _conversationStore.GetSnapshotAsync(
                 request.SessionId,
-                includeBodies: true,
+                includeBodies: false,
                 cancellationToken: cancellationToken);
         var mode = request.ConversationModeOverride
             ?? (_conversationStore is null ? _options.Conversation.Mode : state.Mode);
@@ -991,13 +991,6 @@ public sealed class ContextAssembler : IContextAssembler
         var current = request.CurrentMessageId is { } currentId
             ? state.Messages.FirstOrDefault(message => message.Id == currentId)
             : null;
-        var currentContent = _sanitizer.Sanitize(current?.Content ?? task.Intent);
-        var assembly = new ConversationAssemblyState(
-            mode,
-            modeSource,
-            currentContent,
-            current?.Sensitivity == ConversationSensitivity.Sensitive)
-        { CurrentImages = current?.Images ?? [] };
         var recentCutoff = DateTimeOffset.UtcNow - _options.Conversation.RecentTurnMaximumAge;
         ConversationMessage[] allPriorMessages =
         [
@@ -1007,6 +1000,31 @@ public sealed class ContextAssembler : IContextAssembler
         ];
         var priorMessages = allPriorMessages.Where(message =>
             message.OccurredAt >= recentCutoff);
+        var turns = mode == ConversationContextMode.ConversationAware
+            ? CreateCompleteTurns(priorMessages, state.Messages).TakeLast(_options.Conversation.RecentTurnCount).ToArray()
+            : [];
+        var selectedIds = turns.SelectMany(turn => turn).Select(message => message.Id).ToHashSet();
+        if (current is not null)
+        {
+            selectedIds.Add(current.Id);
+        }
+
+        var selected = _conversationStore is null || selectedIds.Count == 0
+            ? []
+            : (await _conversationStore.GetMessagesAsync(request.SessionId, selectedIds, cancellationToken))
+                .ToDictionary(message => message.Id);
+        if (current is not null && selected.TryGetValue(current.Id, out var loadedCurrent))
+        {
+            current = loadedCurrent;
+        }
+
+        var currentContent = _sanitizer.Sanitize(current?.Content ?? task.Intent);
+        var assembly = new ConversationAssemblyState(
+            mode,
+            modeSource,
+            currentContent,
+            current?.Sensitivity == ConversationSensitivity.Sensitive)
+        { CurrentImages = current?.Images ?? [] };
         if (mode == ConversationContextMode.ConversationAware)
         {
             foreach (var message in allPriorMessages.Where(message =>
@@ -1015,11 +1033,9 @@ public sealed class ContextAssembler : IContextAssembler
                 assembly.AddExcludedMessage(message, "Message is outside the hot recent-turn age window.");
             }
 
-            var turns = CreateCompleteTurns(priorMessages, state.Messages);
-            foreach (var turn in turns
-                .TakeLast(_options.Conversation.RecentTurnCount))
+            foreach (var turn in turns)
             {
-                assembly.AddRecentTurn(turn);
+                assembly.AddRecentTurn(turn.Select(message => selected.GetValueOrDefault(message.Id) ?? message).ToArray());
             }
 
             while (TokenEstimator.Estimate(assembly.RecentTurnsContent)
@@ -1871,6 +1887,7 @@ public sealed class ContextAssembler : IContextAssembler
                 EstimatedTokens = message.EstimatedTokens,
                 Images = message.Images,
                 ImageDisposition = message.Images.Count == 0 ? null
+                    : !included ? "metadata only; pixels omitted"
                     : message.Content is null ? "unavailable after body retention"
                     : included && message.Role == ConversationRole.User
                         ? _omittedImageCounts.TryGetValue(message.Id, out var count)

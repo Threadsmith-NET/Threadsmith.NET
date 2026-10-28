@@ -145,6 +145,7 @@ public sealed class SqliteConversationStore : IConversationStore
             includeBodies,
             warnings,
             historyWindow,
+            null,
             cancellationToken);
 
         // Retired automatic memory rows and indexes are historical data, never restoration input.
@@ -162,6 +163,24 @@ public sealed class SqliteConversationStore : IConversationStore
             Summary = null,
             Warnings = warnings,
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
+        SessionId sessionId,
+        IReadOnlyCollection<ConversationMessageId> messageIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(messageIds);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (messageIds.Count == 0)
+        {
+            return [];
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        return await ReadMessagesAsync(connection, sessionId, true, [], null, messageIds, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -371,15 +390,22 @@ public sealed class SqliteConversationStore : IConversationStore
         bool includeBodies,
         List<string> warnings,
         ConversationHistoryWindow? historyWindow,
+        IReadOnlyCollection<ConversationMessageId>? messageIds,
         CancellationToken cancellationToken)
     {
         var messages = new List<ConversationMessage>();
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT message_id, run_id, sequence, role, body, artifact_id, content_hash,
+        command.CommandText = $"""
+            SELECT message_id, run_id, sequence, role, {(includeBodies ? "body" : "NULL")}, artifact_id, content_hash,
                    estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json
             FROM conversation_messages WHERE session_id = $session
-            """ + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
+            """ + (messageIds is null ? string.Empty : " AND message_id IN (SELECT value FROM json_each($messages))")
+            + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
+        if (messageIds is not null)
+        {
+            command.Parameters.AddWithValue("$messages", JsonSerializer.Serialize(messageIds.Select(id => id.Value.ToString("D"))));
+        }
+
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
         if (historyWindow is not null)
         {
@@ -404,10 +430,10 @@ public sealed class SqliteConversationStore : IConversationStore
                 continue;
             }
 
-            var body = includeBodies && !await reader.IsDBNullAsync(4)
+            var body = includeBodies && !await reader.IsDBNullAsync(4, cancellationToken)
                 ? reader.GetString(4)
                 : null;
-            var artifactId = await reader.IsDBNullAsync(5) ? null : reader.GetString(5);
+            var artifactId = await reader.IsDBNullAsync(5, cancellationToken) ? null : reader.GetString(5);
             if (includeBodies && body is null && artifactId is not null)
             {
                 body = await _artifactStore.ReadAsync(artifactId, cancellationToken);
@@ -460,7 +486,7 @@ public sealed class SqliteConversationStore : IConversationStore
                 ContentHash = reader.GetString(6),
                 EstimatedTokens = reader.GetInt32(7),
                 Sensitivity = (ConversationSensitivity)reader.GetInt32(8),
-                RepositoryRevision = await reader.IsDBNullAsync(9) ? null : reader.GetString(9),
+                RepositoryRevision = await reader.IsDBNullAsync(9, cancellationToken) ? null : reader.GetString(9),
                 OccurredAt = DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture),
                 SchemaVersion = schemaVersion,
             });

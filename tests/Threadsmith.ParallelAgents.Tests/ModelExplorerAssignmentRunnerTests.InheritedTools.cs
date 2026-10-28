@@ -355,6 +355,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
     private sealed class UnusedInheritedConversationStore : IConversationStore
     {
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();

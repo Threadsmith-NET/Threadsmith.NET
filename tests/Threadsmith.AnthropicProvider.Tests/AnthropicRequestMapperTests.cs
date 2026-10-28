@@ -454,7 +454,9 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_ThreeRounds_KeepsRoundSpecificReplayAndCorrelation()
     {
         var first = TestAnthropic.ToolStream(thinking: true, secondTool: true);
-        var second = first.Replace("wire_one", "wire_three", StringComparison.Ordinal).Replace("wire_two", "wire_four", StringComparison.Ordinal);
+        var second = first.Replace("wire_one", "wire_three", StringComparison.Ordinal).Replace("wire_two", "wire_four", StringComparison.Ordinal)
+            .Replace("signed-canary-A", "signed-second-A", StringComparison.Ordinal)
+            .Replace("redacted-canary", "redacted-second", StringComparison.Ordinal);
         var handler = new TestAnthropicHandler(first, second, TestAnthropic.TextStream("done"));
         using var client = new HttpClient(handler);
         using var state = new ModelRequestTransientState();
@@ -470,6 +472,11 @@ public sealed class AnthropicRequestMapperTests
         Assert.Equal(5, messages.GetArrayLength());
         Assert.Equal("wire_one", messages[2].GetProperty("content")[0].GetProperty("tool_use_id").GetString());
         Assert.Equal("wire_three", messages[4].GetProperty("content")[0].GetProperty("tool_use_id").GetString());
+        Assert.Equal("signed-canary-AB", messages[1].GetProperty("content")[0].GetProperty("signature").GetString());
+        Assert.Equal("redacted-canary", messages[1].GetProperty("content")[1].GetProperty("data").GetString());
+        Assert.Equal("signed-second-AB", messages[3].GetProperty("content")[0].GetProperty("signature").GetString());
+        Assert.Equal("redacted-second", messages[3].GetProperty("content")[1].GetProperty("data").GetString());
+        Assert.True(JsonElement.DeepEquals(handler.Requests[1].GetProperty("messages")[1], messages[1]));
         Assert.Equal(2, state.Responses.Count);
         Assert.Equal(50, state.RetainedOutputTokens);
     }

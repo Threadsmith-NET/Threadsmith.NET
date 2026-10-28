@@ -69,6 +69,14 @@ public sealed partial class SkillSubsystemTests
             Assert.DoesNotContain("inputSchema", result.ResultJson, StringComparison.Ordinal);
             Assert.DoesNotContain("Private instruction body", result.ResultJson, StringComparison.Ordinal);
             discovery = JsonSerializer.Deserialize<InspectSkillOutput>(result.ResultJson!)!;
+            Assert.NotNull(result.ModelResultContent);
+            using var modelOutput = JsonDocument.Parse(result.ModelResultContent);
+            using var durableOutput = JsonDocument.Parse(result.ResultJson!);
+            Assert.True(JsonElement.DeepEquals(durableOutput.RootElement, modelOutput.RootElement));
+            foreach (var discovered in discovery.Skills)
+            {
+                Assert.Contains(discovered.Selector, result.ModelResultContent, StringComparison.Ordinal);
+            }
         }
 
         Assert.Equal(expectedCount, discovery.Skills.Count);
@@ -352,6 +360,10 @@ public sealed partial class SkillSubsystemTests
         var root = output.RootElement;
         var skill = Assert.Single(root.GetProperty("skills").EnumerateArray());
         var exact = skill.GetProperty("selector").GetString()!;
+        Assert.NotNull(result.ModelResultContent);
+        Assert.Contains(exact, result.ModelResultContent, StringComparison.Ordinal);
+        using var modelOutput = JsonDocument.Parse(result.ModelResultContent);
+        Assert.True(JsonElement.DeepEquals(root, modelOutput.RootElement));
         Assert.True((await application.HandleAsync(new VerifySkillCommand(exact))).Enabled);
         Assert.Contains("Ask the user for any missing, required information", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);
         Assert.Contains("native JSON value", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);

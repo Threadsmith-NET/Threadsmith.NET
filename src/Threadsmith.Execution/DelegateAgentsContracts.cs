@@ -47,9 +47,9 @@ public sealed record DelegateAgentRequest
     [JsonPropertyName("task")]
     public required string Task { get; init; }
 
-    /// <summary>Bounded untrusted context supplied to the child after host instructions.</summary>
+    /// <summary>Optional untrusted child-specific context appended to the shared context after host instructions.</summary>
     [JsonPropertyName("context")]
-    public required string Context { get; init; }
+    public string? Context { get; init; }
 
     /// <summary>Requested host-narrowed tool authority.</summary>
     [JsonPropertyName("toolAccess")]
@@ -59,6 +59,10 @@ public sealed record DelegateAgentRequest
 /// <summary>Strict model-facing request for one bounded fork/join delegation.</summary>
 public sealed record DelegateAgentsInput
 {
+    /// <summary>Optional untrusted context supplied once and prefixed to every child's individual context.</summary>
+    [JsonPropertyName("sharedContext")]
+    public string? SharedContext { get; init; }
+
     /// <summary>Role-specific assignments to run concurrently.</summary>
     [JsonPropertyName("agents")]
     public required IReadOnlyList<DelegateAgentRequest> Agents { get; init; }
@@ -442,10 +446,10 @@ internal static class DelegateAgentsInputValidator
                     "agents[].task must contain non-empty text.");
             }
 
-            if (string.IsNullOrWhiteSpace(agent.Context))
+            if (string.IsNullOrWhiteSpace(input.SharedContext) && string.IsNullOrWhiteSpace(agent.Context))
             {
                 throw new ToolArgumentValidationException(
-                    "agents[].context must contain non-empty text.");
+                    "Supply non-empty sharedContext or agents[].context for every child.");
             }
         }
     }

@@ -1,6 +1,8 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Runs;
@@ -136,7 +138,8 @@ public static class TuiKitFrontendTests
         Assert.Contains(segments, segment => segment.Text == "strike" && segment.Role == PresentationTextRole.MarkdownStrikethrough);
         Assert.Contains(segments, segment => segment.Text == "code" && segment.Role == PresentationTextRole.MarkdownCode);
         Assert.Contains(segments, segment => segment.Text == "link" && segment.Role == PresentationTextRole.Hyperlink);
-        Assert.Contains("https://example.com/", visible, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://example.com/", visible, StringComparison.Ordinal);
+        Assert.Contains(segments, segment => segment.Text == "link" && segment.LinkTarget?.AbsoluteUri == "https://example.com/");
     }
 
     /// <summary>Grapheme edits and undo preserve exact Unicode and multiline paste.</summary>
@@ -314,6 +317,43 @@ public static class TuiKitFrontendTests
 
         view.HandleKey(KeyEvent.Char('a', KeyModifiers.Ctrl));
         Assert.Equal(expected, view.SelectedText());
+    }
+
+    /// <summary>Rendered model text retains exactly one blank line before tool activity after reflow.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("\n")]
+    [InlineData("\n\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r\n\r\n")]
+    public static void ModelOutputBeforeToolPreservesBlankLine(string ending)
+    {
+        var sessionId = SessionId.New();
+        var occurredAt = DateTimeOffset.UtcNow;
+        var invocationId = ToolInvocationId.New();
+        var transcript = new ConversationTranscript(string.Empty);
+        var collector = new ModelAnswerCollector(renderMarkdown: true);
+        var view = new TranscriptView();
+        transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "inspect"));
+        transcript.Apply(new ModelReasoningObserved(sessionId, occurredAt, "Hidden reasoning"));
+        var output = new ModelOutputObserved(sessionId, occurredAt, "I'll investigate." + ending);
+        transcript.Apply(output);
+        collector.Append(transcript.Text);
+        transcript.Apply(new ToolInvocationStarted(sessionId, occurredAt, invocationId, "read_file"));
+        view.Present(new PresentationBatch([Assert.IsType<PresentationMarkdownItem>(collector.Flush())]));
+        var previousLength = transcript.Length;
+        var completed = new ToolInvocationCompleted(sessionId, occurredAt, invocationId, Succeeded: true);
+        transcript.Apply(completed);
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(segments, completed, transcript.GetTextSince(previousLength));
+        view.Present(new PresentationBatch([new PresentationTextItem(segments)]));
+
+        foreach (var width in new[] { 40, 120, 80 })
+        {
+            view.Render(new BufferSurface(new CellBuffer(width, 24)));
+            Assert.StartsWith("\nI'll investigate.\n\n TOOLS: read_file - completed", string.Join('\n', view.Lines), StringComparison.Ordinal);
+            Assert.DoesNotContain("Hidden reasoning", string.Join('\n', view.Lines), StringComparison.Ordinal);
+        }
     }
 
     /// <summary>Markdown layout cannot reintroduce extra trailing blank rows before a retained input echo.</summary>

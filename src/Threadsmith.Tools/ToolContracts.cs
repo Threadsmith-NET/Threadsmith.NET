@@ -717,12 +717,21 @@ public abstract class Tool<TInput, TOutput> : ITool
             var normalizedArgumentsJson = NormalizeOptionalNullArguments(argumentsJson);
             var input = JsonSerializer.Deserialize<TInput>(normalizedArgumentsJson, _jsonOptions)
                 ?? throw new ToolArgumentValidationException("Tool arguments were empty.");
-            ValidateInput(input);
             if (input is IConceptToolInput conceptInput)
             {
-                _ = MemoryConcepts.Normalize(conceptInput.Concepts);
+                try
+                {
+                    _ = MemoryConcepts.Normalize(conceptInput.Concepts);
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new ToolArgumentValidationException(
+                        $"Invalid concepts: supply at most {MemoryConcepts.MaximumPerInput} single words or hyphenated terms, each 1–{MemoryConcepts.MaximumConceptRunes} characters using Unicode letters/digits and single internal hyphens, with no spaces or other punctuation. For example, use theme-catalog-caching instead of a phrase, csharp for C#, and dotnet for .NET. Correct concepts or omit the optional field, then re-emit the full intended batch.",
+                        exception);
+                }
             }
 
+            ValidateInput(input);
             return input;
         }
         catch (ToolArgumentValidationException)

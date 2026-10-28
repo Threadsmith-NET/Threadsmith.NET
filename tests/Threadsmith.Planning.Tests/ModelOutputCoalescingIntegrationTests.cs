@@ -19,7 +19,16 @@ public static class ModelOutputCoalescingIntegrationTests
     [InlineData("fail")]
     [InlineData("cancel")]
     [InlineData("tool")]
-    public static async Task MainLoop_DrainsExactTextToSqliteBeforeTermination(string ending)
+    [InlineData("complete", "sk-abcdefghijklmnop", -1)]
+    [InlineData("fail", "sk-abcdefghijklmnop", 0)]
+    [InlineData("cancel", "sk-abcdefghijklmnop", 4096)]
+    [InlineData("tool", "password: 'first-line\nsecret-canary'")]
+    [InlineData("complete", "-----BEGIN RSA PRIVATE KEY-----\nsecret-canary\n-----END RSA PRIVATE KEY-----\n")]
+    [InlineData("complete", "oversized")]
+    [InlineData("complete", "long-line", 0)]
+    [InlineData("complete", null, 0)]
+    public static async Task MainLoop_DrainsExactTextToSqliteBeforeTermination(
+        string ending, string? sensitiveContent = null, int maximumOutputCharacters = 8 * 1024 * 1024)
     {
         var directory = Path.Combine(Path.GetTempPath(), "threadsmith-output-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -37,7 +46,13 @@ public static class ModelOutputCoalescingIntegrationTests
                     await store.AppendAsync(item, token);
                 }
             });
-            var provider = new FragmentProvider(ending);
+            var content = sensitiveContent switch
+            {
+                "oversized" => "password: '" + new string('x', 16385) + "\nsecret-canary'",
+                "long-line" => new string('x', 16385),
+                _ => sensitiveContent,
+            };
+            var provider = new FragmentProvider(ending, content);
             var sanitizer = new SecretOutputSanitizer();
             var registry = new ToolRegistry([new TestDeterministicOutputTool("tool result")]);
             var pipeline = new ToolInvocationPipeline(
@@ -63,6 +78,7 @@ public static class ModelOutputCoalescingIntegrationTests
                 toolRegistry: registry,
                 limits: new ExecutionLimits
                 {
+                    MaxStructuredOutputCharacters = maximumOutputCharacters,
                     MaxModelOutputBatchCharacters = 64,
                     ModelOutputFlushIntervalMilliseconds = int.MaxValue,
                 },
@@ -93,12 +109,27 @@ public static class ModelOutputCoalescingIntegrationTests
 
             var restored = await store.ReadAsync(session, TestContext.Current.CancellationToken);
             var text = restored.OfType<ModelOutputObserved>().ToArray();
-            Assert.Equal("first" + new string('x', 1000) + "tail", string.Concat(text.Select(item => item.Text)));
-            Assert.Equal(18, text.Length);
+            if (content is null)
+            {
+                Assert.Equal("first" + new string('x', 1000) + "\ntail", string.Concat(text.Select(item => item.Text)));
+                Assert.Equal(17, text.Length);
+                var reasoning = received.FindIndex(item => item is ModelReasoningObserved);
+                Assert.Equal("first" + new string('x', 1000) + "\n", string.Concat(received.Take(reasoning).OfType<ModelOutputObserved>().Select(item => item.Text)));
+            }
+            else
+            {
+                var expected = sanitizer.Sanitize(content);
+                Assert.Equal(expected, string.Concat(text.Select(item => item.Text)));
+                Assert.Equal(expected, string.Concat(received.OfType<ModelReasoningObserved>().Select(item => item.Text)));
+                Assert.DoesNotContain("secret-canary", string.Concat(text.Select(item => item.Text)), StringComparison.Ordinal);
+                if (!content.Contains('\n'))
+                {
+                    Assert.True(received.FindIndex(item => item is ModelReasoningObserved) < received.FindIndex(item => item is ModelOutputObserved));
+                }
+            }
+
             Assert.All(text, item => Assert.InRange(item.Text.Length, 1, 64));
             Assert.True(received.FindLastIndex(item => item is ModelOutputObserved) < received.FindIndex(item => item is RunCompleted));
-            var reasoning = received.FindIndex(item => item is ModelReasoningObserved);
-            Assert.Equal("first" + new string('x', 1000), string.Concat(received.Take(reasoning).OfType<ModelOutputObserved>().Select(item => item.Text)));
             Assert.DoesNotContain(restored, item => item is ModelReasoningObserved);
             if (ending == "tool")
             {
@@ -115,10 +146,12 @@ public static class ModelOutputCoalescingIntegrationTests
     private sealed class FragmentProvider : IModelProvider
     {
         private readonly string _ending;
+        private readonly string? _content;
 
-        public FragmentProvider(string ending)
+        public FragmentProvider(string ending, string? content)
         {
             _ending = ending;
+            _content = content;
         }
 
         public TaskCompletionSource Waiting { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -127,18 +160,38 @@ public static class ModelOutputCoalescingIntegrationTests
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            yield return new ModelChunk { Text = "first" };
-            for (var index = 0; index < 1000; index++)
+            if (_content is null)
             {
-                yield return new ModelChunk { Text = "x" };
+                yield return new ModelChunk { Text = "first" };
+                for (var index = 0; index < 1000; index++)
+                {
+                    yield return new ModelChunk { Text = "x" };
+                }
+
+                yield return new ModelChunk { Text = "\n" };
+                yield return new ModelChunk { Reasoning = "visible thoughts\n" };
+                yield return new ModelChunk
+                {
+                    Text = "tail",
+                    Output = _ending == "tool" ? new ToolRequestModelOutput("deterministic_output", "{\"sequence\":1}") : null,
+                };
+            }
+            else
+            {
+                // Interleave both channels at every character boundary. Neither may flush
+                // the other's incomplete credential, even when observations intervene.
+                foreach (var character in _content)
+                {
+                    yield return new ModelChunk { Text = character.ToString() };
+                    yield return new ModelChunk { Reasoning = character.ToString() };
+                }
+
+                if (_ending == "tool")
+                {
+                    yield return new ModelChunk { Output = new ToolRequestModelOutput("deterministic_output", "{\"sequence\":1}") };
+                }
             }
 
-            yield return new ModelChunk { Reasoning = "private reasoning" };
-            yield return new ModelChunk
-            {
-                Text = "tail",
-                Output = _ending == "tool" ? new ToolRequestModelOutput("deterministic_output", "{\"sequence\":1}") : null,
-            };
             if (_ending == "fail")
             {
                 throw new InvalidOperationException("provider failed");

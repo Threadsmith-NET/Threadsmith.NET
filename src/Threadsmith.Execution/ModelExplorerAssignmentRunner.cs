@@ -231,7 +231,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             _parentContext.Invocation,
             plan,
             frozen,
-            plan.Provenance.RepositoryIdentity) with
+            plan.Provenance.RepositoryIdentity,
+            [ChildAgentEvidenceTool.ToolId]) with
         {
             ModelContextWindowTokens = model.ContextWindowTokens,
             ModelRequestOutputReserveTokens = model.OutputReserveTokens,

@@ -1,9 +1,11 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Models;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -11,6 +13,65 @@ using Xunit;
 /// <summary>Hint admission follows the existing native execution boundary.</summary>
 public static class NativeConceptTransportTests
 {
+    /// <summary>Shared native schemas expose the format enforced during preflight, including child tool catalogs.</summary>
+    [Theory]
+    [InlineData("theme-catalog-caching", true)]
+    [InlineData("workspace-identity", true)]
+    [InlineData("缓存", true)]
+    [InlineData("theme catalog caching", false)]
+    [InlineData("workspace identity", false)]
+    [InlineData("C#", false)]
+    [InlineData(".NET", false)]
+    [InlineData("-prefix", false)]
+    [InlineData("suffix-", false)]
+    [InlineData("double--hyphen", false)]
+    [InlineData("", false)]
+    public static void Advertised_concepts_match_preflight_format(string concept, bool valid)
+    {
+        var tool = new ListFilesTool(TestPromptLoader.Instance);
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var concepts = schema.RootElement.GetProperty("properties").GetProperty("concepts");
+        var items = concepts.GetProperty("items");
+        var pattern = items.GetProperty("pattern").GetString()!;
+        Assert.Equal(valid, Regex.IsMatch(concept, pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)));
+        Assert.Equal(8, concepts.GetProperty("maxItems").GetInt32());
+        Assert.Equal(1, items.GetProperty("minLength").GetInt32());
+        Assert.Equal(48, items.GetProperty("maxLength").GetInt32());
+        Assert.Contains("Omit concepts", concepts.GetProperty("description").GetString(), StringComparison.Ordinal);
+        using var strict = JsonDocument.Parse(Assert.IsType<string>(ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(tool.Definition.Id, tool.Definition.InputSchema.JsonSchema)));
+        var strictConcepts = strict.RootElement.GetProperty("properties").GetProperty("concepts");
+
+        // Strict projection intentionally removes validation-only keywords; guidance must survive.
+        Assert.Equal("string", strictConcepts.GetProperty("items").GetProperty("type").GetString());
+        Assert.Equal(concepts.GetProperty("description").GetString(), strictConcepts.GetProperty("description").GetString());
+        var json = JsonSerializer.Serialize(new { path = ".", concepts = new[] { concept } });
+        if (valid)
+        {
+            Assert.IsType<ListFilesInput>(tool.DeserializeInput(json));
+        }
+        else
+        {
+            var error = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(json));
+            Assert.Contains("Invalid concepts", error.Message, StringComparison.Ordinal);
+            Assert.Contains("omit the optional field", error.Message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Length and item bounds return the same useful correction as invalid phrases.</summary>
+    [Fact]
+    public static void Concept_bounds_have_actionable_preflight_errors()
+    {
+        var tool = new ListFilesTool(TestPromptLoader.Instance);
+        Assert.IsType<ListFilesInput>(tool.DeserializeInput(JsonSerializer.Serialize(new { concepts = new[] { new string('a', 48) } })));
+        string[][] invalidConcepts = [[new string('a', 49)], [.. Enumerable.Repeat("caching", 9)]];
+        foreach (var concepts in invalidConcepts)
+        {
+            var error = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(JsonSerializer.Serialize(new { concepts })));
+            Assert.Contains("Invalid concepts", error.Message, StringComparison.Ordinal);
+            Assert.Contains("re-emit the full intended batch", error.Message, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Operational identity ignores hints only for tools explicitly declaring them as metadata.</summary>
     [Fact]
     public static void Hint_changes_do_not_bypass_duplicate_call_admission()
@@ -99,6 +160,13 @@ public static class NativeConceptTransportTests
                 },
                 TestContext.Current.CancellationToken);
             Assert.Equal(!denied && !invalid, result.Succeeded);
+            if (invalid)
+            {
+                Assert.Equal(ToolErrorClassification.InvalidArguments, result.ErrorClassification);
+                Assert.Contains("Invalid concepts", result.Error, StringComparison.Ordinal);
+                Assert.Contains("theme-catalog-caching", result.Error, StringComparison.Ordinal);
+            }
+
             Assert.Equal(denied || invalid ? [] : new[] { "cancellation" }, result.Concepts);
             using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(result));
             Assert.False(serialized.RootElement.TryGetProperty("Concepts", out _));

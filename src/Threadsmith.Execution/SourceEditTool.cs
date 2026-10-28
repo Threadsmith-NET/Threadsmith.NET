@@ -74,6 +74,7 @@ public sealed class SourceEditTool : Tool<SourceEditInput, SourceEditReceipt>, I
             var receipt = await _edits.HandleAsync(command, cancellationToken);
             var modelResult = JsonSerializer.SerializeToNode(receipt)?.AsObject()
                 ?? throw new InvalidOperationException("Source edit receipt could not be serialized.");
+            modelResult[nameof(receipt.Status)] = receipt.Status.ToString();
             if (receipt.Analysis is { } analysis)
             {
                 modelResult[nameof(receipt.Analysis)] = SourceEditAnalysisProjection.Create(analysis);

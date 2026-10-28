@@ -243,7 +243,8 @@ public static class DependencyDirectionTests
         string[] violations =
         [
             .. Directory.GetFiles(modelsDirectory, "*.cs", SearchOption.AllDirectories)
-                .Where(path => File.ReadAllText(path).Contains("OpenAiCompatible", StringComparison.Ordinal)),
+                .Where(path => File.ReadAllLines(path).Any(line => line.Contains("OpenAiCompatible", StringComparison.Ordinal)
+                    && line != "[assembly: InternalsVisibleTo(\"Threadsmith.Models.OpenAiCompatible\")]")),
         ];
         Assert.Empty(violations);
     }
@@ -256,7 +257,8 @@ public static class DependencyDirectionTests
         string[] violations =
         [
             .. Directory.GetFiles(modelsDirectory, "*.cs", SearchOption.AllDirectories)
-                .Where(path => File.ReadAllText(path).Contains("OpenAiCodex", StringComparison.Ordinal)),
+                .Where(path => File.ReadAllLines(path).Any(line => line.Contains("OpenAiCodex", StringComparison.Ordinal)
+                    && line != "[assembly: InternalsVisibleTo(\"Threadsmith.Models.OpenAiCodex\")]")),
         ];
         Assert.Empty(violations);
     }

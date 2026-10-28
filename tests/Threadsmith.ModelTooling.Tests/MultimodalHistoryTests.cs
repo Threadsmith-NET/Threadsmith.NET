@@ -335,6 +335,9 @@ public sealed partial class MultimodalTests
 
     private sealed class ImageHistoryStore(ConversationStateSnapshot snapshot) : IConversationStore
     {
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<ConversationMessage>>(snapshot.Messages.Where(message => message.SessionId == sessionId && messageIds.Contains(message.Id)).ToArray());
+
         public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, ConversationHistoryWindow? historyWindow = null, CancellationToken cancellationToken = default)
             => Task.FromResult(snapshot);
 

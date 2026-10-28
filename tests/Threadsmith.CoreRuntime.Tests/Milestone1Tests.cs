@@ -3389,7 +3389,7 @@ public static partial class Milestone1Tests
     [InlineData(false)]
     public static async Task InteractionCoordinator_ThinkingStreaming_RetainsActivityWhenSupported(bool retainsActivity)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var cancellationToken = TestContext.Current.CancellationToken;
         var provider = new PausedReasoningModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"], retainsActivity: retainsActivity);
@@ -3397,13 +3397,13 @@ public static partial class Milestone1Tests
             new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
-        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: cancellationToken);
         try
         {
-            await surface.ReasoningPresented.WaitAsync(timeout.Token);
+            await surface.ReasoningPresented.WaitAsync(cancellationToken);
             if (retainsActivity)
             {
-                await surface.StatusStarted.WaitAsync(timeout.Token);
+                await surface.StatusStarted.WaitAsync(cancellationToken);
             }
 
             Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
@@ -3411,7 +3411,7 @@ public static partial class Milestone1Tests
             Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
 
             provider.ReleaseAnswer();
-            await provider.AnswerEmitted.WaitAsync(timeout.Token);
+            await provider.AnswerEmitted.WaitAsync(cancellationToken);
             Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
             Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
         }
@@ -3419,7 +3419,7 @@ public static partial class Milestone1Tests
         {
             provider.ReleaseAnswer();
             provider.ReleaseCompletion();
-            await shellTask.WaitAsync(timeout.Token);
+            await shellTask.WaitAsync(cancellationToken);
         }
 
         Assert.Empty(surface.ActiveStatuses);
@@ -4962,7 +4962,7 @@ public static partial class Milestone1Tests
 
             async IAsyncEnumerable<ModelChunk> Stream2Async()
             {
-                yield return new ModelChunk { Reasoning = "Inspect the repository." };
+                yield return new ModelChunk { Reasoning = "Inspect the repository.\n" };
                 await _releaseAnswer.Task.WaitAsync(cancellationToken);
                 yield return new ModelChunk { Text = "answer" };
                 _answerEmitted.TrySetResult();

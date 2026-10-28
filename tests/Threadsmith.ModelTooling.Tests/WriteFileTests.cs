@@ -631,6 +631,9 @@ public static class WriteFileTests
 
     private sealed class ConversationStore : IConversationStore
     {
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
         public IReadOnlyList<ConversationMessage> Messages { get; init; } = [];
 
         public SessionId? RequestedSession { get; private set; }

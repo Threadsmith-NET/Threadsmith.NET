@@ -11,24 +11,24 @@ using Xunit;
 
 public sealed partial class SessionConversationTests
 {
-    /// <summary>A real Anthropic response envelope survives concept refresh and replays its tool correlation.</summary>
+    /// <summary>Unchanged recall preserves signed reasoning across two refreshes; changed intelligence still rewrites history.</summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task AnthropicConceptContinuation_PreservesReplayWithAndWithoutMemoryMatches(bool matches, bool intelligenceOnly)
+    public async Task AnthropicConceptContinuation_PreservesReplayUnlessIntelligenceContextChanges(bool matches, bool intelligenceOnly)
     {
         var ct = TestContext.Current.CancellationToken;
-        using var handler = new MemoryReplayHandler();
+        using var handler = new MemoryReplayHandler { EmitSecondTool = true };
         using var client = new HttpClient(handler);
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches, intelligenceOnly);
         var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
 
-        Assert.Equal(2, handler.Requests.Count);
-        if (intelligenceOnly)
+        Assert.Equal(3, handler.Requests.Count);
+        if (intelligenceOnly && matches)
         {
             Assert.True(provider.Requests[1].HistoryRewriteGeneration > provider.Requests[0].HistoryRewriteGeneration);
         }
@@ -38,14 +38,21 @@ public sealed partial class SessionConversationTests
             Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
         }
 
-        if (intelligenceOnly)
+        Assert.Equal(provider.Requests[1].HistoryRewriteGeneration, provider.Requests[2].HistoryRewriteGeneration);
+        Assert.Equal(provider.Requests[1].Messages, provider.Requests[2].Messages.Take(provider.Requests[1].Messages.Count));
+        Assert.Equal(intelligenceOnly && matches ? 1 : 3, provider.RetainedResponses.Count);
+        for (var round = 1; round <= 2; round++)
         {
-            Assert.Empty(provider.RetainedResponses);
-        }
-        else
-        {
-            var response = Assert.Single(provider.RetainedResponses);
-            Assert.Equal("wire-memory", Assert.Single(response.WireToolCallIds));
+            var thinking = handler.Requests[round].GetProperty("messages").EnumerateArray()
+                .SelectMany(message => message.GetProperty("content").EnumerateArray())
+                .Where(block => block.GetProperty("type").GetString() == "thinking").ToArray();
+            var firstRetainedRound = intelligenceOnly && matches ? 2 : 1;
+            Assert.Equal(
+                Enumerable.Range(firstRetainedRound, round - firstRetainedRound + 1).Select(index => $"private-memory-{index}"),
+                thinking.Select(block => block.GetProperty("thinking").GetString()));
+            Assert.Equal(
+                Enumerable.Range(firstRetainedRound, round - firstRetainedRound + 1).Select(index => $"signature-{index}"),
+                thinking.Select(block => block.GetProperty("signature").GetString()));
         }
 
         var blocks = handler.Requests[1].GetProperty("messages").EnumerateArray()
@@ -55,12 +62,56 @@ public sealed partial class SessionConversationTests
         Assert.Contains(blocks, block => block.GetProperty("type").GetString() == "tool_result"
             && block.GetProperty("tool_use_id").GetString() == toolId);
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
+        Assert.Equal(3, memory.Requests.Count);
+        Assert.Equal(
+            provider.Requests[1].Messages.Count(message => message.SectionId == "repository-memory"),
+            provider.Requests[2].Messages.Count(message => message.SectionId == "repository-memory"));
         Assert.Contains(memory.Requests, request => request.Concepts.Contains("cancellation"));
         Assert.Contains(memory.Requests, request => request.IntentConcepts is { } snapshot
             && snapshot.Concepts.Contains("cancellation") && snapshot.RunId == request.UserTurnId
             && snapshot.Epoch == request.IntentEpoch && snapshot.RepositoryIdentity == request.RepositoryIdentity);
         Assert.Equal(matches, provider.Requests[1].Messages.Any(message => message.SectionId == "repository-memory"
             && message.GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal)));
+    }
+
+    /// <summary>Actual intelligence replacement, withdrawal or disablement still clears opaque replay.</summary>
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public async Task AnthropicIntelligenceChange_DiscardsEarlierReasoning(bool remove, bool disable, bool revisionOnly)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var handler = new MemoryReplayHandler { EmitSecondTool = true };
+        using var client = new HttpClient(handler);
+        var provider = new MemoryReplayProvider(client);
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, intelligenceOnly: true);
+        var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
+        handler.BeforeSecondResponse = () =>
+        {
+            if (!disable)
+            {
+                memory.Entry = memory.Entry with
+                {
+                    Text = revisionOnly ? memory.Entry.Text : "Updated cancellation guidance.",
+                    Revision = 2,
+                };
+            }
+
+            memory.Matches = !remove;
+            memory.IntelligenceOnly = !disable;
+        };
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.True(provider.Requests[2].HistoryRewriteGeneration > provider.Requests[1].HistoryRewriteGeneration);
+        var blocks = handler.Requests[2].GetProperty("messages").EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray()).ToArray();
+        Assert.DoesNotContain(blocks, block => block.GetProperty("type").GetString() == "thinking");
+        Assert.Equal(2, blocks.Count(block => block.GetProperty("type").GetString() == "tool_use"));
+        Assert.Equal(2, blocks.Count(block => block.GetProperty("type").GetString() == "tool_result"));
     }
 
     /// <summary>Later memory replacement/removal appends a current snapshot without changing prior replay prefixes.</summary>
@@ -174,7 +225,7 @@ public sealed partial class SessionConversationTests
 
         public bool Matches { get; set; } = true;
 
-        public bool IntelligenceOnly { get; init; }
+        public bool IntelligenceOnly { get; set; }
 
         RepositoryIntelligenceStatus IRepositoryIntelligenceStatusProvider.Capture(string repositoryIdentity)
         {
@@ -338,16 +389,20 @@ public sealed partial class SessionConversationTests
             var stream = Event("message_start", new { type = "message_start", message = new { id = "memory-response", type = "message", role = "assistant", model = "claude-test", content = Array.Empty<object>(), usage = new { input_tokens = 100, output_tokens = 0 } } });
             if (toolResponse)
             {
+                stream += Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = string.Empty, signature = string.Empty } });
+                stream += Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "thinking_delta", thinking = $"private-memory-{Requests.Count}" } });
+                stream += Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "signature_delta", signature = $"signature-{Requests.Count}" } });
+                stream += Event("content_block_stop", new { type = "content_block_stop", index = 0 });
                 var arguments = Requests.Count == 1 ? "{\"concepts\":[\"cancellation\"]}" : RepeatConcept ? "{\"path\":\".\",\"concepts\":[\"cancellation\"]}" : "{\"path\":\".\",\"concepts\":[\"logging\"]}";
-                stream += Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "tool_use", id = Requests.Count == 1 ? "wire-memory" : "wire-memory-2", name = "list_files", input = new { } } });
-                stream += Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "input_json_delta", partial_json = arguments } });
+                stream += Event("content_block_start", new { type = "content_block_start", index = 1, content_block = new { type = "tool_use", id = Requests.Count == 1 ? "wire-memory" : "wire-memory-2", name = "list_files", input = new { } } });
+                stream += Event("content_block_delta", new { type = "content_block_delta", index = 1, delta = new { type = "input_json_delta", partial_json = arguments } });
             }
             else
             {
                 stream += Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "text", text = "Inspection complete." } });
             }
 
-            stream += Event("content_block_stop", new { type = "content_block_stop", index = 0 });
+            stream += Event("content_block_stop", new { type = "content_block_stop", index = toolResponse ? 1 : 0 });
             stream += Event("message_delta", new { type = "message_delta", delta = new { stop_reason = toolResponse ? "tool_use" : "end_turn", stop_sequence = (string?)null }, usage = new { output_tokens = 25 } });
             stream += Event("message_stop", new { type = "message_stop" });
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(stream, Encoding.UTF8, "text/event-stream") };

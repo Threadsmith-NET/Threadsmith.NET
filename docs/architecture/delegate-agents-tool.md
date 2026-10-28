@@ -51,10 +51,11 @@ Primary implementation:
 
 ### 2. The tool validates a deliberately small input
 
-The model supplies only an array of child requests:
+The model supplies an array of child requests and may supply common context once:
 
 ```json
 {
+  "sharedContext": "Inspect the current execution implementation. Cite exact files and preserve the checkout.",
   "agents": [
     {
       "task": "Trace the cancellation path.",
@@ -68,6 +69,8 @@ The model supplies only an array of child requests:
 
 `agents[].role` is optional and defaults to `explorer`. The exact accepted values are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, `architectureReviewer`, and `bugReviewer`. Unknown roles, different capitalization, and unknown fields fail validation before scheduling. The model cannot choose child IDs, provider/profile/reasoning, budgets, deadlines, trust, sensitivity, workspace roots, individual tool IDs, approval, or concurrency. Host policy owns those values.
 
+`sharedContext` and `agents[].context` are optional nullable strings. Each child requires non-whitespace text in at least one of them. Use `sharedContext` for common target identity, captured evidence IDs, source-access instructions, requirements, preservation constraints, and response instructions. Keep each child's `task` focused and use its `context` only for additional individual details. Existing calls containing only individual contexts retain their behavior.
+
 Primary implementation:
 
 - `DelegateAgentsContracts` owns input/output DTOs, limits, and validation.
@@ -76,6 +79,8 @@ Primary implementation:
 ### 3. The host freezes a delegation plan
 
 `DelegateAgentsPlanFactory` converts each request into an `AgentAssignment` with host-generated identities and immutable authority. The plan records the parent session/run, workspace, repository and baseline identities, attempt and generation, budgets, role, stopping rules, sensitivity, tool policy, and failure policy.
+
+Before freezing an assignment, the factory trims the outer whitespace of both context fields, prefixes the shared text to the individual text with a blank line, and stores the result in the existing `InitialContext`. A single nonempty field is used by itself. The expanded context follows ordinary validation, persistence, token estimation, prompt escaping, and capacity admission as untrusted user task data; it does not grant evidence access or change authority. The onboarding investigator's existing 8,192-character task-and-brief limit includes the expanded context and separator. Shared context reduces model-authored repetition in the parent's delegation call; every child still receives its own copy in its model input.
 
 Conversation delegation creates:
 

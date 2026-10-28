@@ -67,7 +67,7 @@ System policy, stable conversation instructions, request envelopes, and required
 | `System-ChildAgent-OutputPolicy.md` | Legacy Explorer JSON output policy retained in the catalog; unused for ordinary child responses. | `None` |
 | `System-ChildAgent-Implementer.md` | Implementer role amendment for assigned changes and validation using advertised tools, with accurate completion and limitation reporting. | `None` |
 | `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
-| `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
+| `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for assigned test execution, evaluation of observed results, coverage improvements, and explicit execution limits. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
 | `System-ChildAgent-ArchitectureReviewer.md` | ArchitectureReviewer role amendment informed by repository design and applicable documents. | `None` |
 | `System-ChildAgent-BugReviewer.md` | BugReviewer role amendment for functional correctness against supplied requirements and acceptance criteria, with evidence reuse and completion guidance. | `None` |
@@ -485,7 +485,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
 | `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Compiler findings do not gate writes; the model must repair introduced errors and treat new compiler or analyzer warnings related to the current work as errors for completion, fixing them before finishing or explaining a conflict with the request. Unknown warning origins require assessment against the changes; unrelated existing warnings remain out of scope. Missing counts are unknown and incomplete coverage cannot establish clean validation. Builds/tests require explicit tool calls. | `None` |
-| `Tool-delegate_agents-Description.md` | Delegation tool guidance for role selection including concrete Explorer tasks, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
+| `Tool-delegate_agents-Description.md` | Delegation guidance for roles, shared context with individual additions, evidence references, concurrent assignments, inherited tools, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
@@ -702,9 +702,11 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Review.md` | Lead review acquisition, change-focused specialist delegation, synthesis and delivery while preserving the active checkout and report format. | `None` |
+| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, synthesis and delivery while preserving the active checkout and report format. | `None` |
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
+
+For captured PR reviews, the shared handoff references the snapshot's complete inventory using the target identity, evidence ID, file count, and already-known project roots. It does not reproduce the full path list, even when directly delivered. Every specialist still reviews all changed files through bounded evidence reads; exact paths may direct a particular specialist's focus. Reviews without a captured inventory retain the explicit changed-file list. This changes handoff wording only, not evidence capture, access, or review scope.
 
 #### `Procedure` family
 

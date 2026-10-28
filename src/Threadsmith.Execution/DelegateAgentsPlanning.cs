@@ -91,7 +91,7 @@ public sealed class DelegateAgentsPlanFactory
                 throw new ArgumentException("Onboarding accepts at most two read-only Explorer investigators per call.", nameof(input));
             }
 
-            if (input.Agents.Any(request => (long)request.Task.Length + request.Context.Length > 8_192))
+            if (input.Agents.Any(request => (long)request.Task.Length + CombineContext(input.SharedContext, request.Context).Length > 8_192))
             {
                 throw new ArgumentException("Each onboarding investigator needs a task and brief totaling at most 8192 characters.", nameof(input));
             }
@@ -113,6 +113,7 @@ public sealed class DelegateAgentsPlanFactory
         var preference = _preferences.Capture();
         AgentAssignment[] assignments = [.. input.Agents.Select(request => CreateAssignment(
             request,
+            input.SharedContext,
             context,
             preference,
             acceptedAt))];
@@ -139,6 +140,7 @@ public sealed class DelegateAgentsPlanFactory
 
     private AgentAssignment CreateAssignment(
         DelegateAgentRequest request,
+        string? sharedContext,
         ToolExecutionContext context,
         SessionModelPreferenceSnapshot preference,
         DateTimeOffset acceptedAt)
@@ -162,7 +164,7 @@ public sealed class DelegateAgentsPlanFactory
             Tasks = [_prompts.Get(context.Invocation.IntelligenceRun is null
                 ? PromptFileNames.ContextChildAgentStructuredFindingsTask
                 : PromptFileNames.ContextChildAgentIntelligenceInvestigation)],
-            InitialContext = request.Context.Trim(),
+            InitialContext = CombineContext(sharedContext, request.Context),
             OutputSchema = DelegateAgentsContract.ResponseSchema,
             StoppingCondition = "Stop after the assigned question is answered or the bounded evidence surface is exhausted.",
             Deadline = _options.EffectiveChildBudget.CreateDeadline(acceptedAt),
@@ -198,6 +200,15 @@ public sealed class DelegateAgentsPlanFactory
         {
             Policy = _models.FreezePolicy(assignment, inheritTrustedModelCatalog: context.Invocation.ModelUsesTrustedCatalog),
         };
+    }
+
+    private static string CombineContext(string? sharedContext, string? context)
+    {
+        var shared = sharedContext?.Trim() ?? string.Empty;
+        var individual = context?.Trim() ?? string.Empty;
+        return shared.Length == 0 ? individual
+            : individual.Length == 0 ? shared
+            : $"{shared}\n\n{individual}";
     }
 
     private ToolDefinition[] ResolveDefinitions(

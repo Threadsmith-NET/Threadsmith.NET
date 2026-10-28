@@ -10,6 +10,37 @@ using Xunit;
 /// <summary>Plan 33 conversation archive, provenance, persistence, and tolerance tests.</summary>
 public static class Plan33ConversationArchiveTests
 {
+    /// <summary>Selective reads retain ordering, session isolation, full bodies, and artifact integrity checks.</summary>
+    [Fact]
+    public static async Task Selected_messages_share_archive_integrity_and_session_boundaries()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 32);
+        var token = TestContext.Current.CancellationToken;
+        var session = SessionId.New();
+        var first = await fixture.Store.ArchiveMessageAsync(CreateMessage(session, RunId.New(), ConversationRole.User, "inline"), token);
+        var body = new string('x', 256);
+        var second = await fixture.Store.ArchiveMessageAsync(CreateMessage(session, RunId.New(), ConversationRole.Assistant, body), token);
+        var foreign = await fixture.Store.ArchiveMessageAsync(CreateMessage(SessionId.New(), RunId.New(), ConversationRole.User, "foreign"), token);
+
+        var metadata = await fixture.Store.GetSnapshotAsync(session, includeBodies: false, cancellationToken: token);
+        var selected = await fixture.Store.GetMessagesAsync(session, [second.Id, foreign.Id, first.Id, second.Id], token);
+
+        Assert.All(metadata.Messages, message => Assert.Null(message.Content));
+        Assert.Equal([first.Id, second.Id], selected.Select(message => message.Id));
+        Assert.Equal(["inline", body], selected.Select(message => message.Content));
+        Assert.Empty(await fixture.Store.GetMessagesAsync(session, [], token));
+        await using (var connection = new SqliteConnection(fixture.ConnectionString))
+        {
+            await connection.OpenAsync(token);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE conversation_messages SET content_hash = 'mismatched' WHERE message_id = $id;";
+            command.Parameters.AddWithValue("$id", second.Id.Value.ToString("D"));
+            await command.ExecuteNonQueryAsync(token);
+        }
+
+        Assert.Null(Assert.Single(await fixture.Store.GetMessagesAsync(session, [second.Id], token)).Content);
+    }
+
     /// <summary>Stable message and memory identifiers preserve value equality through JSON.</summary>
     [Fact]
     public static void Conversation_identifiers_round_trip()

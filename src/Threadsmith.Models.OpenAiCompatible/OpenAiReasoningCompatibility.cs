@@ -1,5 +1,6 @@
 namespace Threadsmith.Models.OpenAiCompatible;
 
+using System.Text.Json.Serialization;
 using Threadsmith.Models;
 
 /// <summary>Closed request-control modes supported by the OpenAI-compatible adapter.</summary>
@@ -43,6 +44,17 @@ public enum OpenAiReasoningResponseMode
     KnownFields,
 }
 
+/// <summary>Allowlisted assistant fields used for reasoning replay.</summary>
+public enum OpenAiReasoningReplayField
+{
+    /// <summary>Uses <c>reasoning_content</c>.</summary>
+    [JsonStringEnumMemberName("reasoning_content")]
+    ReasoningContent,
+
+    /// <summary>Uses <c>reasoning</c>, as expected by Ollama.</summary>
+    Reasoning,
+}
+
 /// <summary>Compiled chat-template request shapes needed by supported endpoints.</summary>
 public enum OpenAiChatTemplateKind
 {
@@ -71,6 +83,12 @@ public sealed record OpenAiReasoningCompatibilityConfiguration
 {
     /// <summary>Supported schema version. Unknown versions fail closed.</summary>
     public int SchemaVersion { get; init; } = 1;
+
+    /// <summary>Explicit opt-in to replay returned reasoning during tool continuations.</summary>
+    public bool SupportsReasoningReplay { get; init; }
+
+    /// <summary>Assistant replay field, independent of streamed response extraction.</summary>
+    public OpenAiReasoningReplayField ReplayField { get; init; }
 
     /// <summary>Compiled request-control mode.</summary>
     public OpenAiReasoningControlMode Mode { get; init; }

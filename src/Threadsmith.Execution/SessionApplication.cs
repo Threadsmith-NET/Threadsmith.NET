@@ -360,7 +360,7 @@ public sealed partial class SessionApplication :
             if (registration.Completion.Task.IsCompleted
                 && _runs.TryRemove(new KeyValuePair<RunId, RunRegistration>(command.RunId, registration)))
             {
-                registration.Cancellation.Dispose();
+                registration.CancellationLifetime.Dispose();
             }
         }
     }
@@ -378,8 +378,7 @@ public sealed partial class SessionApplication :
             return false;
         }
 
-        await registration.Cancellation.CancelAsync();
-        return true;
+        return await registration.CancellationLifetime.CancelAsync();
     }
 
     /// <inheritdoc />
@@ -552,7 +551,7 @@ public sealed partial class SessionApplication :
         registration.IntelligenceHistoryDepth = command.IntelligenceHistoryDepth;
         if (!_runs.TryAdd(runId, registration))
         {
-            registration.Cancellation.Dispose();
+            registration.CancellationLifetime.Dispose();
             registration = null;
             return false;
         }
@@ -1122,7 +1121,7 @@ public sealed partial class SessionApplication :
         {
             SessionId = sessionId;
             WorkspaceId = workspaceId;
-            Cancellation = cancellation;
+            CancellationLifetime = new RunCancellationLifetime(cancellation);
             Task = task;
             Machine = machine;
             Budget = budget;
@@ -1130,7 +1129,9 @@ public sealed partial class SessionApplication :
 
         public IBudget Budget { get; }
 
-        public CancellationTokenSource Cancellation { get; }
+        public CancellationTokenSource Cancellation => CancellationLifetime.Source;
+
+        public RunCancellationLifetime CancellationLifetime { get; }
 
         public ConversationMessageId? CurrentMessageId { get; set; }
 

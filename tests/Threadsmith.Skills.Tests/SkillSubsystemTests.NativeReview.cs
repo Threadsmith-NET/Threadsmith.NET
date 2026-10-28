@@ -22,7 +22,7 @@ public sealed partial class SkillSubsystemTests
         Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
     }
 
-    /// <summary>PR reviews gather complete inventory and diff evidence before delegation.</summary>
+    /// <summary>PR reviews delegate complete captured scope by reference while other reviews retain explicit inventories.</summary>
     [Fact]
     public void NativeReview_PullRequestUsesInventoryBeforeDelegation()
     {
@@ -33,6 +33,13 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("read_agent_evidence", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("Always set kind:\"diff\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("one top-level `sharedContext`", prompt, StringComparison.Ordinal);
+        Assert.Contains("common response instructions once in `sharedContext`", prompt, StringComparison.Ordinal);
+        Assert.Contains("TestReviewer alone owns build/test execution", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("in every specialist's context", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not reproduce the complete changed-file inventory", prompt, StringComparison.Ordinal);
+        Assert.Contains("review all changed files listed in the captured snapshot", prompt, StringComparison.Ordinal);
+        Assert.Contains("For reviews without a captured inventory, retain the explicit changed-file inventory", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>

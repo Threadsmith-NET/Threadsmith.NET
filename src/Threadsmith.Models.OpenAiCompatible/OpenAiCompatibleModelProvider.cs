@@ -30,6 +30,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     private readonly OpenAiReasoningCompatibilityConfiguration? _reasoningCompatibility;
     private readonly TimeProvider _timeProvider;
 
+    private string ReplayProtocol => _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning
+        ? "openai-compatible-reasoning-alias" : "openai-compatible-reasoning";
+
+    private bool SupportsReasoningReplay => _profile.Provider == "openai-compatible"
+        && _reasoningCompatibility is { SupportsReasoningReplay: true };
+
     /// <summary>Initializes a new instance of the <see cref="OpenAiCompatibleModelProvider"/> class.</summary>
     /// <remarks>The API key is resolved by the composition root and is never persisted by this type.</remarks>
     public OpenAiCompatibleModelProvider(
@@ -112,6 +118,19 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         int maximumOutputTokens,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        request = request with { ResolvedProfileId = request.ResolvedProfileId ?? _profile.Id };
+        if (!SupportsReasoningReplay && request.TransientState is { HasResponses: true })
+        {
+            throw new ModelProviderException("This model does not support private reasoning replay; start a fresh turn.");
+        }
+
+        ProviderResponseReplay.Validate(request, _profile, _apiKey ?? string.Empty, ReplayProtocol);
+        if (request.TransientState is { HasResponses: true }
+            && ProviderResponseReplay.Estimate(request, _profile).TotalCapacityTokens > _profile.ContextWindow)
+        {
+            throw new ModelProviderException("Private reasoning replay exceeds the selected context window.");
+        }
+
         request = await ModelImages.ResolveAsync(request, _profile, cancellationToken);
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
@@ -293,9 +312,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             long toolCallCount = 0;
             var outputTracker = new StreamedOutputTracker(_profile.MaximumStreamedBytes, _maximumStreamedCharacters);
             var usageReported = false;
+            long reportedOutputTokens = 0;
             var textGuard = canonicalTools.Count > 0 ? new NativeToolTextGuard() : null;
             var orphanedToolArguments = false;
             var completed = false;
+            var replayReasoning = SupportsReasoningReplay ? new StringBuilder() : null;
+            var replayText = SupportsReasoningReplay ? new StringBuilder() : null;
+            OpenAiMessage? pendingReplayResponse = null;
+            IReadOnlyList<ModelChunk> pendingReplayToolChunks = [];
             while (true)
             {
                 string? line;
@@ -370,6 +394,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     }
 
                     usageReported = true;
+                    reportedOutputTokens = Math.Max(reportedOutputTokens, reportedUsage.CompletionTokens);
                     var conservativeInputTokens = Math.Max(
                         reportedUsage.PromptTokens,
                         request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length));
@@ -398,6 +423,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         outputTracker.Add(reasoning);
                         completionCharacters += reasoning.Length;
+                        replayReasoning?.Append(reasoning);
                         yield return new ModelChunk { Reasoning = reasoning };
                     }
 
@@ -405,6 +431,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         outputTracker.Add(content);
                         completionCharacters += content.Length;
+                        replayText?.Append(content);
                         var visibleContent = textGuard?.Append(content) ?? content;
                         if (!orphanedToolArguments && visibleContent.Length > 0)
                         {
@@ -455,7 +482,30 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             continue;
                         }
 
-                        foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
+                        var calls = toolCalls.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToArray();
+                        var toolChunks = DrainToolCalls(toolCalls, toolNameMap);
+                        if (finishReason == "tool_calls" && calls.Length > 0 && replayReasoning is { Length: > 0 })
+                        {
+                            pendingReplayResponse = new OpenAiMessage
+                            {
+                                Role = "assistant",
+                                Content = replayText?.ToString(),
+                                ReasoningContent = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? null : replayReasoning.ToString(),
+                                Reasoning = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? replayReasoning.ToString() : null,
+                                ToolCalls = calls.Select(call => new OpenAiMessageToolCall
+                                {
+                                    Id = call.Id,
+                                    Function = new OpenAiMessageFunctionCall { Name = call.Name, Arguments = call.Arguments },
+                                }).ToArray(),
+                            };
+
+                            // The usage trailer follows finish_reason. Keep the correlated batch
+                            // behind its envelope until the immutable replay allowance is final.
+                            pendingReplayToolChunks = toolChunks;
+                            continue;
+                        }
+
+                        foreach (var toolChunk in toolChunks)
                         {
                             yield return toolChunk;
                         }
@@ -516,6 +566,39 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     SafeMessage = "The provider emitted tool parameters as assistant text. "
                         + "The tool batch was not executed because its arguments may be incomplete.",
                 });
+            }
+
+            if (pendingReplayResponse is { ToolCalls: { } replayCalls })
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var responseNode = JsonSerializer.SerializeToNode(pendingReplayResponse, _jsonOptions)
+                    ?? throw new ModelProviderException("Missing assistant response.");
+                var replay = ProviderResponseReplay.Create(
+                    request,
+                    _profile,
+                    _apiKey ?? string.Empty,
+                    ReplayProtocol,
+                    responseNode,
+                    replayCalls.Select(call => call.Id).ToArray(),
+                    Math.Max(reportedOutputTokens, EstimateTokenCount(completionCharacters)));
+                try
+                {
+                    yield return new ModelChunk { ResponseEnvelope = replay };
+                }
+                finally
+                {
+                    if (!replay.IsRetained)
+                    {
+                        replay.Dispose();
+                    }
+                }
+
+                foreach (var toolChunk in pendingReplayToolChunks)
+                {
+                    yield return toolChunk;
+                }
+
+                yield return new ModelChunk { FinishReason = ModelFinishReason.ToolCalls };
             }
         }
     }
@@ -622,12 +705,26 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
         var messages = new List<OpenAiMessage>(request.Messages.Count);
         var pendingImages = new List<OpenAiMessage>();
-        foreach (var message in request.Messages)
+        var replay = request.TransientState?.Responses.ToDictionary(item => item.Binding.ModelRound) ?? [];
+        var usedReplay = new HashSet<int>();
+        for (var messageIndex = 0; messageIndex < request.Messages.Count; messageIndex++)
         {
+            var message = request.Messages[messageIndex];
             if (message.Role != ModelMessageRole.Tool && pendingImages.Count > 0)
             {
                 messages.AddRange(pendingImages);
                 pendingImages.Clear();
+            }
+
+            if (message.Role == ModelMessageRole.Assistant && message.ModelRound is { } round && replay.TryGetValue(round, out var envelope))
+            {
+                if (usedReplay.Add(round))
+                {
+                    messages.Add(ProviderResponseReplay.Read(envelope, request, messageIndex).Deserialize<OpenAiMessage>(_jsonOptions)
+                        ?? throw new ModelProviderException("Missing private assistant response."));
+                }
+
+                continue;
             }
 
             var content = message.GetModelVisibleContent();
@@ -675,7 +772,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         Role = "tool",
                         Content = content,
-                        ToolCallId = message.ToolCallId,
+                        ToolCallId = message.ModelRound is { } resultRound && replay.ContainsKey(resultRound)
+                            ? request.TransientState?.GetWireToolCallId(resultRound, message.ToolCallId) : message.ToolCallId,
                     });
                     if (message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image))
                     {
@@ -690,6 +788,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         messages.AddRange(pendingImages);
+        if (usedReplay.Count != replay.Count)
+        {
+            throw new ModelProviderException("Private response has no chronological history position.");
+        }
+
         return messages;
     }
 
@@ -1208,6 +1311,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiMessage
     {
+        [JsonPropertyName("reasoning")]
+        public string? Reasoning { get; init; }
+
+        [JsonPropertyName("reasoning_content")]
+        public string? ReasoningContent { get; init; }
+
         [JsonPropertyName("role")]
         public required string Role { get; init; }
 

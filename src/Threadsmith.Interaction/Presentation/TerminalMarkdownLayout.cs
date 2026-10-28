@@ -2,7 +2,6 @@ namespace Threadsmith.Interaction.Presentation;
 
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Text;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Deterministic terminal-neutral layout for semantic markdown documents.</summary>
@@ -283,7 +282,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
         var inlineSegments = CreateInlineSegments(spans, forcedRole);
         output.Add(new PresentationTextSegment(firstPrefix, prefixRole));
         var column = GetWidth(firstPrefix);
-        var pendingWhitespace = string.Empty;
+        var pendingWhitespace = new List<PresentationTextSegment>();
         foreach (var segment in inlineSegments)
         {
             var index = 0;
@@ -291,7 +290,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
             {
                 if (segment.Text[index] == '\n')
                 {
-                    pendingWhitespace = string.Empty;
+                    pendingWhitespace.Clear();
                     output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                     column = GetWidth(continuationPrefix);
                     index++;
@@ -310,29 +309,29 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 var token = segment.Text[index..end];
                 if (whitespace)
                 {
-                    pendingWhitespace += token;
+                    pendingWhitespace.Add(segment with { Text = token });
                     index = end;
                     continue;
                 }
 
                 var tokenWidth = GetWidth(token);
                 var continuationWidth = GetWidth(continuationPrefix);
-                var whitespaceWidth = GetWidth(pendingWhitespace);
+                var whitespaceWidth = pendingWhitespace.Sum(space => GetWidth(space.Text));
                 if (column > continuationWidth && column + whitespaceWidth + tokenWidth > width)
                 {
                     output.Add(new PresentationTextSegment("\n" + continuationPrefix, prefixRole));
                     column = continuationWidth;
-                    pendingWhitespace = string.Empty;
+                    pendingWhitespace.Clear();
                 }
-                else if (pendingWhitespace.Length > 0 && column > continuationWidth)
+                else if (pendingWhitespace.Count > 0 && column > continuationWidth)
                 {
-                    output.Add(new PresentationTextSegment(pendingWhitespace, PresentationTextRole.Default));
+                    output.AddRange(pendingWhitespace);
                     column += whitespaceWidth;
-                    pendingWhitespace = string.Empty;
+                    pendingWhitespace.Clear();
                 }
                 else
                 {
-                    pendingWhitespace = string.Empty;
+                    pendingWhitespace.Clear();
                 }
 
                 while (token.Length > 0 && column + GetWidth(token) > width)
@@ -377,43 +376,13 @@ internal static class TerminalMarkdownLayout<TMetrics>
         PresentationTextRole? forcedRole)
     {
         var segments = new List<PresentationTextSegment>();
-        Uri? previousLink = null;
-        var linkLabel = new StringBuilder();
         foreach (var span in spans)
         {
-            if (previousLink is not null
-                && !string.Equals(span.LinkTarget?.AbsoluteUri, previousLink.AbsoluteUri, StringComparison.Ordinal))
-            {
-                AppendLinkDestination(segments, previousLink, linkLabel.ToString());
-                linkLabel.Clear();
-            }
-
             var role = forcedRole ?? GetRole(span);
             segments.Add(new PresentationTextSegment(span.Text, role, span.LinkTarget));
-            previousLink = span.LinkTarget;
-            if (previousLink is not null)
-            {
-                linkLabel.Append(span.Text);
-            }
-        }
-
-        if (previousLink is not null)
-        {
-            AppendLinkDestination(segments, previousLink, linkLabel.ToString());
         }
 
         return segments;
-    }
-
-    private static void AppendLinkDestination(List<PresentationTextSegment> segments, Uri link, string label)
-    {
-        if (string.Equals(label, link.OriginalString, StringComparison.Ordinal)
-            || string.Equals(label, link.AbsoluteUri, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        segments.Add(new PresentationTextSegment($" ({link.AbsoluteUri})", PresentationTextRole.Hyperlink, link));
     }
 
     private static PresentationTextRole GetRole(MarkdownSpan span)

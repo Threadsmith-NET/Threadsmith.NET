@@ -43,7 +43,7 @@ public sealed record OpenAiCompatibleModelConfiguration : ModelConfiguration
 }
 
 /// <summary>Compiled registration and migration boundary for the OpenAI-compatible provider.</summary>
-public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistration
+public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistration, IModelRequestPreparation
 {
     private static readonly HashSet<string> ForbiddenHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -73,6 +73,9 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
 
     /// <inheritdoc />
     public Type ModelConfigurationType => typeof(OpenAiCompatibleModelConfiguration);
+
+    /// <inheritdoc />
+    public ModelRequestPreparationResult Prepare(ModelRequestPreparationContext context) => ProviderResponseReplay.Prepare(context);
 
     /// <inheritdoc />
     public void Validate(ModelProviderConfiguration provider)
@@ -394,7 +397,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         var identity = $"Provider '{providerId}' model '{model.Id.Value:D}'";
         if (compatibility.SchemaVersion != 1
             || !Enum.IsDefined(compatibility.Mode)
-            || !Enum.IsDefined(compatibility.ResponseMode))
+            || !Enum.IsDefined(compatibility.ResponseMode)
+            || !Enum.IsDefined(compatibility.ReplayField))
         {
             throw new InvalidOperationException($"{identity} has an unsupported reasoning compatibility mode or version.");
         }

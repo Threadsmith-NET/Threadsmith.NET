@@ -89,7 +89,7 @@ release process starts redistributing them.
 
 ### TUIKit product frontend (2026-09-24)
 
-`Threadsmith.Tui.TuiKit` pins **TUIKit 1.1.1** in the root central catalog. It is included in the product solution and dependency graph. Canonical release evidence records its exact SHA-512, MIT declaration, and supplemental font notices. TUIKit is the sole interactive frontend.
+`Threadsmith.Tui.TuiKit` pins **TUIKit 1.11.2** in the root central catalog. It is included in the product solution and dependency graph. Canonical release evidence records its exact SHA-512, MIT declaration, and supplemental font notices. TUIKit is the sole interactive frontend.
 
 The [version-specific licensing bundle](../eng/release/legal/TUIKit-1.1.1/README.md)
 records exact archive/assembly/resource digests, the pinned upstream MIT license,

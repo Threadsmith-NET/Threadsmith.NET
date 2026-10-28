@@ -357,7 +357,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             case PresentationMarkdownItem markdown:
                 try
                 {
-                    segments = TuiMarkdownLayout.Format(markdown.Document, width);
+                    segments = TuiMarkdownLayout.Format(markdown.Document, width, markdown.RawSource);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -580,7 +580,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             }
 
             var style = ranges is not null && rangeIndex < ranges.Count && ranges[rangeIndex].Start <= glyph.Offset
-                ? ResolveStyle(ranges[rangeIndex].Role)
+                ? ResolveStyle(ranges[rangeIndex].Role).WithHyperlink(ranges[rangeIndex].Link)
                 : row.Line.Style;
             if (_focusedDisclosure is not null && _disclosureHeaders.GetValueOrDefault(row.Line.Id) == _focusedDisclosure)
             {

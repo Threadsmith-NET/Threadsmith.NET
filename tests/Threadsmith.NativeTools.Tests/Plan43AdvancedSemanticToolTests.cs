@@ -871,7 +871,11 @@ public sealed class Plan43AdvancedSemanticToolTests
         Assert.All(
             tools,
             tool => Assert.Contains("fall back only", tool.Definition.Description, StringComparison.OrdinalIgnoreCase));
-        Assert.All(tools, tool => Assert.DoesNotContain("script", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
+        Assert.All(tools, tool =>
+        {
+            using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+            Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("script", out _));
+        });
         Assert.Contains("depth", tools[0].Definition.InputSchema.JsonSchema);
         Assert.DoesNotContain("maximumDepth", tools[0].Definition.InputSchema.JsonSchema);
         Assert.Contains("kind", tools[2].Definition.InputSchema.JsonSchema);

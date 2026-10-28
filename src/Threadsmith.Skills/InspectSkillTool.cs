@@ -1,5 +1,6 @@
 namespace Threadsmith.Skills;
 
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Threadsmith.Core;
@@ -34,6 +35,12 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
 {
     private const int DiscoveryCandidateLimit = 500;
     private const int DiscoveryEntryLimit = 32;
+
+    // This projection is model text, not HTML. Keep opaque selectors directly copyable.
+    private static readonly JsonSerializerOptions ModelJsonOptions = new()
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private readonly ICommandHandler<InspectSkillCommand, SkillCatalogCandidate> _inspection;
     private readonly ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>> _listing;
@@ -131,9 +138,11 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
                 guidance += "\n\nShowing a bounded subset of matching enabled, verified skills. Call inspect_skill again with a narrower query to find a specific skill.";
             }
 
+            var output = new InspectSkillOutput(guidance, entries);
             return new ToolExecution<InspectSkillOutput>(
-                new InspectSkillOutput(guidance, entries),
-                []);
+                output,
+                [],
+                ModelResultContent: JsonSerializer.Serialize(output, ModelJsonOptions));
         }
 
         var candidate = await _inspection.HandleAsync(new InspectSkillCommand(input.Selector), cancellationToken);
@@ -152,11 +161,13 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
         }
 
         using var schema = JsonDocument.Parse(schemaJson);
+        var inspectedOutput = new InspectSkillOutput(
+            _prompts.Get(PromptFileNames.ToolInspectSkillGuidance),
+            [ProjectEntry(candidate, SkillPolicyIdentity.FormatSelector(candidate)) with { InputSchema = schema.RootElement.Clone() }]);
         return new ToolExecution<InspectSkillOutput>(
-            new InspectSkillOutput(
-                _prompts.Get(PromptFileNames.ToolInspectSkillGuidance),
-                [ProjectEntry(candidate, SkillPolicyIdentity.FormatSelector(candidate)) with { InputSchema = schema.RootElement.Clone() }]),
-            [new ToolProvenanceSource("skill-package", candidate.Metadata.SkillId.Value, candidate.Identity.Digest.Value)]);
+            inspectedOutput,
+            [new ToolProvenanceSource("skill-package", candidate.Metadata.SkillId.Value, candidate.Identity.Digest.Value)],
+            ModelResultContent: JsonSerializer.Serialize(inspectedOutput, ModelJsonOptions));
     }
 
     /// <inheritdoc />

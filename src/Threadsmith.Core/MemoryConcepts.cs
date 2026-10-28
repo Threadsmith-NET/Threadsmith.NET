@@ -33,6 +33,9 @@ public static class MemoryConcepts
     /// <summary>Maximum distinct hints retained for a user turn.</summary>
     public const int MaximumPerTurn = 64;
 
+    /// <summary>Maximum Unicode scalar count of one normalized concept.</summary>
+    public const int MaximumConceptRunes = 48;
+
     /// <summary>Returns a deterministic detached set or rejects invalid input.</summary>
     public static IReadOnlyList<string> Normalize(IReadOnlyList<string>? concepts)
     {
@@ -48,7 +51,7 @@ public static class MemoryConcepts
             ArgumentException.ThrowIfNullOrWhiteSpace(concept);
             var value = concept.Trim().Normalize(NormalizationForm.FormKC).ToLowerInvariant();
             var runes = value.EnumerateRunes().ToArray();
-            if (runes.Length is 0 or > 48 || value.StartsWith('-') || value.EndsWith('-')
+            if (runes.Length is 0 or > MaximumConceptRunes || value.StartsWith('-') || value.EndsWith('-')
                 || value.Contains("--", StringComparison.Ordinal)
                 || runes.Any(rune => !Rune.IsLetterOrDigit(rune) && rune.Value != '-'))
             {

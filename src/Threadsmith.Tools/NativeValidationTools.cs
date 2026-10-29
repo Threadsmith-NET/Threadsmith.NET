@@ -170,10 +170,16 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var result = await _service.CheckFormatAsync(
+        var result = await ConversationReceiptChecks.ObserveAsync(
+            context,
+            Definition.Id,
+            input.TargetPath,
+            "format --verify-no-changes",
+            token => _service.CheckFormatAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
             input,
+            token),
             cancellationToken);
         return new(
             result,
@@ -468,10 +474,16 @@ public sealed class TargetedTestTool : Tool<TargetedTestInput, TargetedTestResul
         CancellationToken cancellationToken = default)
     {
         var request = CreateRequest(input);
-        var result = await _service.RunTargetedTestAsync(
+        var result = await ConversationReceiptChecks.ObserveAsync(
+            context,
+            Definition.Id,
+            request.TestId.Value,
+            JsonSerializer.Serialize(request),
+            token => _service.RunTargetedTestAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
             request,
+            token),
             cancellationToken);
         return new(
             result,
@@ -544,10 +556,16 @@ public abstract class NativeValidationTargetTool<TRequest> : Tool<TRequest, Vali
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var result = await RunAsync(
+        var result = await ConversationReceiptChecks.ObserveAsync(
+            context,
+            Definition.Id,
+            input.TargetPath,
+            JsonSerializer.Serialize(input),
+            token => RunAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
             input,
+            token),
             cancellationToken);
         return new(
             result,

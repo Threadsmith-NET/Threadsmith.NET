@@ -8,6 +8,31 @@ using Xunit;
 /// <summary>Actual provider serialization through the parent conversation's existing replay lifecycle.</summary>
 public static class ReasoningReplayConversationTests
 {
+    /// <summary>Exercises signed replay through the actual parent loop.</summary>
+    [Fact]
+    public static async Task OpenRouter_TwoSignedToolRoundsUseMainLoopAndRemainPrivate()
+    {
+        static string RouterStream(int round) => ReasoningReplayFixture.Stream(false, round, "deterministic_output", "{\"sequence\":" + (round + 1) + "}")
+            .Replace("\"reasoning_content\":\"private-" + round + "-\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"opaque-" + round + "-\"}]", StringComparison.Ordinal)
+            .Replace("\"reasoning_content\":\"state\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"state\"}]", StringComparison.Ordinal);
+        await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
+            ReasoningReplayFixture.Catalog(false, openRouter: true), RouterStream(0), RouterStream(1), ReasoningReplayFixture.Final(false));
+        harness.Handler.FragmentResponses = true;
+        await harness.RunToCompletionAsync();
+        Assert.Equal(3, harness.Handler.Requests.Count);
+        var messages = harness.Handler.Requests[2].GetProperty("messages").EnumerateArray().Where(message => message.TryGetProperty("reasoning_details", out _)).ToArray();
+        Assert.Equal(2, messages.Length);
+        for (var round = 0; round < 2; round++)
+        {
+            Assert.Equal($"opaque-{round}-state", messages[round].GetProperty("reasoning_details")[0].GetProperty("data").GetString());
+            Assert.Equal($"wire-{round}", messages[round].GetProperty("tool_calls")[0].GetProperty("id").GetString());
+        }
+
+        Assert.Equal(2, harness.Observed.OfType<ToolInvocationCompleted>().Count());
+        Assert.DoesNotContain("opaque-", JsonSerializer.Serialize(harness.Observed), StringComparison.Ordinal);
+        Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState?.HasResponses));
+    }
+
     /// <summary>Chronological developer corrections preserve earlier reasoning and can precede a new retained round.</summary>
     [Theory]
     [InlineData(false, false)]

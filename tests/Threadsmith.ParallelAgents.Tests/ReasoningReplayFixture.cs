@@ -6,6 +6,7 @@ using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCodex;
 using Threadsmith.Models.OpenAiCompatible;
+using Threadsmith.Models.OpenAiCompatible.OpenRouter;
 using Xunit;
 
 /// <summary>Deterministic provider protocol data; no live endpoint or user configuration is used.</summary>
@@ -13,9 +14,11 @@ internal static class ReasoningReplayFixture
 {
     private static readonly string[] CodexRoundTypes = ["reasoning", "function_call", "function_call_output"];
 
-    internal static EffectiveModelProviderCatalog Catalog(bool codex, bool replay = true, int contextWindow = 200000, bool reasoningAlias = false)
+    internal static EffectiveModelProviderCatalog Catalog(bool codex, bool replay = true, int contextWindow = 200000, bool reasoningAlias = false, bool openRouter = false)
     {
-        ModelConfiguration model = codex
+        ModelConfiguration model = openRouter
+            ? new OpenRouterModelConfiguration { Id = ModelProfileId.New(), Name = "fixture", ModelId = "vendor/fixture", JsonSchemaResponses = true, ReasoningControl = ReasoningControllability.Selectable, EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.Low] = "low" }, SupportsReasoningReplay = replay, Upstream = "test", ExpectedProviderName = "test" }
+            : codex
             ? new OpenAiCodexModelConfiguration { Id = ModelProfileId.New(), Name = "fixture", ModelId = "fixture" }
             : new OpenAiCompatibleModelConfiguration
             {
@@ -34,12 +37,14 @@ internal static class ReasoningReplayFixture
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low],
             DefaultReasoningLevel = ReasoningLevel.Low,
         };
-        ModelProviderConfiguration provider = codex
+        ModelProviderConfiguration provider = openRouter
+            ? new OpenRouterProviderConfiguration { Id = "fixture", Name = "fixture", SecretKeyReference = "secrets:fixture", Models = [model] }
+            : codex
             ? new OpenAiCodexProviderConfiguration { Id = "fixture", Name = "fixture", SecretKeyReference = OpenAiCodexProviderRegistration.OAuthSecretReference, Models = [model] }
             : new OpenAiCompatibleProviderConfiguration { Id = "fixture", Name = "fixture", BaseUri = new Uri("https://fixture.invalid/v1/"), Models = [model] };
         return new EffectiveModelProviderCatalog(
             new() { Providers = [provider], DefaultModelId = model.Id },
-            new ModelProviderRegistry([new OpenAiCodexProviderRegistration(), new OpenAiCompatibleProviderRegistration()]));
+            new ModelProviderRegistry([new OpenAiCodexProviderRegistration(), new OpenAiCompatibleProviderRegistration(), new OpenRouterProviderRegistration()]));
     }
 
     internal static string Stream(bool codex, int round, string tool, string arguments, bool reasoning = true)

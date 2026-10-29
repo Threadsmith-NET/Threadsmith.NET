@@ -340,8 +340,9 @@ public sealed partial class SessionApplication
         }
 
         var invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
+        registration.ReceiptWorkspaceId = invocationContext?.WorkspaceId;
         registration.RepositoryIdentity = invocationContext?.RepositoryPath;
-        return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions };
+        return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions, ReceiptChecks = registration.ReceiptChecks, ReceiptBaseline = () => _sourceEdits?.GetReceiptBaseline(invocationContext.WorkspaceId) };
     }
 
     private async Task RefreshMemoryContextAsync(
@@ -3172,7 +3173,7 @@ public sealed partial class SessionApplication
                         usage?.OutputTokens ?? 0),
                     1,
                     duration,
-                    usage?.EstimatedCost ?? 0));
+                    usage?.BudgetCost ?? 0));
                 LastActualBudgetStatus = budgetUsage;
                 _registration.ModelRequestWallClockAccrued += duration;
                 if (budgetUsage.IsExhausted

@@ -919,3 +919,21 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 5. Confirm the existing built-in search/read/write capability and writer availability checks apply, with no broader folder or mutation permissions.
 
 **Verifies:** Fixed cleanup ownership, explicit opt-in, repository ignore coverage, lifecycle isolation, and bounded tool authority. See MTP-274.
+
+## Scenario OPENROUTER — Governed manually configured provider
+
+1. Configure a manual model using the compiled OpenRouter provider and a separate secret reference.
+2. Select it explicitly and exercise ordinary MAIN and delegated requests, including declared reasoning and tool continuations.
+3. Hide reasoning display, cancel work, change model selection, and inspect normal logs and usage projections.
+
+**Verifies:** No automatic model discovery/default change; one governed execution lifecycle; exact private reasoning/tool continuation; no duplicated tool effects; private payloads excluded from diagnostics and persistence; reported charges distinguished from conservative estimates; declared capability, capacity and cancellation enforcement.
+
+## Scenario CR-1 — Bounded completed-turn verification receipts
+
+1. Run explicit native validation with and without source edits, then ask what was verified on a subsequent turn. Confirm one historical receipt preserves typed scope, authority, platform, result and source-state limits.
+2. Run a check before a host edit and confirm it is earlier-baseline evidence; an intervening baseline change makes applicability indeterminate. External changes and prebuilt test binaries cannot establish final-source verification.
+3. Fail or cancel consequential work and confirm already applied effects and completed checks remain historical facts. Routine answers and reads create no receipt.
+4. Resume or clone the session and confirm receipt origin remains stable without replaying tools. Retry publication and confirm only one receipt exists for the run and version.
+5. Exceed receipt capacity and confirm complete-entry reduction, explicit omission counts and the hard history-token bound. Governed-memory-only and Stateless retain their existing exclusions.
+
+**Verifies:** truthful bounded historical verification, durable origin, idempotence and ordinary context governance.

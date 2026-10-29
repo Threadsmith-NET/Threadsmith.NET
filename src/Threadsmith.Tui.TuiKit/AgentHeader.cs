@@ -136,6 +136,11 @@ internal sealed class AgentHeader
             counts += compact ? $" (R{CompactCount(reasoning)})" : $" (reasoning {reasoning:N0})";
         }
 
+        if (usage.ReportedCost is { } cost)
+        {
+            counts += $" charged {cost.ToString("0.######", CultureInfo.InvariantCulture)}";
+        }
+
         return counts + (state.IsPostResume ? " since resume" : string.Empty);
     }
 
@@ -157,6 +162,11 @@ internal sealed class AgentHeader
         if (usage.ReasoningTokens is { } reasoning)
         {
             tokens += $" (reasoning {reasoning:N0})";
+        }
+
+        if (usage.ReportedCost is { } cost)
+        {
+            tokens += $"; charged {cost.ToString("0.######", CultureInfo.InvariantCulture)} ({usage.CostProvenance})";
         }
 
         if (usage.Cache is not { Availability: CacheUsageAvailability.Reported } cache)

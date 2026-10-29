@@ -1806,7 +1806,7 @@ public sealed class SemanticRefreshCoordinator :
             {
                 var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
                     .GroupBy(pair => pair.Key, PathComparer)
-                    .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.Identity : null, PathComparer);
+                    .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.ByteIdentity : null, PathComparer);
                 _backend.ContinueEditAfterGraphRefresh(binding.Request.WorkspaceId, verifiedInputs);
                 try
                 {
@@ -2653,7 +2653,8 @@ public sealed class SemanticRefreshCoordinator :
                 snapshot.Exists,
                 snapshot.IsStable,
                 snapshot.Text,
-                snapshot.Identity);
+                snapshot.Identity)
+            { ByteIdentity = snapshot.ByteIdentity };
         }
 
         for (var attempt = 0; attempt < _resourceLimits.MaximumStableFileReadAttempts; attempt++)
@@ -2672,7 +2673,7 @@ public sealed class SemanticRefreshCoordinator :
             var before = new FileInfo(path);
             before.Refresh();
             string? text = null;
-            byte[]? contentHash = null;
+            byte[] contentHash;
             try
             {
                 if (!IsSafeForRead(binding, path))
@@ -2693,7 +2694,20 @@ public sealed class SemanticRefreshCoordinator :
                 }
                 else
                 {
-                    text = await File.ReadAllTextAsync(path, cancellationToken);
+                    // Roslyn compares decoded text, while mutation receipts identify exact bytes.
+                    // Capture both from the same read so BOMs and encodings cannot break edit continuation.
+                    await using var stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete,
+                        bufferSize: 81920,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    using var hash = SHA256.Create();
+                    await using var hashingStream = new CryptoStream(stream, hash, CryptoStreamMode.Read);
+                    using var reader = new StreamReader(hashingStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                    text = await reader.ReadToEndAsync(cancellationToken);
+                    contentHash = hash.Hash ?? throw new InvalidDataException("The semantic input byte hash is unavailable.");
                 }
             }
             catch (FileNotFoundException)
@@ -2726,9 +2740,10 @@ public sealed class SemanticRefreshCoordinator :
                 && before.Length == after.Length
                 && before.LastWriteTimeUtc == after.LastWriteTimeUtc)
             {
-                var hash = contentHash ?? SHA256.HashData(Encoding.UTF8.GetBytes(text ?? string.Empty));
+                var hash = readAsBinary ? contentHash : SHA256.HashData(Encoding.UTF8.GetBytes(text ?? string.Empty));
+                var byteIdentity = Convert.ToHexString(contentHash);
                 var identity = Convert.ToHexString(hash);
-                return new StableFileContent(true, true, text, identity);
+                return new StableFileContent(true, true, text, identity) { ByteIdentity = byteIdentity };
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(20), _timeProvider, cancellationToken);
@@ -3361,7 +3376,10 @@ public sealed class SemanticRefreshCoordinator :
         bool Exists,
         bool IsStable,
         string? Text,
-        string Identity);
+        string Identity)
+    {
+        public string ByteIdentity { get; init; } = Identity;
+    }
 
     private sealed record RecentHostEchoIdentity(
         string Identity,
@@ -3538,7 +3556,11 @@ internal sealed record SemanticFileSnapshot(
     bool Exists,
     bool IsStable,
     string? Text,
-    string Identity);
+    string Identity)
+{
+    /// <summary>Gets the exact byte hash used to verify mutation receipts independently of decoded text.</summary>
+    public string ByteIdentity { get; init; } = Identity;
+}
 
 /// <summary>Adapts the semantic engine registry to refresh execution.</summary>
 internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend

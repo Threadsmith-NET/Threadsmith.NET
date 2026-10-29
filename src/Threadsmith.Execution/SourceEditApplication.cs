@@ -701,6 +701,24 @@ public sealed class SourceEditApplication :
         }
     }
 
+    /// <summary>Reads existing baseline identity without acquiring an edit lease or scanning files.</summary>
+    internal WorkspaceBaseline? GetReceiptBaseline(WorkspaceId? workspaceId)
+    {
+        if (workspaceId is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _workspaces.GetWorkspace(workspaceId.Value).Baseline;
+        }
+        catch (KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
     private bool HasPendingFeedback(FeedbackDelivery delivery, RunId runId)
     {
         try

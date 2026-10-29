@@ -13,7 +13,7 @@ using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Streams chat completions from a configured OpenAI-compatible HTTP endpoint.</summary>
-internal sealed class OpenAiCompatibleModelProvider : IModelProvider
+internal class OpenAiCompatibleModelProvider : IModelProvider
 {
     private static readonly JsonSerializerOptions _jsonOptions = new()
     {
@@ -23,17 +23,19 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private readonly string? _apiKey;
     private readonly IReadOnlyDictionary<string, string> _headers;
-    private readonly HttpClient _httpClient;
+    private readonly HttpClient? _httpClient;
     private readonly int? _maximumStreamedCharacters;
     private readonly ModelProfile _profile;
     private readonly bool _promptCacheKeyEnabled;
     private readonly OpenAiReasoningCompatibilityConfiguration? _reasoningCompatibility;
     private readonly TimeProvider _timeProvider;
 
-    private string ReplayProtocol => _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning
+    /// <summary>Identifies compatible private replay payloads.</summary>
+    protected virtual string ReplayProtocol => _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning
         ? "openai-compatible-reasoning-alias" : "openai-compatible-reasoning";
 
-    private bool SupportsReasoningReplay => _profile.Provider == "openai-compatible"
+    /// <summary>Whether this protocol can retain completed tool exchanges.</summary>
+    protected virtual bool SupportsReasoningReplay => _profile.Provider == "openai-compatible"
         && _reasoningCompatibility is { SupportsReasoningReplay: true };
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCompatibleModelProvider"/> class.</summary>
@@ -51,7 +53,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumStreamedCharacters.GetValueOrDefault());
-        if (!string.Equals(profile.Provider, "openai-compatible", StringComparison.OrdinalIgnoreCase)
+        if (!string.Equals(profile.Provider, ProviderFamily, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(profile.Provider, "openai", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException(
@@ -102,7 +104,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 $"Model profile '{_profile.Name}' prohibits sensitive request content.");
         }
 
-        var maximumOutputTokens = request.MaximumOutputTokens ?? _profile.MaximumOutputTokens;
+        var maximumOutputTokens = request.MaximumOutputTokens ?? DefaultOutputCeiling;
         if (maximumOutputTokens <= 0 || maximumOutputTokens > _profile.MaximumOutputTokens)
         {
             throw new ModelProviderException(
@@ -111,6 +113,73 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         return StreamCoreAsync(request, maximumOutputTokens, cancellationToken);
+    }
+
+    /// <summary>Compiled protocol identity used by validation and diagnostics.</summary>
+    protected virtual string ProviderFamily => "openai-compatible";
+
+    /// <summary>Projects compiled protocol differences after canonical message and tool projection.</summary>
+    protected virtual void ProjectRequest(JsonObject body, ModelStreamRequest request)
+    {
+    }
+
+    /// <summary>Whether strict tool schema rewriting is supported by this protocol profile.</summary>
+    protected virtual bool SupportsStrictArguments => true;
+
+    /// <summary>Whether a response can contain several tool calls.</summary>
+    protected virtual bool AllowsParallelTools(ModelStreamRequest request) => request.AllowMultipleToolCalls != false;
+
+    /// <summary>Creates response-local private reasoning state.</summary>
+    protected virtual ReasoningAccumulator CreateReasoningAccumulator() => new();
+
+    /// <summary>Normalizes optional protocol charge metadata without changing conservative estimates.</summary>
+    protected virtual ModelUsage NormalizeUsage(ModelUsage usage, JsonElement? charge) => usage;
+
+    /// <summary>Owns bounded detached reasoning for one response, never for an adapter lifetime.</summary>
+    protected class ReasoningAccumulator
+    {
+        /// <summary>Whether tool continuation requires exact private protocol state.</summary>
+        public virtual bool RequiresPrivateReplay => false;
+
+        /// <summary>Consumes optional protocol detail fragments and returns display text.</summary>
+        public virtual string? Append(JsonElement? details, string? text) => text;
+
+        /// <summary>Projects complete private protocol state onto an assistant replay message.</summary>
+        public virtual JsonElement? Complete() => null;
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="OpenAiCompatibleModelProvider"/> class for credential-free projection.</summary>
+    protected OpenAiCompatibleModelProvider(ModelProfile profile)
+    {
+        _profile = profile;
+        _headers = new Dictionary<string, string>();
+        _timeProvider = TimeProvider.System;
+    }
+
+    /// <summary>Serializes the same canonical wire projection used for dispatch.</summary>
+    protected ReadOnlyMemory<byte> ProjectWireRequest(ModelStreamRequest request)
+    {
+        var tools = ModelToolCanonicalizer.Canonicalize(request.Tools);
+        return CreateRequestContent(request, request.MaximumOutputTokens ?? DefaultOutputCeiling, tools, ModelToolWireNameMap.Create(tools));
+    }
+
+    /// <summary>Whether this compiled subclass requires post-projection wire changes.</summary>
+    protected virtual bool HasRequestProjection => false;
+
+    /// <summary>Default output ceiling used by preparation and dispatch.</summary>
+    protected virtual int DefaultOutputCeiling => _profile.MaximumOutputTokens;
+
+    /// <summary>Whether the protocol requires an explicit SSE done marker.</summary>
+    protected virtual bool RequiresDoneMarker => false;
+
+    /// <summary>Projects compiled private replay fields after shared correlation.</summary>
+    protected virtual void ProjectReplay(JsonObject response)
+    {
+    }
+
+    /// <summary>Validates available response identity before replay can be committed.</summary>
+    protected virtual void ValidateResponseIdentity(string? model, string? provider)
+    {
     }
 
     private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
@@ -161,7 +230,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             try
             {
                 requestCancellation.Token.ThrowIfCancellationRequested();
-                var pendingResponse = _httpClient.SendAsync(
+                var pendingResponse = (_httpClient ?? throw new InvalidOperationException("Projection-only adapter cannot submit requests.")).SendAsync(
                     message,
                     HttpCompletionOption.ResponseHeadersRead,
                     requestCancellation.Token);
@@ -316,6 +385,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var textGuard = canonicalTools.Count > 0 ? new NativeToolTextGuard() : null;
             var orphanedToolArguments = false;
             var completed = false;
+            var receivedDone = false;
+            string? terminalReason = null;
+            var reasoningState = CreateReasoningAccumulator();
             var replayReasoning = SupportsReasoningReplay ? new StringBuilder() : null;
             var replayText = SupportsReasoningReplay ? new StringBuilder() : null;
             OpenAiMessage? pendingReplayResponse = null;
@@ -352,6 +424,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 var payload = line.AsSpan(5).Trim().ToString();
                 if (string.Equals(payload, "[DONE]", StringComparison.Ordinal))
                 {
+                    receivedDone = true;
                     break;
                 }
 
@@ -367,6 +440,46 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         "The provider returned a malformed streaming chunk.",
                         exception);
                 }
+
+                if (envelope.Usage is { } reportedUsage)
+                {
+                    if (reportedUsage.PromptTokens < 0 || reportedUsage.CompletionTokens < 0)
+                    {
+                        throw new MalformedModelOutputException(
+                            "The provider returned negative token usage.");
+                    }
+
+                    var inputCount = reportedUsage.PromptTokens ?? request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length);
+                    var outputCount = reportedUsage.CompletionTokens ?? EstimateTokenCount(completionCharacters);
+                    var reasoningCount = ReasoningTokenUsage.Read(reportedUsage.CompletionTokenDetails, "reasoning_tokens", reportedUsage.CompletionTokens ?? long.MaxValue);
+                    outputCount = Math.Max(outputCount, reasoningCount ?? 0);
+                    usageReported = true;
+                    reportedOutputTokens = Math.Max(reportedOutputTokens, outputCount);
+                    var conservativeInputTokens = Math.Max(
+                        inputCount,
+                        request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length));
+                    var conservativeOutputTokens = Math.Max(
+                        outputCount,
+                        EstimateTokenCount(completionCharacters));
+                    yield return new ModelChunk
+                    {
+                        Usage = NormalizeUsage(
+                            new ModelUsage(
+                            inputCount,
+                            outputCount,
+                            _profile.Cost.Calculate(
+                                conservativeInputTokens,
+                                conservativeOutputTokens),
+                            IsEstimate: reportedUsage.PromptTokens is null || reportedUsage.CompletionTokens is null,
+                            Cache: CreateCacheUsage(reportedUsage))
+                            {
+                                ReasoningTokens = reasoningCount,
+                            },
+                            reportedUsage.Cost),
+                    };
+                }
+
+                ValidateResponseIdentity(envelope.Model, envelope.Provider);
 
                 if (envelope.Error is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } error)
                 {
@@ -385,46 +498,35 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         + "Check the provider server logs for details.");
                 }
 
-                if (envelope.Usage is { } reportedUsage)
-                {
-                    if (reportedUsage.PromptTokens < 0 || reportedUsage.CompletionTokens < 0)
-                    {
-                        throw new MalformedModelOutputException(
-                            "The provider returned negative token usage.");
-                    }
-
-                    usageReported = true;
-                    reportedOutputTokens = Math.Max(reportedOutputTokens, reportedUsage.CompletionTokens);
-                    var conservativeInputTokens = Math.Max(
-                        reportedUsage.PromptTokens,
-                        request.WireEstimate?.WireInputTokens ?? EstimateTokenCount(request.Input.Length));
-                    var conservativeOutputTokens = Math.Max(
-                        reportedUsage.CompletionTokens,
-                        EstimateTokenCount(completionCharacters));
-                    yield return new ModelChunk
-                    {
-                        Usage = new ModelUsage(
-                            reportedUsage.PromptTokens,
-                            reportedUsage.CompletionTokens,
-                            _profile.Cost.Calculate(
-                                conservativeInputTokens,
-                                conservativeOutputTokens),
-                            Cache: CreateCacheUsage(reportedUsage))
-                        {
-                            ReasoningTokens = ReasoningTokenUsage.Read(reportedUsage.CompletionTokenDetails, "reasoning_tokens", reportedUsage.CompletionTokens),
-                        },
-                    };
-                }
-
                 foreach (var choice in envelope.Choices)
                 {
-                    var reasoning = ResolveReasoningDelta(choice.Delta);
+                    if (completed)
+                    {
+                        if (choice.Delta.Content is { Length: > 0 } || choice.Delta.ToolCalls.Count > 0
+                            || (choice.Delta.ReasoningDetails is { } trailingDetails && (trailingDetails.ValueKind != JsonValueKind.Array || trailingDetails.GetArrayLength() != 0)) || ResolveReasoningDelta(choice.Delta) is { Length: > 0 }
+                            || (choice.FinishReason is not null && choice.FinishReason != terminalReason))
+                        {
+                            throw new MalformedModelOutputException("The provider changed a completed response.");
+                        }
+
+                        continue;
+                    }
+
+                    if (choice.Delta.ReasoningDetails is { } detailBytes)
+                    {
+                        outputTracker.Add(detailBytes.GetRawText());
+                    }
+
+                    var reasoning = reasoningState.Append(choice.Delta.ReasoningDetails, ResolveReasoningDelta(choice.Delta));
                     if (reasoning is { Length: > 0 })
                     {
                         outputTracker.Add(reasoning);
                         completionCharacters += reasoning.Length;
                         replayReasoning?.Append(reasoning);
-                        yield return new ModelChunk { Reasoning = reasoning };
+                        if (request.IncludeReasoningText != false)
+                        {
+                            yield return new ModelChunk { Reasoning = reasoning };
+                        }
                     }
 
                     if (choice.Delta.Content is { Length: > 0 } content)
@@ -467,6 +569,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     if (choice.FinishReason is { } finishReason)
                     {
                         completed = true;
+                        terminalReason = finishReason;
                         if (textGuard is not null)
                         {
                             orphanedToolArguments |= textGuard.Complete(toolCallCount > 0, out var remainingText);
@@ -483,15 +586,17 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         }
 
                         var calls = toolCalls.OrderBy(pair => pair.Key).Select(pair => pair.Value).ToArray();
-                        var toolChunks = DrainToolCalls(toolCalls, toolNameMap);
-                        if (finishReason == "tool_calls" && calls.Length > 0 && replayReasoning is { Length: > 0 })
+                        IReadOnlyList<ModelChunk> toolChunks = [];
+                        if (finishReason == "tool_calls" && calls.Length > 0 && SupportsReasoningReplay
+                            && (replayReasoning is { Length: > 0 } || reasoningState.Complete() is not null))
                         {
                             pendingReplayResponse = new OpenAiMessage
                             {
                                 Role = "assistant",
                                 Content = replayText?.ToString(),
-                                ReasoningContent = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? null : replayReasoning.ToString(),
-                                Reasoning = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? replayReasoning.ToString() : null,
+                                ReasoningDetails = reasoningState.Complete(),
+                                ReasoningContent = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? null : replayReasoning?.ToString(),
+                                Reasoning = _reasoningCompatibility?.ReplayField == OpenAiReasoningReplayField.Reasoning ? replayReasoning?.ToString() : null,
                                 ToolCalls = calls.Select(call => new OpenAiMessageToolCall
                                 {
                                     Id = call.Id,
@@ -505,21 +610,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             continue;
                         }
 
-                        foreach (var toolChunk in toolChunks)
-                        {
-                            yield return toolChunk;
-                        }
-
-                        yield return new ModelChunk
-                        {
-                            FinishReason = finishReason switch
-                            {
-                                "stop" => ModelFinishReason.Stop,
-                                "tool_calls" => ModelFinishReason.ToolCalls,
-                                "length" => ModelFinishReason.Length,
-                                _ => ModelFinishReason.Other,
-                            },
-                        };
+                        pendingReplayToolChunks = toolChunks;
                     }
                 }
             }
@@ -533,12 +624,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
             }
 
-            if (!orphanedToolArguments)
+            if (RequiresDoneMarker && (!completed || !receivedDone))
             {
-                foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
-                {
-                    yield return toolChunk;
-                }
+                throw new TransientModelException("Model endpoint connection ended without a completed response.");
             }
 
             if (!usageReported)
@@ -548,11 +636,13 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 var outputTokens = EstimateTokenCount(completionCharacters);
                 yield return new ModelChunk
                 {
-                    Usage = new ModelUsage(
+                    Usage = NormalizeUsage(
+                        new ModelUsage(
                         inputTokens,
                         outputTokens,
                         _profile.Cost.Calculate(inputTokens, outputTokens),
                         IsEstimate: true),
+                        null),
                 };
             }
 
@@ -561,18 +651,36 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 throw new MalformedInvocationException(new MalformedInvocationDiagnostic
                 {
                     Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                    ProviderFamily = "openai-compatible",
+                    ProviderFamily = ProviderFamily,
                     ToolCallCount = toolCalls.Count,
                     SafeMessage = "The provider emitted tool parameters as assistant text. "
                         + "The tool batch was not executed because its arguments may be incomplete.",
                 });
             }
 
+            if (toolCalls.Count > 0 && terminalReason is not null && terminalReason != "tool_calls")
+            {
+                throw new MalformedModelOutputException("The provider returned tools without a successful tool-call completion.");
+            }
+
+            if (toolCalls.Count > 0 && reasoningState.RequiresPrivateReplay && !SupportsReasoningReplay)
+            {
+                throw new ModelProviderException("The provider returned signed reasoning that this profile cannot safely replay; the tool batch was not executed.");
+            }
+
+            if (toolCalls.Count > 1 && !AllowsParallelTools(request))
+            {
+                throw new MalformedModelOutputException("The provider returned multiple tools when parallel calls are unavailable.");
+            }
+
+            pendingReplayToolChunks = DrainToolCalls(toolCalls, toolNameMap);
+
             if (pendingReplayResponse is { ToolCalls: { } replayCalls })
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var responseNode = JsonSerializer.SerializeToNode(pendingReplayResponse, _jsonOptions)
                     ?? throw new ModelProviderException("Missing assistant response.");
+                ProjectReplay(responseNode.AsObject());
                 var replay = ProviderResponseReplay.Create(
                     request,
                     _profile,
@@ -592,13 +700,25 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         replay.Dispose();
                     }
                 }
+            }
 
-                foreach (var toolChunk in pendingReplayToolChunks)
+            foreach (var toolChunk in pendingReplayToolChunks)
+            {
+                yield return toolChunk;
+            }
+
+            if (terminalReason is not null)
+            {
+                yield return new ModelChunk
                 {
-                    yield return toolChunk;
-                }
-
-                yield return new ModelChunk { FinishReason = ModelFinishReason.ToolCalls };
+                    FinishReason = terminalReason switch
+                    {
+                        "stop" => ModelFinishReason.Stop,
+                        "tool_calls" => ModelFinishReason.ToolCalls,
+                        "length" => ModelFinishReason.Length,
+                        _ => ModelFinishReason.Other,
+                    },
+                };
             }
         }
     }
@@ -636,7 +756,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
 
                 var wireToolName = toolNameMap.ToWireName(definition.Name);
-                var strictSchema = definition.PreferStrictArguments
+                var strictSchema = SupportsStrictArguments && definition.PreferStrictArguments
                     ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
                         definition.Name,
                         definition.ArgumentsJsonSchema)
@@ -686,10 +806,21 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         };
         var imageBytes = request.Messages.SelectMany(message => message.Content)
             .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
-            .Sum(part => part.Image is { } image ? ((image.ByteLength + 2L) / 3) * 4 : 0);
+            .Sum(part => part.Image is { } image && request.ImageData.TryGetValue(image.Id, out var imageData) ? ((imageData.Length + 2L) / 3) * 4 : 0);
         var buffer = new ArrayBufferWriter<byte>(checked((int)imageBytes + 65536));
         using var writer = new Utf8JsonWriter(buffer);
-        JsonSerializer.Serialize(writer, body, _jsonOptions);
+        if (HasRequestProjection)
+        {
+            var projected = JsonSerializer.SerializeToNode(body, _jsonOptions)?.AsObject()
+                ?? throw new ModelProviderException("Missing request projection.");
+            ProjectRequest(projected, request);
+            projected.WriteTo(writer, _jsonOptions);
+        }
+        else
+        {
+            JsonSerializer.Serialize(writer, body, _jsonOptions);
+        }
+
         writer.Flush();
         return buffer.WrittenMemory;
     }
@@ -913,11 +1044,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         messages.Add(new OpenAiMessage { Role = "user", Content = content });
     }
 
-    private static ModelCacheUsage CreateCacheUsage(OpenAiUsage usage)
+    private ModelCacheUsage CreateCacheUsage(OpenAiUsage usage)
     {
         var cacheReadTokens = usage.PromptTokenDetails?.CachedTokens
             ?? usage.CacheReadInputTokens;
         var cacheWriteTokens = usage.PromptTokenDetails?.CreatedCacheTokens
+            ?? usage.PromptTokenDetails?.CacheWriteTokens
             ?? usage.CacheCreationInputTokens;
         if (cacheReadTokens is < 0 || cacheWriteTokens is < 0)
         {
@@ -935,7 +1067,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             ReadInputSemantics = cacheReadTokens is not null
                 ? CacheReadInputSemantics.IncludedInInput
                 : CacheReadInputSemantics.Unknown,
-            Provenance = reported ? "openai-compatible:usage" : null,
+            Provenance = reported ? ProviderFamily + ":usage" : null,
         };
     }
 
@@ -1081,7 +1213,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 : delta.ReasoningText;
     }
 
-    private static IReadOnlyList<ModelChunk> DrainToolCalls(
+    private IReadOnlyList<ModelChunk> DrainToolCalls(
         Dictionary<int, ToolCallAccumulator> toolCalls,
         ModelToolWireNameMap toolNameMap)
     {
@@ -1096,7 +1228,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 calls[index].Arguments);
             ModelOutputValidator.ValidateInvocation(
                 output,
-                providerFamily: "openai-compatible",
+                providerFamily: ProviderFamily,
                 toolOrdinal: index,
                 toolCallCount: calls.Length);
         }
@@ -1311,6 +1443,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiMessage
     {
+        [JsonPropertyName("reasoning_details")]
+        public JsonElement? ReasoningDetails { get; init; }
+
         [JsonPropertyName("reasoning")]
         public string? Reasoning { get; init; }
 
@@ -1359,6 +1494,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiStreamEnvelope
     {
+        [JsonPropertyName("model")]
+        public string? Model { get; init; }
+
+        [JsonPropertyName("provider")]
+        public string? Provider { get; init; }
+
         [JsonPropertyName("error")]
         public JsonElement? Error { get; init; }
 
@@ -1380,6 +1521,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiDelta
     {
+        [JsonPropertyName("reasoning_details")]
+        public JsonElement? ReasoningDetails { get; init; }
+
         [JsonPropertyName("content")]
         public string? Content { get; init; }
 
@@ -1419,11 +1563,14 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiUsage
     {
+        [JsonPropertyName("cost")]
+        public JsonElement? Cost { get; init; }
+
         [JsonPropertyName("prompt_tokens")]
-        public long PromptTokens { get; init; }
+        public long? PromptTokens { get; init; }
 
         [JsonPropertyName("completion_tokens")]
-        public long CompletionTokens { get; init; }
+        public long? CompletionTokens { get; init; }
 
         [JsonPropertyName("prompt_tokens_details")]
         public OpenAiPromptTokenDetails? PromptTokenDetails { get; init; }
@@ -1440,6 +1587,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiPromptTokenDetails
     {
+        [JsonPropertyName("cache_write_tokens")]
+        public long? CacheWriteTokens { get; init; }
+
         [JsonPropertyName("cached_tokens")]
         public long? CachedTokens { get; init; }
 

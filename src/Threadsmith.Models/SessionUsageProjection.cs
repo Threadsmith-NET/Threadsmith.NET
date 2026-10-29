@@ -31,6 +31,9 @@ public sealed record SessionUsageSnapshot(
     /// <summary>Gets cumulative reasoning tokens only when every contributing request reports its breakdown.</summary>
     public long? ReasoningTokens { get; init; }
 
+    /// <summary>Gets cumulative reported charges only when every contributing request reports its charge.</summary>
+    public decimal? ReportedCost { get; init; }
+
     /// <summary>Gets the latest observed request for this agent, independent of cumulative counters.</summary>
     public ModelRequestUsageSnapshot? LatestRequest { get; init; }
 
@@ -172,11 +175,13 @@ public sealed class SessionUsageProjection
                 return result;
             }
 
+            decimal? reportedCost = 0;
             long? reasoningTokens = 0;
             foreach (var pair in requests.Where(pair => childRunId is { } child
                 ? pair.Key.RunId == child : !IsChild(sessionId, pair.Key.RunId)))
             {
                 var usage = pair.Value;
+                reportedCost = reportedCost is { } totalCost && usage?.ReportedCost is { } charge && totalCost <= decimal.MaxValue - charge ? totalCost + charge : null;
                 reasoningTokens = reasoningTokens is { } accumulated && usage?.ReasoningTokens is { } reasoning
                     ? SaturatingAdd(accumulated, reasoning) : null;
                 result = result with
@@ -194,6 +199,7 @@ public sealed class SessionUsageProjection
 
             return result with
             {
+                ReportedCost = result.HasObservation ? reportedCost : null,
                 ReasoningTokens = result.HasObservation ? reasoningTokens : null,
                 LatestRequest = _latestUsage.GetValueOrDefault((sessionId, childRunId)),
             };
@@ -247,6 +253,7 @@ public sealed class SessionUsageProjection
 
         if (usage.InputTokens < 0
             || usage.OutputTokens < 0
+            || usage.ReportedCost is < 0
             || usage.ReasoningTokens is < 0
             || usage.Cache?.CacheReadTokens is < 0
             || usage.Cache?.CacheWriteTokens is < 0)
@@ -374,9 +381,11 @@ public sealed class SessionUsageProjection
             long cachedInputTokens = 0;
             long cacheWriteTokens = 0;
             var hasCacheObservation = false;
+            decimal? reportedCost = restored is null ? 0 : null;
             long? reasoningTokens = restored is null ? 0 : null;
             foreach (var usage in requests.Values)
             {
+                reportedCost = reportedCost is { } totalCost && usage?.ReportedCost is { } charge && totalCost <= decimal.MaxValue - charge ? totalCost + charge : null;
                 reasoningTokens = reasoningTokens is { } accumulated && usage?.ReasoningTokens is { } reasoning
                     ? SaturatingAdd(accumulated, reasoning) : null;
                 if (usage is null)
@@ -414,6 +423,7 @@ public sealed class SessionUsageProjection
                 cacheWriteTokens,
                 hasCacheObservation)
             {
+                ReportedCost = requests.Count > 0 ? reportedCost : null,
                 ReasoningTokens = requests.Count > 0 ? reasoningTokens : null,
             };
         }

@@ -92,9 +92,9 @@ public static class AnthropicConversationLoopTests
         Assert.Equal(snapshot.InputTokens, status.ContextTokens);
         Assert.Equal(snapshot.InputTokens, snapshot.Components.Sum(item => item.Tokens));
         Assert.True(snapshot.InputTokens > harness.Model.Requests[0].WireEstimate?.WireInputTokens);
-        Assert.Contains(snapshot.Components, item => item.Container == "system");
+        Assert.Contains(snapshot.Components, item => item.Category == "System prompt" && item.Tokens > 0);
         Assert.Contains(snapshot.Components, item => item.Category == "Tools" && item.Label == "deterministic_output");
-        Assert.Equal(2, snapshot.Components.Count(item => item.Label.Contains("provider-replay", StringComparison.Ordinal)));
+        Assert.Equal(100, Assert.Single(snapshot.Components, item => item.Id == "retained-allowance").Tokens);
         var serialized = JsonSerializer.Serialize(snapshot);
         Assert.DoesNotContain("signed-native-loop", serialized, StringComparison.Ordinal);
         Assert.DoesNotContain("private native reasoning", serialized, StringComparison.Ordinal);

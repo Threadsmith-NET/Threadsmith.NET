@@ -253,6 +253,36 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        if (message.Receipt is not null)
+        {
+            await using var existing = connection.CreateCommand();
+            existing.Transaction = transaction;
+            existing.CommandText = "SELECT sequence, body, content_hash, estimated_tokens, artifact_id, message_id, role, sensitivity, repository_revision, occurred_at, schema_version, images_json, receipt_json FROM conversation_messages WHERE session_id = $session AND run_id = $run AND json_extract(receipt_json, '$.Version') = $version";
+            existing.Parameters.AddWithValue("$version", message.Receipt.Version);
+            existing.Parameters.AddWithValue("$session", message.SessionId.Value.ToString("D"));
+            existing.Parameters.AddWithValue("$run", message.RunId.Value.ToString("D"));
+            await using var reader = await existing.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                return message with
+                {
+                    Sequence = reader.GetInt64(0),
+                    Content = await reader.IsDBNullAsync(1, cancellationToken) ? null : reader.GetString(1),
+                    ContentHash = reader.GetString(2),
+                    EstimatedTokens = reader.GetInt32(3),
+                    ArtifactId = await reader.IsDBNullAsync(4, cancellationToken) ? null : reader.GetString(4),
+                    Id = new ConversationMessageId(Guid.Parse(reader.GetString(5))),
+                    Role = (ConversationRole)reader.GetInt32(6),
+                    Sensitivity = (ConversationSensitivity)reader.GetInt32(7),
+                    RepositoryRevision = await reader.IsDBNullAsync(8, cancellationToken) ? null : reader.GetString(8),
+                    OccurredAt = DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture),
+                    SchemaVersion = reader.GetInt32(10),
+                    Images = JsonSerializer.Deserialize<ImageArtifact[]>(reader.GetString(11)) ?? [],
+                    Receipt = JsonSerializer.Deserialize<ConversationReceiptProvenance>(reader.GetString(12)),
+                };
+            }
+        }
+
         var sequence = await GetNextSequenceAsync(connection, transaction, message.SessionId, cancellationToken);
         var archived = message with
         {
@@ -271,9 +301,9 @@ public sealed class SqliteConversationStore : IConversationStore
                 INSERT INTO conversation_messages(
                     message_id, session_id, run_id, sequence, role, body, artifact_id,
                     content_hash, estimated_tokens, sensitivity, repository_revision,
-                    occurred_at, schema_version, images_json)
+                    occurred_at, schema_version, images_json, receipt_json)
                 VALUES($message, $session, $run, $sequence, $role, $body, $artifact,
-                    $hash, $tokens, $sensitivity, $revision, $occurredAt, $schemaVersion, $images);
+                    $hash, $tokens, $sensitivity, $revision, $occurredAt, $schemaVersion, $images, $receipt);
                 """;
             AddMessageParameters(command, archived);
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -313,6 +343,7 @@ public sealed class SqliteConversationStore : IConversationStore
         command.Parameters.AddWithValue("$revision", (object?)message.RepositoryRevision ?? DBNull.Value);
         command.Parameters.AddWithValue("$occurredAt", message.OccurredAt.ToString("O"));
         command.Parameters.AddWithValue("$schemaVersion", message.SchemaVersion);
+        command.Parameters.AddWithValue("$receipt", message.Receipt is null ? DBNull.Value : JsonSerializer.Serialize(message.Receipt));
         command.Parameters.AddWithValue("$images", JsonSerializer.Serialize(message.Images));
     }
 
@@ -397,7 +428,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT message_id, run_id, sequence, role, {(includeBodies ? "body" : "NULL")}, artifact_id, content_hash,
-                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json
+                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json, receipt_json
             FROM conversation_messages WHERE session_id = $session
             """ + (messageIds is null ? string.Empty : " AND message_id IN (SELECT value FROM json_each($messages))")
             + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
@@ -482,6 +513,7 @@ public sealed class SqliteConversationStore : IConversationStore
                 Role = (ConversationRole)reader.GetInt32(3),
                 Content = body,
                 Images = JsonSerializer.Deserialize<ImageArtifact[]>(reader.GetString(12)) ?? [],
+                Receipt = await reader.IsDBNullAsync(13, cancellationToken) ? null : JsonSerializer.Deserialize<ConversationReceiptProvenance>(reader.GetString(13)),
                 ArtifactId = artifactId,
                 ContentHash = reader.GetString(6),
                 EstimatedTokens = reader.GetInt32(7),

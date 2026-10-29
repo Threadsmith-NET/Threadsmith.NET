@@ -12,6 +12,7 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCompatible;
+using Threadsmith.Models.OpenAiCompatible.OpenRouter;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -97,7 +98,9 @@ public sealed partial class MultimodalTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ChatWireCarriesActualPixelsAndToolIdentity(bool toolResult)
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ChatWireCarriesActualPixelsAndToolIdentity(bool toolResult, bool openRouter = false)
     {
         await using var fixture = await Fixture.CreateAsync();
         var token = TestContext.Current.CancellationToken;
@@ -120,9 +123,25 @@ public sealed partial class MultimodalTests
                 },
             ],
         };
-        var registration = new OpenAiCompatibleProviderRegistration();
-        var catalog = new EffectiveModelProviderCatalog(new ModelProviderCatalogConfiguration { Providers = [configuration] }, new ModelProviderRegistry([registration]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), images: fixture.Store);
+        IModelProviderRegistration registration = openRouter ? new OpenRouterProviderRegistration() : new OpenAiCompatibleProviderRegistration();
+        ModelProviderConfiguration effectiveConfiguration = openRouter ? new OpenRouterProviderConfiguration
+        {
+            Id = "fixture",
+            Name = "fixture",
+            SecretKeyReference = "secrets:fixture",
+            Models =
+            [
+                new OpenRouterModelConfiguration
+                {
+                Id = configuration.Models[0].Id, Name = "fixture", ModelId = "vendor/fixture", ContextWindow = 100000,
+                MaximumOutputTokens = 4096, SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image,
+                SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed, Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
+                },
+            ],
+        }
+        : configuration;
+        var catalog = new EffectiveModelProviderCatalog(new ModelProviderCatalogConfiguration { Providers = [effectiveConfiguration] }, new ModelProviderRegistry([registration]));
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), images: fixture.Store);
         var imageMessage = new ModelMessage
         {
             Role = toolResult ? ModelMessageRole.Tool : ModelMessageRole.User,
@@ -446,15 +465,15 @@ public sealed partial class MultimodalTests
         await lifecycle.CloneAsync(
             source,
             new SessionCatalogEntry
-        {
-            SessionId = destination,
-            CloneSourceSessionId = source,
-            RepositoryIdentity = "repo",
-            RepositoryDisplayName = "repo",
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow,
-            State = SessionLifecycleState.Idle,
-        },
+            {
+                SessionId = destination,
+                CloneSourceSessionId = source,
+                RepositoryIdentity = "repo",
+                RepositoryDisplayName = "repo",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                State = SessionLifecycleState.Idle,
+            },
             new SessionDurableUsage(0, 0, false, false, false),
             token);
         var clone = await fixture.Conversations.GetSnapshotAsync(destination, cancellationToken: token);
@@ -586,7 +605,7 @@ public sealed partial class MultimodalTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream") };
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n", Encoding.UTF8, "text/event-stream") };
         }
     }
 

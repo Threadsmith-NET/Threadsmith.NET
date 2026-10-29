@@ -159,29 +159,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             }
 
             ValidateReasoningCompatibility(configured.Id, openAiModel);
-            if (openAiModel.ContextWindow <= 0
-                || openAiModel.MaximumOutputTokens <= 0
-                || openAiModel.MaximumOutputTokens > openAiModel.ContextWindow
-                || openAiModel.EffectiveRequestOutputTokenReserve <= 0
-                || openAiModel.EffectiveRequestOutputTokenReserve >= openAiModel.ContextWindow
-                || openAiModel.EffectiveRequestOutputTokenReserve > openAiModel.MaximumOutputTokens
-                || openAiModel.Cost.InputPerMillionTokens < 0
-                || openAiModel.Cost.OutputPerMillionTokens < 0
-                || openAiModel.TimeoutSeconds < 0
-                || openAiModel.MaximumStreamedBytes < 0
-                || openAiModel.MaximumToolCalls < 0
-                || openAiModel.RetryMaxAttempts <= 0
-                || openAiModel.RetryDelayMilliseconds < 0
-                || openAiModel.SupportedReasoningLevels.Count == 0
-                || openAiModel.SupportedReasoningLevels.Distinct().Count()
-                    != openAiModel.SupportedReasoningLevels.Count
-                || (openAiModel.ReasoningCompatibility is null
-                    && !openAiModel.SupportedReasoningLevels.Contains(ReasoningLevel.None))
-                || !openAiModel.SupportedReasoningLevels.Contains(openAiModel.DefaultReasoningLevel))
-            {
-                throw new InvalidOperationException(
-                    $"Model '{openAiModel.Id.Value:D}' contains invalid limits or policy metadata.");
-            }
+            ValidateModelLimits(openAiModel, openAiModel.ReasoningCompatibility is null);
         }
     }
 
@@ -200,39 +178,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
         {
             var endpoint = model.LegacyEndpointOverride
                 ?? ComposeEndpoint(configured.BaseUri, configured.ChatCompletionsPath, configured.Id);
-            profiles.Add(new ModelProfile
-            {
-                Id = model.Id,
-                Name = model.Name,
-                Provider = TypeDiscriminator,
-                Endpoint = endpoint,
-                ModelId = model.ModelId,
-                SecretKeyReference = configured.SecretKeyReference,
-                ContextWindow = model.ContextWindow,
-                MaximumOutputTokens = model.MaximumOutputTokens,
-                RequestOutputTokenReserve = model.RequestOutputTokenReserve,
-                Capabilities = model.Capabilities,
-                SupportedInputContentTypes = model.SupportedInputContentTypes,
-                SupportedOutputContentTypes = model.SupportedOutputContentTypes,
-                Cost = model.Cost,
-                SensitiveDataPolicy = model.SensitiveDataPolicy,
-                IntendedWorkloadClasses = model.IntendedWorkloadClasses,
-                ReasoningEffort = model.DefaultReasoningLevel == ReasoningLevel.None
-                    ? null
-                    : model.DefaultReasoningLevel.Value,
-                DefaultReasoningLevel = model.DefaultReasoningLevel,
-                SupportedReasoningLevels = model.SupportedReasoningLevels,
-                ReasoningCapability = CreateEffectiveReasoningCapability(configured.Id, model),
-                Temperature = model.Temperature,
-                Timeout = TimeSpan.FromSeconds(model.TimeoutSeconds),
-                MaximumStreamedBytes = model.MaximumStreamedBytes,
-                MaximumToolCalls = model.MaximumToolCalls,
-                RetryPolicy = new ModelRetryPolicy
-                {
-                    MaxAttempts = model.RetryMaxAttempts,
-                    Delay = TimeSpan.FromMilliseconds(model.RetryDelayMilliseconds),
-                },
-            });
+            profiles.Add(CreateProfile(model, model.ModelId, endpoint, TypeDiscriminator, configured.SecretKeyReference, CreateEffectiveReasoningCapability(configured.Id, model)));
         }
 
         return profiles;
@@ -333,6 +279,72 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             },
             registry,
             enforceHttps);
+    }
+
+    /// <summary>Validates shared chat model limits without protocol-specific assumptions.</summary>
+    internal static void ValidateModelLimits(ModelConfiguration model, bool requireNone)
+    {
+        if (model.ContextWindow <= 0
+            || model.MaximumOutputTokens <= 0
+            || model.MaximumOutputTokens > model.ContextWindow
+            || model.EffectiveRequestOutputTokenReserve <= 0
+            || model.EffectiveRequestOutputTokenReserve >= model.ContextWindow
+            || model.EffectiveRequestOutputTokenReserve > model.MaximumOutputTokens
+            || model.Cost.InputPerMillionTokens < 0
+            || model.Cost.OutputPerMillionTokens < 0
+            || model.TimeoutSeconds < 0
+            || model.MaximumStreamedBytes < 0
+            || model.MaximumToolCalls < 0
+            || model.RetryMaxAttempts <= 0
+            || model.RetryDelayMilliseconds < 0
+            || model.SupportedReasoningLevels.Count == 0
+            || model.SupportedReasoningLevels.Distinct().Count()
+                != model.SupportedReasoningLevels.Count
+            || (requireNone
+                && !model.SupportedReasoningLevels.Contains(ReasoningLevel.None))
+            || !model.SupportedReasoningLevels.Contains(model.DefaultReasoningLevel))
+        {
+            throw new InvalidOperationException(
+                $"Model '{model.Id.Value:D}' contains invalid limits or policy metadata.");
+        }
+    }
+
+    /// <summary>Projects shared catalog metadata into the host-owned selected profile.</summary>
+    internal static ModelProfile CreateProfile(ModelConfiguration model, string modelId, Uri endpoint, string providerType, string? secretReference, EffectiveReasoningCapability reasoningCapability)
+    {
+        return new ModelProfile
+        {
+            Id = model.Id,
+            Name = model.Name,
+            Provider = providerType,
+            Endpoint = endpoint,
+            ModelId = modelId,
+            SecretKeyReference = secretReference,
+            ContextWindow = model.ContextWindow,
+            MaximumOutputTokens = model.MaximumOutputTokens,
+            RequestOutputTokenReserve = model.RequestOutputTokenReserve,
+            Capabilities = model.Capabilities,
+            SupportedInputContentTypes = model.SupportedInputContentTypes,
+            SupportedOutputContentTypes = model.SupportedOutputContentTypes,
+            Cost = model.Cost,
+            SensitiveDataPolicy = model.SensitiveDataPolicy,
+            IntendedWorkloadClasses = model.IntendedWorkloadClasses,
+            ReasoningEffort = model.DefaultReasoningLevel == ReasoningLevel.None
+                    ? null
+                    : model.DefaultReasoningLevel.Value,
+            DefaultReasoningLevel = model.DefaultReasoningLevel,
+            SupportedReasoningLevels = model.SupportedReasoningLevels,
+            ReasoningCapability = reasoningCapability,
+            Temperature = model.Temperature,
+            Timeout = TimeSpan.FromSeconds(model.TimeoutSeconds),
+            MaximumStreamedBytes = model.MaximumStreamedBytes,
+            MaximumToolCalls = model.MaximumToolCalls,
+            RetryPolicy = new ModelRetryPolicy
+            {
+                MaxAttempts = model.RetryMaxAttempts,
+                Delay = TimeSpan.FromMilliseconds(model.RetryDelayMilliseconds),
+            },
+        };
     }
 
     private static EffectiveReasoningCapability CreateEffectiveReasoningCapability(

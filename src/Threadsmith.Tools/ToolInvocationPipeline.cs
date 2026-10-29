@@ -524,6 +524,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             InvocationKey = request.InvocationKey,
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
             Deadline = AdmissionDeadline(tool.Definition, admittedAt),
+            CallerCancellation = cancellationToken,
             TimeProvider = _timeProvider,
         };
         var activityDetail = CreateActivityDetail(tool, input);

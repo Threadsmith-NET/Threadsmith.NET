@@ -11,6 +11,7 @@ using Threadsmith.Models;
 using Threadsmith.Models.Anthropic;
 using Threadsmith.Models.OpenAiCodex;
 using Threadsmith.Models.OpenAiCompatible;
+using Threadsmith.Models.OpenAiCompatible.OpenRouter;
 using Threadsmith.Tools;
 
 /// <summary>Composes model catalogs, provider dispatch, startup selection, and the shared HTTP transport.</summary>
@@ -85,7 +86,7 @@ internal static class ModelComposition
             var openAiRegistration = new OpenAiCompatibleProviderRegistration();
             var codexRegistration = new OpenAiCodexProviderRegistration();
             var anthropicRegistration = new AnthropicProviderRegistration();
-            var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration, anthropicRegistration]);
+            var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration, anthropicRegistration, new OpenRouterProviderRegistration()]);
             var (effectiveCatalog, trustedCatalog) = await LoadCatalogsAsync(
                 configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory, secretResolver, httpClient, CancellationToken.None).ConfigureAwait(false);
             if (effectiveCatalog?.Configuration.Providers.Any(

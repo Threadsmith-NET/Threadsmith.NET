@@ -52,6 +52,7 @@ internal sealed class ModelRequestBudgetUsage
         ArgumentOutOfRangeException.ThrowIfNegative(usage.InputTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(usage.OutputTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(usage.EstimatedCost);
+        ArgumentOutOfRangeException.ThrowIfNegative(usage.ReportedCost ?? 0);
         var tokens = ModelRequestAdmissionEstimator.SaturatingTokenTotal(
             usage.InputTokens,
             usage.OutputTokens);
@@ -59,9 +60,9 @@ internal sealed class ModelRequestBudgetUsage
             Math.Max(0, tokens - _chargedTokens),
             0,
             TimeSpan.Zero,
-            Math.Max(0, usage.EstimatedCost - _chargedCost));
+            Math.Max(0, usage.BudgetCost - _chargedCost));
         _chargedTokens = Math.Max(_chargedTokens, tokens);
-        _chargedCost = Math.Max(_chargedCost, usage.EstimatedCost);
+        _chargedCost = Math.Max(_chargedCost, usage.BudgetCost);
         return budget.Accrue(delta);
     }
 }

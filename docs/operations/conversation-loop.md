@@ -50,3 +50,13 @@ Cancellation finalization records durable edit receipts without reacquiring the 
 No executable plan, plan approval, step, tranche, proposal-generation turn or completion tool is required. A user-requested written plan is ordinary advisory conversation text.
 
 See [mutation model](../architecture/mutation-model.md), [execution recovery](execution-resumption.md), [semantic refresh](semantic-refresh.md), and [validation pipeline](../architecture/validation-pipeline.md).
+
+## Completed-turn receipts
+
+Consequential turns archive one bounded historical receipt through the ordinary conversation store. Applied edits and explicit native build, analyzer, format and targeted-test observations share that receipt; validation-only turns also qualify. Ordinary answers and reads do not. Exploratory checks retain their authority and never satisfy an acceptance gate merely by appearing in history. The host does not launch validation to complete a receipt.
+
+Checks retain the platform, invocation, effective scope and selector, typed result, available counts and source observation. Existing baseline capture identity and revision are observations, not proof of all source or built inputs. A changed baseline during a check is indeterminate; a later baseline makes it earlier-state evidence. Unobserved external edits and targeted tests using existing binaries keep final-code applicability unknown. Child handoffs containing suggested validation are not verification.
+
+The run collects at most eight checks. Rendering admits at most 32 effect paths, eight checks, eight unresolved items and available diff metadata, then removes complete entries to fit 512 estimated tokens including historical framing. Omission counts remain explicit. Failed checks and applied effects take priority over passing checks. Diff metadata does not offer cross-turn recovery. Text is sanitized and remains sensitive historical data under normal history modes and whole-turn budgets.
+
+Receipt version and original session/run/message association persist atomically with the archive message. Repeated publication uses the same durable message identity. Clones retain original receipt provenance while acquiring their own archive identities. Old messages without receipt metadata remain ordinary historical text. Resume does not rerun checks or create validation claims.

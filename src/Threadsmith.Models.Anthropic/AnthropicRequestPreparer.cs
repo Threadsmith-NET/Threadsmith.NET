@@ -1,9 +1,6 @@
 namespace Threadsmith.Models.Anthropic;
 
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Prepares cache boundaries and conservative native capacity before credential activation.</summary>
@@ -40,18 +37,27 @@ internal static class AnthropicRequestPreparer
             MinimumCacheablePrefixTokens = compatibility.MinimumCacheableTokens ?? 0,
             ReportsCachedTokens = true,
         };
+        var messages = request.Messages.Count > 0 ? request.Messages
+            : [new ModelMessage { Role = ModelMessageRole.User, SectionId = "legacy-input", Content = [new() { Content = request.Input }] }];
+        var stableMessageCount = request.Layout?.StablePrefixMessageCount
+            ?? request.Messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).Count();
+        var instructions = request.ProviderInstructions is { } supplied && request.Messages.Any(message => message.SectionId == supplied.SectionId)
+            ? null : request.ProviderInstructions;
+        var estimate = ProviderResponseReplay.IncludeAllowance(request, ModelWireEstimator.Estimate(
+            messages,
+            ModelToolCanonicalizer.Canonicalize(request.Tools),
+            ToolTransportMode.Native,
+            stableMessageCount,
+            request.MaximumOutputTokens ?? profile.EffectiveRequestOutputTokenReserve,
+            instructions));
         var stableSections = request.Messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
             .Where(message => message.Content.Any(part => part.IsModelVisible))
-            .GroupBy(message => message.SectionId, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Sum(message => Encoding.UTF8.GetByteCount(message.GetModelVisibleContent())), StringComparer.Ordinal);
-        var toolBytes = request.Tools.Sum(tool => Encoding.UTF8.GetByteCount(tool.ArgumentsJsonSchema)
-            + Encoding.UTF8.GetByteCount(tool.Name) + Encoding.UTF8.GetByteCount(tool.Description));
-        var stableBytes = stableSections.Values.Sum() + toolBytes;
+            .Select(message => message.SectionId).ToHashSet(StringComparer.Ordinal);
         var breakpoints = new List<ModelCacheBreakpoint>();
 
         // Keep reusable instructions and tools, then move the final breakpoint with the conversation.
         // Legacy planner indices are never treated as native block indices.
-        if (capabilities.ExplicitCacheControl && stableBytes / 4 >= capabilities.MinimumCacheablePrefixTokens)
+        if (capabilities.ExplicitCacheControl && estimate.StablePrefixTokens >= capabilities.MinimumCacheablePrefixTokens)
         {
             var historyEnd = request.Messages.Select((message, index) => (message, index))
                 .Where(item => item.message.SectionId is "recent-user" or "recent-assistant"
@@ -64,7 +70,7 @@ internal static class AnthropicRequestPreparer
                 (ModelCacheBreakpointClass.RepositoryInstructions, "repository-instructions"),
             })
             {
-                if (candidate.Item1 == ModelCacheBreakpointClass.ToolInventory ? request.Tools.Count > 0 : stableSections.ContainsKey(candidate.Item2))
+                if (candidate.Item1 == ModelCacheBreakpointClass.ToolInventory ? request.Tools.Count > 0 : stableSections.Contains(candidate.Item2))
                 {
                     breakpoints.Add(new ModelCacheBreakpoint(candidate.Item1, -1));
                 }
@@ -74,7 +80,7 @@ internal static class AnthropicRequestPreparer
             {
                 breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.ConversationHistory, index));
             }
-            else if (stableSections.ContainsKey("conversation-policy"))
+            else if (stableSections.Contains("conversation-policy"))
             {
                 breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.PhasePolicy, -1));
             }
@@ -84,152 +90,37 @@ internal static class AnthropicRequestPreparer
 
         var plan = new ModelCachePlan(breakpoints.AsReadOnly());
         var projected = request with { CacheCapabilities = capabilities, CachePlan = plan };
-        var attribution = new Dictionary<JsonNode, ModelMessage>(ReferenceEqualityComparer.Instance);
-        var body = AnthropicRequestMapper.CreateBody(projected, profile, compatibility, attribution);
+        var body = AnthropicRequestMapper.CreateBody(projected, profile, compatibility);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(body);
         try
         {
-            var imageTokens = request.Messages.SelectMany(message => message.Content).Where(part => part.IsModelVisible && part.Image is not null)
-                .Sum(part => ModelImages.EstimateTokens(part.Image ?? throw new ModelProviderException("Missing image metadata.")));
-            var framing = imageTokens + FramingAllowanceTokens + (request.ResponseFormat is null ? 0 : StructuredOutputAllowanceTokens);
-            var retained = request.TransientState?.RetainedOutputTokens ?? 0;
-            var total = Math.Min(int.MaxValue, (long)bytes.Length + framing + retained);
-            var attributionResult = Attribute(body, bytes, attribution, request, framing, retained, total);
-
-            // One token per UTF-8 byte is deliberately conservative until an exact model tokenizer is reviewed.
-            // Signed bytes additionally retain reported output usage: ciphertext length does not measure hidden thinking.
+            // Native schema projection may expand the supplied schema. Count the projected output contract in token units.
+            var outputTokens = ((long)(body["output_config"]?.ToJsonString().Length ?? 0) + 3) / 4;
+            var framing = FramingAllowanceTokens + (request.ResponseFormat is null ? 0 : StructuredOutputAllowanceTokens);
+            var estimatedTotal = estimate.WireInputTokens + outputTokens + framing;
+            var total = Math.Min(int.MaxValue, estimatedTotal);
             return new ModelRequestPreparationResult
             {
                 RequiresInitialInstructionPrefix = true,
                 WireDigest = AnthropicRequestMapper.Hash(bytes),
                 CacheCapabilities = capabilities,
                 CachePlan = plan,
-                WireEstimate = new ModelWireEstimate
+                WireEstimate = estimate with
                 {
-                    Components = attributionResult.Components,
-                    EstimationBasis = "Conservative provider capacity: one token per serialized UTF-8 byte, plus framing and retained-output allowances. Contributions follow model-context order, independent of request-object property serialization.",
-                    LogicalTokens = request.WireEstimate?.LogicalTokens ?? bytes.Length,
                     WireInputTokens = (int)total,
-                    StablePrefixTokens = stableBytes,
-                    StablePrefixComponentCount = attributionResult.StablePrefixComponentCount,
-                    NativeToolTokens = toolBytes,
-                    FramingTokens = framing,
-                    ProviderInstructionTokens = Encoding.UTF8.GetByteCount(request.ProviderInstructions?.Content ?? string.Empty),
-                    OutputReserveTokens = request.MaximumOutputTokens ?? profile.EffectiveRequestOutputTokenReserve,
-                    SectionTokens = stableSections,
+                    Components = total == estimatedTotal
+                        ? [.. estimate.Components,
+                            new("output-config", "Output contract", "Output format / reasoning settings", "Native output contract", outputTokens),
+                            new("anthropic-framing", "Provider overhead/replay", "Anthropic framing allowance", "Capacity allowances", framing)] : [],
+                    StablePrefixComponentCount = total == estimatedTotal ? estimate.StablePrefixComponentCount : 0,
+                    FramingTokens = estimate.FramingTokens + framing,
+                    EstimationBasis = estimate.EstimationBasis + " Includes Anthropic framing and projected output-contract token allowances; transport bytes are not tokens.",
                 },
             };
         }
         finally
         {
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
-        }
-    }
-
-    private static (IReadOnlyList<ContextUsageComponent> Components, int StablePrefixComponentCount) Attribute(
-        JsonObject body,
-        byte[] bytes,
-        Dictionary<JsonNode, ModelMessage> attribution,
-        ModelStreamRequest request,
-        int framing,
-        long retained,
-        long total)
-    {
-        using var document = JsonDocument.Parse(bytes);
-        var components = new List<ContextUsageComponent>();
-        var systemComponents = new List<ContextUsageComponent>();
-        var messageComponents = new List<ContextUsageComponent>();
-        var toolComponents = new List<ContextUsageComponent>();
-        var outputComponents = new List<ContextUsageComponent>();
-        var toolNames = ModelToolCanonicalizer.Canonicalize(request.Tools).Select(tool => tool.Name).ToArray();
-        foreach (var (field, target) in new[]
-        {
-            ("system", systemComponents),
-            ("messages", messageComponents),
-            ("tools", toolComponents),
-            ("output_config", outputComponents),
-        })
-        {
-            if (document.RootElement.TryGetProperty(field, out var element)
-                && body[field] is { } node)
-            {
-                Visit(node, element, field, target);
-            }
-        }
-
-        var toolInsertionIndex = systemComponents.FindIndex(item => item.Category == "Conversation instructions");
-        if (toolInsertionIndex < 0)
-        {
-            toolInsertionIndex = systemComponents.Count;
-        }
-
-        components.AddRange(systemComponents.Take(toolInsertionIndex));
-        components.AddRange(toolComponents);
-        components.AddRange(systemComponents.Skip(toolInsertionIndex));
-        components.AddRange(messageComponents);
-        components.AddRange(outputComponents);
-        var stableMessageCount = Math.Min(
-            request.Layout?.StablePrefixMessageCount
-                ?? request.Messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).Count(),
-            systemComponents.Count);
-        var stablePrefixComponentCount = stableMessageCount + toolComponents.Count;
-
-        var remainder = bytes.LongLength - components.Sum(item => item.Tokens);
-        components.Add(new("wire-framing", "Provider overhead/replay", "Serialization / request settings", "Request framing", remainder));
-        components.Add(new("framing-allowance", "Provider overhead/replay", "Provider framing allowance", "Capacity allowances", framing));
-        components.Add(new("retained-allowance", "Provider overhead/replay", "Retained output allowance", "Capacity allowances", retained));
-
-        // Saturated admission estimates cannot be honestly subdivided into an unsaturated inventory.
-        return components.Sum(item => item.Tokens) == total
-            ? (components.AsReadOnly(), stablePrefixComponentCount)
-            : ([], 0);
-
-        void Visit(JsonNode node, JsonElement element, string container, List<ContextUsageComponent> target)
-        {
-            if (attribution.TryGetValue(node, out var message))
-            {
-                var content = message.GetModelVisibleContent();
-                target.Add(ContextUsageAttribution.Message(
-                    message,
-                    target.Count,
-                    container,
-                    Encoding.UTF8.GetByteCount(element.GetRawText()),
-                    length => JsonEncodedText.Encode(content.AsSpan(0, length)).EncodedUtf8Bytes.Length));
-            }
-            else if (container == "tools" && element.ValueKind == JsonValueKind.Array)
-            {
-                var index = 0;
-                foreach (var tool in element.EnumerateArray())
-                {
-                    target.Add(new($"tools:{index}", "Tools", toolNames[index], container, Encoding.UTF8.GetByteCount(tool.GetRawText())));
-                    index++;
-                }
-            }
-            else if (container == "output_config")
-            {
-                target.Add(new("output-config", "Output contract", "Output format / reasoning settings", container, Encoding.UTF8.GetByteCount(element.GetRawText())));
-            }
-            else if (node is JsonArray array)
-            {
-                var index = 0;
-                foreach (var child in element.EnumerateArray())
-                {
-                    if (array[index++] is { } childNode)
-                    {
-                        Visit(childNode, child, container, target);
-                    }
-                }
-            }
-            else if (node is JsonObject obj && container is "messages" or "system")
-            {
-                foreach (var child in element.EnumerateObject())
-                {
-                    if (obj[child.Name] is { } childNode)
-                    {
-                        Visit(childNode, child.Value, container, target);
-                    }
-                }
-            }
         }
     }
 }

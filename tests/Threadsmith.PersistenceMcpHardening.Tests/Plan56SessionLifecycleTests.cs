@@ -152,9 +152,12 @@ public static partial class Plan56SessionLifecycleTests
             EstimatedTokens = 1,
             OccurredAt = now.AddSeconds(2),
         });
+        var receiptId = ConversationMessageId.New();
+        var origin = new ConversationReceiptProvenance(1, sourceId, firstSourceRunId, receiptId);
         _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
         {
-            Id = ConversationMessageId.New(),
+            Id = receiptId,
+            Receipt = origin,
             SessionId = sourceId,
             RunId = firstSourceRunId,
             Sequence = 0,
@@ -188,6 +191,9 @@ public static partial class Plan56SessionLifecycleTests
         var clonedSecondRequest = Assert.Single(cloneState.Messages, message => message.Content == "second cloned request");
         var clonedSecondOutcome = Assert.Single(cloneState.Messages, message => message.Content == "second cloned outcome");
         Assert.NotEqual(sourceMessage.Id, clonedFirstRequest.Id);
+        Assert.Equal(origin, clonedFirstOutcome.Receipt);
+        Assert.NotEqual(origin.OriginMessageId, clonedFirstOutcome.Id);
+        Assert.Equal("first cloned outcome", clonedFirstOutcome.Content);
         Assert.NotEqual(firstSourceRunId, clonedFirstRequest.RunId);
         Assert.NotEqual(secondSourceRunId, clonedSecondRequest.RunId);
         Assert.Equal(clonedFirstRequest.RunId, clonedFirstOutcome.RunId);

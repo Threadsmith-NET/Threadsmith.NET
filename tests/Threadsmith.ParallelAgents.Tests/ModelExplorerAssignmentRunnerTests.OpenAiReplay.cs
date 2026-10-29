@@ -22,7 +22,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(false, false, true)]
     [InlineData(true, false, true)]
     [InlineData(false, false, false, true)]
-    public async Task RunAsync_OpenAiReasoning_PreservesAndReleasesReplay(bool codex, bool cancelAfterTool, bool exceedCapacity, bool reasoningAlias = false)
+    [InlineData(false, false, false, true, true)]
+    [InlineData(false, true, false, true, true)]
+    public async Task RunAsync_OpenAiReasoning_PreservesAndReleasesReplay(bool codex, bool cancelAfterTool, bool exceedCapacity, bool reasoningAlias = false, bool openRouter = false)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var ct = cancellation.Token;
@@ -40,7 +42,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var evidence = new EvidenceStore(events, sanitizer);
         var tool = new InspectMetadataTool();
         var registry = new ToolRegistry([tool]);
-        var catalog = ReasoningReplayFixture.Catalog(codex, contextWindow: exceedCapacity ? 9000 : 200000, reasoningAlias: reasoningAlias);
+        var catalog = ReasoningReplayFixture.Catalog(codex, contextWindow: exceedCapacity ? 9000 : 200000, reasoningAlias: reasoningAlias, openRouter: openRouter);
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
         using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id) { ExceedCapacity = exceedCapacity, ReasoningAlias = reasoningAlias };
         using var client = new HttpClient(handler);
@@ -94,7 +96,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.All(provider.Requests.Skip(1), request =>
         {
             var allowance = Assert.Single(request.WireEstimate!.Components, item => item.Id == "retained-allowance");
-            Assert.True(allowance.Tokens > 0);
+            Assert.True(openRouter ? allowance.Tokens >= 0 : allowance.Tokens > 0);
             Assert.Equal(request.WireEstimate.WireInputTokens, request.WireEstimate.Components.Sum(item => item.Tokens));
         });
         Assert.DoesNotContain("opaque-", JsonSerializer.Serialize(observed), StringComparison.Ordinal);

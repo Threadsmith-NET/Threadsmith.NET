@@ -132,7 +132,7 @@ The host preserves native tool-call IDs and ordered assistant blocks through eve
 
 If a message-level update arrives while a content block is still open, the failure reports the block type, zero-based index, and recognized stop reason. Reported terminal usage is retained in the existing usage diagnostics before the response is rejected; missing terminal counts remain estimates. Unknown stop reasons are labeled unrecognized. Block contents, thinking, signatures, and tool arguments are excluded from the error, and no tool calls from the incomplete response are released.
 
-Before admission and dispatch, the adapter prepares the same native body, including strict tool schemas, system blocks, replay, and explicit five-minute cache breakpoints. The initial local estimator conservatively counts UTF-8 bytes plus framing; signed output also retains provider-reported output-token cost. This can admit less context than a calibrated tokenizer. Cache writes are priced conservatively for admission; actual usage distinguishes uncached input, cache writes, cache reads, and output. A missing cache hit is reported as such. The host owns the single deadline and bounded retry policy, and never retries after a model chunk has been delivered to the host. Native protocol metadata alone does not prevent retrying a transient transport failure.
+Before admission and dispatch, the adapter prepares the same native body, including strict tool schemas, system blocks, replay, and explicit five-minute cache breakpoints. Context admission and display use the shared token estimate for messages, tools and image dimensions, plus native framing and projected output-contract token allowances; signed output retains provider-reported output-token usage. Serialized UTF-8 bytes determine request identity, not token capacity. These local estimates can differ from actual provider-reported usage. Cache writes are priced conservatively for admission; actual usage distinguishes uncached input, cache writes, cache reads, and output. A missing cache hit is reported as such. The host owns the single deadline and bounded retry policy, and never retries after a model chunk has been delivered to the host. Native protocol metadata alone does not prevent retrying a transient transport failure.
 
 Anthropic caching uses those explicit `cache_control` breakpoints; the Messages API has no equivalent Threadsmith session-routing header or `prompt_cache_key` field. Threadsmith therefore does not add Codex/OpenAI cache-affinity metadata to Anthropic requests.
 
@@ -322,8 +322,69 @@ Every model has independent `supportedInputContentTypes` and `supportedOutputCon
 }
 ```
 
-All three compiled endpoints currently require output `Text`: no verified native image-generation response is implemented. Requesting Image output fails configuration validation. The host's generated-image artifact/export contract is tested with a deterministic provider; it does not imply live generation support.
+All compiled endpoints currently require output `Text`: no verified native image-generation response is implemented. Requesting Image output fails configuration validation. The host's generated-image artifact/export contract is tested with a deterministic provider; it does not imply live generation support.
 
 Images use native high-detail Chat Completions image URLs containing transient data, Codex Responses `input_image` content (including correlated function outputs), and Anthropic base64 image blocks, including nested `tool_result` blocks. Chat endpoints that lack image-bearing tool results receive correlated textual tool results followed by an adjacent user-role evidence message. The host labels this as tool evidence. PNG/JPEG bytes are resolved only at provider submission; persisted messages, identities and logs contain descriptors. Image contents cannot be redacted as text, so the selected profile must permit sensitive input. Capability checks repeat on every prepared request, including continuations and model changes; unsupported images cause an actionable failure.
 
 Admission uses a deliberately conservative allowance: the greater of `2833 + 5667 × ceil(width/512) × ceil(height/512)` and `2048 + 3 × ceil(width/32) × ceil(height/32)`. This covers the documented 4o-mini high-detail tile schedule without assuming provider downscaling and patch-based accounting; it can reject large images earlier than an endpoint would. Base64 is transport data, never natural-language token input. The host separately caps encoded bytes/count; metadata/digests, dimensions, media type and ordering participate in request identity. Actual provider usage remains authoritative for reporting. Official protocol evidence and local validation limits are recorded in plan 120.
+
+## OpenRouter (manual catalog)
+
+The compiled `openrouter` provider uses `https://openrouter.ai/api/v1/chat/completions` through the shared chat-completions lifecycle. It requires a `secrets:` reference. It never discovers models, selects a default automatically, or executes upstream tools. Add a provider to the user catalog and select it with `/models`; delegated role assignments use the existing trusted catalog.
+
+This is a configuration template, not a verified remote model recommendation. Replace the slug, upstream routing slug, returned provider name, limits, capabilities and prices with values verified for the intended endpoint. Do not enable features based only on a vendor prefix.
+
+```json
+{
+  "type": "openrouter",
+  "id": "router",
+  "name": "OpenRouter",
+  "secretKeyReference": "secrets:models:openrouter",
+  "models": [{
+    "type": "openrouter",
+    "id": "c09555b1-7a77-47be-90f3-020587705959",
+    "name": "Reviewed upstream model",
+    "modelId": "vendor/exact-model",
+    "contextWindow": 128000,
+    "maximumOutputTokens": 8192,
+    "requestOutputTokenReserve": 4096,
+    "capabilities": { "streaming": true, "toolCalls": true, "structuredOutput": false },
+    "supportedInputContentTypes": "text",
+    "supportedOutputContentTypes": "text",
+    "cost": { "inputPerMillionTokens": 3, "outputPerMillionTokens": 15 },
+    "sensitiveDataPolicy": "prohibited",
+    "intendedWorkloadClasses": [ "general", "planning", "review" ],
+    "reasoningControl": "selectable",
+    "supportedReasoningLevels": [ "none", "low", "high" ],
+    "defaultReasoningLevel": "low",
+    "effortMap": { "low": "low", "high": "high" },
+    "supportsReasoningReplay": true,
+    "upstream": "reviewed-routing-slug",
+    "expectedProviderName": "Reviewed Provider Name",
+    "automaticPrefixCaching": false,
+    "strictToolArguments": false,
+    "jsonSchemaResponses": false,
+    "parallelToolCalls": false,
+    "seedSupported": false,
+    "timeoutSeconds": 120,
+    "maximumStreamedBytes": 16777216,
+    "maximumToolCalls": 32,
+    "retryMaxAttempts": 3,
+    "retryDelayMilliseconds": 250
+  }]
+}
+```
+
+Store the token separately under `models.openrouter` in the existing user secret store. Never put the token in the provider catalog, command history, or model logs.
+
+`reasoningControl` is `unsupported`, `alwaysOn`, or `selectable`. Unsupported and always-on profiles advertise only the host placeholder `none`; this placeholder does not disable intrinsic reasoning. Selectable profiles must map every enabled level using either `effortMap` or `reasoningBudgets`. A budget must be smaller than the actual output ceiling. Include `none` only when the upstream supports disabling reasoning. Display suppression remains independent: hidden display preserves private continuation data.
+
+Replay-capable profiles require one `upstream` and an `expectedProviderName`. Routing sends that upstream in `only` and `order`, disables fallback, and requires parameter support. The routing slug may include an endpoint suffix; the returned provider display name usually does not. Name validation cannot independently prove a region when the response omits it. Routing and reasoning metadata are bound into private replay authority and cannot be changed by repository overrides of inherited models. Dynamic routers and model variants are excluded.
+
+Tool-call batches use the shared host admission and execution pipeline for every OpenRouter upstream. `parallelToolCalls` declares support for the optional `parallel_tool_calls` request parameter; it does not control whether returned batches are accepted. Leave it `false` when an endpoint supports batches but does not advertise that parameter, so `require_parameters` does not exclude the route. Set it `true` only when the endpoint accepts the parameter. An explicit host request disallowing multiple calls still rejects a batch before any of its tools execute. The existing tool scheduler decides which admitted calls can execute concurrently.
+
+Set `minimumCacheableTokens` only when the selected endpoint accepts an ephemeral content cache marker. The adapter advertises one explicit tail breakpoint, uses the host's stable-prefix admission, and moves that marker with the conversation. Automatic caching is separately declared. Cache misses preserve the full request. OpenRouter context admission and display use the shared token estimate for messages, tools, image dimensions and retained output, plus a bounded framing allowance and any response-schema tokens. Serialized UTF-8 transport bytes are used for request identity, not as a token count. These remain estimates and can differ from provider-reported usage. The existing host cache affinity is sent as OpenRouter `session_id`. No Codex headers or `prompt_cache_key` are sent. Cache read/write counters remain unavailable when omitted. Configured prices provide conservative admission and estimates; `usage.cost` supplies a separate reported charge and provenance. Budgets use the greater of the estimate and reported charge.
+
+Structured reasoning preserves ordered blocks and detached unknown properties, including signatures and encrypted data, only in the active loop's bounded private replay state. Only text/summary fields can be displayed. Completed tools are held until terminal, trailer, and invocation validation succeeds. Switching, history rewriting, cancellation and completion follow existing replay invalidation. Interrupted signed exchanges cannot be recovered by repeating tool effects.
+
+Remote compatibility is not established by fake HTTP fixtures. Before relying on a profile, run bounded plain chat, effort/off, hidden-display, two-tool-round, follow-up, image (if declared), cancellation, and warm/cold cache checks. Record exact model, routing slug, returned provider name, usage and charge observations without credentials or private reasoning. See the [reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), [streaming](https://openrouter.ai/docs/api_reference/streaming), [routing](https://openrouter.ai/docs/guides/routing/provider-selection), [caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching), and [usage](https://openrouter.ai/docs/cookbook/administration/usage-accounting) contracts.

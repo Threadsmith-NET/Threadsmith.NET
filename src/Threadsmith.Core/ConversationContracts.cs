@@ -92,6 +92,9 @@ public static class ConversationSchemaVersions
 /// <summary>One sanitized visible conversation message with stable provenance.</summary>
 public sealed record ConversationMessage
 {
+    /// <summary>Original receipt identity, retained unchanged when historical messages are cloned.</summary>
+    public ConversationReceiptProvenance? Receipt { get; init; }
+
     /// <summary>Ordered immutable image references retained with this message, without encoded bytes.</summary>
     public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
 
@@ -290,3 +293,6 @@ public sealed record GetContextInspectionCommand(RunId RunId, SessionId? Session
 
 /// <summary>Requests compaction at the next safe host-owned turn boundary.</summary>
 public sealed record RequestConversationCompactionCommand(SessionId SessionId) : ICommand<bool>;
+
+/// <summary>Versioned original receipt association; clone archive identities may differ.</summary>
+public sealed record ConversationReceiptProvenance(int Version, SessionId OriginSessionId, RunId OriginRunId, ConversationMessageId OriginMessageId);

@@ -75,6 +75,96 @@ public sealed partial class SourceEditApplicationTests
         Assert.Contains("Completed", nextInput, StringComparison.Ordinal);
     }
 
+    /// <summary>Advisory outcome evidence remains valid redacted history for subsequent requests.</summary>
+    [Theory]
+    [InlineData("BuildOnly")]
+    [InlineData("EditBuild")]
+    [InlineData("TestOnly")]
+    [InlineData("EditTest")]
+    [InlineData("BuildEdit")]
+    [InlineData("Timeout")]
+    [InlineData("AnalyzerTimeout")]
+    [InlineData("EvidenceFailure")]
+    public async Task ConversationArchivesTypedValidationWithOptionalEdit(string scenario)
+    {
+        var edit = scenario is "EditBuild" or "EditTest" or "BuildEdit" or "EvidenceFailure";
+        var targeted = scenario is "TestOnly" or "EditTest";
+        var before = scenario == "BuildEdit";
+        var timeout = scenario is "Timeout" or "AnalyzerTimeout";
+        var analyzer = scenario == "AnalyzerTimeout";
+        var evidenceFailure = scenario == "EvidenceFailure";
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        const string secret = "ThreadsmithPrivatePassword42";
+        var sanitizer = new SecretOutputSanitizer();
+        var connection = $"Data Source={Path.Combine(fixture.Repository, "history.db")};Pooling=False";
+        await new MigrationRunner(connection, DefaultMigrations.All).RunAsync(ct);
+        var artifacts = new ArtifactStore(connection, Path.Combine(fixture.Repository, "history-artifacts"), sanitizer);
+        await artifacts.InitializeAsync(ct);
+        var history = new SqliteConversationStore(connection, artifacts, sanitizer);
+        var edits = fixture.CreateApplication(effects: evidenceFailure ? new FailingReceiptStore(fixture.Store) : null, analyzer: new AdvisoryAnalyzer(["Password=" + secret]));
+        var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance), new DotNetBuildTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance), new DotNetAnalyzerTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance), new TargetedTestTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance)]);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var evidence = new EvidenceStore(fixture.Events, sanitizer);
+        var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance, conversationStore: history);
+        var provider = new CompletionProvider(edit ? 1 : 0) { ValidateAfterEdits = true, Targeted = targeted, Analyzer = analyzer, ValidateBeforeEdits = before };
+        var sessions = new SessionApplication(
+            fixture.Events,
+            provider,
+            UnboundedBudget.Instance,
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            pipeline,
+            (_, _) => Task.FromResult(new ToolInvocationContext
+            {
+                RepositoryPath = fixture.Repository,
+                WorkspaceId = fixture.WorkspaceId,
+                TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                RequestedBy = "model",
+                AllowedExecutables = ["dotnet"],
+            }),
+            contextAssembler: assembler,
+            evidenceStore: evidence,
+            toolRegistry: registry,
+            conversationStore: history,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance,
+            sourceEdits: edit ? edits : null);
+        sessions.RegisterRestoredSession(fixture.SessionId);
+        var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Apply the edit."), ct);
+        Assert.Equal(!evidenceFailure, await sessions.HandleAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(edit ? "class Changed { }" : "class Example { }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
+        var reopened = new SqliteConversationStore(connection, artifacts, sanitizer);
+        var snapshot = await reopened.GetSnapshotAsync(fixture.SessionId, cancellationToken: ct);
+        var receipt = Assert.Single(snapshot.Messages, message => message.Content?.Contains("Historical host execution outcome", StringComparison.Ordinal) == true);
+        var content = Assert.IsType<string>(receipt.Content);
+        Assert.DoesNotContain(secret, content, StringComparison.Ordinal);
+        using var json = JsonDocument.Parse(content[content.IndexOf('{')..(content.LastIndexOf('}') + 1)]);
+        Assert.Equal(evidenceFailure ? "Failed" : "Completed", json.RootElement.GetProperty("Status").GetString());
+        Assert.True(receipt.EstimatedTokens <= 512);
+        Assert.NotNull(receipt.Receipt);
+        var check = Assert.Single(json.RootElement.GetProperty("Checks").EnumerateArray());
+        Assert.Equal(timeout ? (analyzer ? "dotnet_analyzers:TimedOut" : "dotnet_build:TimedOut") : targeted ? "TargetedTest:Passed" : "Build:Succeeded", check.GetProperty("Result").GetString());
+        Assert.Equal("Exploratory", check.GetProperty("Authority").GetString());
+        Assert.Equal(before ? "EarlierBaseline" : "Unknown", check.GetProperty("Applicability").GetString());
+        Assert.Equal("Example.csproj", check.GetProperty("Target").GetString());
+        Assert.Equal(edit && !evidenceFailure ? 1 : 0, json.RootElement.GetProperty("ChangedFiles").GetArrayLength());
+        var duplicate = await reopened.ArchiveMessageAsync(receipt with { Id = ConversationMessageId.New(), Content = "retry", OccurredAt = DateTimeOffset.MaxValue, Sensitivity = ConversationSensitivity.None }, ct);
+        Assert.Equal(receipt.Receipt, duplicate.Receipt);
+        Assert.Equal(receipt.Content, duplicate.Content);
+        Assert.Equal(receipt.Sensitivity, duplicate.Sensitivity);
+        Assert.Equal(receipt.OccurredAt, duplicate.OccurredAt);
+        Assert.Equal(receipt.Sequence, duplicate.Sequence);
+        Assert.Equal(snapshot.Messages.Count, (await reopened.GetSnapshotAsync(fixture.SessionId, cancellationToken: ct)).Messages.Count);
+        var next = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "What happened to the edit?"), ct);
+        await sessions.HandleAsync(new WaitForRunCommand(next), ct);
+        var nextInput = JsonSerializer.Serialize(provider.Requests[^1].Messages);
+        Assert.DoesNotContain(secret, nextInput, StringComparison.Ordinal);
+        Assert.Contains("Historical host execution outcome", nextInput, StringComparison.Ordinal);
+        Assert.Contains(check.GetProperty("Result").GetString()!, nextInput, StringComparison.Ordinal);
+        Assert.Contains(evidenceFailure ? "Failed" : "Completed", nextInput, StringComparison.Ordinal);
+    }
+
     /// <summary>An unresolved disk effect cannot become a successful ordinary conversation.</summary>
     [Theory]
     [InlineData(false)]
@@ -313,6 +403,14 @@ public sealed partial class SourceEditApplicationTests
             _editCount = editCount;
         }
 
+        public bool ValidateAfterEdits { get; init; }
+
+        public bool Targeted { get; init; }
+
+        public bool Analyzer { get; init; }
+
+        public bool ValidateBeforeEdits { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public Action<ModelStreamRequest>? RequestObserved { get; init; }
@@ -324,7 +422,14 @@ public sealed partial class SourceEditApplicationTests
             RequestObserved?.Invoke(request);
             await Task.Yield();
             _round++;
-            if (_round > _editCount)
+            if (ValidateAfterEdits && _round == (ValidateBeforeEdits ? 1 : _editCount + 1))
+            {
+                yield return new() { Output = new ToolRequestModelOutput(Targeted ? "test_run_targeted" : Analyzer ? "dotnet_analyzers" : "dotnet_build", Targeted ? "{\"testId\":\"selected-test\"}" : "{\"targetPath\":\"Example.csproj\"}"), FinishReason = ModelFinishReason.ToolCalls };
+                yield break;
+            }
+
+            var editRound = _round - (ValidateBeforeEdits ? 1 : 0);
+            if (editRound > _editCount)
             {
                 yield return new() { Text = "Done.", FinishReason = ModelFinishReason.Stop };
                 yield break;
@@ -333,9 +438,68 @@ public sealed partial class SourceEditApplicationTests
             var arguments = JsonSerializer.Serialize(new
             {
                 rationale = "Apply requested edit.",
-                mutations = new[] { new { type = "ReplaceText", relativePath = "Example.cs", expectedText = _round == 1 ? "Example" : "Changed", replacementText = _round == 1 ? "Changed" : "Final" } },
+                mutations = new[] { new { type = "ReplaceText", relativePath = "Example.cs", expectedText = editRound == 1 ? "Example" : "Changed", replacementText = editRound == 1 ? "Changed" : "Final" } },
             });
             yield return new() { Output = new ToolRequestModelOutput("edit_source", arguments), FinishReason = ModelFinishReason.ToolCalls };
         }
+    }
+
+    private sealed class ReceiptValidationService : INativeValidationToolService
+    {
+        public bool Timeout { get; init; }
+
+        public IReadOnlyList<string> ConfiguredNetworkHosts => [];
+
+        public IReadOnlyList<string> ConfiguredSecretReferences => [];
+
+        public Task<ValidationToolResult> BuildAsync(string repositoryPath, RunId runId, BuildToolRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Timeout)
+            {
+                throw new OperationCanceledException();
+            }
+
+            return Task.FromResult(new ValidationToolResult("build-1", ValidationInvocationKind.Build, ValidationAuthority.Exploratory, true, request.TargetPath, ["build", request.TargetPath], [], "build complete", 0, TimeSpan.Zero, false, false));
+        }
+
+        public Task<ValidationToolResult> AnalyzeAsync(string repositoryPath, RunId runId, AnalyzerToolRequest request, CancellationToken cancellationToken = default) => throw new OperationCanceledException();
+
+        public Task<ValidationToolResult> CheckFormatAsync(string repositoryPath, RunId runId, FormatCheckRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<NuGetDependencyHealthResult> InspectPackagesAsync(string repositoryPath, RunId runId, NuGetDependencyHealthRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<DiagnosticQueryResult> QueryDiagnosticsAsync(string repositoryPath, DiagnosticQuery query, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<TestDiscoveryResult> DiscoverTestsAsync(string repositoryPath, RunId runId, TestDiscoveryRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public string ResolveTestProjectPath(string repositoryPath, DiscoveredTestId testId) => "Example.csproj";
+
+        public Task<TargetedTestResult> RunTargetedTestAsync(string repositoryPath, RunId runId, TargetedTestRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var test = new DiscoveredTest(request.TestId, "Example.Test", "Example.csproj", null, "Example", "Test", new Dictionary<string, string>());
+            return Task.FromResult(new TargetedTestResult(test, "FullyQualifiedName=Example.Test", ValidationAuthority.Exploratory, TestOutcome.Passed, 1, 0, 0, string.Empty, TimeSpan.Zero, false, false, []));
+        }
+    }
+
+    private sealed class FailingReceiptStore : IMutationEffectStore
+    {
+        private readonly IMutationEffectStore _store;
+
+        public FailingReceiptStore(IMutationEffectStore store)
+        {
+            _store = store;
+        }
+
+        public Task<bool> TryBeginEffectAsync(MutationEffectRecord record, CancellationToken cancellationToken = default) => _store.TryBeginEffectAsync(record, cancellationToken);
+
+        public Task<MutationEffectRecord?> GetEffectAsync(Guid effectId, CancellationToken cancellationToken = default) => _store.GetEffectAsync(effectId, cancellationToken);
+
+        public Task CompleteEffectAsync(Guid effectId, SourceEditReceipt receipt, CancellationToken cancellationToken = default) => _store.CompleteEffectAsync(effectId, receipt, cancellationToken);
+
+        public Task<IReadOnlyList<MutationEffectRecord>> GetUnresolvedEffectsAsync(string repositoryIdentity, CancellationToken cancellationToken = default) => _store.GetUnresolvedEffectsAsync(repositoryIdentity, cancellationToken);
+
+        public IAsyncEnumerable<MutationEffectRecord> ReadRunEffectsAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default) => throw new IOException("Cumulative evidence unavailable");
     }
 }

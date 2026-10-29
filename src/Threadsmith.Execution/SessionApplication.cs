@@ -677,7 +677,7 @@ public sealed partial class SessionApplication :
 
             // Once the terminal state commits, publish its outcome and release waiters even
             // if cancellation arrives while subscribers are processing that final publication.
-            var editSucceeded = await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Completed, registration.Cancellation.Token);
+            var editSucceeded = await RecordConversationOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Completed, registration.Cancellation.Token);
             await registration.Machine.TransitionAsync(
                 editSucceeded ? RunPhase.Completion : RunPhase.Failed,
                 "scripted activity completed",
@@ -694,7 +694,7 @@ public sealed partial class SessionApplication :
                 return;
             }
 
-            await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Cancelled);
+            await RecordConversationOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Cancelled);
             await registration.Machine.TransitionAsync(
                 RunPhase.Cancelled,
                 "cancellation requested",
@@ -714,7 +714,7 @@ public sealed partial class SessionApplication :
                 ModelFailureClassifier.Classify(exception),
                 sanitizedMessage);
             var classification = ModelFailureClassifier.Classify(exception);
-            await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Failed);
+            await RecordConversationOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Failed);
             await registration.Machine.TransitionAsync(
                 RunPhase.Failed,
                 "run failed",
@@ -777,45 +777,14 @@ public sealed partial class SessionApplication :
         }
     }
 
-    private async Task<bool> RecordDirectEditOutcomeAsync(SessionId sessionId, RunId runId, ExecutionCheckpointPhase status, CancellationToken cancellationToken = default)
+    private async Task<bool> RecordConversationOutcomeAsync(SessionId sessionId, RunId runId, ExecutionCheckpointPhase status, CancellationToken cancellationToken = default)
     {
         using var promptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
-        if (_sourceEdits is null)
-        {
-            return true;
-        }
-
+        ExecutionOutcomeProjection? outcome = null;
+        var editEvidenceUnavailable = false;
         try
         {
-            var outcome = await _sourceEdits.RecordRunOutcomeAsync(sessionId, runId, status, cancellationToken);
-            if (outcome is not null && _conversationStore is not null)
-            {
-                try
-                {
-                    var outcomeJson = JsonSerializer.Serialize(new
-                    {
-                        RunId = runId.Value,
-                        Status = outcome.Status.ToString(),
-                        ChangedFiles = outcome.ChangedFiles.Take(32),
-                        OmittedFileCount = Math.Max(0, outcome.ChangedFiles.Count - 32),
-                        ValidationStatus = outcome.Validation?.Gate.Status.ToString(),
-                        ValidationReasons = outcome.Validation?.Gate.Reasons.Take(8),
-                        outcome.FinalDiff,
-                        ResidualRisks = outcome.ResidualRisks.Take(8),
-                    });
-                    var content = _prompts.Render(PromptFileNames.ContextExecutionOutcome, new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["OutcomeJson"] = JsonOutputSanitizer.Sanitize(outcomeJson, _sanitizer),
-                    });
-                    await ArchiveVisibleMessageAsync(sessionId, runId, ConversationRole.Assistant, content, CancellationToken.None);
-                }
-                catch (Exception exception)
-                {
-                    _logger.LogWarning(exception, "The authoritative direct-edit outcome for run {RunId} could not be archived", runId.Value);
-                }
-            }
-
-            return outcome is null || outcome.Status == ExecutionCheckpointPhase.Completed;
+            outcome = _sourceEdits is null ? null : await _sourceEdits.RecordRunOutcomeAsync(sessionId, runId, status, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -823,11 +792,30 @@ public sealed partial class SessionApplication :
         }
         catch (Exception exception)
         {
-            // Durable per-edit receipts remain authoritative even when optional cumulative evidence fails.
+            editEvidenceUnavailable = true;
             _logger.LogWarning(exception, "Cumulative direct-edit evidence is unavailable for run {RunId}", runId.Value);
             await _events.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "SourceEditOutcomeUnavailable", "Cumulative edit evidence is unavailable; individual durable edit receipts remain authoritative."), CancellationToken.None);
-            return false;
         }
+
+        var checks = _runs.TryGetValue(runId, out var registration) ? registration.ReceiptChecks : new ConversationReceiptChecks();
+        if ((outcome is not null || checks.HasObservations || editEvidenceUnavailable) && _conversationStore is not null)
+        {
+            try
+            {
+                var messageId = new ConversationMessageId(new Guid(SHA256.HashData(
+                    Encoding.UTF8.GetBytes($"receipt-v1:{sessionId.Value}:{runId.Value}"))[..16]));
+                var provenance = new ConversationReceiptProvenance(1, sessionId, runId, messageId);
+                var content = ConversationReceiptRenderer.Render(
+                    provenance, status == ExecutionCheckpointPhase.Completed && (editEvidenceUnavailable || outcome is { Status: not ExecutionCheckpointPhase.Completed }) ? ExecutionCheckpointPhase.Failed : status, outcome, checks, _prompts, _sanitizer, _sourceEdits?.GetReceiptBaseline(registration?.ReceiptWorkspaceId), editEvidenceUnavailable);
+                await ArchiveVisibleMessageAsync(sessionId, runId, ConversationRole.Assistant, content, CancellationToken.None, receipt: provenance);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(exception, "The conversation receipt for run {RunId} could not be archived", runId.Value);
+            }
+        }
+
+        return !editEvidenceUnavailable && (outcome is null || outcome.Status == ExecutionCheckpointPhase.Completed);
     }
 
     private static BudgetStatus AccrueUnchargedWallClock(
@@ -1052,7 +1040,8 @@ public sealed partial class SessionApplication :
         ConversationRole role,
         string content,
         CancellationToken cancellationToken,
-        IReadOnlyList<ImageArtifact>? images = null)
+        IReadOnlyList<ImageArtifact>? images = null,
+        ConversationReceiptProvenance? receipt = null)
     {
         if (_conversationStore is null)
         {
@@ -1065,7 +1054,8 @@ public sealed partial class SessionApplication :
         return await _conversationStore.ArchiveMessageAsync(
             new ConversationMessage
             {
-                Id = ConversationMessageId.New(),
+                Id = receipt?.OriginMessageId ?? ConversationMessageId.New(),
+                Receipt = receipt,
                 SessionId = sessionId,
                 RunId = runId,
                 Sequence = 0,
@@ -1126,6 +1116,10 @@ public sealed partial class SessionApplication :
             Machine = machine;
             Budget = budget;
         }
+
+        public WorkspaceId? ReceiptWorkspaceId { get; set; }
+
+        public ConversationReceiptChecks ReceiptChecks { get; } = new();
 
         public IBudget Budget { get; }
 

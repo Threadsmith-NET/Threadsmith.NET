@@ -31,6 +31,11 @@ public sealed class AnthropicRequestMapperTests
             Messages = tool ? [TestAnthropic.Message(ModelMessageRole.User, "question", "inspect"), TestAnthropic.Message(ModelMessageRole.Assistant, "call", "{}", "call-image", "lookup"), message] : [message],
             ResolveImageAsync = (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(bytes),
         };
+        var prepared = AnthropicRequestPreparer.Prepare(request, profile, TestAnthropic.Compatibility(), "provider");
+        var withoutImages = request with { Messages = request.Messages.Select(item => item with { Content = item.Content.Where(part => part.Image is null).ToArray() }).ToArray() };
+        var textOnly = AnthropicRequestPreparer.Prepare(withoutImages, profile, TestAnthropic.Compatibility(), "provider");
+        Assert.Equal(ModelImages.EstimateTokens(image), prepared.WireEstimate.WireInputTokens - textOnly.WireEstimate.WireInputTokens);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
         await TestAnthropic.CollectAsync(provider, request);
         var body = Assert.Single(handler.Requests);
         Assert.Contains(Convert.ToBase64String(bytes), body.GetRawText(), StringComparison.Ordinal);
@@ -260,10 +265,10 @@ public sealed class AnthropicRequestMapperTests
         Assert.Equal(4, CountCacheControls(body));
         Assert.NotNull(body["messages"]?.AsArray().Last()?["content"]?.AsArray().Last()?["cache_control"]);
         Assert.Equal(AnthropicRequestMapper.Digest(body), prepared.WireDigest);
-        Assert.True(prepared.WireEstimate.WireInputTokens >= JsonSerializer.SerializeToUtf8Bytes(body).Length);
+        Assert.True(prepared.WireEstimate.WireInputTokens < JsonSerializer.SerializeToUtf8Bytes(body).Length);
         Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
         Assert.Contains(prepared.WireEstimate.Components, item => item.Label == request.Tools[0].Name && item.Category == "Tools");
-        Assert.Equal(4, prepared.WireEstimate.StablePrefixComponentCount);
+        Assert.Equal(5, prepared.WireEstimate.StablePrefixComponentCount);
         Assert.Equal(
             ["System: host-policy", "Developer: repository-instructions", request.Tools[0].Name, "Developer: conversation-policy"],
             [.. prepared.WireEstimate.Components
@@ -274,9 +279,9 @@ public sealed class AnthropicRequestMapperTests
         Assert.True(JsonNode.DeepEquals(body, uncached));
     }
 
-    /// <summary>Escaped per-source byte sizes reconcile without modifying the native body or digest.</summary>
+    /// <summary>Per-source token estimates reconcile without modifying the native body or digest.</summary>
     [Fact]
-    public void PreparationAccountsEscapedSourceBytesWithoutChangingNativePayload()
+    public void PreparationAccountsSourceTokensWithoutChangingNativePayload()
     {
         const string first = "<agents>中文\"\\</agents>";
         const string second = "<append>second & \"text\"</append>";
@@ -292,9 +297,46 @@ public sealed class AnthropicRequestMapperTests
         Assert.Equal(original.WireEstimate.WireInputTokens, prepared.WireEstimate.WireInputTokens);
         var instructions = prepared.WireEstimate.Components.Single(item => item.Label == "Developer: repository-instructions");
         Assert.Equal(instructions.Tokens, instructions.Children.Sum(item => item.Tokens));
-        Assert.Equal(JsonEncodedText.Encode(first).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "AGENTS.md").Tokens);
-        Assert.Equal(JsonEncodedText.Encode(second).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "append.md").Tokens);
+        Assert.Equal((first.Length + 3) / 4, instructions.Children.Single(item => item.Label == "AGENTS.md").Tokens);
+        Assert.Equal(((first.Length + second.Length + 3) / 4) - ((first.Length + 3) / 4), instructions.Children.Single(item => item.Label == "append.md").Tokens);
         Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
+    }
+
+    [Theory]
+    [InlineData("plain text ")]
+    [InlineData("<text>\"quoted\"\\</text>")]
+    [InlineData("中文日本語 ")]
+    public void Prepare_UsesTokenUnitsWithoutAccumulatingAllowances(string fragment)
+    {
+        var text = string.Concat(Enumerable.Repeat(fragment, 1000));
+        var request = TestAnthropic.Request() with { Messages = [TestAnthropic.Message(ModelMessageRole.User, "current-user", text)] };
+        var prepared = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+        var repeated = AnthropicRequestPreparer.Prepare(request with { WireEstimate = prepared.WireEstimate }, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+
+        Assert.InRange(prepared.WireEstimate.WireInputTokens, text.Length / 4, (text.Length / 4) + 300);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
+        Assert.Equal((text.Length + 3) / 4, prepared.WireEstimate.SectionTokens["current-user"]);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, repeated.WireEstimate.WireInputTokens);
+        Assert.Equal(prepared.WireDigest, repeated.WireDigest);
+    }
+
+    [Fact]
+    public void Prepare_IncludesProjectedResponseSchemaAsTokens()
+    {
+        var request = TestAnthropic.Request() with
+        {
+            ResponseFormat = new ModelResponseFormat { SchemaId = "fixture", JsonSchema = TestAnthropic.Tool().ArgumentsJsonSchema },
+        };
+        var schema = JsonNode.Parse(request.ResponseFormat.JsonSchema)!.AsObject();
+        schema["description"] = new string('a', 5000);
+        var larger = request with { ResponseFormat = request.ResponseFormat with { JsonSchema = schema.ToJsonString() } };
+        var small = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+        var large = AnthropicRequestPreparer.Prepare(larger, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+
+        Assert.InRange(large.WireEstimate.WireInputTokens - small.WireEstimate.WireInputTokens, 1250, 1300);
+        Assert.Equal(large.WireEstimate.WireInputTokens, large.WireEstimate.Components.Sum(item => item.Tokens));
+        Assert.Contains(large.WireEstimate.Components, item => item.Category == "Output contract" && item.Tokens >= 1250);
+        Assert.NotEqual(small.WireDigest, large.WireDigest);
     }
 
     /// <summary>Exact thinking/text/tool replay remains in chronological position despite sanitized host text and a display toggle.</summary>
@@ -324,6 +366,12 @@ public sealed class AnthropicRequestMapperTests
 
         var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), request);
         var continuation = BindContinuation(request, chunks);
+        var prepared = AnthropicRequestPreparer.Prepare(continuation, TestAnthropic.Profile(true), TestAnthropic.Compatibility(true), "instance");
+        var repeated = AnthropicRequestPreparer.Prepare(continuation with { WireEstimate = prepared.WireEstimate }, TestAnthropic.Profile(true), TestAnthropic.Compatibility(true), "instance");
+        Assert.Equal(25, prepared.WireEstimate.Components.Single(item => item.Id == "retained-allowance").Tokens);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, repeated.WireEstimate.WireInputTokens);
+
         await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), continuation with { IncludeReasoningText = false });
         var second = handler.Requests[1];
         var messages = second.GetProperty("messages");

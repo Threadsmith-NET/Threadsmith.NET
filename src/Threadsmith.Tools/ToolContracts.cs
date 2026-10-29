@@ -414,6 +414,14 @@ public sealed record ToolInvocationContext
 
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
+
+    /// <summary>Bounded parent-run validation observations; never inherited as child verification.</summary>
+    [JsonIgnore]
+    internal ConversationReceiptChecks? ReceiptChecks { get; init; }
+
+    /// <summary>Cheap live baseline identity; does not prove all inputs.</summary>
+    [JsonIgnore]
+    internal Func<WorkspaceBaseline?>? ReceiptBaseline { get; init; }
 }
 
 /// <summary>One historical evidence body explicitly referenced by the current model request.</summary>
@@ -634,6 +642,10 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Whether tool policy requires review of the exact staged diff.</summary>
     internal bool RequireExactDiffReview { get; init; }
+
+    /// <summary>Original pipeline cancellation, distinct from its linked execution timeout.</summary>
+    [JsonIgnore]
+    internal CancellationToken? CallerCancellation { get; init; }
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>

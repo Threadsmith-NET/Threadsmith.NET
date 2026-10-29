@@ -340,8 +340,9 @@ public sealed partial class SessionApplication
         }
 
         var invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
+        registration.ReceiptWorkspaceId = invocationContext?.WorkspaceId;
         registration.RepositoryIdentity = invocationContext?.RepositoryPath;
-        return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions };
+        return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions, ReceiptChecks = registration.ReceiptChecks, ReceiptBaseline = () => _sourceEdits?.GetReceiptBaseline(invocationContext.WorkspaceId) };
     }
 
     private async Task RefreshMemoryContextAsync(

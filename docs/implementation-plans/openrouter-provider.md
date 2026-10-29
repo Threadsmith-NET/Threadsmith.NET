@@ -206,3 +206,20 @@ Validation environment: Windows x64, .NET SDK `10.0.403`, branch `feature/openro
 The solution-wide informational analyzer scan with `--severity info --include $changedCs` also examined unchanged lines in touched files and reported existing suggestions there (including CA1869, CA2219, CA1873, IDE0032 and Roslynator suggestions). New suggestions were fixed; the focused provider scan above is clean. This is not a claim that the entire solution passes the optional informational scan.
 
 Skipped tests include environment-dependent Windows symbolic-link scenarios and explicitly gated benchmarks/native-model/live scenarios. Fixtures establish deterministic host integration, not remote protocol compatibility or cache hits. Representative live checks, interactive manual checks and Linux/macOS execution remain outstanding; M35 stays active. No GitHub Actions run was dispatched and no commit, push or PR was made. The original inbox draft is preserved.
+
+### Context estimate correction (2026-10-29)
+
+Live log inspection found that OpenRouter preparation replaced the shared token estimate with serialized UTF-8 byte length. The mismatch existed by 11:06 Eastern (61,086 estimated versus 10,808 reported input tokens), before receipt enrichment. In the 16:02 run, this caused compaction when the byte-derived estimate reached 195,963 against a 193,428-token threshold. Cached input was already included in reported usage, so cache accounting did not explain the discrepancy.
+
+Preparation now retains the established message/tool/image/retained-output token estimate, adds framing and response-schema token allowances, and retains exact wire hashing and replay validation. UI attribution and compaction consume that same corrected estimate. No tokenizer, competing accounting store or compaction path is introduced. Focused cases cover plain/escaped/Unicode input, response schema, image dimensions, repeated preparation and component reconciliation. This is an approximate estimate, not a promise of provider-tokenizer equality. An independent adversarial review found no concrete defects in the correction. The running installed application was not replaced.
+
+Windows correction validation (logs: ignored `artifacts/openrouter-token-*.log`):
+
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` — passed, zero warnings/errors. Restore had passed earlier in the same session; package references are unchanged.
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-class '*OpenRouterProviderTests'` — 28 passed.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` — 4,749 passed, zero failed, 64 skipped (4,813 total).
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include src/Threadsmith.Models.OpenAiCompatible/OpenRouter/OpenRouterProviderRegistration.cs tests/Threadsmith.ModelTooling.Tests/OpenRouterProviderTests.cs` — passed.
+- `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include src/Threadsmith.Models.OpenAiCompatible/OpenRouter/OpenRouterProviderRegistration.cs tests/Threadsmith.ModelTooling.Tests/OpenRouterProviderTests.cs` — passed.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` and `git diff --check` — passed.
+
+The live logs establish the reported defect; the corrected binary has not been exercised against the remote provider. Linux/macOS remain unverified. No staging, commit, push or deployment was performed.

@@ -188,28 +188,13 @@ public sealed class OpenRouterProviderRegistration : IModelProviderRegistration,
         var bytes = OpenRouterModelProvider.PrepareWire(context.Request with { CachePlan = plan, CacheCapabilities = capabilities }, context.Profile, model);
         try
         {
-            var imageTokens = context.Request.Messages.SelectMany(message => message.Content)
-                .Where(part => part.IsModelVisible && part.Image is not null)
-                .Sum(part => part.Image is { } image ? ModelImages.EstimateTokens(image) : 0);
-
-            // Only add hidden-output allowance beyond the replay bytes already counted in the wire.
-            long retained = 0;
-            foreach (var envelope in context.Request.TransientState?.Responses ?? [])
-            {
-                var payload = envelope.CopyProtocolPayload();
-                try
-                {
-                    using var document = JsonDocument.Parse(payload);
-                    var serializedResponseBytes = System.Text.Encoding.UTF8.GetByteCount(document.RootElement.GetProperty("response").GetRawText());
-                    retained = checked(retained + Math.Max(0, envelope.RetainedOutputTokens - serializedResponseBytes));
-                }
-                finally
-                {
-                    CryptographicOperations.ZeroMemory(payload);
-                }
-            }
-
-            var total = Math.Min(int.MaxValue, bytes.LongLength + imageTokens + retained + 256);
+            // The shared estimator already accounts for messages, tools, image dimensions and
+            // retained output in token units. Serialized transport bytes are only a digest input.
+            var schemaTokens = context.Request is { ResponseFormat: { } format, Tools.Count: 0 }
+                ? ((long)format.JsonSchema.Length + format.SchemaId.Length + 3) / 4 : 0;
+            var providerAllowance = schemaTokens + 256;
+            var estimatedTotal = prepared.WireEstimate.WireInputTokens + providerAllowance;
+            var total = Math.Min(int.MaxValue, estimatedTotal);
             return prepared with
             {
                 WireDigest = Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
@@ -223,9 +208,10 @@ public sealed class OpenRouterProviderRegistration : IModelProviderRegistration,
                 WireEstimate = prepared.WireEstimate with
                 {
                     WireInputTokens = (int)total,
-                    Components = [new("openrouter-wire", "Provider overhead/replay", "OpenRouter wire", "Request framing", total - retained), new("retained-allowance", "Provider overhead/replay", "Retained output allowance", "Capacity allowances", retained)],
-                    StablePrefixComponentCount = 0,
-                    EstimationBasis = "Conservative serialized UTF-8 bytes plus dimension-based image tokens, framing, and retained output allowance.",
+                    Components = total == estimatedTotal
+                        ? [.. prepared.WireEstimate.Components, new("openrouter-framing", "Provider overhead/replay", "OpenRouter framing and response schema", "Capacity allowances", providerAllowance)] : [],
+                    StablePrefixComponentCount = total == estimatedTotal ? prepared.WireEstimate.StablePrefixComponentCount : 0,
+                    EstimationBasis = prepared.WireEstimate.EstimationBasis + " Includes OpenRouter framing and response-schema token allowance; transport bytes are not tokens.",
                 },
                 CacheCapabilities = capabilities,
                 CachePlan = plan,

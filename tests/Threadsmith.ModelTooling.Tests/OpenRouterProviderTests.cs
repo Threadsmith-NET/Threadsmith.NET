@@ -180,7 +180,7 @@ public static class OpenRouterProviderTests
 
     /// <summary>Validates the OpenRouter request and response boundary.</summary>
     [Fact]
-    public static void Preparation_IncludesSchemaAndRejectsBudgetWithoutHeadroom()
+    public static void Preparation_IncludesResponseSchemaAsTokens()
     {
         var registration = new OpenRouterProviderRegistration();
         var model = Model() with { JsonSchemaResponses = true };
@@ -189,8 +189,34 @@ public static class OpenRouterProviderTests
         var context = new ModelRequestPreparationContext { ProviderConfiguration = config, ModelConfiguration = model, Profile = profile, Request = Request() with { Tools = [] } };
         var plain = registration.Prepare(context);
         var schema = registration.Prepare(context with { Request = context.Request with { ResponseFormat = new ModelResponseFormat { SchemaId = "test", JsonSchema = "{\"type\":\"object\",\"description\":\"" + new string('x', 5000) + "\"}" } } });
-        Assert.True(schema.WireEstimate.WireInputTokens >= plain.WireEstimate.WireInputTokens + 5000);
+        Assert.InRange(schema.WireEstimate.WireInputTokens - plain.WireEstimate.WireInputTokens, 1250, 1300);
         Assert.NotEqual(plain.WireDigest, schema.WireDigest);
+    }
+
+    /// <summary>Transport escaping and UTF-8 byte counts must not trigger premature context pressure.</summary>
+    [Theory]
+    [InlineData("sample text ")]
+    [InlineData("<>\"\\\n")]
+    [InlineData("日本語")]
+    public static void Preparation_UsesTokenUnitsAndPreservesAttribution(string fragment)
+    {
+        var registration = new OpenRouterProviderRegistration();
+        var model = Model();
+        var config = Configuration(model);
+        var profile = Assert.Single(registration.CreateProfiles(config));
+        var text = string.Concat(Enumerable.Repeat(fragment, 1000));
+        var request = Request() with
+        {
+            Tools = [],
+            Messages = [new ModelMessage { Role = ModelMessageRole.User, SectionId = "user", Content = [new() { Content = text }] }],
+        };
+        var context = new ModelRequestPreparationContext { ProviderConfiguration = config, ModelConfiguration = model, Profile = profile, Request = request };
+        var prepared = registration.Prepare(context);
+        Assert.InRange(prepared.WireEstimate.WireInputTokens, text.Length / 4, (text.Length / 4) + 300);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(component => component.Tokens));
+        Assert.True(prepared.WireEstimate.SectionTokens["user"] > 0);
+        var repeated = registration.Prepare(context with { Request = request with { WireEstimate = prepared.WireEstimate, Preparation = prepared } });
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, repeated.WireEstimate.WireInputTokens);
     }
 
     /// <summary>Validates the OpenRouter request and response boundary.</summary>

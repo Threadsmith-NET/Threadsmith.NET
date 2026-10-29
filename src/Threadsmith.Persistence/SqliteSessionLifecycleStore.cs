@@ -171,10 +171,10 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
                 SELECT $destination, mode, $updatedAt FROM conversation_sessions WHERE session_id = $source;
             INSERT INTO conversation_messages(
                 message_id, session_id, run_id, sequence, role, body, artifact_id, content_hash,
-                estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json)
+                estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json, receipt_json)
                 SELECT map.new_id, $destination, runs.new_id, source.sequence, source.role,
                        source.body, source.artifact_id, source.content_hash, source.estimated_tokens,
-                       source.sensitivity, source.repository_revision, source.occurred_at, source.schema_version, source.images_json
+                       source.sensitivity, source.repository_revision, source.occurred_at, source.schema_version, source.images_json, source.receipt_json
                 FROM conversation_messages source JOIN clone_message_map map ON map.old_id = source.message_id
                 JOIN clone_run_map runs ON runs.old_id = source.run_id;
             INSERT OR IGNORE INTO image_artifact_refs(id, session_id, content_hash, descriptor)

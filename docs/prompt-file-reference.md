@@ -954,3 +954,5 @@ The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`a
 `Tool-write_file-Description.md` also identifies ordered user-message `attachments` metadata as the source of `artifactId` values for current and retained historical image attachments. The filename and placeholder contract are unchanged; context assembly owns metadata fields/order and artifact access remains code-enforced.
 
 The ask_user description documents the harness-owned Other choice and the Cancelled message "The user declined to answer". Enter submits; Escape/Cancel resumes with that refusal. No prompt tokens or authority rules change.
+
+`Context-ExecutionOutcome.md` keeps the `OutcomeJson` token. It now frames the versioned completed-turn receipt combining durable edit outcomes and explicit native validation observations, including validation-only turns. Origin identity, source-proof limits, omissions and recovery availability are historical data; the token does not grant validation authority or cross-turn evidence access. Shipped framing text is unchanged.

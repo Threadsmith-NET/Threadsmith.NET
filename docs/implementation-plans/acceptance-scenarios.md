@@ -919,3 +919,11 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 5. Confirm the existing built-in search/read/write capability and writer availability checks apply, with no broader folder or mutation permissions.
 
 **Verifies:** Fixed cleanup ownership, explicit opt-in, repository ignore coverage, lifecycle isolation, and bounded tool authority. See MTP-274.
+
+## Scenario OPENROUTER — Governed manually configured provider
+
+1. Configure a manual model using the compiled OpenRouter provider and a separate secret reference.
+2. Select it explicitly and exercise ordinary MAIN and delegated requests, including declared reasoning and tool continuations.
+3. Hide reasoning display, cancel work, change model selection, and inspect normal logs and usage projections.
+
+**Verifies:** No automatic model discovery/default change; one governed execution lifecycle; exact private reasoning/tool continuation; no duplicated tool effects; private payloads excluded from diagnostics and persistence; reported charges distinguished from conservative estimates; declared capability, capacity and cancellation enforcement.

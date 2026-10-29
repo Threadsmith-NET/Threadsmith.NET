@@ -54,6 +54,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M32 | Planned | In-process public hosting with API-driven TUI composition, final-answer streaming, and shared shutdown. | [Details](milestones/milestone-32-in-process-tui-automation.md) |
 | M33 | Active | Shared memory reconciliation, metadata and progressive concept recall. | [Details](milestones/milestone-33-memory-reconciliation-and-concept-recall.md) |
 | M34 | Complete | Multimodal model capabilities, image input and governed file artifacts. | [Details](milestones/milestone-34-multimodal-conversation-and-file-artifacts.md) |
+| M35 | Active | Manually configured OpenRouter models through the shared governed provider lifecycle. | [Details](milestones/milestone-35-openrouter-provider.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

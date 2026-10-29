@@ -1,7 +1,6 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -13,11 +12,13 @@ using Xunit;
 /// <summary>Hint admission follows the existing native execution boundary.</summary>
 public static class NativeConceptTransportTests
 {
-    /// <summary>Shared native schemas expose the format enforced during preflight, including child tool catalogs.</summary>
+    /// <summary>Portable schemas retain guidance and bounds while preflight enforces Unicode concept syntax.</summary>
     [Theory]
     [InlineData("theme-catalog-caching", true)]
     [InlineData("workspace-identity", true)]
     [InlineData("缓存", true)]
+    [InlineData("𐐀-cache", true)]
+    [InlineData("cache-١", true)]
     [InlineData("theme catalog caching", false)]
     [InlineData("workspace identity", false)]
     [InlineData("C#", false)]
@@ -25,19 +26,21 @@ public static class NativeConceptTransportTests
     [InlineData("-prefix", false)]
     [InlineData("suffix-", false)]
     [InlineData("double--hyphen", false)]
+    [InlineData("cache_1", false)]
+    [InlineData("cache-😀", false)]
     [InlineData("", false)]
-    public static void Advertised_concepts_match_preflight_format(string concept, bool valid)
+    public static void Portable_concept_schemas_preserve_host_preflight_validation(string concept, bool valid)
     {
         var tool = new ListFilesTool(TestPromptLoader.Instance);
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         var concepts = schema.RootElement.GetProperty("properties").GetProperty("concepts");
         var items = concepts.GetProperty("items");
-        var pattern = items.GetProperty("pattern").GetString()!;
-        Assert.Equal(valid, Regex.IsMatch(concept, pattern, RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)));
+        Assert.False(items.TryGetProperty("pattern", out _));
         Assert.Equal(8, concepts.GetProperty("maxItems").GetInt32());
         Assert.Equal(1, items.GetProperty("minLength").GetInt32());
         Assert.Equal(48, items.GetProperty("maxLength").GetInt32());
         Assert.Contains("Omit concepts", concepts.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Unicode letters/digits", concepts.GetProperty("description").GetString(), StringComparison.Ordinal);
         using var strict = JsonDocument.Parse(Assert.IsType<string>(ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(tool.Definition.Id, tool.Definition.InputSchema.JsonSchema)));
         var strictConcepts = strict.RootElement.GetProperty("properties").GetProperty("concepts");
 

@@ -2022,13 +2022,13 @@ internal static class ToolDefinitionFactory
             concepts["maxItems"] = MemoryConcepts.MaximumPerInput;
             concepts["description"] = $"Optional applicability hints: at most {MemoryConcepts.MaximumPerInput} single words or hyphenated terms, each 1–{MemoryConcepts.MaximumConceptRunes} characters using Unicode letters/digits and single internal hyphens. No spaces or other punctuation. Use csharp and dotnet for C# and .NET. Examples: caching, theme-catalog, workspace-identity. Omit concepts when unnecessary.";
 
-            // Advertise canonical hints; runtime also accepts trimming and Unicode normalization.
+            // Keep Unicode category validation in MemoryConcepts.Normalize: provider JSON Schema
+            // validators do not consistently support Unicode property escapes in regex patterns.
             concepts["items"] = new JsonObject
             {
                 ["type"] = "string",
                 ["minLength"] = 1,
                 ["maxLength"] = MemoryConcepts.MaximumConceptRunes,
-                ["pattern"] = @"^[\p{L}\p{Nd}]+(?:-[\p{L}\p{Nd}]+)*$",
             };
         }
 

@@ -2234,3 +2234,17 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 **Evidence:** Record actual Windows/macOS/Linux terminal and SSH/tmux checks separately. Native notifications are deferred. Do not claim screen-reader support or cross-platform validation without running those checks.
 
 Approval-modal regression: use a benign long unbroken URL prompt without fetching it. Verify wrapped origin/path text, F2 full details and PgUp/PgDn scroll, 40x12/80x24/160x40 dimensions and resize, unchanged Deny/approval selection, and a wider frame only where margins permit. Query-value redaction remains unchanged.
+
+## MTP-OPENROUTER — Manual provider compatibility
+
+**Prerequisites:** An explicitly selected manual OpenRouter profile, verified endpoint metadata, a bounded API key in the existing user secret store, and a disposable repository. Record the exact model slug, upstream routing slug and expected response provider name.
+
+1. Select the profile with `/models`; inspect `/reasoning` and choose each declared level, including off where supported.
+2. Ask for plain text, then request two successive repository inspections through ordinary host tools and a genuine follow-up. Verify one execution per tool, visible progress, and successful continuation.
+3. Repeat with reasoning display hidden. Verify the same tool behavior without reasoning text in presentation or raw logs.
+4. Cancel during response reading and after a tool completes. Start a fresh turn; verify no prior tool is repeated to recover an interrupted exchange.
+5. For declared image support, inspect an existing PNG/JPEG through the normal file tool. For explicit cache support, repeat an unchanged prefix and compare reported cold/warm cache counters. Missing counters are unavailable, not proof of a hit.
+6. Exercise a delegated role assigned to the trusted OpenRouter profile. Verify normal child progress, usage, completion and cancellation.
+7. Record reported token usage, charge provenance and limitations. Never capture credentials, signatures or encrypted reasoning. Do not infer remote compatibility from fixture tests or Windows results from other platforms.
+
+**Expected:** Existing model selection, policy, tools, privacy, cancellation and usage paths remain authoritative. Unsupported capabilities fail before submission or through established correction handling. Live evidence is specific to the exact configured endpoint.

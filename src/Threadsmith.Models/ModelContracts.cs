@@ -201,6 +201,15 @@ public sealed record ModelUsage(
     bool IsEstimate = false,
     ModelCacheUsage? Cache = null)
 {
+    /// <summary>Provider-reported monetary charge, separate from the configured-price estimate; null means unavailable.</summary>
+    public decimal? ReportedCost { get; init; }
+
+    /// <summary>Compiled provenance for the reported charge.</summary>
+    public string? CostProvenance { get; init; }
+
+    /// <summary>Conservative amount used for budget enforcement.</summary>
+    public decimal BudgetCost => Math.Max(EstimatedCost, ReportedCost ?? 0);
+
     /// <summary>Largest individual attempt output when this report aggregates retries; null means OutputTokens describes one attempt.</summary>
     public long? MaximumAttemptOutputTokens { get; init; }
 

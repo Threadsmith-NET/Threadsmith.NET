@@ -3172,7 +3172,7 @@ public sealed partial class SessionApplication
                         usage?.OutputTokens ?? 0),
                     1,
                     duration,
-                    usage?.EstimatedCost ?? 0));
+                    usage?.BudgetCost ?? 0));
                 LastActualBudgetStatus = budgetUsage;
                 _registration.ModelRequestWallClockAccrued += duration;
                 if (budgetUsage.IsExhausted

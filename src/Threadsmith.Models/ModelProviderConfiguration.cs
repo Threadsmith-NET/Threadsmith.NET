@@ -188,6 +188,9 @@ public interface IModelProviderRegistration
     /// <summary>Concrete model configuration record type.</summary>
     Type ModelConfigurationType { get; }
 
+    /// <summary>Compiled model property names that repository layers cannot change on inherited profiles.</summary>
+    IReadOnlyList<string> RepositoryProtectedModelProperties => [];
+
     /// <summary>Validates one typed provider and all provider-specific settings.</summary>
     void Validate(ModelProviderConfiguration provider);
 
@@ -585,7 +588,7 @@ public static class ModelProviderConfigurationLoader
             }
             : repository is null
                 ? user.DeepClone().AsObject()
-                : MergeObjects(user, repository, "$", limits);
+                : MergeObjects(user, repository, "$", limits, registry);
         ValidateTree(effective, limits, "effective");
 
         try
@@ -628,7 +631,7 @@ public static class ModelProviderConfigurationLoader
         var inherited = JsonSerializer.SerializeToNode(trusted, options)?.AsObject()
             ?? throw new InvalidOperationException("Trusted catalog serialization failed.");
         var overrides = ParseLayer(repositoryCatalogPath, limits, "repository");
-        var effective = MergeObjects(inherited, overrides, "$", limits);
+        var effective = MergeObjects(inherited, overrides, "$", limits, registry);
         ValidateTree(effective, limits, "effective");
         try
         {
@@ -835,7 +838,8 @@ public static class ModelProviderConfigurationLoader
         JsonObject inherited,
         JsonObject overrides,
         string path,
-        ModelProviderCatalogLimits limits)
+        ModelProviderCatalogLimits limits,
+        ModelProviderRegistry registry)
     {
         var result = inherited.DeepClone().AsObject();
         foreach ((var overrideName, var overrideValue) in overrides)
@@ -846,7 +850,7 @@ public static class ModelProviderConfigurationLoader
             var inheritedValue = existing.Key is null ? null : existing.Value;
             if (overrideValue is JsonObject overrideObject && inheritedValue is JsonObject inheritedObject)
             {
-                result[resultName] = MergeObjects(inheritedObject, overrideObject, path + "." + overrideName, limits);
+                result[resultName] = MergeObjects(inheritedObject, overrideObject, path + "." + overrideName, limits, registry);
             }
             else if (overrideValue is JsonArray overrideArray
                 && inheritedValue is JsonArray inheritedArray
@@ -857,7 +861,8 @@ public static class ModelProviderConfigurationLoader
                     inheritedArray,
                     overrideArray,
                     path + "." + overrideName,
-                    limits);
+                    limits,
+                    registry);
             }
             else
             {
@@ -872,7 +877,8 @@ public static class ModelProviderConfigurationLoader
         JsonArray inherited,
         JsonArray overrides,
         string path,
-        ModelProviderCatalogLimits limits)
+        ModelProviderCatalogLimits limits,
+        ModelProviderRegistry registry)
     {
         var result = new JsonArray([.. inherited.Select(item => item?.DeepClone())]);
         var positions = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -907,6 +913,21 @@ public static class ModelProviderConfigurationLoader
                     $"Catalog override for '{id}' cannot change type '{inheritedType}' to '{overrideType}'.");
             }
 
+            if (path.EndsWith(".models", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var name in registry.Get(inheritedType).RepositoryProtectedModelProperties)
+                {
+                    if (TryGetPropertyValue(overrideItem, name, out var replacement))
+                    {
+                        _ = TryGetPropertyValue(inheritedItem, name, out var original);
+                        if (!JsonNode.DeepEquals(original, replacement))
+                        {
+                            throw new InvalidOperationException($"Repository catalog cannot change inherited provider protocol setting '{name}'.");
+                        }
+                    }
+                }
+            }
+
             if (path.EndsWith(".models", StringComparison.OrdinalIgnoreCase)
                 && TryGetPropertyValue(overrideItem, "reasoningCompatibility", out var overrideReasoningNode))
             {
@@ -924,7 +945,7 @@ public static class ModelProviderConfigurationLoader
 
                 if (inheritedReasoning is null || overrideReasoning is null)
                 {
-                    result[position] = MergeObjects(inheritedItem, overrideItem, path + "['" + id + "']", limits);
+                    result[position] = MergeObjects(inheritedItem, overrideItem, path + "['" + id + "']", limits, registry);
                     continue;
                 }
 
@@ -966,7 +987,7 @@ public static class ModelProviderConfigurationLoader
                 }
             }
 
-            result[position] = MergeObjects(inheritedItem, overrideItem, path + "['" + id + "']", limits);
+            result[position] = MergeObjects(inheritedItem, overrideItem, path + "['" + id + "']", limits, registry);
         }
 
         return result;

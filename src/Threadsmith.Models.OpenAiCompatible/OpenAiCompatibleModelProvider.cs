@@ -276,7 +276,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 using (response)
                 {
                     await using var chunks = ReadResponseAsync(
-                        response, request, canonicalTools, toolNameMap, requestCancellation, cancellationToken)
+                        response, request, canonicalTools, toolNameMap, maximumOutputTokens, requestCancellation, cancellationToken)
                         .GetAsyncEnumerator(cancellationToken);
                     while (true)
                     {
@@ -358,6 +358,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
         ModelStreamRequest request,
         IReadOnlyList<ModelToolDefinition> canonicalTools,
         ModelToolWireNameMap toolNameMap,
+        int maximumOutputTokens,
         CancellationTokenSource requestCancellation,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -660,6 +661,17 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
             if (toolCalls.Count > 0 && terminalReason is not null && terminalReason != "tool_calls")
             {
+                if (terminalReason == "length")
+                {
+                    throw new MalformedInvocationException(new MalformedInvocationDiagnostic
+                    {
+                        Kind = MalformedInvocationFailureKind.TruncatedArguments,
+                        ProviderFamily = ProviderFamily,
+                        ToolCallCount = toolCalls.Count,
+                        SafeMessage = ModelOutputValidator.TruncatedInvocationMessage,
+                    });
+                }
+
                 throw new MalformedModelOutputException("The provider returned tools without a successful tool-call completion.");
             }
 
@@ -673,7 +685,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 throw new MalformedModelOutputException("The provider returned multiple tools when parallel calls are unavailable.");
             }
 
-            pendingReplayToolChunks = DrainToolCalls(toolCalls, toolNameMap);
+            pendingReplayToolChunks = DrainToolCalls(toolCalls, toolNameMap, terminalReason == "length" || reportedOutputTokens >= maximumOutputTokens);
 
             if (pendingReplayResponse is { ToolCalls: { } replayCalls })
             {
@@ -1215,7 +1227,8 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
     private IReadOnlyList<ModelChunk> DrainToolCalls(
         Dictionary<int, ToolCallAccumulator> toolCalls,
-        ModelToolWireNameMap toolNameMap)
+        ModelToolWireNameMap toolNameMap,
+        bool outputLimitReached)
     {
         var calls = toolCalls
             .OrderBy(item => item.Key)
@@ -1230,7 +1243,8 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 output,
                 providerFamily: ProviderFamily,
                 toolOrdinal: index,
-                toolCallCount: calls.Length);
+                toolCallCount: calls.Length,
+                outputLimitReached: outputLimitReached);
         }
 
         var chunks = calls

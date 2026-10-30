@@ -242,6 +242,10 @@ internal static class InteractionEventSegments
             case MutationProposalRepairAttempted or ModelCorrectionAttempted:
                 AppendLifecycleBlock(segments, text, PresentationTextRole.Warning);
                 return;
+            case ApprovalGranted:
+                AppendLines(segments, text, static line => line.StartsWith(" MUTATION:", StringComparison.Ordinal)
+                    ? PresentationTextRole.Success : PresentationTextRole.Muted);
+                return;
             case MutationApplied:
                 AppendLifecycleBlock(segments, text, PresentationTextRole.Success);
                 return;

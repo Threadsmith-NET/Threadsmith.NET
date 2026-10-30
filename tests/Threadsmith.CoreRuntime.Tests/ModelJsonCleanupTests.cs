@@ -9,6 +9,9 @@ public static class ModelJsonCleanupTests
     /// <summary>Prose and Markdown framing do not conceal a complete JSON object.</summary>
     [Theory]
     [InlineData("Here is the result: {\"value\":1}", "{\"value\":1}")]
+    [InlineData("[Result]\n{\"value\":1}", "{\"value\":1}")]
+    [InlineData("[note]\n{\"value\":1}", "{\"value\":1}")]
+    [InlineData("{Result}\n{\"value\":1}", "{\"value\":1}")]
     [InlineData("```json\n{\"value\":1}\n```", "{\"value\":1}")]
     [InlineData("{\"value\":1}\nDone.", "{\"value\":1}")]
     [InlineData("Example: {}. Actual: {\"value\":1}", "{\"value\":1}")]
@@ -16,6 +19,23 @@ public static class ModelJsonCleanupTests
     public static void Clean_ExtractsJsonValue(string input, string expected)
     {
         Assert.Equal(expected, ModelJsonCleanup.Clean(input));
+    }
+
+    /// <summary>Incomplete envelopes cannot promote a complete nested operation to root authority.</summary>
+    [Theory]
+    [InlineData("{\"mutations\":[{\"type\":\"CreateFile\"}],\"rationale\":\"unfinished")]
+    [InlineData("```json\n{\"mutations\":[{\"type\":\"CreateFile\"}],\"rationale\":\"unfinished")]
+    [InlineData("[Result]\n{\"mutations\":[{\"type\":\"CreateFile\"}],\"rationale\":\"unfinished")]
+    [InlineData("[{\"value\":1},")]
+    [InlineData("[1,{\"value\":1},")]
+    [InlineData("[-1,{\"value\":1},")]
+    [InlineData("[true,{\"value\":1},")]
+    [InlineData("[false,{\"value\":1},")]
+    [InlineData("[null,{\"value\":1},")]
+    [InlineData("[\"text\",{\"value\":1},")]
+    public static void Clean_PreservesIncompleteEnvelope(string input)
+    {
+        Assert.Equal(input, ModelJsonCleanup.Clean(input));
     }
 
     /// <summary>Unrecoverable text remains available for the existing validation error path.</summary>

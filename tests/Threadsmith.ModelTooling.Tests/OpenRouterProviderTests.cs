@@ -113,13 +113,22 @@ public static class OpenRouterProviderTests
         using var handler = new Handler(Frame("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"id","function":{"name":"inspect","arguments":"{}"}}]}}]}""") + Trailer(reason) + Frame("[DONE]"));
         using var client = new HttpClient(handler);
         var chunks = new List<ModelChunk>();
-        await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
+        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(async () =>
         {
             await foreach (var chunk in Provider(client, Model()).StreamAsync(Request(), TestContext.Current.CancellationToken))
             {
                 chunks.Add(chunk);
             }
         });
+        if (reason == "length")
+        {
+            Assert.Equal(MalformedInvocationFailureKind.TruncatedArguments, Assert.IsType<MalformedInvocationException>(exception).Diagnostic.Kind);
+        }
+        else
+        {
+            Assert.IsType<MalformedModelOutputException>(exception);
+        }
+
         Assert.Single(chunks, chunk => chunk.Usage is not null);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
     }
@@ -197,7 +206,7 @@ public static class OpenRouterProviderTests
     [Theory]
     [InlineData("sample text ")]
     [InlineData("<>\"\\\n")]
-    [InlineData("日本語")]
+    [InlineData("æ—¥æœ¬èªž")]
     public static void Preparation_UsesTokenUnitsAndPreservesAttribution(string fragment)
     {
         var registration = new OpenRouterProviderRegistration();

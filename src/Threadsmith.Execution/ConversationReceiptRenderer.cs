@@ -11,12 +11,17 @@ internal static class ConversationReceiptRenderer
 
     /// <summary>Renders sanitized complete entries within 512 estimated tokens including framing.</summary>
     internal static string Render(ConversationReceiptProvenance provenance, ExecutionCheckpointPhase status, ExecutionOutcomeProjection? outcome, ConversationReceiptChecks observations, IPromptLoader prompts, IOutputSanitizer sanitizer, WorkspaceBaseline? finalBaseline, bool editEvidenceUnavailable)
+        => RenderReceipt(provenance, status, outcome, observations, prompts, sanitizer, finalBaseline, editEvidenceUnavailable).Content;
+
+    /// <summary>Returns only the recovery entries that survived the same bounded rendering.</summary>
+    internal static (string Content, ConversationReceiptProvenance Provenance) RenderReceipt(ConversationReceiptProvenance provenance, ExecutionCheckpointPhase status, ExecutionOutcomeProjection? outcome, ConversationReceiptChecks observations, IPromptLoader prompts, IOutputSanitizer sanitizer, WorkspaceBaseline? finalBaseline, bool editEvidenceUnavailable)
     {
         var snapshot = observations.Snapshot(finalBaseline);
         var checks = snapshot.Checks.OrderBy(check => check.Succeeded).ThenByDescending(check => check.Started).ToList();
         var paths = (outcome?.ChangedFiles ?? []).Where(path => path.Length <= 256).Take(32).ToList();
         var reference = outcome?.FinalDiff;
         var risks = (outcome?.ResidualRisks ?? []).Where(risk => risk.Length <= 256).Take(8).ToList();
+        var evidence = provenance.Evidence.ToList();
         while (true)
         {
             var json = JsonSerializer.Serialize(
@@ -34,23 +39,31 @@ internal static class ConversationReceiptRenderer
                     OmittedChecks = snapshot.Total - checks.Count,
                     OmittedRisks = (outcome?.ResidualRisks.Count ?? 0) - risks.Count,
                     FinalDiff = reference,
-                    RecoveryAvailable = false,
+                    RecoveryAvailable = evidence.Count > 0,
+                    Evidence = evidence.Select(item => new { EvidenceId = item.EvidenceId.Value, item.Label, item.WasTruncated }),
+                    RecoveryTool = evidence.Count > 0 ? ActiveTurnEvidenceTool.ToolId : null,
+                    OmittedEvidence = provenance.Evidence.Count - evidence.Count,
                     OmittedReferences = outcome?.FinalDiff is null || reference is not null ? 0 : 1,
                     Coverage = "Unrecorded coverage unknown; final-source verification unknown",
                 },
                 SerializerOptions);
+            var sanitizedJson = JsonOutputSanitizer.Sanitize(json, sanitizer);
             var rendered = sanitizer.Sanitize(prompts.Render(PromptFileNames.ContextExecutionOutcome, new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["OutcomeJson"] = JsonOutputSanitizer.Sanitize(json, sanitizer),
+                ["OutcomeJson"] = sanitizedJson,
             }));
             if (rendered.Length <= 2048)
             {
-                return rendered;
+                return (rendered, provenance with { Evidence = rendered.Contains(sanitizedJson, StringComparison.Ordinal) ? evidence.ToArray() : [] });
             }
 
             if (reference is not null)
             {
                 reference = null;
+            }
+            else if (evidence.Count > 1)
+            {
+                evidence.RemoveAt(evidence.Count - 1);
             }
             else if (checks.Any(check => check.Succeeded))
             {
@@ -72,9 +85,13 @@ internal static class ConversationReceiptRenderer
             {
                 risks.RemoveAt(risks.Count - 1);
             }
+            else if (evidence.Count > 0)
+            {
+                evidence.Clear();
+            }
             else
             {
-                return $"Historical receipt v1; run {provenance.OriginRunId.Value}; status {status}. All details omitted; verification unknown.";
+                return ($"Historical receipt v1; run {provenance.OriginRunId.Value}; status {status}. All details omitted; verification unknown.", provenance with { Evidence = [] });
             }
         }
     }

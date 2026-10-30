@@ -324,6 +324,9 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];
 
+    /// <summary>Original archived observations explicitly admitted in the dispatched request.</summary>
+    public IReadOnlyList<ReceiptEvidenceGrant> ReceiptEvidenceReferences { get; init; } = [];
+
     /// <summary>Optional session-scoped scratchpad authority.</summary>
     [JsonIgnore]
     public ScratchpadSessionCapability Scratchpad { get; init; }

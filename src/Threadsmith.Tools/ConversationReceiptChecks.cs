@@ -7,7 +7,40 @@ internal sealed class ConversationReceiptChecks
 {
     private readonly Lock _gate = new();
     private readonly List<ConversationCheckObservation> _checks = [];
+    private readonly Dictionary<string, ReceiptEvidenceCapture> _evidence = new(StringComparer.Ordinal);
     private int _total;
+    private int _evidenceBytes;
+
+    /// <summary>Retains only the bounded model-visible result of an already observed check.</summary>
+    internal void CaptureEvidence(ToolInvocationResult result, EvidenceId evidenceId, string repositoryPath, string content)
+    {
+        lock (_gate)
+        {
+            var id = result.ToolInvocationId.Value.ToString();
+            if (!_checks.Any(check => check.Invocation == id) || _evidence.ContainsKey(id)
+                || content.Length > 1024 * 1024 || result.Images.Count > 0)
+            {
+                return;
+            }
+
+            var bytes = System.Text.Encoding.UTF8.GetByteCount(content);
+            if (bytes <= 1024 * 1024 && _evidenceBytes + bytes <= 4 * 1024 * 1024)
+            {
+                _evidence.Add(id, new ReceiptEvidenceCapture(evidenceId, result.ToolInvocationId, RepositoryIdentity.Create(repositoryPath), result.ToolId, content, result.IsTruncated));
+                _evidenceBytes += bytes;
+            }
+        }
+    }
+
+    /// <summary>Returns retained observations in the receipt's consequential-check order.</summary>
+    internal IReadOnlyList<ReceiptEvidenceCapture> EvidenceSnapshot()
+    {
+        lock (_gate)
+        {
+            return _checks.OrderBy(check => check.Succeeded).ThenByDescending(check => check.Started)
+                .Where(check => _evidence.ContainsKey(check.Invocation)).Select(check => _evidence[check.Invocation]).ToArray();
+        }
+    }
 
     /// <summary>Whether a consequential check was attempted.</summary>
     internal bool HasObservations
@@ -93,6 +126,11 @@ internal sealed class ConversationReceiptChecks
                     if (removable < 0)
                     {
                         return;
+                    }
+
+                    if (owner._evidence.Remove(owner._checks[removable].Invocation, out var removed))
+                    {
+                        owner._evidenceBytes -= System.Text.Encoding.UTF8.GetByteCount(removed.Content);
                     }
 
                     owner._checks.RemoveAt(removable);

@@ -341,6 +341,7 @@ public sealed partial class SessionApplication
 
         var invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
         registration.ReceiptWorkspaceId = invocationContext?.WorkspaceId;
+        registration.ReceiptRepositoryIdentity = invocationContext is null ? null : RepositoryIdentity.Create(invocationContext.RepositoryPath);
         registration.RepositoryIdentity = invocationContext?.RepositoryPath;
         return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions, ReceiptChecks = registration.ReceiptChecks, ReceiptBaseline = () => _sourceEdits?.GetReceiptBaseline(invocationContext.WorkspaceId) };
     }
@@ -492,6 +493,8 @@ public sealed partial class SessionApplication
                     ? registration.MemoryIntent.Capture(intentRepository, runId) : null,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
+                ReceiptRecoveryTool = CreateContextToolSchemas(CreateModelTools(conversationDefinitions, workspaceAvailable, true), conversationDefinitions)
+                    .FirstOrDefault(schema => schema.Id == ActiveTurnEvidenceTool.ToolId),
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -513,6 +516,12 @@ public sealed partial class SessionApplication
             invocationContext,
             context?.ModelResolution);
 
+        var receiptReferences = ReceiptEvidenceAuthorization.Select(context?.Messages, registration.SessionId, invocationContext?.RepositoryPath);
+        modelTools = CreateModelTools(
+            conversationDefinitions,
+            workspaceAvailable,
+            loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
+
         await AssessActiveTurnCompactionAsync(
             runId,
             registration,
@@ -532,7 +541,7 @@ public sealed partial class SessionApplication
         modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
-            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0);
+            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
 
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
@@ -572,6 +581,16 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
+        receiptReferences = ReceiptEvidenceAuthorization.Select(requestEnvelope.Messages, registration.SessionId, invocationContext?.RepositoryPath);
+        if (receiptReferences.Count == 0 && loopState.ActiveTurnEvidenceReferences.Count == 0
+            && modelTools.Any(tool => tool.Name == ActiveTurnEvidenceTool.ToolId))
+        {
+            modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, false);
+            requestEnvelope = CreateRequestEnvelope(context, modelTools, modelVisibleContinuation.Messages, modelVisibleContinuation.FirstNeverDeliveredMessageIndex);
+
+            // Removing a schema does not restore historical grants in this dispatched request.
+        }
+
         if (loopState.ActiveTurnEvidenceReferences.Count > 0
             && (invocationContext is null
                 || !ActiveTurnSourceProjector.ValidateFinalRequest(
@@ -594,6 +613,7 @@ public sealed partial class SessionApplication
             invocationContext = invocationContext with
             {
                 ActiveTurnEvidenceReferences = loopState.ActiveTurnEvidenceReferences,
+                ReceiptEvidenceReferences = receiptReferences,
             };
         }
 
@@ -1542,6 +1562,11 @@ public sealed partial class SessionApplication
             {
                 var evidenceId = await ToolEvidenceAdmission.AdmitEvidenceAsync(
                     _evidenceStore, round.Registration.SessionId, round.RunId, invocationContext.RepositoryPath, result, content, cancellationToken);
+                if (_receiptEvidenceStore is not null)
+                {
+                    round.Registration.ReceiptChecks.CaptureEvidence(result, evidenceId, invocationContext.RepositoryPath, content);
+                }
+
                 loopState.AddCurrentSource(
                     batchResult.CorrelationId,
                     ActiveTurnSourceKind.Evidence,
@@ -1993,7 +2018,7 @@ public sealed partial class SessionApplication
         {
             var effectiveTools = ResolveRecoveryToolAvailability(
                 requestTools ?? modelTools,
-                continuation.EvidenceReferences.Count > 0);
+                continuation.EvidenceReferences.Count > 0 || (activeTurnRecoveryDefinition is not null && ReceiptEvidenceAuthorization.Select(context.Messages, registration.SessionId, invocationContext?.RepositoryPath).Count > 0));
             var messages = continuation.Messages.ToList();
             var envelope = applyCapacityFallback
                 ? CreateRequestEnvelope(

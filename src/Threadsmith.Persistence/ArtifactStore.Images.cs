@@ -189,7 +189,7 @@ public sealed partial class ArtifactStore
                 var temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
-                    if (!await HasValidImageBodyAsync(destination, bytes.Length, hash, cancellationToken))
+                    if (!await HasValidArtifactBodyAsync(destination, bytes.Length, hash, cancellationToken))
                     {
                         await File.WriteAllBytesAsync(temporary, bytes, cancellationToken);
                         cancellationToken.ThrowIfCancellationRequested();
@@ -383,7 +383,7 @@ public sealed partial class ArtifactStore
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 
-    private static async Task<bool> HasValidImageBodyAsync(string path, int length, string hash, CancellationToken cancellationToken)
+    private static async Task<bool> HasValidArtifactBodyAsync(string path, int length, string hash, CancellationToken cancellationToken)
     {
         if (!File.Exists(path))
         {

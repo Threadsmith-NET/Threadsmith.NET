@@ -135,7 +135,7 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
                 target,
                 provider,
                 account,
-                PrEvidencePathScope.IsRestricted(invocation) ? file => PrEvidencePathScope.IsAllowed(file, invocation) : null,
+                ToolPathRules.IsRepositoryScopeRestricted(invocation) ? file => PrEvidencePathScope.IsAllowed(file, invocation) : null,
                 cancellationToken),
             invocation);
         handoff.Register(context.SessionId, context.RunId, result);
@@ -312,7 +312,7 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
 
     private static PrFetchOutput Confine(PrFetchOutput result, ToolInvocationContext context)
     {
-        if (!PrEvidencePathScope.IsRestricted(context) || result.Page.Files.Count == 0)
+        if (!ToolPathRules.IsRepositoryScopeRestricted(context) || result.Page.Files.Count == 0)
         {
             return result;
         }

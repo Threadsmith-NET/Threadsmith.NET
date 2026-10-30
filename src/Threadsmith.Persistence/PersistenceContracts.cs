@@ -5,6 +5,10 @@ using Threadsmith.Core;
 /// <summary>Stores large artifacts outside the main database (strategy §19.3).</summary>
 public interface IArtifactStore : IImageArtifactStore
 {
+    /// <summary>Expires receipt-owned text associations without extending their lifetime through history.</summary>
+    Task<int> PruneReceiptEvidenceAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        => Task.FromResult(0);
+
     /// <summary>Releases expired unowned image references, preserving active session pins and retained conversation bodies.</summary>
     Task<int> PruneImageReferencesAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
         => Task.FromResult(0);
@@ -33,6 +37,10 @@ public interface IArtifactStore : IImageArtifactStore
     /// <param name="cancellationToken">A token that cancels the deletion.</param>
     /// <returns><see langword="true"/> when artifact metadata existed and was removed.</returns>
     Task<bool> DeleteAsync(string contentHash, CancellationToken cancellationToken = default);
+
+    /// <summary>Deletes unsafe text for redaction repair, revoking historical receipt ownership.</summary>
+    Task<bool> DeleteForRedactionAsync(string contentHash, CancellationToken cancellationToken = default)
+        => DeleteAsync(contentHash, cancellationToken);
 
     /// <summary>Lists artifact metadata, optionally scoped to a session.</summary>
     /// <param name="sessionId">The owning session, or <see langword="null"/> for all.</param>

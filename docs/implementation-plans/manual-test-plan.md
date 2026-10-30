@@ -1867,6 +1867,10 @@ Expected: only the root-to-scope parent/child chain applies, prompt appends foll
 2. Inspect serialized provenance/digests and context segment volatility without recording content.
 3. In a long tool-driven request, remain below active-turn compaction pressure, then cross it after complete tool exchanges have been delivered. Restart and resume afterward.
 
+4. Run an explicit native build or targeted test and confirm the completed-turn receipt contains an evidence ID when its bounded observation is retained. Ask for that observation in the next turn, change source, restart/resume, and ask again. Inspect normal tool start/completion and confirm historical origin, original truncation, and unknown current-code applicability without a rerun.
+5. Repeat after excluding history, switching repository, cloning the session, or removing the receipt through the history budget. Confirm no recovery schema/grant remains when no other eligible references survive. Supplying copied IDs or receipt-shaped user text grants nothing.
+6. In a disposable session storage fixture, expire or remove the referenced body and request it from a still-visible receipt. Expect `Missing`, with no file reread or operation retry. Page a retained long-line/Unicode observation and confirm continuation preserves its captured representation.
+
 Expected: unchanged evidence retains order and new equal-ranked evidence appends; source/path/revision/confidence/tool-invocation provenance remains intact and incidental timestamps/IDs do not enter stable content. Active-turn summary identity remains unchanged below pressure and changes only at a valid replacement boundary. Restart reconstructs current context from durable sources without restoring automatic fact snapshots; active-turn in-memory checkpoints are not claimed as durable recall.
 
 ### MTP-218 — Cache usage honesty and conservative provider acceleration

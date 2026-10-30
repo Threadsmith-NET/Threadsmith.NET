@@ -269,6 +269,23 @@ public sealed class AllowApprovalPolicy : IApprovalPolicy
 /// <summary>Shared repository-relative prohibited-path matching.</summary>
 internal static class ToolPathRules
 {
+    /// <summary>Checks whether the caller's roots or prohibited paths narrow the repository.</summary>
+    internal static bool IsRepositoryScopeRestricted(ToolInvocationContext context)
+    {
+        if (context.ProhibitedPaths.Count > 0)
+        {
+            return true;
+        }
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
+        return !context.ApprovedRoots.Any(root =>
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot))
+                .Equals(repositoryRoot, comparison));
+    }
+
     /// <summary>Normalizes a path under the exact built-in tool's repository or scratchpad authority.</summary>
     internal static string NormalizeAndValidateForTool(
         string candidatePath,

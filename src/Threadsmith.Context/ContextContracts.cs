@@ -250,6 +250,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Tool contracts currently available to the model.</summary>
     public IReadOnlyList<ContextToolSchema> ToolSchemas { get; init; } = [];
 
+    /// <summary>Optional tool advertised and budgeted only for surviving owned historical receipts.</summary>
+    public ContextToolSchema? ReceiptRecoveryTool { get; init; }
+
     /// <summary>Required model features for this request.</summary>
     public ModelCapabilitySet RequiredCapabilities { get; init; } = new();
 

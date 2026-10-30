@@ -35,7 +35,7 @@ public sealed record ArtifactMetadata
 /// content is sanitized via the host <c>SecretOutputSanitizer</c> before it is written so secrets
 /// never reach disk artifacts (§19.6, §22.3).
 /// </remarks>
-public sealed partial class ArtifactStore : IArtifactStore
+public sealed partial class ArtifactStore : IArtifactStore, IReceiptEvidenceStore
 {
     /// <summary>Default store-wide image budget: 512 MiB.</summary>
     public const long DefaultMaximumRetainedImageBytes = 512L * 1024 * 1024;
@@ -88,40 +88,11 @@ public sealed partial class ArtifactStore : IArtifactStore
         await InitializeAsync(cancellationToken);
         var sanitized = _sanitizer.Sanitize(content);
         var bytes = System.Text.Encoding.UTF8.GetBytes(sanitized);
-        var hash = SHA256.HashData(bytes);
-        var hashText = Convert.ToHexString(hash).ToLowerInvariant();
-        var relativePath = Path.Combine(hashText[..2], hashText[2..4], hashText + ".bin");
-        var absolutePath = Path.Combine(_artifactDirectory, relativePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath) ?? throw new InvalidOperationException("Missing artifact directory."));
-        if (!File.Exists(absolutePath))
-        {
-            await File.WriteAllBytesAsync(absolutePath, bytes, cancellationToken);
-        }
-
-        var recordedAt = _timeProvider.GetUtcNow();
-        var metadata = new ArtifactMetadata
-        {
-            ContentHash = hashText,
-            Kind = kind,
-            Length = bytes.Length,
-            SessionId = sessionId,
-            RelativePath = relativePath,
-            RecordedAt = recordedAt,
-        };
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        await using var insert = connection.CreateCommand();
-        insert.CommandText = """
-            INSERT OR IGNORE INTO artifacts(content_hash, kind, length, session_id, relative_path, recorded_at)
-            VALUES($hash, $kind, $length, $session, $path, $recordedAt);
-            """;
-        insert.Parameters.AddWithValue("$hash", hashText);
-        insert.Parameters.AddWithValue("$kind", kind);
-        insert.Parameters.AddWithValue("$length", bytes.Length);
-        insert.Parameters.AddWithValue("$session", (object?)sessionId?.Value.ToString("D") ?? DBNull.Value);
-        insert.Parameters.AddWithValue("$path", relativePath);
-        insert.Parameters.AddWithValue("$recordedAt", recordedAt.ToString("O"));
-        await insert.ExecuteNonQueryAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var metadata = await StoreTextBytesAsync(bytes, kind, sessionId, connection, transaction, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return metadata;
     }
 
@@ -245,7 +216,7 @@ public sealed partial class ArtifactStore : IArtifactStore
                     ON artifacts(session_id);
                 CREATE INDEX IF NOT EXISTS ix_artifacts_kind
                     ON artifacts(kind);
-                """ + ImageArtifactSchemaMigration.ReferenceSchemaSql + ImageQuotaIndexSql;
+                """ + ImageArtifactSchemaMigration.ReferenceSchemaSql + ImageQuotaIndexSql + ReceiptEvidenceMigration.SchemaSql;
             await command.ExecuteNonQueryAsync(cancellationToken);
             Volatile.Write(ref _initialized, true);
         }
@@ -255,12 +226,60 @@ public sealed partial class ArtifactStore : IArtifactStore
         }
     }
 
+    private async Task<ArtifactMetadata> StoreTextBytesAsync(byte[] bytes, string kind, SessionId? sessionId, SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var hash = SHA256.HashData(bytes);
+        var hashText = Convert.ToHexString(hash).ToLowerInvariant();
+        var relativePath = Path.Combine(hashText[..2], hashText[2..4], hashText + ".bin");
+        var absolutePath = Path.Combine(_artifactDirectory, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(absolutePath) ?? throw new InvalidOperationException("Missing artifact directory."));
+        if (!await HasValidArtifactBodyAsync(absolutePath, bytes.Length, hashText, cancellationToken))
+        {
+            var temporary = absolutePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                await File.WriteAllBytesAsync(temporary, bytes, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                File.Move(temporary, absolutePath, overwrite: true);
+            }
+            finally
+            {
+                File.Delete(temporary);
+            }
+        }
+
+        var recordedAt = _timeProvider.GetUtcNow();
+        var metadata = new ArtifactMetadata
+        {
+            ContentHash = hashText,
+            Kind = kind,
+            Length = bytes.Length,
+            SessionId = sessionId,
+            RelativePath = relativePath,
+            RecordedAt = recordedAt,
+        };
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT OR IGNORE INTO artifacts(content_hash, kind, length, session_id, relative_path, recorded_at)
+            VALUES($hash, $kind, $length, $session, $path, $recordedAt);
+            """;
+        insert.Parameters.AddWithValue("$hash", hashText);
+        insert.Parameters.AddWithValue("$kind", kind);
+        insert.Parameters.AddWithValue("$length", bytes.Length);
+        insert.Parameters.AddWithValue("$session", (object?)sessionId?.Value.ToString("D") ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$path", relativePath);
+        insert.Parameters.AddWithValue("$recordedAt", recordedAt.ToString("O"));
+        await insert.ExecuteNonQueryAsync(cancellationToken);
+        return metadata;
+    }
+
     private async Task<bool> DeleteUnreferencedAsync(
         SqliteConnection connection, SqliteTransaction transaction, string contentHash, CancellationToken cancellationToken)
     {
         await using var select = connection.CreateCommand();
         select.Transaction = transaction;
-        select.CommandText = "SELECT relative_path FROM artifacts WHERE content_hash = $hash AND NOT EXISTS (SELECT 1 FROM image_artifact_refs WHERE content_hash = $hash);";
+        select.CommandText = "SELECT relative_path FROM artifacts WHERE content_hash = $hash AND NOT EXISTS (SELECT 1 FROM image_artifact_refs WHERE content_hash = $hash) AND NOT EXISTS (SELECT 1 FROM receipt_evidence WHERE content_hash = $hash);";
         select.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
         var result = await select.ExecuteScalarAsync(cancellationToken);
         if (result is not string relativePath)

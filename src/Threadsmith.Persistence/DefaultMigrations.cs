@@ -590,6 +590,7 @@ public sealed class DefaultMigrations
         new ImageArtifactSchemaMigration(),
         new ImageQuotaIndexMigration(),
         new ConversationReceiptMigration(),
+        new ReceiptEvidenceMigration(),
     ];
 
     /// <summary>Uses the effective repository capacity during first import so valid manual memories are not prematurely evicted.</summary>

@@ -620,7 +620,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
-| `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of historical sanitized evidence explicitly referenced by the current request. | `None` |
+| `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of current-run source evidence and retained same-session check/diff observations authorized by intact host receipts in the final request. | `None` |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
@@ -955,4 +955,6 @@ The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`a
 
 The ask_user description documents the harness-owned Other choice and the Cancelled message "The user declined to answer". Enter submits; Escape/Cancel resumes with that refusal. No prompt tokens or authority rules change.
 
-`Context-ExecutionOutcome.md` keeps the `OutcomeJson` token. It now frames the versioned completed-turn receipt combining durable edit outcomes and explicit native validation observations, including validation-only turns. Origin identity, source-proof limits, omissions and recovery availability are historical data; the token does not grant validation authority or cross-turn evidence access. Shipped framing text is unchanged.
+`Context-ExecutionOutcome.md` keeps the `OutcomeJson` token. It now frames the versioned completed-turn receipt combining durable edit outcomes and explicit native validation observations, including validation-only turns. Origin identity, source-proof limits, omissions and recovery availability are historical data; the token does not grant validation authority. Optional evidence IDs describe retained observations; access requires matching typed host provenance and an intact receipt in the final request. Shipped framing text is unchanged.
+
+Historical evidence recovery retains the `OutcomeJson` and tool input token contracts. Completed-turn receipts may display evidence IDs, labels, original truncation and recovery availability. Code owns scoped artifact publication, final-request grants, paging and retention; receipt prose and prompt overrides cannot confer access.

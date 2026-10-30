@@ -20,6 +20,7 @@ Threadsmith is designed for unfamiliar or large C# solutions, multi-project chan
 - **Host-owned control flow** — trust, policy, approvals, containment, cancellation, and validation remain outside the model.
 - **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
 - **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts.
+- **Advanced Context Management** — context is aggressively managed to avoid unnecessary growth, allowing for long work sessions without ever having to compact the context window. Prior-turn tool result receipts and cross-turn, session-scoped recall ability of tool results keep old information out of the context but make it available on request to the model if needed. 
 - **Private** — Use any model provider you want or run completely local. No external logging or telemetry, ever. 
 
 Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations. The best cross-platform way to run Threadsmith in isolation is through a container. I'm not going to try to come up with sandbox strategies for all three platforms when containers are easy and work fine. (Instructions coming soon!)

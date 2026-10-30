@@ -13,15 +13,16 @@ Many coding agents treat a repository primarily as text and depend on repeated e
 Threadsmith is designed for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only editing unreliable. Its core principles are:
 
 - **Compiler-aware evidence** — Roslyn and MSBuild provide symbol, reference, caller, project, and diagnostic context.
-- **Advanced code exploration tools** — Repository Intelligence and Archeology allow the model to ask questions about how the code base is built and why, as well as understand its evolution so as to not repeat past failures. 
+- **Advanced code exploration tools** — Advanced "code_explore" tool allows the model to ask natural-language questions about the repository and receive deterministic answers, sometimes replacing a dozen separate tool calls. Repository Intelligence and Archeology allow the model to ask questions about how the code base is built and why, as well as understand its evolution so as to not repeat past failures. 
 - **Human-governed changes** — mutation policy controls exact-diff review or auto-authorization; models cannot grant themselves write authority.
 - **Transactional mutation** — proposed changes are confined to permitted paths, staged, shown as exact diffs, authorized under host policy, and applied transactionally with source preconditions and committed-byte verification.
 - **Advisory compiler feedback** — versioned findings disclose coverage and omissions, support repairs in the same conversation, and never establish build or test success. A written plan is optional conversation text.
 - **Host-owned control flow** — trust, policy, approvals, containment, cancellation, and validation remain outside the model.
 - **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
 - **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts.
+- **Private** — Use any model provider you want or run completely local. No external logging or telemetry, ever. 
 
-Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations.
+Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations. The best cross-platform way to run Threadsmith in isolation is through a container. I'm not going to try to come up with sandbox strategies for all three platforms when containers are easy and work fine. (Instructions coming soon!)
 
 ## Who is Threadsmith for?
 

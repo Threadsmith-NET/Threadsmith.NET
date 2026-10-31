@@ -19,7 +19,7 @@ Threadsmith is designed for unfamiliar or large C# solutions, multi-project chan
 - **Advisory compiler feedback** — versioned findings disclose coverage and omissions, support repairs in the same conversation, and never establish build or test success. A written plan is optional conversation text.
 - **Host-owned control flow** — trust, policy, approvals, containment, cancellation, and validation remain outside the model.
 - **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
-- **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts.
+- **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts. Interface with remote or local models. Full-featuted Codex, Anthropic, Open Router, and generic OpenAI-compatible providers already integrated, including full Codex auth flow. Ollama, vLLM, sglang, llama.cpp all supported. 
 - **Advanced Context Management** — context is aggressively managed to avoid unnecessary growth, allowing for long work sessions without ever having to compact the context window. Prior-turn tool result receipts and cross-turn, session-scoped recall ability of tool results keep old information out of the context but make it available on request to the model if needed. 
 - **Private** — Use any model provider you want or run completely local. No external logging or telemetry, ever. 
 

@@ -119,7 +119,7 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
         var evidenceId = new EvidenceId(input.EvidenceId);
         if (context.Invocation.ReceiptEvidenceReferences.FirstOrDefault(item => item.Reference.EvidenceId == evidenceId) is { } grant)
         {
-            if (context.Invocation.IsChildAgent || ToolPathRules.IsRepositoryScopeRestricted(context.Invocation)
+            if (context.Invocation.IsChildAgent
                 || grant.Receipt.OriginSessionId != context.SessionId
                 || grant.Reference.RepositoryIdentity != RepositoryIdentity.Create(context.Invocation.RepositoryPath))
             {

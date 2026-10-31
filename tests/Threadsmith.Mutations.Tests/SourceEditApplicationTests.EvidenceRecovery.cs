@@ -115,6 +115,9 @@ public sealed partial class SourceEditApplicationTests
                     TrustLevel = RepositoryTrustLevel.TrustedMutation,
                     RequestedBy = "model",
                     AllowedExecutables = ["dotnet"],
+                    // Archived evidence was authorized at capture; path restrictions do not revoke recovery.
+                    ProhibitedPaths = [".threadsmith/secrets/", "**/*.env", "**/*.snk"],
+                    ApprovedRoots = provider.EvidenceId == Guid.Empty ? ["."] : ["allowed"],
                     DeniedToolIds = disableRecovery && provider.EvidenceId != Guid.Empty ? [ActiveTurnEvidenceTool.ToolId] : [],
                 }),
                 contextAssembler: assembler,

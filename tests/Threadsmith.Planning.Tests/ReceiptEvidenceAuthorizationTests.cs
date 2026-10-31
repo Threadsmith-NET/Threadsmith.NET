@@ -46,8 +46,6 @@ public static class ReceiptEvidenceAuthorizationTests
     [InlineData("child")]
     [InlineData("repository")]
     [InlineData("session")]
-    [InlineData("prohibited")]
-    [InlineData("roots")]
     public static async Task ToolRejectsUnauthorizedHistoricalReadsBeforeLookup(string mismatch)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -60,8 +58,6 @@ public static class ReceiptEvidenceAuthorizationTests
             RepositoryPath = mismatch == "repository" ? Path.Combine(Environment.CurrentDirectory, "other") : Environment.CurrentDirectory,
             RequestedBy = "model",
             IsChildAgent = mismatch == "child",
-            ProhibitedPaths = mismatch == "prohibited" ? ["private.cs"] : [],
-            ApprovedRoots = mismatch == "roots" ? ["allowed"] : ["."],
             ReceiptEvidenceReferences = [new(receipt, reference)],
         };
         var tool = new ActiveTurnEvidenceTool(new EvidenceStore(events, new SecretOutputSanitizer()), TestPromptLoader.Instance, new UnexpectedStore());

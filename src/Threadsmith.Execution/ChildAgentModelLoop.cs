@@ -180,6 +180,7 @@ internal sealed class ChildAgentModelLoop
                 maximumRounds = Math.Min(maximumRounds, assignment.Budget.ModelTurns);
             }
 
+            ModelStreamRequest? previousRequest = null;
             for (var round = 0; round < maximumRounds; round++)
             {
                 using var roundPromptScope = _prompts.BeginModelScope(model.ProfileId);
@@ -198,20 +199,25 @@ internal sealed class ChildAgentModelLoop
                     new ActiveTurnCompactionValidator(summaryPolicy, _sanitizer, _prompts),
                     summaryPolicy,
                     _prompts);
-                if (!transientState.HasResponses)
+                var replayRequest = previousRequest is null ? null : previousRequest with
                 {
-                    await history.CompactAsync(
-                        assignment,
-                        model,
-                        toolWireEstimate,
-                        round,
-                        compactor,
-                        new ChildCompactionObserver(plan.Provenance.SessionId, _sessionUsage, ledger),
-                        cancellationToken);
-                }
+                    Messages = messages.ToArray(),
+                    ToolContinuationRound = round,
+                    HistoryRewriteGeneration = history.RewriteGeneration,
+                };
+                await history.CompactAsync(
+                    assignment,
+                    model,
+                    toolWireEstimate,
+                    round,
+                    compactor,
+                    new ChildCompactionObserver(plan.Provenance.SessionId, _sessionUsage, ledger),
+                    replayRequest,
+                    cancellationToken);
 
                 var fitted = FitRequest(plan.Provenance.SessionId.Value, assignment, model, messages, BindPrompts, round, history.RewriteGeneration, transientState);
                 model = fitted.Model;
+                previousRequest = fitted.Request;
                 using var selectedPromptScope = _prompts.BeginModelScope(model.ProfileId);
                 childToolContext = childToolContext with
                 {

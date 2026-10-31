@@ -271,7 +271,7 @@ internal sealed class AnthropicStreamAdapter
         {
             ["version"] = 1,
             ["history_count"] = _request.Messages.Count,
-            ["history_digest"] = AnthropicReplayIdentity.HistoryDigest(_request.Messages),
+            ["history_digest"] = ModelRequestTransientState.ComputePrefixDigest(_request.Messages),
             ["legacy_input_digest"] = _request.Messages.Count == 0 ? AnthropicRequestMapper.Hash(System.Text.Encoding.UTF8.GetBytes(_request.Input)) : null,
             ["assistant"] = new JsonObject { ["role"] = "assistant", ["content"] = content },
         });

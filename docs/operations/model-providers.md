@@ -255,7 +255,7 @@ For compatible endpoints that require reasoning to accompany assistant tool call
 
 The Codex adapter retains completed reasoning output items, including `encrypted_content` when returned, and replays the original items in output order alongside function calls and their results. Requesting encrypted reasoning does not guarantee that an endpoint returns it; responses without reasoning continue normally. Visible summaries are never substituted for opaque state. Anthropic retains its existing thinking, signature, and redacted-thinking replay.
 
-Replay uses the bounded, in-memory active-turn response envelopes. Model/provider/credential changes and rewritten history cannot reuse incompatible state; compaction and turn completion release it. Opaque payloads are excluded from ordinary logs and user-visible output. Deterministic protocol fixtures exercise these behaviors; they do not establish that a particular live backend or model returns replayable reasoning.
+Replay uses the bounded, in-memory active-turn response envelopes. Model/provider/credential changes and unauthorized history rewrites cannot reuse incompatible state. Accepted compaction releases responses belonging to removed exchanges and gives retained complete exchanges an exact host-authorized history binding; their opaque payloads and wire call identities remain unchanged. Failed candidates leave replay untouched, and turn completion releases all retained responses. Opaque payloads are excluded from ordinary logs and user-visible output. Deterministic protocol fixtures exercise these behaviors; they do not establish that a particular live backend or model returns replayable reasoning.
 
 ### Model configuration
 

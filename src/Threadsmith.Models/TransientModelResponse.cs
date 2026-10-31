@@ -158,6 +158,8 @@ public sealed class ModelRequestTransientState : IDisposable
     private readonly Dictionary<(int Round, string CallId), string> _wireIds = [];
     private readonly Dictionary<int, HashSet<int>> _boundOrdinals = [];
     private readonly Dictionary<int, string> _historyDigests = [];
+    private readonly Dictionary<int, (int Count, string Digest)> _rewrittenPrefixes = [];
+    private readonly Dictionary<int, (int Count, string Digest)> _acceptedPrefixes = [];
     private bool _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="ModelRequestTransientState"/> class with a hard byte ceiling.</summary>
@@ -210,6 +212,7 @@ public sealed class ModelRequestTransientState : IDisposable
         envelope.MarkRetained();
         _responses.Add(envelope);
         _boundOrdinals.Add(binding.ModelRound, []);
+        _acceptedPrefixes.Add(binding.ModelRound, (request.Messages.Count, ComputePrefixDigest(request.Messages)));
     }
 
     /// <summary>Binds one host audit identity to a completed response's exact ordinal.</summary>
@@ -265,10 +268,144 @@ public sealed class ModelRequestTransientState : IDisposable
             {
                 throw new ModelProviderException("Private model continuation no longer matches active history; start a fresh turn.");
             }
+
+            if (!_acceptedPrefixes.TryGetValue(binding.ModelRound, out var prefix)
+                || prefix.Count > request.Messages.Count
+                || prefix.Digest != ComputePrefixDigest(request.Messages.Take(prefix.Count)))
+            {
+                throw new ModelProviderException("Private response preceding history changed; start a fresh turn.");
+            }
         }
     }
 
-    /// <summary>Releases private data only at a completed host turn boundary.</summary>
+    /// <summary>Creates an isolated replay projection for a host-authorized history rewrite, preserving retained assistant responses exactly.</summary>
+    public ModelRequestTransientState CreateHistoryRewrite(ModelStreamRequest original, ModelStreamRequest rewritten)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(rewritten);
+        ValidateHistory(original);
+        if (rewritten.RunId != original.RunId || rewritten.ResolvedProfileId != original.ResolvedProfileId
+            || rewritten.HistoryRewriteGeneration != original.HistoryRewriteGeneration + 1
+            || rewritten.ReasoningLevel != original.ReasoningLevel || rewritten.ProviderInstructions != original.ProviderInstructions
+            || rewritten.ToolTransportMode != original.ToolTransportMode || rewritten.AllowMultipleToolCalls != original.AllowMultipleToolCalls
+            || !original.Messages.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
+                .SequenceEqual(rewritten.Messages.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)))
+        {
+            throw new ModelProviderException("History compaction cannot change active replay authority.");
+        }
+
+        var projection = new ModelRequestTransientState(_maximumBytes);
+        try
+        {
+            var tools = ModelToolCanonicalizer.ComputeDigest(ModelToolCanonicalizer.Canonicalize(rewritten.Tools));
+            foreach (var response in _responses)
+            {
+                var round = response.Binding.ModelRound;
+                var messages = rewritten.Messages.Where(message => message.ModelRound == round).ToArray();
+                if (messages.Length == 0)
+                {
+                    continue;
+                }
+
+                if (_historyDigests[round] != ComputeHistoryDigest(round, messages))
+                {
+                    throw new ModelProviderException("Compaction changed a retained assistant tool response.");
+                }
+
+                var calls = messages.Where(message => message.Role == ModelMessageRole.Assistant && message.ToolCallId is not null).ToArray();
+                var results = messages.Where(message => message.Role == ModelMessageRole.Tool).ToArray();
+                var resultKeys = results.Select(result => (result.ToolCallId, result.ToolName)).ToHashSet();
+                if (calls.Length != results.Length || resultKeys.Count != results.Length
+                    || calls.Any(call => !resultKeys.Contains((call.ToolCallId, call.ToolName))))
+                {
+                    throw new ModelProviderException("Compaction must retain complete tool exchanges.");
+                }
+
+                var prefixCount = rewritten.Messages.TakeWhile(message => message.ModelRound != round).Count();
+                var bytes = response.CopyProtocolPayload();
+                try
+                {
+                    var retained = new ModelResponseReplayEnvelope(
+                        response.Binding with
+                        {
+                            HistoryRewriteGeneration = rewritten.HistoryRewriteGeneration,
+                            ToolInventoryDigest = tools,
+                        },
+                        bytes,
+                        response.WireToolCallIds,
+                        response.RetainedOutputTokens);
+                    retained.MarkRetained();
+                    projection._responses.Add(retained);
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(bytes);
+                }
+
+                projection._historyDigests.Add(round, _historyDigests[round]);
+                projection._boundOrdinals.Add(round, [.. _boundOrdinals[round]]);
+                foreach (var (key, value) in _wireIds.Where(pair => pair.Key.Round == round))
+                {
+                    projection._wireIds.Add(key, value);
+                }
+
+                projection._rewrittenPrefixes.Add(round, (prefixCount, ComputePrefixDigest(rewritten.Messages.Take(prefixCount))));
+                projection._acceptedPrefixes.Add(round, projection._rewrittenPrefixes[round]);
+            }
+
+            projection.ValidateHistory(rewritten);
+            return projection;
+        }
+        catch
+        {
+            projection.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Atomically adopts a validated replay projection after its corresponding history rewrite is accepted.</summary>
+    public void AdoptHistoryRewrite(ModelRequestTransientState projection)
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(projection._disposed, projection);
+        if (ReferenceEquals(this, projection))
+        {
+            throw new ArgumentException("A replay projection must have separate ownership.", nameof(projection));
+        }
+
+        Clear();
+        _responses.AddRange(projection._responses);
+        foreach (var (key, value) in projection._wireIds)
+        {
+            _wireIds.Add(key, value);
+        }
+
+        foreach (var (key, value) in projection._boundOrdinals)
+        {
+            _boundOrdinals.Add(key, value);
+        }
+
+        foreach (var (key, value) in projection._historyDigests)
+        {
+            _historyDigests.Add(key, value);
+        }
+
+        foreach (var (key, value) in projection._rewrittenPrefixes)
+        {
+            _rewrittenPrefixes.Add(key, value);
+        }
+
+        foreach (var (key, value) in projection._acceptedPrefixes)
+        {
+            _acceptedPrefixes.Add(key, value);
+        }
+
+        projection._responses.Clear();
+        projection.Dispose();
+    }
+
+    /// <summary>Releases private data at a completed boundary or after an accepted history rewrite.</summary>
     public void Clear()
     {
         foreach (var response in _responses)
@@ -280,6 +417,8 @@ public sealed class ModelRequestTransientState : IDisposable
         _wireIds.Clear();
         _boundOrdinals.Clear();
         _historyDigests.Clear();
+        _rewrittenPrefixes.Clear();
+        _acceptedPrefixes.Clear();
     }
 
     /// <inheritdoc />
@@ -294,6 +433,18 @@ public sealed class ModelRequestTransientState : IDisposable
     {
         return "ModelRequestTransientState { private active-loop state }";
     }
+
+    /// <summary>Validates a host-rebased prefix, or returns null when the original provider binding still applies.</summary>
+    internal bool? MatchesRewrittenPrefix(int round, IReadOnlyList<ModelMessage> messages, int messageIndex)
+    {
+        return _rewrittenPrefixes.TryGetValue(round, out var prefix)
+            ? prefix.Count == messageIndex && prefix.Digest == ComputePrefixDigest(messages.Take(messageIndex))
+            : null;
+    }
+
+    /// <summary>Hashes canonical history including transient round identities for every replay adapter.</summary>
+    internal static string ComputePrefixDigest(IEnumerable<ModelMessage> messages)
+        => Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(messages.Select(message => new { Message = message, message.ModelRound }))));
 
     private static string ComputeHistoryDigest(int modelRound, IReadOnlyList<ModelMessage> messages)
     {

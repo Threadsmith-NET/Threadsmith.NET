@@ -91,6 +91,10 @@ Use `url` for a PR link; there is no `prUrl` field. Normally omit `provider`; th
 
 You do not need to write JSON in conversation. With `invoke_skill` available and the package enabled, ask the model to use the exact skill and describe the target. The model constructs the input and calls the normal skill tool.
 
+Note: Despite the examples, you can normally just "Use the code review skill to review all unstaged changes."
+
+A reasonably capable model will normally invoke`inspect_skill` and find the skill and its schema and invoke accordingly. 
+
 Current branch:
 
 ```text

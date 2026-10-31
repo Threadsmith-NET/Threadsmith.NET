@@ -1718,6 +1718,40 @@ public static class Milestone3Tests
         Assert.Equal("datetime", exception.Diagnostic.ToolName);
     }
 
+    /// <summary>Output exhaustion rejects incomplete tool envelopes and gives bounded split instructions.</summary>
+    [Theory]
+    [InlineData("length", 1, true)]
+    [InlineData("tool_calls", 64, true)]
+    [InlineData("tool_calls", 1, false)]
+    public static async Task OpenAiAdapter_TruncatedArgumentsPreserveCause(string finishReason, int outputTokens, bool truncated)
+    {
+        const string arguments = "{\"mutations\":[{\"type\":\"CreateFile\"}],\"rationale\":\"unfinished";
+        var chunk = JsonSerializer.Serialize(new
+        {
+            choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, id = "call-1", function = new { name = "edit_source", arguments } } } }, finish_reason = finishReason } },
+            usage = new { prompt_tokens = 20, completion_tokens = outputTokens },
+        });
+        var provider = new OpenAiCompatibleModelProvider(
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, "data: " + chunk + "\n\ndata: [DONE]\n")))),
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+        var request = new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "Apply edits.",
+            MaximumOutputTokens = 64,
+            Tools = [new ModelToolDefinition { Name = "edit_source", Description = "Edit source.", ArgumentsJsonSchema = "{\"type\":\"object\"}" }],
+        };
+        var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() => CollectAsync(provider, request));
+        Assert.Equal(truncated ? MalformedInvocationFailureKind.TruncatedArguments : MalformedInvocationFailureKind.InvalidJsonArguments, exception.Diagnostic.Kind);
+        if (truncated)
+        {
+            Assert.Contains("Split the work", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("incomplete", exception.Message, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("CreateFile", exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Malformed arguments remain rejected when the selected tool accepts input.</summary>
     [Fact]
     public static async Task OpenAiAdapter_MalformedInputToolArguments_RemainRejected()

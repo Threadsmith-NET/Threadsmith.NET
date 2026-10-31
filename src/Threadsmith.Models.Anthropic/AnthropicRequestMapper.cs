@@ -153,8 +153,10 @@ internal static class AnthropicRequestMapper
                         var payload = JsonNode.Parse(bytes) as JsonObject
                             ?? throw new ModelProviderException("Anthropic private response is invalid.");
                         var count = payload["history_count"]?.GetValue<int>() ?? -1;
-                        if (payload["version"]?.GetValue<int>() != 1 || count < 0 || count > request.Messages.Count || (count > 0 && messageIndex != count)
-                            || payload["history_digest"]?.GetValue<string>() != AnthropicReplayIdentity.HistoryDigest(request.Messages.Take(count))
+                        var prefixMatches = request.TransientState?.MatchesRewrittenPrefix(round, request.Messages, messageIndex);
+                        if (payload["version"]?.GetValue<int>() != 1 || prefixMatches == false
+                            || (prefixMatches is null && (count < 0 || count > request.Messages.Count || (count > 0 && messageIndex != count)
+                                || payload["history_digest"]?.GetValue<string>() != ModelRequestTransientState.ComputePrefixDigest(request.Messages.Take(count))))
                             || envelope.Binding.ModelRound != replay.Keys.Order().ElementAt(usedReplay.Count - 1))
                         {
                             throw new ModelProviderException("Anthropic continuation preceding history changed; start a fresh turn.");

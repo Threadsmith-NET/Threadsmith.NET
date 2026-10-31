@@ -12,23 +12,6 @@ internal static class PrEvidencePathScope
         && (file.PreviousPath is null || IsAllowed(file.PreviousPath, context));
     }
 
-    /// <summary>Checks whether the caller's roots or prohibited paths narrow the repository.</summary>
-    internal static bool IsRestricted(ToolInvocationContext context)
-    {
-        if (context.ProhibitedPaths.Count > 0)
-        {
-            return true;
-        }
-
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
-        return !context.ApprovedRoots.Any(root =>
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot))
-                .Equals(repositoryRoot, comparison));
-    }
-
     private static bool IsAllowed(string path, ToolInvocationContext context)
     {
         try

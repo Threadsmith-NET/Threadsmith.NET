@@ -427,11 +427,13 @@ internal static class InteractionPresentationFormatter
     /// <param name="applied">The host-owned applied mutation event.</param>
     /// <param name="requiredApproval">The previously rendered approval mode for the mutation set, when known.</param>
     /// <param name="detail">Optional concise plan-derived detail for the applied mutation.</param>
+    /// <param name="mutationCount">Number of successfully applied mutations for this file in the committed batch.</param>
     /// <returns>A terminal-neutral TUI presentation block.</returns>
     internal static string FormatMutationApplied(
         MutationApplied applied,
         MutationApprovalLevel? requiredApproval = null,
-        string? detail = null)
+        string? detail = null,
+        int mutationCount = 1)
     {
         ArgumentNullException.ThrowIfNull(applied);
 
@@ -439,9 +441,12 @@ internal static class InteractionPresentationFormatter
         var title = requiredApproval == MutationApprovalLevel.PolicyAutoApproved
             ? "Applied under the active approval policy"
             : "Applied";
+        var message = mutationCount == 1
+            ? $"Mutation applied: {path}"
+            : $"{mutationCount} mutations successfully applied to {path}";
         var lines = new List<TuiBlockLine>
         {
-            new(TuiBlockLineKind.Body, $"Mutation applied: {path}", PresentationTextRole.Muted),
+            new(TuiBlockLineKind.Body, message, PresentationTextRole.Muted),
         };
         if (!string.IsNullOrWhiteSpace(detail))
         {

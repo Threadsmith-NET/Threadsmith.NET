@@ -341,6 +341,7 @@ public sealed partial class SessionApplication
 
         var invocationContext = await _toolContextFactory(registration.SessionId, cancellationToken);
         registration.ReceiptWorkspaceId = invocationContext?.WorkspaceId;
+        registration.ReceiptRepositoryIdentity = invocationContext is null ? null : RepositoryIdentity.Create(invocationContext.RepositoryPath);
         registration.RepositoryIdentity = invocationContext?.RepositoryPath;
         return invocationContext is null ? null : invocationContext with { UserQuestions = _userQuestions, ReceiptChecks = registration.ReceiptChecks, ReceiptBaseline = () => _sourceEdits?.GetReceiptBaseline(invocationContext.WorkspaceId) };
     }
@@ -492,6 +493,8 @@ public sealed partial class SessionApplication
                     ? registration.MemoryIntent.Capture(intentRepository, runId) : null,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
+                ReceiptRecoveryTool = CreateContextToolSchemas(CreateModelTools(conversationDefinitions, workspaceAvailable, true), conversationDefinitions)
+                    .FirstOrDefault(schema => schema.Id == ActiveTurnEvidenceTool.ToolId),
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -513,6 +516,12 @@ public sealed partial class SessionApplication
             invocationContext,
             context?.ModelResolution);
 
+        var receiptReferences = ReceiptEvidenceAuthorization.Select(context?.Messages, registration.SessionId, invocationContext?.RepositoryPath);
+        modelTools = CreateModelTools(
+            conversationDefinitions,
+            workspaceAvailable,
+            loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
+
         await AssessActiveTurnCompactionAsync(
             runId,
             registration,
@@ -532,7 +541,7 @@ public sealed partial class SessionApplication
         modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
-            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0);
+            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
 
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
@@ -547,7 +556,8 @@ public sealed partial class SessionApplication
                 context,
                 modelTools,
                 modelVisibleContinuation.Messages,
-                modelVisibleContinuation.FirstNeverDeliveredMessageIndex);
+                modelVisibleContinuation.FirstNeverDeliveredMessageIndex,
+                preserveReplay: loopState.TransientState.HasResponses);
         }
         catch (BudgetExceededException)
         {
@@ -572,6 +582,16 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
+        receiptReferences = ReceiptEvidenceAuthorization.Select(requestEnvelope.Messages, registration.SessionId, invocationContext?.RepositoryPath);
+        if (receiptReferences.Count == 0 && loopState.ActiveTurnEvidenceReferences.Count == 0
+            && modelTools.Any(tool => tool.Name == ActiveTurnEvidenceTool.ToolId))
+        {
+            modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, false);
+            requestEnvelope = CreateRequestEnvelope(context, modelTools, modelVisibleContinuation.Messages, modelVisibleContinuation.FirstNeverDeliveredMessageIndex);
+
+            // Removing a schema does not restore historical grants in this dispatched request.
+        }
+
         if (loopState.ActiveTurnEvidenceReferences.Count > 0
             && (invocationContext is null
                 || !ActiveTurnSourceProjector.ValidateFinalRequest(
@@ -594,6 +614,7 @@ public sealed partial class SessionApplication
             invocationContext = invocationContext with
             {
                 ActiveTurnEvidenceReferences = loopState.ActiveTurnEvidenceReferences,
+                ReceiptEvidenceReferences = receiptReferences,
             };
         }
 
@@ -626,6 +647,12 @@ public sealed partial class SessionApplication
             _sessionPreferences?.IncludeReasoningText ?? false);
         modelRequest = modelRequest with { TransientState = loopState.TransientState };
         modelRequest = ModelRequestPreparation.Prepare(_model, modelRequest);
+        if (loopState.TransientState.HasResponses && context is not null
+            && modelRequest.WireEstimate?.WireInputTokens > context.Inspection.TokenBudget)
+        {
+            throw new BudgetExceededException("The prepared continuation and retained replay exceed the selected input budget.");
+        }
+
         modelRequest = _sessionUsage?.ObservePreparedRequest(registration.SessionId, usageRequestId, modelRequest, context?.ModelResolution?.ContextWindow) ?? modelRequest;
         loopState.RequiresChronologicalCorrections = modelRequest.Preparation?.RequiresInitialInstructionPrefix == true;
         if (invocationContext is not null)
@@ -1542,6 +1569,11 @@ public sealed partial class SessionApplication
             {
                 var evidenceId = await ToolEvidenceAdmission.AdmitEvidenceAsync(
                     _evidenceStore, round.Registration.SessionId, round.RunId, invocationContext.RepositoryPath, result, content, cancellationToken);
+                if (_receiptEvidenceStore is not null)
+                {
+                    round.Registration.ReceiptChecks.CaptureEvidence(result, evidenceId, invocationContext.RepositoryPath, content);
+                }
+
                 loopState.AddCurrentSource(
                     batchResult.CorrelationId,
                     ActiveTurnSourceKind.Evidence,
@@ -1965,11 +1997,6 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (loopState.TransientState.HasResponses)
-        {
-            return;
-        }
-
         loopState.IncrementAssessmentSequence();
         var outputReserve = _activeTurnCompactionPolicy.ResolveOutputReserve(
             context.ModelResolution?.EffectiveRequestOutputTokenReserve);
@@ -1986,6 +2013,7 @@ public sealed partial class SessionApplication
         var compactionActivityDuration = default(TimeSpan?);
         var compactionActivityProfileId = default(ModelProfileId?);
         var visible = loopState.CreateModelVisibleContinuation();
+        ModelStreamRequest? replayOriginalRequest = null;
         ModelStreamRequest PrepareRequest(
             ModelVisibleContinuation continuation,
             bool applyCapacityFallback = true,
@@ -1993,14 +2021,15 @@ public sealed partial class SessionApplication
         {
             var effectiveTools = ResolveRecoveryToolAvailability(
                 requestTools ?? modelTools,
-                continuation.EvidenceReferences.Count > 0);
+                continuation.EvidenceReferences.Count > 0 || (activeTurnRecoveryDefinition is not null && ReceiptEvidenceAuthorization.Select(context.Messages, registration.SessionId, invocationContext?.RepositoryPath).Count > 0));
             var messages = continuation.Messages.ToList();
             var envelope = applyCapacityFallback
                 ? CreateRequestEnvelope(
                     context,
                     effectiveTools,
                     messages,
-                    continuation.FirstNeverDeliveredMessageIndex)
+                    continuation.FirstNeverDeliveredMessageIndex,
+                    preserveReplay: loopState.TransientState.HasResponses)
                 : new RequestEnvelope(
                     [.. context.Messages ?? [], .. messages],
                     EstimateCompleteRequest(
@@ -2025,7 +2054,22 @@ public sealed partial class SessionApplication
                 loopState.HistoryRewriteGeneration,
                 containsSensitiveData,
                 includeReasoningText);
-            return ModelRequestPreparation.Prepare(_model, request);
+            if (replayOriginalRequest is not null && !ReferenceEquals(continuation, visible) && loopState.TransientState.HasResponses)
+            {
+                request = request with { HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1 };
+                using var projection = loopState.TransientState.CreateHistoryRewrite(replayOriginalRequest, request);
+                var prepared = ModelRequestPreparation.Prepare(_model, request with { TransientState = projection });
+                if (applyCapacityFallback && prepared.WireEstimate is { } estimate
+                    && (estimate.WireInputTokens > maximumInputTokens
+                        || (context.ModelResolution is { } resolution && estimate.TotalCapacityTokens > resolution.ContextWindow)))
+                {
+                    throw new BudgetExceededException("The compacted request and retained replay exceed the selected model context window.");
+                }
+
+                return prepared with { TransientState = null };
+            }
+
+            return ModelRequestPreparation.Prepare(_model, request with { TransientState = loopState.TransientState });
         }
 
         IReadOnlyList<ModelToolDefinition> ResolveRecoveryToolAvailability(
@@ -2058,6 +2102,7 @@ public sealed partial class SessionApplication
         }
 
         var preparedOrdinaryRequest = PrepareRequest(visible, applyCapacityFallback: false);
+        replayOriginalRequest = preparedOrdinaryRequest;
         var beforeEstimate = preparedOrdinaryRequest.WireEstimate
             ?? EstimateCompleteRequest(context, modelTools, layout, visible.Messages, outputReserve);
         var preparedOrdinaryAdmissionRequest = preparedOrdinaryRequest;
@@ -2367,7 +2412,14 @@ public sealed partial class SessionApplication
                         await StartActivityAsync(activityProfileId);
                     }
 
+                    using var replayProjection = loopState.TransientState.HasResponses
+                        ? loopState.TransientState.CreateHistoryRewrite(preparedOrdinaryRequest, preparedProjectedRequest) : null;
                     _ = loopState.ActivateSourceProjection(deterministicProjection);
+                    if (replayProjection is not null)
+                    {
+                        loopState.TransientState.AdoptHistoryRewrite(replayProjection);
+                    }
+
                     _logger.LogInformation(
                         "Exact active-turn source projection removed {RemovedRanges} ranges for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens including recovery schema overhead.",
                         deterministicProjection.RemovedRangeCount,
@@ -2636,11 +2688,18 @@ public sealed partial class SessionApplication
                         HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
                         Duration = result.Duration,
                     };
+                    using var replayProjection = loopState.TransientState.HasResponses
+                        ? loopState.TransientState.CreateHistoryRewrite(preparedOrdinaryRequest, preparedAfterRequest) : null;
                     loopState.ActivateSummary(
                         summary,
                         compactedPrefix,
                         checkpoint,
                         sourceProjectionForSummary);
+                    if (replayProjection is not null)
+                    {
+                        loopState.TransientState.AdoptHistoryRewrite(replayProjection);
+                    }
+
                     _logger.LogInformation(
                         "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
                         compactedGroupCount,
@@ -2810,7 +2869,8 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? context,
         IReadOnlyList<ModelToolDefinition> modelTools,
         List<ModelMessage> continuationMessages,
-        int? firstNeverDeliveredMessageIndex)
+        int? firstNeverDeliveredMessageIndex,
+        bool preserveReplay = false)
     {
         IReadOnlyList<ModelMessage> requestMessages =
         [
@@ -2822,7 +2882,7 @@ public sealed partial class SessionApplication
 
         if (context?.Layout is { } requestLayout)
         {
-            emergencyReductionApplied = BoundContinuationMessages(
+            emergencyReductionApplied = !preserveReplay && BoundContinuationMessages(
                 continuationMessages,
                 context,
                 modelTools,
@@ -2840,6 +2900,10 @@ public sealed partial class SessionApplication
                 requestLayout.StablePrefixMessageCount,
                 context.ModelResolution?.EffectiveRequestOutputTokenReserve ?? 0,
                 context.ProviderInstructions);
+            if (preserveReplay && wireEstimate.WireInputTokens > context.Inspection.TokenBudget)
+            {
+                throw new BudgetExceededException("The retained continuation exceeds the selected input budget; a validated history rewrite is required.");
+            }
         }
 
         return new RequestEnvelope(

@@ -22,6 +22,8 @@ internal sealed class ConversationTranscript
     private readonly Dictionary<MutationSetId, RunId> _mutationSetRuns = [];
     private readonly Dictionary<MutationSetId, Dictionary<string, string>> _planStepDetailsByMutationSet = [];
     private readonly Dictionary<MutationSetId, MutationApprovalLevel> _mutationApprovalLevels = [];
+    private readonly Dictionary<MutationSetId, ApprovalId> _mutationSetApprovals = [];
+    private readonly Dictionary<MutationSetId, Dictionary<string, (MutationApplied Event, int Count)>> _pendingAppliedMutations = [];
     private readonly Dictionary<(RunId RunId, SemanticCheckId SemanticCheckId), SemanticCheckStarted> _pendingSemanticChecks = [];
     private readonly Dictionary<SemanticRefreshId, LinkedListNode<SemanticRefreshId>> _renderedSemanticRefreshStarts = [];
     private readonly LinkedList<SemanticRefreshId> _renderedSemanticRefreshStartOrder = [];
@@ -188,6 +190,8 @@ internal sealed class ConversationTranscript
                 _answerActive = false;
                 return true;
             case RunCompleted completed:
+                // A cancelled event publication may omit the normal approval boundary.
+                var appliedMutationsFlushed = FlushAppliedMutations();
                 foreach (var id in _pendingTools.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray())
                 {
                     _pendingTools.Remove(id);
@@ -205,7 +209,7 @@ internal sealed class ConversationTranscript
                 _awaitingFirstResponseBoundary = false;
                 if (_lastVisibleWasLifecycleBlock)
                 {
-                    return false;
+                    return appliedMutationsFlushed;
                 }
 
                 AppendText(Environment.NewLine);
@@ -277,6 +281,11 @@ internal sealed class ConversationTranscript
                 return true;
             case MutationSetProposed proposed:
                 _mutationApprovalLevels[proposed.MutationSetId] = proposed.RequiredApproval;
+                if (proposed.ApprovalId != default)
+                {
+                    _mutationSetApprovals[proposed.MutationSetId] = proposed.ApprovalId;
+                }
+
                 _planStepDetailsByMutationSet[proposed.MutationSetId] = CreateMutationSetPlanStepDetails();
                 if (_activeMutationProposalRunId is { } proposalRunId)
                 {
@@ -297,12 +306,37 @@ internal sealed class ConversationTranscript
                         : "Choose apply or discard at the mutation review prompt."));
                 return true;
             case MutationApplied applied:
+                if (_mutationSetApprovals.ContainsKey(applied.MutationSetId))
+                {
+                    if (!_pendingAppliedMutations.TryGetValue(applied.MutationSetId, out var files))
+                    {
+                        files = new(StringComparer.Ordinal);
+                        _pendingAppliedMutations.Add(applied.MutationSetId, files);
+                    }
+
+                    var path = applied.RelativePath ?? applied.MutationId.ToString();
+                    files[path] = files.TryGetValue(path, out var existing)
+                        ? (existing.Event, existing.Count + 1)
+                        : (applied, 1);
+                    return false;
+                }
+
                 AppendLifecycleBlock(InteractionPresentationFormatter.FormatMutationApplied(
                     applied,
                     GetMutationApprovalLevel(applied),
                     GetPlanStepDetail(applied)));
                 return true;
+            case ApprovalGranted granted:
+                var changed = false;
+                foreach (var setId in _mutationSetApprovals.Where(pair => pair.Value == granted.ApprovalId).Select(pair => pair.Key).ToArray())
+                {
+                    changed |= FlushAppliedMutations(setId);
+                    _mutationSetApprovals.Remove(setId);
+                }
+
+                return changed;
             case MutationSetRolledBack rolledBack:
+                FlushAppliedMutations(rolledBack.MutationSetId);
                 RemoveMutationSetCorrelationState(rolledBack.MutationSetId);
                 AppendSystemResponse(
                     $"Mutation set rolled back; restored {rolledBack.RestoredFiles.Count} files.");
@@ -310,6 +344,29 @@ internal sealed class ConversationTranscript
             default:
                 return false;
         }
+    }
+
+    private bool FlushAppliedMutations(MutationSetId? mutationSetId = null)
+    {
+        var changed = false;
+        MutationSetId[] setIds = mutationSetId is { } id ? [id] : [.. _pendingAppliedMutations.Keys];
+        foreach (var setId in setIds)
+        {
+            if (!_pendingAppliedMutations.Remove(setId, out var files))
+            {
+                continue;
+            }
+
+            _mutationSetApprovals.Remove(setId);
+            foreach (var (applied, count) in files.Values)
+            {
+                AppendLifecycleBlock(InteractionPresentationFormatter.FormatMutationApplied(
+                    applied, GetMutationApprovalLevel(applied), GetPlanStepDetail(applied), count));
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     private void RecordPlanRiskBasis(PlanProposed proposed)
@@ -420,6 +477,7 @@ internal sealed class ConversationTranscript
         _mutationSetRuns.Remove(mutationSetId);
         _planStepDetailsByMutationSet.Remove(mutationSetId);
         _mutationApprovalLevels.Remove(mutationSetId);
+        _mutationSetApprovals.Remove(mutationSetId);
     }
 
     private static string CreatePlanRiskBasis(int declaredRiskCount, PlanSanityCheckCompleted? sanity)

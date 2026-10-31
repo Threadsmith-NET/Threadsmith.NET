@@ -275,14 +275,20 @@ public sealed class ContextAssembler : IContextAssembler
             ["CurrentTurnHostContext"] = currentTurnHostContext,
         };
         var governedState = JsonSerializer.Serialize(governedStateValues);
+        var receiptRecoveryTool = request.ReceiptRecoveryTool is { } recovery
+            && !request.ToolSchemas.Any(schema => schema.Id == recovery.Id) ? recovery : null;
+        var receiptRecoveryIncluded = receiptRecoveryTool is not null
+            && ReceiptEvidenceAuthorization.Select(conversation.CreateRecentMessages(), request.SessionId, request.RepositoryPath).Count > 0;
+        var toolContracts = receiptRecoveryIncluded && receiptRecoveryTool is { } includedRecovery ? request.ToolSchemas.Append(includedRecovery) : request.ToolSchemas;
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(
-            request.ToolSchemas.Select(schema => new ModelToolDefinition
+            toolContracts.Select(schema => new ModelToolDefinition
             {
                 Name = schema.Id,
                 Description = schema.DescriptionResolver?.Invoke() ?? schema.Description,
                 ArgumentsJsonSchema = schema.JsonSchema,
                 PreferStrictArguments = schema.PreferStrictArguments,
             }));
+        var requiredCapabilities = request.RequiredCapabilities with { ToolCalls = request.RequiredCapabilities.ToolCalls || receiptRecoveryIncluded };
         var toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
         IReadOnlyList<ModelContextSource> textToolSources = [];
         var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
@@ -320,6 +326,11 @@ public sealed class ContextAssembler : IContextAssembler
             ["wireFraming"] = 0,
             ["outputSchema"] = TokenEstimator.Estimate(outputSchema),
         };
+        var optionalRecoveryTokens = receiptRecoveryIncluded
+            ? request.ToolTransportMode == ToolTransportMode.Native
+                ? tokensByCategory["nativeToolSchemas"] - TokenEstimator.Estimate(JsonSerializer.Serialize(canonicalTools.Where(tool => tool.Name != receiptRecoveryTool?.Id)))
+                : tokensByCategory["toolSchemas"] - TokenEstimator.Estimate(ModelToolCanonicalizer.RenderText(canonicalTools.Where(tool => tool.Name != receiptRecoveryTool?.Id).ToArray(), _prompts, out _))
+            : 0;
         var fixedTokens = tokensByCategory.Values.Sum();
         var optionalConversationTokens = tokensByCategory["recentTurns"]
             + tokensByCategory["conversationSummary"]
@@ -334,7 +345,7 @@ public sealed class ContextAssembler : IContextAssembler
             .ThenBy(item => item.EvidenceId.Value)];
         var workloadClass = WorkloadClass.General;
         var tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
-        var requiredFixedTokens = fixedTokens - optionalConversationTokens;
+        var requiredFixedTokens = fixedTokens - optionalConversationTokens - optionalRecoveryTokens;
         if (requiredFixedTokens > tokenBudget)
         {
             throw new InvalidOperationException(
@@ -430,7 +441,7 @@ public sealed class ContextAssembler : IContextAssembler
         };
         var modelResolution = _modelResolver?.Resolve(
             workloadClass,
-            request.RequiredCapabilities,
+            requiredCapabilities,
             constraints,
             request.DefaultModelProfileId);
         if (modelResolution is { } resolved && resolved.ProfileId != promptProfileId
@@ -477,6 +488,18 @@ public sealed class ContextAssembler : IContextAssembler
         {
             if (conversation.TryReduce() || repositoryMemory.TryReduce())
             {
+                if (receiptRecoveryIncluded && ReceiptEvidenceAuthorization.Select(conversation.CreateRecentMessages(), request.SessionId, request.RepositoryPath).Count == 0)
+                {
+                    receiptRecoveryIncluded = false;
+                    canonicalTools = ModelToolCanonicalizer.Canonicalize(canonicalTools.Where(tool => tool.Name != receiptRecoveryTool?.Id));
+                    toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
+                    toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
+                        ? ModelToolCanonicalizer.RenderText(canonicalTools, _prompts, out textToolSources) : string.Empty;
+                    tokensByCategory["toolSchemas"] = TokenEstimator.Estimate(toolSchemas);
+                    tokensByCategory["nativeToolSchemas"] = request.ToolTransportMode == ToolTransportMode.Native
+                        ? TokenEstimator.Estimate(JsonSerializer.Serialize(canonicalTools)) : 0;
+                }
+
                 modelInput = BuildModelInput(
                     systemPolicy,
                     appendContent,
@@ -814,7 +837,7 @@ public sealed class ContextAssembler : IContextAssembler
         return new ContextAssemblyResult(
             modelInput,
             workloadClass,
-            request.RequiredCapabilities,
+            requiredCapabilities,
             constraints,
             modelResolution,
             inspection,
@@ -1841,6 +1864,8 @@ public sealed class ContextAssembler : IContextAssembler
                     message.Content ?? string.Empty,
                     message.Role == ConversationRole.User && message.Content is not null ? message.Images : [],
                     _omittedImageCounts.GetValueOrDefault(message.Id)),
+                Receipt = message.Receipt,
+                ReceiptContentHash = message.Receipt is null ? null : message.ContentHash,
             })];
         }
 

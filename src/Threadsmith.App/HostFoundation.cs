@@ -1084,7 +1084,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             .. prFetchTool is null ? Array.Empty<ITool>() : [prFetchTool],
             new ListFilesTool(promptLoader, limits),
             new ReadFileTool(promptLoader, sanitizer, limits, imageArtifacts),
-            new ActiveTurnEvidenceTool(evidenceStore, promptLoader),
+            new ActiveTurnEvidenceTool(evidenceStore, promptLoader, imageArtifacts as IReceiptEvidenceStore),
             new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits, imageArtifacts),
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),

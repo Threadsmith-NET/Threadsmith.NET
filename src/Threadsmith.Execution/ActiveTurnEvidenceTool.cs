@@ -47,6 +47,12 @@ public sealed record ActiveTurnEvidenceOutput
 
     /// <summary>Bounded stale or missing explanation.</summary>
     public string? Detail { get; init; }
+
+    /// <summary>Original run for a recovered archived observation; never a current validation claim.</summary>
+    public Guid? OriginRunId { get; init; }
+
+    /// <summary>Whether the original retained observation already omitted output.</summary>
+    public bool? OriginalTruncated { get; init; }
 }
 
 /// <summary>Reads only historical evidence explicitly referenced by the current canonical request.</summary>
@@ -62,18 +68,20 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
 
     private readonly ToolDefinition _definition;
     private readonly IEvidenceStore _store;
+    private readonly IReceiptEvidenceStore? _receiptStore;
 
     /// <summary>Initializes a new instance of the <see cref="ActiveTurnEvidenceTool"/> class.</summary>
-    public ActiveTurnEvidenceTool(IEvidenceStore store, IPromptLoader prompts)
+    public ActiveTurnEvidenceTool(IEvidenceStore store, IPromptLoader prompts, IReceiptEvidenceStore? receiptStore = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(prompts);
         _store = store;
+        _receiptStore = receiptStore;
         _definition = new ToolDefinition
         {
             Id = ToolId,
-            Version = "1.0",
-            DisplayName = "Read Active-Turn Evidence",
+            Version = "1.1",
+            DisplayName = "Read Referenced Evidence",
             Description = prompts.Get(PromptFileNames.ToolReadActiveTurnEvidenceDescription),
             DescriptionResolver = () => prompts.Get(PromptFileNames.ToolReadActiveTurnEvidenceDescription),
             Category = ToolCategory.SystemInformation,
@@ -87,8 +95,8 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
             InputSchema = new ToolSchema("active-turn-evidence-input", 1, InputSchemaJson),
             OutputSchema = new ToolSchema(
                 "active-turn-evidence-output",
-                1,
-                """{"type":"object","additionalProperties":false,"required":["status","evidenceId"],"properties":{"status":{"type":"string","enum":["Available","Stale","Missing"]},"evidenceId":{"type":"string","format":"uuid"},"content":{"type":["string","null"]},"nextLine":{"type":["integer","null"],"minimum":1},"nextColumn":{"type":["integer","null"],"minimum":1},"totalLines":{"type":["integer","null"],"minimum":0},"detail":{"type":["string","null"]}}}"""),
+                2,
+                """{"type":"object","additionalProperties":false,"required":["status","evidenceId"],"properties":{"status":{"type":"string","enum":["Available","Stale","Missing"]},"evidenceId":{"type":"string","format":"uuid"},"content":{"type":["string","null"]},"nextLine":{"type":["integer","null"],"minimum":1},"nextColumn":{"type":["integer","null"],"minimum":1},"totalLines":{"type":["integer","null"],"minimum":0},"detail":{"type":["string","null"]},"originRunId":{"type":["string","null"],"format":"uuid"},"originalTruncated":{"type":["boolean","null"]}}}"""),
             SubagentAvailable = false,
             Scheduling = new ToolSchedulingDescriptor
             {
@@ -109,6 +117,18 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
     {
         cancellationToken.ThrowIfCancellationRequested();
         var evidenceId = new EvidenceId(input.EvidenceId);
+        if (context.Invocation.ReceiptEvidenceReferences.FirstOrDefault(item => item.Reference.EvidenceId == evidenceId) is { } grant)
+        {
+            if (context.Invocation.IsChildAgent
+                || grant.Receipt.OriginSessionId != context.SessionId
+                || grant.Reference.RepositoryIdentity != RepositoryIdentity.Create(context.Invocation.RepositoryPath))
+            {
+                throw new UnauthorizedAccessException("This evidence is not referenced by the current model request.");
+            }
+
+            return ReadArchivedAsync(input, context, grant, cancellationToken);
+        }
+
         var reference = context.Invocation.ActiveTurnEvidenceReferences
             .FirstOrDefault(item => item.EvidenceId == evidenceId)
             ?? throw new UnauthorizedAccessException(
@@ -194,5 +214,39 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
                 Detail = detail,
             },
             []);
+    }
+
+    private async Task<ToolExecution<ActiveTurnEvidenceOutput>> ReadArchivedAsync(ActiveTurnEvidenceInput input, ToolExecutionContext context, ReceiptEvidenceGrant grant, CancellationToken cancellationToken)
+    {
+        TextEvidenceReadResult? read;
+        try
+        {
+            read = _receiptStore is null ? null : await _receiptStore.ReadReceiptEvidenceAsync(context.SessionId, grant, input.StartLine, input.EndLine, input.StartColumn, cancellationToken);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ToolArgumentValidationException(exception.Message);
+        }
+
+        if (read is null)
+        {
+            return CreateResult(ActiveTurnEvidenceStatus.Missing, input.EvidenceId, "The referenced historical observation is unavailable.");
+        }
+
+        return new ToolExecution<ActiveTurnEvidenceOutput>(
+            new ActiveTurnEvidenceOutput
+            {
+                Status = ActiveTurnEvidenceStatus.Available,
+                EvidenceId = input.EvidenceId,
+                Content = read.Content,
+                NextLine = read.NextLine,
+                NextColumn = read.NextColumn,
+                TotalLines = read.TotalLines,
+                OriginRunId = grant.Receipt.OriginRunId.Value,
+                OriginalTruncated = grant.Reference.WasTruncated,
+                Detail = "Historical captured observation; current-source applicability is unknown. Current output sanitization applies.",
+            },
+            [new ToolProvenanceSource("evidence", input.EvidenceId.ToString("D"))],
+            IsTruncated: read.NextLine is not null);
     }
 }

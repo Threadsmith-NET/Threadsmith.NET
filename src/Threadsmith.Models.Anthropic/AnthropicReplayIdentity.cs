@@ -47,13 +47,6 @@ internal static class AnthropicReplayIdentity
         }
     }
 
-    /// <summary>Anchors each completed response to its exact preceding canonical history, including transient round ordering.</summary>
-    internal static string HistoryDigest(IEnumerable<ModelMessage> messages)
-    {
-        return AnthropicRequestMapper.Hash(
-        JsonSerializer.SerializeToUtf8Bytes(messages.Select(message => new { Message = message, message.ModelRound })));
-    }
-
     private static string Credential(string apiKey, string providerId, string? reference)
     {
         return AnthropicRequestMapper.Hash(

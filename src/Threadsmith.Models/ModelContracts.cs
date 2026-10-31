@@ -400,6 +400,9 @@ public enum MalformedInvocationFailureKind
 
     /// <summary>Post-apply validation failed and can be corrected by another mutation proposal.</summary>
     PostApplyValidation,
+
+    /// <summary>Tool arguments were incomplete when the response exhausted its output allowance.</summary>
+    TruncatedArguments,
 }
 
 /// <summary>Sanitized diagnostic metadata for a recoverable malformed model invocation.</summary>

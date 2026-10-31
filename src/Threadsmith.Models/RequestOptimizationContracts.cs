@@ -62,6 +62,14 @@ public sealed record ModelContentPart
 /// <summary>One immutable chronological provider-neutral model message.</summary>
 public sealed record ModelMessage
 {
+    /// <summary>Trusted original receipt association; never inferred from model-facing text.</summary>
+    [JsonIgnore]
+    public ConversationReceiptProvenance? Receipt { get; init; }
+
+    /// <summary>Exact archived body identity; any subsequent text reduction revokes its receipt grants.</summary>
+    [JsonIgnore]
+    public string? ReceiptContentHash { get; init; }
+
     /// <summary>Host-only source ranges in the final visible text, excluded from serialization and request identity.</summary>
     [JsonIgnore]
     public IReadOnlyList<ModelContextSource> Sources { get; init; } = [];

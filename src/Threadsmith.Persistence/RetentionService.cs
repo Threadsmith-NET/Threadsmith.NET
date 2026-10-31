@@ -117,6 +117,7 @@ public sealed class RetentionService
             : await _skillStateStore.DeleteCheckpointsOlderThanAsync(cutoff, cancellationToken);
         var removedArtifacts = 0;
         await _artifactStore.PruneImageReferencesAsync(cutoff, cancellationToken);
+        await _artifactStore.PruneReceiptEvidenceAsync(cutoff, cancellationToken);
 
         // Artifact cleanup is delegated to the artifact store's session-scoped listing; in
         // metadata-only mode artifacts are already sanitized so they remain unless aged.

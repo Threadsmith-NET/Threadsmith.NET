@@ -75,6 +75,18 @@ internal sealed class ChildAgentHistory
         IActiveTurnCompactor compactor,
         IActiveTurnCompactionAttemptObserver observer,
         CancellationToken cancellationToken)
+        => await CompactAsync(assignment, model, tools, round, compactor, observer, null, cancellationToken);
+
+    /// <summary>Compacts completed exchanges and their replay bindings as one accepted history rewrite.</summary>
+    public async Task CompactAsync(
+        AgentAssignment assignment,
+        AgentModelSelection model,
+        ModelWireToolEstimate tools,
+        int round,
+        IActiveTurnCompactor compactor,
+        IActiveTurnCompactionAttemptObserver observer,
+        ModelStreamRequest? replayRequest,
+        CancellationToken cancellationToken)
     {
         if (!_options.Enabled || !_options.Summary.Enabled
             || (_lastAttemptRound is { } last && round - last < _options.MinimumRoundsBetweenAttempts))
@@ -84,7 +96,7 @@ internal sealed class ChildAgentHistory
 
         int Estimate(IReadOnlyList<ModelMessage> messages) => ModelWireEstimator.Estimate(
             messages, tools, 0, model.OutputReserveTokens, model.ProviderInstructions).WireInputTokens;
-        var before = Estimate(Messages);
+        var before = (int)Math.Min(int.MaxValue, Estimate(Messages) + (replayRequest?.TransientState?.RetainedOutputTokens ?? 0));
         var capacity = model.ContextWindowTokens - model.OutputReserveTokens;
         if (!(_options.TriggerTokens > 0 && before >= _options.TriggerTokens)
             && !(_options.TriggerPercent > 0 && before >= (long)capacity * _options.TriggerPercent / 100))
@@ -196,12 +208,23 @@ internal sealed class ChildAgentHistory
                 }
             }
 
-            var after = Estimate(replacement);
+            using var replayProjection = replayRequest?.TransientState is { HasResponses: true } replay
+                ? replay.CreateHistoryRewrite(replayRequest, replayRequest with
+                {
+                    Messages = replacement,
+                    HistoryRewriteGeneration = RewriteGeneration + 1,
+                }) : null;
+            var after = (int)Math.Min(int.MaxValue, Estimate(replacement) + (replayProjection?.RetainedOutputTokens ?? 0));
             activity?.SetTag("threadsmith.compaction.after_input_tokens", after);
             if (before - after < Math.Max(1, _options.MinimumSavingsTokens))
             {
                 activity?.SetTag("threadsmith.compaction.outcome", "insufficient_savings");
                 return;
+            }
+
+            if (replayProjection is not null)
+            {
+                replayRequest?.TransientState?.AdoptHistoryRewrite(replayProjection);
             }
 
             Messages.Clear();

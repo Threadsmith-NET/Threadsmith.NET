@@ -139,6 +139,8 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 6. Inspect final selection, token/sensitivity exclusions, branch/query/cache diagnostics, and actual-submission receipts separately. Previewing context cannot increment inclusion statistics.
 7. Restart, resume, and clone sessions containing both visible transcripts and historical automatic snapshots. Confirm archive order/mode/valid governed state restore while retired automatic items never reenter the prompt. Explicit repository notes remain repository-local and independent of the old transcript.
 
+8. Complete a native check, then recover its bounded observation by the evidence ID in a later admitted receipt. Change source and restart/resume the same session; confirm original historical bytes and unknown current applicability, with no check rerun. Remove the receipt or use a clone/other repository/history-excluding mode; confirm no historical grant. Expire or remove the capture and confirm unavailable recovery.
+
 **Verifies:** bounded archive continuity, model-generated active-turn compaction, explicit repository recall, three-mode assembly, token/sensitivity policy, truthful inspection/accounting, and restart/clone exclusion of retired automatic memory. Hidden reasoning, secrets, provider wire types, and raw tool payloads never become automatically promoted conversation facts.
 
 

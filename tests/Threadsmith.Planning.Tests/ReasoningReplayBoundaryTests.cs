@@ -10,6 +10,44 @@ using Xunit;
 /// <summary>Real provider serialization with explicit host replay ownership and changed authorities.</summary>
 public static class ReasoningReplayBoundaryTests
 {
+    /// <summary>Rejected projections leave private ownership intact; accepted rewrites retain exact signed output and enforce their new prefix.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task HistoryRewrite_IsIsolatedAndStillRejectsTampering(bool codex)
+    {
+        using var fixture = new ReplaySession(codex);
+        var original = await fixture.CompleteToolRoundAsync();
+        var envelope = Assert.Single(fixture.State.Responses);
+        var rewritten = original with
+        {
+            HistoryRewriteGeneration = 1,
+            Messages = [new ModelMessage { Role = ModelMessageRole.HostContext, SectionId = "summary", Content = [new() { Content = "Completed earlier work." }] }, .. original.Messages],
+        };
+        using (var discarded = fixture.State.CreateHistoryRewrite(original, rewritten))
+        {
+            Assert.Equal(fixture.State.RetainedOutputTokens, discarded.RetainedOutputTokens);
+            fixture.State.ValidateHistory(original);
+        }
+
+        Assert.True(envelope.ByteCount > 0);
+        Assert.Throws<ModelProviderException>(() => fixture.State.CreateHistoryRewrite(original, rewritten with { ResolvedProfileId = ModelProfileId.New() }));
+        Assert.Throws<ModelProviderException>(() => fixture.State.CreateHistoryRewrite(original, rewritten with
+        {
+            Messages = rewritten.Messages.Where(message => message.Role != ModelMessageRole.Tool).ToArray(),
+        }));
+        using var accepted = fixture.State.CreateHistoryRewrite(original, rewritten);
+        fixture.State.AdoptHistoryRewrite(accepted);
+        Assert.Equal(0, envelope.ByteCount);
+        var request = WithCapacity(rewritten with { TransientState = fixture.State });
+        await CollectAsync(fixture.Provider, request);
+        ReasoningReplayFixture.AssertReplay(fixture.Handler.Requests[1], codex, 1);
+        Assert.Throws<ModelProviderException>(() => fixture.State.ValidateHistory(request with
+        {
+            Messages = [rewritten.Messages[0] with { Content = [new() { Content = "tampered" }] }, .. rewritten.Messages.Skip(1)],
+        }));
+    }
+
     /// <summary>Late cumulative usage contributes to continuation admission before the correlated batch is released.</summary>
     [Theory]
     [InlineData(null, false)]

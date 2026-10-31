@@ -295,4 +295,30 @@ public sealed record GetContextInspectionCommand(RunId RunId, SessionId? Session
 public sealed record RequestConversationCompactionCommand(SessionId SessionId) : ICommand<bool>;
 
 /// <summary>Versioned original receipt association; clone archive identities may differ.</summary>
-public sealed record ConversationReceiptProvenance(int Version, SessionId OriginSessionId, RunId OriginRunId, ConversationMessageId OriginMessageId);
+public sealed record ConversationReceiptProvenance(int Version, SessionId OriginSessionId, RunId OriginRunId, ConversationMessageId OriginMessageId)
+{
+    /// <summary>Only entries retained in the rendered receipt; absent on legacy receipts and unavailable captures.</summary>
+    public IReadOnlyList<ReceiptEvidenceReference> Evidence { get; init; } = [];
+
+    /// <summary>Compares original identity and ordered reference values across persistence round trips.</summary>
+    public bool Equals(ConversationReceiptProvenance? other)
+        => other is not null && Version == other.Version && OriginSessionId == other.OriginSessionId
+            && OriginRunId == other.OriginRunId && OriginMessageId == other.OriginMessageId
+            && Evidence.SequenceEqual(other.Evidence);
+
+    /// <inheritdoc />
+    public override int GetHashCode()
+    {
+        var hash = default(HashCode);
+        hash.Add(Version);
+        hash.Add(OriginSessionId);
+        hash.Add(OriginRunId);
+        hash.Add(OriginMessageId);
+        foreach (var reference in Evidence)
+        {
+            hash.Add(reference);
+        }
+
+        return hash.ToHashCode();
+    }
+}

@@ -40,6 +40,21 @@ public static class ModelJsonCleanup
             }
             catch (JsonException)
             {
+                // Never reinterpret a nested value from a broken JSON envelope as the root.
+                var next = index + 1;
+                while (next < bytes.Length && bytes[next] is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n')
+                {
+                    next++;
+                }
+
+                var remaining = bytes.AsSpan(next);
+                if (next < bytes.Length && (bytes[next] == (byte)'"'
+                    || (bytes[index] == (byte)'[' && (bytes[next] is (byte)'{' or (byte)'[' or (byte)'-' or >= (byte)'0' and <= (byte)'9'
+                        || remaining.StartsWith("true"u8) || remaining.StartsWith("false"u8) || remaining.StartsWith("null"u8)))))
+                {
+                    return trimmed;
+                }
+
                 // Non-JSON braces in surrounding prose are not candidates.
             }
         }

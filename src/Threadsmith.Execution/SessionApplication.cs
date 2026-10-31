@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Models;
+using Threadsmith.Persistence;
 using Threadsmith.Tools;
 
 /// <summary>Coordinates scripted sessions through application commands.</summary>
@@ -55,6 +56,7 @@ public sealed partial class SessionApplication :
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
     private readonly IImageArtifactStore? _imageArtifacts;
+    private readonly IReceiptEvidenceStore? _receiptEvidenceStore;
 
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
@@ -164,9 +166,11 @@ public sealed partial class SessionApplication :
         IRepositoryIntelligenceStatusProvider? repositoryIntelligence = null,
         IRepositoryIntelligenceOperations? intelligenceOperations = null,
         IImageArtifactStore? imageArtifacts = null,
-        UserQuestionCoordinator? userQuestions = null)
+        UserQuestionCoordinator? userQuestions = null,
+        IReceiptEvidenceStore? receiptEvidenceStore = null)
     {
         ArgumentNullException.ThrowIfNull(events);
+        _receiptEvidenceStore = receiptEvidenceStore;
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(sanitizer);
@@ -805,9 +809,32 @@ public sealed partial class SessionApplication :
                 var messageId = new ConversationMessageId(new Guid(SHA256.HashData(
                     Encoding.UTF8.GetBytes($"receipt-v1:{sessionId.Value}:{runId.Value}"))[..16]));
                 var provenance = new ConversationReceiptProvenance(1, sessionId, runId, messageId);
-                var content = ConversationReceiptRenderer.Render(
+                if (_receiptEvidenceStore is not null)
+                {
+                    try
+                    {
+                        var captures = checks.EvidenceSnapshot().ToList();
+                        if (outcome?.FinalDiff is { Length: <= 1024 * 1024 } diff && captures.Count < 8
+                            && registration?.ReceiptRepositoryIdentity is { } repository && _receiptEvidenceStore is IArtifactStore artifacts)
+                        {
+                            var text = await artifacts.ReadAsync(diff.ContentHash, cancellationToken);
+                            if (text is not null)
+                            {
+                                captures.Add(new ReceiptEvidenceCapture(new EvidenceId(messageId.Value), null, repository, "Applied diff", text, false));
+                            }
+                        }
+
+                        provenance = provenance with { Evidence = await _receiptEvidenceStore.CaptureAsync(provenance, captures, cancellationToken) };
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(exception, "Historical evidence capture is unavailable for run {RunId}", runId.Value);
+                    }
+                }
+
+                var rendered = ConversationReceiptRenderer.RenderReceipt(
                     provenance, status == ExecutionCheckpointPhase.Completed && (editEvidenceUnavailable || outcome is { Status: not ExecutionCheckpointPhase.Completed }) ? ExecutionCheckpointPhase.Failed : status, outcome, checks, _prompts, _sanitizer, _sourceEdits?.GetReceiptBaseline(registration?.ReceiptWorkspaceId), editEvidenceUnavailable);
-                await ArchiveVisibleMessageAsync(sessionId, runId, ConversationRole.Assistant, content, CancellationToken.None, receipt: provenance);
+                await ArchiveVisibleMessageAsync(sessionId, runId, ConversationRole.Assistant, rendered.Content, CancellationToken.None, receipt: rendered.Provenance);
             }
             catch (Exception exception)
             {
@@ -1118,6 +1145,8 @@ public sealed partial class SessionApplication :
         }
 
         public WorkspaceId? ReceiptWorkspaceId { get; set; }
+
+        public string? ReceiptRepositoryIdentity { get; set; }
 
         public ConversationReceiptChecks ReceiptChecks { get; } = new();
 

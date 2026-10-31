@@ -24,7 +24,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(false, false, false, true)]
     [InlineData(false, false, false, true, true)]
     [InlineData(false, true, false, true, true)]
-    public async Task RunAsync_OpenAiReasoning_PreservesAndReleasesReplay(bool codex, bool cancelAfterTool, bool exceedCapacity, bool reasoningAlias = false, bool openRouter = false)
+    [InlineData(false, false, false, false, false, true)]
+    [InlineData(true, false, false, false, false, true)]
+    public async Task RunAsync_OpenAiReasoning_PreservesAndReleasesReplay(bool codex, bool cancelAfterTool, bool exceedCapacity, bool reasoningAlias = false, bool openRouter = false, bool compact = false)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var ct = cancellation.Token;
@@ -40,16 +42,20 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         });
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
-        var tool = new InspectMetadataTool();
+        var tool = new InspectMetadataTool(compact ? new string('e', 2048) : "Compiler-backed metadata.");
         var registry = new ToolRegistry([tool]);
         var catalog = ReasoningReplayFixture.Catalog(codex, contextWindow: exceedCapacity ? 9000 : 200000, reasoningAlias: reasoningAlias, openRouter: openRouter);
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
         using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id) { ExceedCapacity = exceedCapacity, ReasoningAlias = reasoningAlias };
         using var client = new HttpClient(handler);
-        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key")));
+        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"))) { Summarize = compact };
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = "low" } };
         var plan = CreatePlan(assignment);
+        var options = compact ? CreateOptions() with
+        {
+            Compaction = new ChildAgentCompactionOptions { TriggerTokens = 1, TriggerPercent = 0, RecentTokens = 1, MinimumSavingsTokens = 1 },
+        } : CreateOptions();
         var runner = new ModelExplorerAssignmentRunner(
             new AgentContextAssembler(evidence),
             new AgentFindingAdmission(evidence),
@@ -59,7 +65,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             evidence,
             new StubInstructionProvider(),
             sanitizer,
-            CreateOptions(),
+            options,
             CreateParentContext(plan, [tool.Definition.Id]),
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId),
             TestPromptLoader.Instance);
@@ -92,7 +98,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(2, outcome.Usage.ToolCalls);
         Assert.Equal(3, handler.Requests.Count);
         ReasoningReplayFixture.AssertReplay(handler.Requests[1], codex, 1, reasoningAlias);
-        ReasoningReplayFixture.AssertReplay(handler.Requests[2], codex, 2, reasoningAlias);
+        if (compact)
+        {
+            Assert.Equal(1, provider.Summaries);
+            Assert.Equal(1, provider.Requests[2].HistoryRewriteGeneration);
+            var body = handler.Requests[2].GetRawText();
+            Assert.DoesNotContain(codex ? "opaque-0-state" : "private-0-state", body, StringComparison.Ordinal);
+            Assert.Contains(codex ? "opaque-1-state" : "private-1-state", body, StringComparison.Ordinal);
+        }
+        else
+        {
+            ReasoningReplayFixture.AssertReplay(handler.Requests[2], codex, 2, reasoningAlias);
+        }
+
         Assert.All(provider.Requests.Skip(1), request =>
         {
             var allowance = Assert.Single(request.WireEstimate!.Components, item => item.Id == "retained-allowance");
@@ -197,6 +215,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         internal List<ModelStreamRequest> PreparedRequests { get; } = [];
 
+        internal bool Summarize { get; init; }
+
+        internal int Summaries { get; private set; }
+
         public ModelStreamRequest Prepare(ModelStreamRequest request)
         {
             var prepared = _inner.Prepare(request);
@@ -206,6 +228,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            if (Summarize && request.Messages.Any(message => message.SectionId == "active-turn-compaction-policy"))
+            {
+                Summaries++;
+                yield return new ModelChunk { Text = "## Goal\nInspect behavior.\n## Critical Context\nEarlier metadata inspection completed." };
+                yield return new ModelChunk { Usage = new ModelUsage(10, 2) };
+                yield break;
+            }
+
             Requests.Add(request);
             await foreach (var chunk in _inner.StreamAsync(request, cancellationToken))
             {

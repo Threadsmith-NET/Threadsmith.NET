@@ -15,6 +15,25 @@ using Xunit;
 
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>An upstream run failure must not be misreported as a compiler or edit-finalization failure.</summary>
+    [Fact]
+    public async Task UpstreamFailureDoesNotEmitMisleadingEditCompletionDiagnostic()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = fixture.Events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
+        await fixture.Application.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        var outcome = await fixture.Application.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Failed, ct);
+        Assert.Equal(ExecutionCheckpointPhase.Failed, outcome?.Status);
+        Assert.DoesNotContain(observed.OfType<DiagnosticObserved>(), item => item.Code == "SourceEditCompletionFailed");
+        Assert.Contains(observed.OfType<ExecutionOutcomeRecorded>(), item => item.Status == ExecutionCheckpointPhase.Failed);
+    }
+
     /// <summary>Advisory outcome evidence remains valid redacted history for subsequent requests.</summary>
     [Fact]
     public async Task ConversationArchivesRedactedOutcomeForNextRequest()

@@ -268,7 +268,7 @@ Partial overlap, cross-tool overlap, changed or missing digests, different works
 
 ### Recovery
 
-When the final request contains receipts, Threadsmith dynamically advertises `read_active_turn_evidence`. The tool returns bounded pages from the original sanitized evidence. Authorization is tied to the same session, run, repository identity, evidence record, and producing tool invocation. It uses the ordinary tool pipeline, so normal policy, events, cancellation, paging, and execution accounting apply.
+When the final request contains receipts, Threadsmith dynamically advertises `read_active_turn_evidence`. The tool returns bounded pages from the original sanitized evidence. Current-run source authorization is tied to the same session, run, repository identity, evidence record, and producing tool invocation. Completed-turn receipts can also authorize retained historical check observations and diffs from the same session and repository through their immutable origin association; see [completed-turn receipts](conversation-loop.md#completed-turn-receipts). It uses the ordinary tool pipeline, so normal policy, events, cancellation, paging, and execution accounting apply.
 
 Recovery never rereads the current repository file. A current reread could return different content and would not prove what the model originally saw. Missing, stale, or unauthorized evidence produces an explicit result. Summarizing a receipt-bearing raw group revokes its recovery reference, and final validation rejects any projection that would leave a receipt without its supporting source. A model-initiated recovery can add a tool round; projection itself adds no provider call.
 

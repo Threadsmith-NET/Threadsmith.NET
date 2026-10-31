@@ -132,7 +132,7 @@ public sealed class RedactionAudit
                     if (!string.Equals(sanitized, content, StringComparison.Ordinal))
                     {
                         await _artifactStore.StoreAsync(sanitized, artifact.Kind, artifact.SessionId, cancellationToken);
-                        if (!await _artifactStore.DeleteAsync(artifact.ContentHash, cancellationToken))
+                        if (!await _artifactStore.DeleteForRedactionAsync(artifact.ContentHash, cancellationToken))
                         {
                             continue;
                         }

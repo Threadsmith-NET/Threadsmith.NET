@@ -8,6 +8,9 @@ using Threadsmith.Core;
 /// <summary>Validates versioned host-owned model outputs before execution.</summary>
 public static class ModelOutputValidator
 {
+    /// <summary>Safe corrective guidance for a rejected invocation after output exhaustion.</summary>
+    public const string TruncatedInvocationMessage = "Tool arguments are incomplete or invalid after reaching the response output-token limit. Split the work into smaller tool calls or smaller file edits; do not repeat the oversized batch. The rejected batch was not executed; requested work remains incomplete.";
+
     /// <summary>Validates the supported schema version and type-specific invariants.</summary>
     public static void Validate(ModelOutput output, int supportedSchemaVersion = 1)
     {
@@ -39,16 +42,18 @@ public static class ModelOutputValidator
         ToolRequestModelOutput tool,
         string? providerFamily = null,
         int? toolOrdinal = null,
-        int? toolCallCount = null)
+        int? toolCallCount = null,
+        bool outputLimitReached = false)
     {
-        using var arguments = ParseInvocationArguments(tool, providerFamily, toolOrdinal, toolCallCount);
+        using var arguments = ParseInvocationArguments(tool, providerFamily, toolOrdinal, toolCallCount, outputLimitReached);
     }
 
     private static JsonDocument ParseInvocationArguments(
         ToolRequestModelOutput tool,
         string? providerFamily,
         int? toolOrdinal,
-        int? toolCallCount)
+        int? toolCallCount,
+        bool outputLimitReached)
     {
         ArgumentNullException.ThrowIfNull(tool);
         if (string.IsNullOrWhiteSpace(tool.ToolName))
@@ -91,9 +96,12 @@ public static class ModelOutputValidator
         }
         catch (JsonException exception)
         {
+            var reason = outputLimitReached
+                ? TruncatedInvocationMessage
+                : "Tool arguments are not valid JSON.";
             throw CreateInvocationException(
-                MalformedInvocationFailureKind.InvalidJsonArguments,
-                "Tool arguments are not valid JSON.",
+                outputLimitReached ? MalformedInvocationFailureKind.TruncatedArguments : MalformedInvocationFailureKind.InvalidJsonArguments,
+                reason,
                 tool.ToolName,
                 tool.ArgumentsJson,
                 providerFamily,

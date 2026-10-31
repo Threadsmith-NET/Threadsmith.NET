@@ -17,6 +17,30 @@ using Xunit;
 /// <summary>Parent-loop continuations through the public native registration and actual SDK HTTP serialization.</summary>
 public static class AnthropicConversationLoopTests
 {
+    /// <summary>Native signed blocks survive an accepted prefix compaction without replaying completed tool effects.</summary>
+    [Fact]
+    public static async Task CompactionPreservesLatestSignedExchange()
+    {
+        await using var harness = new NativeLoopHarness(
+            ToolStream([("first_tool", "deterministic_output", "{\"sequence\":1}")]),
+            ToolStream([("second_tool", "deterministic_output", "{\"sequence\":2}")]),
+            TextStream("Done."));
+        harness.ToolEvidence = new string('e', 4096);
+        harness.Compactor = new ReasoningReplayConversationTests.ReplayCompactor();
+        harness.CompactionPolicy = new ActiveTurnCompactionPolicy { PressureTargetPercent = 1, RetainedRecentTokens = 1 };
+        await harness.RunToCompletionAsync();
+        Assert.Equal(1, harness.Model.Requests[2].HistoryRewriteGeneration);
+        Assert.Equal(2, harness.Observed.OfType<ToolInvocationCompleted>().Count());
+        var body = harness.Handler.Requests[2].GetRawText();
+        Assert.DoesNotContain("first_tool", body, StringComparison.Ordinal);
+        Assert.Contains("second_tool", body, StringComparison.Ordinal);
+        var blocks = harness.Handler.Requests[2].GetProperty("messages").EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray());
+        var thinking = Assert.Single(blocks, block => block.GetProperty("type").GetString() == "thinking");
+        Assert.Equal("signed-native-loop", thinking.GetProperty("signature").GetString());
+        Assert.Equal("private native reasoning", thinking.GetProperty("thinking").GetString());
+    }
+
     /// <summary>Steering that cancels a native pending batch retains its prose through replay without adding a second copy.</summary>
     [Fact]
     public static async Task SteeringBeforeTools_RetainsCommentaryOnce()
@@ -360,6 +384,12 @@ public static class AnthropicConversationLoopTests
 
         internal Action<IDomainEvent>? OnEvent { get; set; }
 
+        internal IActiveTurnCompactor? Compactor { get; set; }
+
+        internal ActiveTurnCompactionPolicy? CompactionPolicy { get; set; }
+
+        internal string ToolEvidence { get; set; } = "Tool evidence collected.";
+
         internal SessionId SessionId { get; private set; }
 
         internal RunId RunId { get; private set; }
@@ -380,7 +410,7 @@ public static class AnthropicConversationLoopTests
                 return Task.CompletedTask;
             });
             var sanitizer = new SecretOutputSanitizer();
-            var registry = new ToolRegistry([new TestDeterministicOutputTool("Tool evidence collected.")]);
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(ToolEvidence)]);
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance);
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
             var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
@@ -401,6 +431,8 @@ public static class AnthropicConversationLoopTests
                 _catalog.DefaultModelId,
                 new ExecutionLimits { MaxModelRounds = 4, MaxCorrectiveTurns = 2 },
                 sessionUsage: Usage,
+                activeTurnCompactor: Compactor,
+                activeTurnCompactionPolicy: CompactionPolicy,
                 steering: Steering,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);

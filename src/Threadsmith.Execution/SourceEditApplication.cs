@@ -393,6 +393,7 @@ public sealed class SourceEditApplication :
         var finalEndpoints = new Dictionary<string, MutationEndpointSnapshot>(comparer);
         var lastMutation = default(MutationSetId);
         var continuous = true;
+        var requestedStatus = status;
         var risks = new List<string>();
         await foreach (var effect in _effectStore.ReadRunEffectsAsync(sessionId, runId, cancellationToken))
         {
@@ -531,7 +532,7 @@ public sealed class SourceEditApplication :
             ResidualRisks = [.. risks.Distinct(StringComparer.Ordinal)],
         };
         await _checkpoints.SaveOutcomeAsync(outcome, cancellationToken);
-        if (status == ExecutionCheckpointPhase.Failed)
+        if (status == ExecutionCheckpointPhase.Failed && requestedStatus != ExecutionCheckpointPhase.Failed)
         {
             var detail = _sanitizer.Sanitize(string.Join(" ", risks.Distinct(StringComparer.Ordinal).Take(8)));
             await _events.PublishAsync(

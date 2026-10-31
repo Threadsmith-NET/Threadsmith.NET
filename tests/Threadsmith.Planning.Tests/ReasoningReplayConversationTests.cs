@@ -1,6 +1,7 @@
 namespace Threadsmith.Planning.Tests;
 
 using System.Text.Json;
+using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Xunit;
@@ -8,13 +9,56 @@ using Xunit;
 /// <summary>Actual provider serialization through the parent conversation's existing replay lifecycle.</summary>
 public static class ReasoningReplayConversationTests
 {
+    /// <summary>Pressure compacts completed history while the newest signed exchange retains its exact wire identity.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public static async Task CompactionWithReplay_PreservesNewestResponseAndExecutesToolsOnce(bool codex, bool openRouter, bool repeat = false)
+    {
+        var responses = new List<string>
+        {
+            openRouter ? RouterStream(0) : ReasoningReplayFixture.Stream(codex, 0, "deterministic_output", "{\"sequence\":1}"),
+            openRouter ? RouterStream(1) : ReasoningReplayFixture.Stream(codex, 1, "deterministic_output", "{\"sequence\":2}"),
+        };
+        if (repeat)
+        {
+            responses.Add(ReasoningReplayFixture.Stream(codex, 2, "deterministic_output", "{\"sequence\":3}"));
+        }
+
+        responses.Add(ReasoningReplayFixture.Final(codex));
+        await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
+            ReasoningReplayFixture.Catalog(codex, openRouter: openRouter), [.. responses]);
+        harness.ToolEvidence = new string('e', 4096);
+        harness.CompactionPolicy = new ActiveTurnCompactionPolicy { PressureTargetPercent = 1, RetainedRecentTokens = 1 };
+        harness.Compactor = new ReplayCompactor();
+        await harness.RunToCompletionAsync();
+
+        Assert.Equal(repeat ? 4 : 3, harness.Handler.Requests.Count);
+        Assert.Equal(repeat ? 3 : 2, harness.Observed.OfType<ToolInvocationCompleted>().Count());
+        Assert.Equal(1, harness.Model.Requests[2].HistoryRewriteGeneration);
+        Assert.Contains(harness.Model.Requests[2].Messages, message => message.SectionId == "active-turn-summary");
+        var body = harness.Handler.Requests[2].GetRawText();
+        Assert.DoesNotContain(codex || openRouter ? "opaque-0-state" : "private-0-state", body, StringComparison.Ordinal);
+        Assert.Contains(codex || openRouter ? "opaque-1-state" : "private-1-state", body, StringComparison.Ordinal);
+        Assert.Contains("wire-1", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("wire-0", body, StringComparison.Ordinal);
+        Assert.Contains(harness.Observed.OfType<ActiveTurnCompactionCompleted>(), item => item.Status == ActiveTurnCompactionInspectionStatus.Completed);
+        if (repeat)
+        {
+            Assert.Equal(2, harness.Model.Requests[3].HistoryRewriteGeneration);
+            var finalBody = harness.Handler.Requests[3].GetRawText();
+            Assert.DoesNotContain(codex ? "opaque-1-state" : "private-1-state", finalBody, StringComparison.Ordinal);
+            Assert.Contains(codex ? "opaque-2-state" : "private-2-state", finalBody, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Exercises signed replay through the actual parent loop.</summary>
     [Fact]
     public static async Task OpenRouter_TwoSignedToolRoundsUseMainLoopAndRemainPrivate()
     {
-        static string RouterStream(int round) => ReasoningReplayFixture.Stream(false, round, "deterministic_output", "{\"sequence\":" + (round + 1) + "}")
-            .Replace("\"reasoning_content\":\"private-" + round + "-\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"opaque-" + round + "-\"}]", StringComparison.Ordinal)
-            .Replace("\"reasoning_content\":\"state\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"state\"}]", StringComparison.Ordinal);
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
             ReasoningReplayFixture.Catalog(false, openRouter: true), RouterStream(0), RouterStream(1), ReasoningReplayFixture.Final(false));
         harness.Handler.FragmentResponses = true;
@@ -138,5 +182,32 @@ public static class ReasoningReplayConversationTests
         Assert.False(harness.Model.HadReplay[1]);
         Assert.DoesNotContain("reasoning_content", harness.Handler.Requests[1].GetRawText(), StringComparison.Ordinal);
         Assert.DoesNotContain("encrypted_content\":", harness.Handler.Requests[1].GetRawText(), StringComparison.Ordinal);
+    }
+
+    private static string RouterStream(int round) => ReasoningReplayFixture.Stream(false, round, "deterministic_output", "{\"sequence\":" + (round + 1) + "}")
+            .Replace("\"reasoning_content\":\"private-" + round + "-\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"opaque-" + round + "-\"}]", StringComparison.Ordinal)
+            .Replace("\"reasoning_content\":\"state\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"state\"}]", StringComparison.Ordinal);
+
+    internal sealed class ReplayCompactor : IActiveTurnCompactor
+    {
+        public Task<ActiveTurnCompactionResult> CompactAsync(ActiveTurnCompactionRequest request, IActiveTurnCompactionAttemptObserver attemptObserver, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ActiveTurnCompactionResult
+            {
+                Outcome = ActiveTurnCompactionOutcome.Completed,
+                Rationale = "Fixture summary.",
+                Summary = new ActiveTurnCompactionSummary
+                {
+                    Version = (request.PriorSummary?.Version ?? 0) + 1,
+                    ThroughGroupSequence = request.EligiblePrefix[^1].Sequence,
+                    CoveredGroupSequences = [.. request.PriorSummary?.CoveredGroupSequences ?? [], .. request.EligiblePrefix.Select(group => group.Sequence)],
+                    Content = "Earlier inspection completed.",
+                    ContentHash = "fixture-summary",
+                    FilesRead = [],
+                    FilesChanged = [],
+                },
+            });
+        }
     }
 }

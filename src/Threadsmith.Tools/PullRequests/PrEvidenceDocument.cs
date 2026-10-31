@@ -1,6 +1,7 @@
 namespace Threadsmith.Tools.PullRequests;
 
 using System.Text;
+using Threadsmith.Core;
 using Threadsmith.Tools;
 
 /// <summary>Formats one completed PR snapshot over the shared text-evidence reader.</summary>

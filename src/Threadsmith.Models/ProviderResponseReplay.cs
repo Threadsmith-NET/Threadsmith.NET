@@ -18,7 +18,7 @@ internal static class ProviderResponseReplay
             WireDigest = Hash(JsonSerializer.SerializeToUtf8Bytes(new
             {
                 request.Input,
-                History = HistoryDigest(request.Messages),
+                History = ModelRequestTransientState.ComputePrefixDigest(request.Messages),
                 Tools = ModelToolCanonicalizer.ComputeDigest(ModelToolCanonicalizer.Canonicalize(request.Tools)),
                 Instructions = Instructions(request),
                 estimate,
@@ -79,7 +79,7 @@ internal static class ProviderResponseReplay
         var payload = JsonSerializer.SerializeToUtf8Bytes(new JsonObject
         {
             ["history_count"] = request.Messages.Count,
-            ["history_digest"] = HistoryDigest(request.Messages),
+            ["history_digest"] = ModelRequestTransientState.ComputePrefixDigest(request.Messages),
             ["input_digest"] = Hash(JsonSerializer.SerializeToUtf8Bytes(request.Input)),
             ["response"] = response,
         });
@@ -144,9 +144,10 @@ internal static class ProviderResponseReplay
             var payload = JsonNode.Parse(bytes)?.AsObject() ?? throw new ModelProviderException("Private response is missing.");
             var count = payload["history_count"]?.GetValue<int>() ?? -1;
             var originalInput = request.Messages.Count > 0 ? request.Messages[0].GetModelVisibleContent() : request.Input;
-            if (count < 0 || count > request.Messages.Count || (count > 0 && count != messageIndex)
-                || payload["history_digest"]?.GetValue<string>() != HistoryDigest(request.Messages.Take(count))
-                || (count == 0 && payload["input_digest"]?.GetValue<string>() != Hash(JsonSerializer.SerializeToUtf8Bytes(originalInput))))
+            var prefixMatches = request.TransientState?.MatchesRewrittenPrefix(envelope.Binding.ModelRound, request.Messages, messageIndex);
+            if (prefixMatches == false || (prefixMatches is null && (count < 0 || count > request.Messages.Count || (count > 0 && count != messageIndex)
+                || payload["history_digest"]?.GetValue<string>() != ModelRequestTransientState.ComputePrefixDigest(request.Messages.Take(count))
+                || (count == 0 && payload["input_digest"]?.GetValue<string>() != Hash(JsonSerializer.SerializeToUtf8Bytes(originalInput))))))
             {
                 throw new ModelProviderException("Private response preceding history changed; start a fresh turn.");
             }
@@ -158,9 +159,6 @@ internal static class ProviderResponseReplay
             CryptographicOperations.ZeroMemory(bytes);
         }
     }
-
-    private static string HistoryDigest(IEnumerable<ModelMessage> messages)
-        => Hash(JsonSerializer.SerializeToUtf8Bytes(messages.Select(message => new { Message = message, message.ModelRound })));
 
     private static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 

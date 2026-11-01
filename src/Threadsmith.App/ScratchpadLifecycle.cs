@@ -377,6 +377,11 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
 
     private async Task ClearAsync(string root, CancellationToken cancellationToken)
     {
+        if (_processes.ActiveProcesses.Any(process => RepositoryPathPolicy.ContainsPath(root, process.WorkingDirectory)))
+        {
+            throw new IOException("Scratchpad cleanup requires tracked processes to finish terminating first.");
+        }
+
         ValidateRoot(root);
         ValidateNoReparsePoints(root, _paths.RepositoryRoot);
         foreach (var entry in Directory.EnumerateFileSystemEntries(root))

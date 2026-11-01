@@ -222,6 +222,7 @@ public sealed class ParallelAgentTests
                 Fingerprint = "parent-policy",
                 AllowedTools = ["read_file", "search"],
                 WriteFolders = [Environment.CurrentDirectory],
+                ReadFolders = [Environment.CurrentDirectory, Path.GetTempPath()],
                 EditableRoots = [Environment.CurrentDirectory],
                 MutationRoots = [Environment.CurrentDirectory],
             },
@@ -244,6 +245,7 @@ public sealed class ParallelAgentTests
         Assert.Equal("parent-policy", child.SecurityPolicy.ParentFingerprint);
         Assert.Equal(RepositoryTrustLevel.TrustedRead, child.SecurityPolicy.MaximumTrust);
         Assert.Empty(child.SecurityPolicy.WriteFolders);
+        Assert.Equal([Path.GetFullPath("src/A.cs", Environment.CurrentDirectory)], child.SecurityPolicy.ReadFolders);
         Assert.Empty(child.SecurityPolicy.EditableRoots);
         Assert.Empty(child.SecurityPolicy.MutationRoots);
         Assert.Empty(child.SecurityPolicy.NetworkHostRestriction);

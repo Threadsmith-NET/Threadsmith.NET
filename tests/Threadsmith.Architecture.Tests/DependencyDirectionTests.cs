@@ -354,6 +354,8 @@ public static class DependencyDirectionTests
             ["Threadsmith.Models.Anthropic"] = ["Threadsmith.Models"],
             ["Threadsmith.Context"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Tools"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
+            // Worker shares host-owned file DTOs and validation without importing host implementation or UI.
+            ["Threadsmith.Scripting.Worker"] = ["Threadsmith.Core"],
             ["Threadsmith.DotNet"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
             ["Threadsmith.Workspaces"] = ["Threadsmith.Core", "Threadsmith.Context"],
             ["Threadsmith.Validation"] = ["Threadsmith.Core", "Threadsmith.Tools"],

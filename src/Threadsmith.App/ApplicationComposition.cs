@@ -1288,6 +1288,7 @@ internal sealed class RepositoryScopedBindingCoordinator
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            _sessionLifecycle?.EnsureIdle();
             LastWarnings = [];
             var previousRepositoryRoot = _currentRepositoryRoot;
             var pathComparison = OperatingSystem.IsWindows()
@@ -1606,6 +1607,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
     /// <summary>Releases transactional staging resources after all command surfaces stop.</summary>
     public async ValueTask DisposeAsync()
     {
+        await SessionLifecycle.StopRunsAsync(CancellationToken.None);
         var failures = new List<Exception>();
         async Task DisposeStepAsync(Func<Task> disposeAsync)
         {

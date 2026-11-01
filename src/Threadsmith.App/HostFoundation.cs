@@ -1045,7 +1045,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         var scriptEngine = new CSharpScriptEngine(
             processManager,
             new ToolConfig(trustedConfiguration),
-            workerPath);
+            workerPath,
+            limits.WriteFileMaximumContentBytes);
         var webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
         var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration, policyBinding);
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(

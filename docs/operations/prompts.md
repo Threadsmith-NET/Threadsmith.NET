@@ -129,7 +129,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Process execution guidance, clamped timeout-hint semantics, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | `ShellLanguage` |
 | `Tool-datetime-Description.md` | `Threadsmith.Tools` | `prompts/Tool-datetime-Description.md` | Advertised description for `datetime`. | None |
 | `Tool-ask_user-Description.md` | `Threadsmith.Tools` | `prompts/Tool-ask_user-Description.md` | Parent-only blocking clarification guidance. | None |
-| `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Advertised script-kind enum and default for `csharp_script`. | None |
+| `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand file API reference for `csharp_script`. | `CSharpScriptingReferencePath` |
 | `Tool-code_explore-Description.md` | `Threadsmith.Tools` | `prompts/Tool-code_explore-Description.md` | Advertised description for `code_explore`. | None |
 | `Tool-call_hierarchy-Description.md` | `Threadsmith.Tools` | `prompts/Tool-call_hierarchy-Description.md` | Advertised description for `call_hierarchy`. | None |
 | `Tool-symbol_impact-Description.md` | `Threadsmith.Tools` | `prompts/Tool-symbol_impact-Description.md` | Advertised description for `symbol_impact`. | None |
@@ -408,3 +408,7 @@ The ask_user description documents the harness-owned Other choice and the Cancel
 Historical evidence recovery retains the `OutcomeJson` and tool input token contracts. Completed-turn receipts may display evidence IDs, labels, original truncation and recovery availability. Code owns scoped artifact publication, final-request grants, paging and retention; receipt prose and prompt overrides cannot confer access.
 
 `Correction-ProviderInvocation-Invalid.md` retains its existing tokens. Its host-generated `Reason` can identify incomplete tool arguments after output exhaustion and instruct smaller tool calls or file edits. Code owns exhaustion detection, whole-batch rejection and retry bounds; the prompt provides the existing correction framing.
+
+## C# scripting reference
+
+`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.

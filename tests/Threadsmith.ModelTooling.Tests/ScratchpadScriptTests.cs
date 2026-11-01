@@ -1,0 +1,319 @@
+namespace Threadsmith.ModelTooling.Tests;
+
+using System.Collections.Immutable;
+using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Threadsmith.Core;
+using Threadsmith.Scripting.Worker;
+using Threadsmith.Tools;
+using Xunit;
+
+/// <summary>Scoped file access through the real worker and shared reader policy.</summary>
+public sealed class ScratchpadScriptTests : IDisposable
+{
+    private readonly string _root;
+
+    /// <summary>Initializes a new instance of the <see cref="ScratchpadScriptTests"/> class.</summary>
+    public ScratchpadScriptTests()
+    {
+        var temporary = Path.GetFullPath(Path.GetTempPath());
+        var physical = Path.GetPathRoot(temporary)!;
+        foreach (var segment in temporary[physical.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var directory = new DirectoryInfo(Path.Combine(physical, segment));
+            physical = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+        }
+
+        _root = Path.Combine(physical, $"threadsmith-script-files-{Guid.NewGuid():N}");
+    }
+
+    /// <summary>Verifies the file execution contract through observable effects.</summary>
+    [Fact]
+    public async Task WorkerReadsLargeInputAndWritesInspectableResult()
+    {
+        var scope = CreateScope();
+        var input = Path.Combine(scope.ScratchpadPath, "input.log");
+        await File.WriteAllLinesAsync(input, Enumerable.Range(0, 100000).Select(index => index % 10 == 0 ? "ERROR" : "ok"), TestContext.Current.CancellationToken);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+        var result = await engine.ExecuteAsync(
+            "var count = Scratchpad.ReadLines(\"input.log\").Count(line => line.Contains(\"ERROR\")); await Scratchpad.WriteAllTextAsync(\"results/count.txt\", count.ToString()); return count;",
+            ScriptKind.Statement,
+            context,
+            TestContext.Current.CancellationToken);
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("10000", result.Output);
+        Assert.Equal("10000", await File.ReadAllTextAsync(Path.Combine(scope.ScratchpadPath, "results", "count.txt"), TestContext.Current.CancellationToken));
+        Assert.True(File.Exists(result.ScriptPath));
+
+        var inputs = Directory.CreateDirectory(Path.Combine(_root, "authorized-inputs")).FullName;
+        var externalInput = Path.Combine(inputs, "external.log");
+        await File.WriteAllLinesAsync(externalInput, ["one", "two", "three"], TestContext.Current.CancellationToken);
+        var filePolicy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            Fingerprint = "configured-read-folders",
+            RepositoryPath = scope.RepositoryPath,
+            ReadFolders = [inputs],
+            ScriptAssemblies = ["System.Linq", "System.Collections", "System.Collections.Generic"],
+            ResourceLimits = new Dictionary<string, int>
+            {
+                ["tools:config:csharp_script:timeout_ms"] = int.MaxValue,
+                ["tools:config:csharp_script:max_output_bytes"] = 65536,
+                ["tools:config:csharp_script:max_code_characters"] = 65536,
+                ["tools:config:csharp_script:max_assemblies"] = 32,
+                ["tools:config:csharp_script:max_assembly_name_characters"] = 128,
+                ["tools:config:csharp_script:max_assembly_setting_characters"] = 4096,
+            }.ToImmutableDictionary(),
+        };
+        var externalCode = $"var count = Scratchpad.ReadLines({JsonSerializer.Serialize(externalInput)}).Count(); await Scratchpad.WriteAllTextAsync(\"results/external-count.txt\", count.ToString()); return count;";
+        var permitted = await engine.ExecuteAsync(externalCode, ScriptKind.Statement, context with { Invocation = context.Invocation with { SecurityPolicy = filePolicy } }, TestContext.Current.CancellationToken);
+        Assert.True(permitted.Success, permitted.Error);
+        Assert.Equal("3", permitted.Output);
+        Assert.Equal("3", await File.ReadAllTextAsync(Path.Combine(scope.ScratchpadPath, "results", "external-count.txt"), TestContext.Current.CancellationToken));
+        var unconfigured = await engine.ExecuteAsync(externalCode, ScriptKind.Statement, context with { Invocation = context.Invocation with { SecurityPolicy = filePolicy with { ReadFolders = [] } } }, TestContext.Current.CancellationToken);
+        Assert.False(unconfigured.Success);
+        Assert.Contains("authorized read locations", unconfigured.Error, StringComparison.Ordinal);
+
+        var rejected = await engine.ExecuteAsync("System.IO.File.ReadAllText(\"input.log\")", ScriptKind.Expression, context, TestContext.Current.CancellationToken);
+        Assert.False(rejected.Success);
+        Assert.True(File.Exists(rejected.ScriptPath));
+        foreach (var probe in new[]
+        {
+            "var writer = Threadsmith.Core.AtomicFileWriter.WriteAsync; return writer is not null;",
+            "new Threadsmith.Scripting.Worker.ScriptGlobals(new Threadsmith.Core.ScriptFileScope { RepositoryPath = \".\", ScratchpadPath = \".\" }, default).Scratchpad.ReadLines(\"AGENTS.md\").First()",
+        })
+        {
+            var bypass = await engine.ExecuteAsync(probe, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
+            Assert.False(bypass.Success);
+            Assert.Contains("host implementation types", bypass.Error, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Named arguments on the supplied API compile and execute in the real worker.</summary>
+    [Fact]
+    public async Task WorkerAcceptsNamedScratchpadArguments()
+    {
+        var scope = CreateScope();
+        await File.WriteAllBytesAsync(Path.Combine(scope.ScratchpadPath, "input.bin"), [1, 2, 3, 4, 5], TestContext.Current.CancellationToken);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+
+        var result = await engine.ExecuteAsync(
+            """
+            var sizes = string.Join(",", Scratchpad.ReadChunks("input.bin", chunkSize: 2).Select(chunk => chunk.Length));
+            Scratchpad.CreateDirectory(path: "results");
+            await Scratchpad.WriteAllTextAsync(path: "results/text.txt", text: "original", cancellationToken: default);
+            await Scratchpad.WriteAllTextAsync("results/text.txt", sizes, overwrite: true);
+            await Scratchpad.AppendTextAsync(text: "!", path: "results/text.txt", cancellationToken: default);
+            await Scratchpad.WriteAllBytesAsync(path: "results/bytes.bin", bytes: new byte[] { 9 }, cancellationToken: default);
+            await Scratchpad.WriteAllBytesAsync("results/bytes.bin", new byte[] { 1, 2 }, overwrite: true);
+            await Scratchpad.AppendBytesAsync(bytes: new byte[] { 3 }, path: "results/bytes.bin", cancellationToken: default);
+            return Scratchpad.ReadLines(path: "results/text.txt").Single();
+            """,
+            ScriptKind.Statement,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("2,2,1!", result.Output);
+        Assert.Equal("2,2,1!", await File.ReadAllTextAsync(Path.Combine(scope.ScratchpadPath, "results", "text.txt"), TestContext.Current.CancellationToken));
+        Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(Path.Combine(scope.ScratchpadPath, "results", "bytes.bin"), TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Verifies the file execution contract through observable effects.</summary>
+    [Fact]
+    public async Task FilesReadAuthorizedInputsAndConfineAllWrites()
+    {
+        var scope = CreateScope();
+        var inputRoot = Path.Combine(_root, "inputs");
+        Directory.CreateDirectory(inputRoot);
+        var input = Path.Combine(inputRoot, "data.bin");
+        await File.WriteAllBytesAsync(input, [1, 2, 3, 4, 5], TestContext.Current.CancellationToken);
+        scope = scope with { ReadRoots = [inputRoot], MaximumWriteBytes = 64 };
+        var files = new ScriptGlobals(scope, TestContext.Current.CancellationToken).Scratchpad;
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, files.ReadChunks(input, 2).SelectMany(bytes => bytes));
+        await files.WriteAllBytesAsync("nested/output.bin", [1, 2], cancellationToken: TestContext.Current.CancellationToken);
+        await files.AppendBytesAsync("nested/output.bin", [3], TestContext.Current.CancellationToken);
+        Assert.Equal(new byte[] { 1, 2, 3 }, files.ReadChunks("nested/output.bin").Single());
+        await Assert.ThrowsAsync<IOException>(() => files.WriteAllTextAsync("nested/output.bin", "replacement", cancellationToken: TestContext.Current.CancellationToken));
+        await files.WriteAllTextAsync("nested/output.bin", "replaced", overwrite: true, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("replaced", files.ReadLines("nested/output.bin").Single());
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => files.WriteAllTextAsync(input, "no", cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => files.WriteAllTextAsync("../escape.txt", "no", cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => files.WriteAllTextAsync("script.PY", "no", cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<IOException>(() => files.AppendBytesAsync("large.bin", new byte[64], TestContext.Current.CancellationToken));
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, await File.ReadAllBytesAsync(input, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Verifies the file execution contract through observable effects.</summary>
+    [Fact]
+    public void ReadsShareConfiguredAuthorityAndRejectUnconfiguredOrProhibitedInputs()
+    {
+        var scope = CreateScope();
+        var external = Path.Combine(_root, "inputs");
+        Directory.CreateDirectory(external);
+        var input = Path.Combine(external, "input.txt");
+        File.WriteAllText(input, "input");
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            Fingerprint = "test",
+            RepositoryPath = scope.RepositoryPath,
+            ReadFolders = [external],
+        };
+        var context = CreateContext(scope) with { SecurityPolicy = policy };
+        Assert.Equal(input, ScriptFilePolicy.ValidateRead(input, context));
+        var files = new ScriptGlobals(ScriptFilePolicy.CreateScope(context, 100), TestContext.Current.CancellationToken).Scratchpad;
+        Assert.Equal("input", files.ReadLines(input).Single());
+        Assert.Throws<UnauthorizedAccessException>(() => ScriptFilePolicy.ValidateRead(input, context with { SecurityPolicy = policy with { ReadFolders = [], WriteFolders = [external] } }));
+        Assert.Throws<UnauthorizedAccessException>(() => ScriptFilePolicy.ValidateRead(input, context with { ProhibitedPaths = ["../inputs/**"] }));
+        Assert.Throws<UnauthorizedAccessException>(() => files.ReadLines(Path.Combine(_root, "unconfigured.txt")).ToArray());
+    }
+
+    /// <summary>Verifies the file execution contract through observable effects.</summary>
+    [Fact]
+    public async Task CanceledWritesDoNotCreateOutputs()
+    {
+        var scope = CreateScope();
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        var files = new ScriptGlobals(scope, cancellation.Token).Scratchpad;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => files.WriteAllTextAsync("cancelled.txt", "no", cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(Path.Combine(scope.ScratchpadPath, "cancelled.txt")));
+    }
+
+    /// <summary>Linked installation ancestors are trusted, but links inside authority roots are rejected.</summary>
+    [Fact]
+    public async Task FileAuthorityChecksLinksWithinRepositoryBoundary()
+    {
+        var scope = CreateScope();
+        var alias = Path.Combine(_root, "parent-alias");
+        try
+        {
+            Directory.CreateSymbolicLink(alias, _root);
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            Assert.Skip("Creating symbolic links is unavailable on this runner.");
+            return;
+        }
+
+        try
+        {
+            var repository = Path.Combine(alias, "repo");
+            var aliasedScope = scope with { RepositoryPath = repository, ScratchpadPath = Path.Combine(repository, ".threadsmith", ".scratchpad"), ReadRoots = [repository] };
+            var files = new ScriptGlobals(aliasedScope, TestContext.Current.CancellationToken).Scratchpad;
+            await files.WriteAllTextAsync("result.txt", "written", cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal("written", files.ReadLines("result.txt").Single());
+            Assert.Equal(Path.Combine(aliasedScope.ScratchpadPath, "result.txt"), ScriptFilePolicy.ValidateRead(Path.Combine(aliasedScope.ScratchpadPath, "result.txt"), CreateContext(aliasedScope)));
+
+            var input = Path.Combine(scope.RepositoryPath, "input.txt");
+            await File.WriteAllTextAsync(input, "repository", TestContext.Current.CancellationToken);
+            Assert.Equal(Path.Combine(repository, "input.txt"), ScriptFilePolicy.ValidateRead("input.txt", CreateContext(aliasedScope)));
+            var innerLink = Path.Combine(scope.RepositoryPath, "linked");
+            Directory.CreateSymbolicLink(innerLink, scope.RepositoryPath);
+            try
+            {
+                var narrowed = Path.Combine(repository, "linked", ".threadsmith");
+                Assert.Throws<UnauthorizedAccessException>(() => ScopedFilePaths.ValidateRead(Path.Combine(narrowed, ".scratchpad", "result.txt"), repository, repository, [narrowed], []));
+            }
+            finally
+            {
+                Directory.Delete(innerLink);
+            }
+
+            var control = Path.Combine(scope.RepositoryPath, ".threadsmith");
+            var movedControl = Path.Combine(_root, "moved-control");
+            Directory.Move(control, movedControl);
+            Directory.CreateSymbolicLink(control, movedControl);
+            try
+            {
+                Assert.Throws<UnauthorizedAccessException>(() => ToolPathRules.NormalizeScratchpadPath(Path.Combine(aliasedScope.ScratchpadPath, "result.txt"), CreateContext(aliasedScope)));
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => files.WriteAllTextAsync("escaped.txt", "no", cancellationToken: TestContext.Current.CancellationToken));
+            }
+            finally
+            {
+                Directory.Delete(control);
+                Directory.Move(movedControl, control);
+            }
+        }
+        finally
+        {
+            Directory.Delete(alias);
+        }
+    }
+
+    /// <summary>Verifies the file execution contract through observable effects.</summary>
+    [Fact]
+    public void ProcessScratchpadDirectoryDoesNotBypassTrustOrApproval()
+    {
+        var scope = CreateScope();
+        var tool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance);
+        var input = new RunProcessInput { Command = "echo test", WorkingDirectory = scope.ScratchpadPath };
+        var context = CreateContext(scope) with { AllowedExecutables = ["powershell", "bash"] };
+        var decision = new DefaultPolicyEngine().Evaluate(tool, input, context);
+        Assert.True(decision.IsAllowed, decision.Reason);
+        Assert.Equal(ApprovalLevel.User, decision.RequiredApproval);
+        Assert.False(new DefaultPolicyEngine().Evaluate(tool, input, context with { TrustLevel = RepositoryTrustLevel.TrustedRead }).IsAllowed);
+    }
+
+    /// <summary>Snippet persistence obeys byte limits before starting a worker.</summary>
+    [Fact]
+    public async Task SnippetByteLimitPreventsPersistenceAndExecution()
+    {
+        var scope = CreateScope();
+        var engine = new CSharpScriptEngine(new UnusedProcessManager(), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), maximumWriteBytes: 4);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context, TestContext.Current.CancellationToken));
+        Assert.Empty(Directory.EnumerateFiles(scope.ScratchpadPath));
+    }
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (Directory.Exists(_root))
+        {
+            Directory.Delete(_root, true);
+        }
+    }
+
+    private ScriptFileScope CreateScope()
+    {
+        var repository = Path.Combine(_root, "repo");
+        var scratchpad = Path.Combine(repository, ".threadsmith", ".scratchpad");
+        Directory.CreateDirectory(scratchpad);
+        return new ScriptFileScope { RepositoryPath = repository, ScratchpadPath = scratchpad, ReadRoots = [repository] };
+    }
+
+    private static ToolInvocationContext CreateContext(ScriptFileScope scope) => new()
+    {
+        RepositoryPath = scope.RepositoryPath,
+        RequestedBy = "test",
+        TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+        Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = scope.ScratchpadPath, DisabledReason = ScratchpadDisabledReason.None },
+    };
+
+    private sealed class PassthroughSanitizer : IOutputSanitizer
+    {
+        public string Sanitize(string value) => value;
+    }
+
+    private sealed class UnusedProcessManager : IProcessManager
+    {
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
+
+        public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+}

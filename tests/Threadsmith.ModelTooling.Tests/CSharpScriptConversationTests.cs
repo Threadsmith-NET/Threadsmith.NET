@@ -86,6 +86,8 @@ public static class CSharpScriptConversationTests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
+            var scratchpad = Path.Combine(repository, ".threadsmith", ".scratchpad");
+            Directory.CreateDirectory(scratchpad);
             var model = new ScriptProbeModelProvider();
             var application = new SessionApplication(
                 events,
@@ -97,6 +99,7 @@ public static class CSharpScriptConversationTests
                 (_, _) => Task.FromResult(new ToolInvocationContext
                 {
                     RepositoryPath = repository,
+                    Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = scratchpad, ModelPath = ".threadsmith/.scratchpad", DisabledReason = ScratchpadDisabledReason.None },
                     TrustLevel = trust,
                     RequestedBy = "model",
                     AllowedExecutables = ["dotnet"],

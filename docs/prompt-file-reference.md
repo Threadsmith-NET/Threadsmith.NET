@@ -457,7 +457,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Advertised script-kind enum and default for `csharp_script`. | `None` |
+| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand file API reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family
 
@@ -779,6 +779,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-completeness"></a>`Completeness` | Host-computed source completeness state, such as complete, partial, drifted, or omitted. |
 | <a id="placeholder-confidence"></a>`Confidence` | Host- or child-reported confidence attached to a finding or semantic result. |
 | <a id="placeholder-conversationsummary"></a>`ConversationSummary` | Empty compatibility field; retired automatic conversation snapshots are not included. Model-generated active-turn summaries have their own message framing. |
+| <a id="placeholder-csharpscriptingreferencepath"></a>`CSharpScriptingReferencePath` | Host-resolved absolute path to the installed on-demand C# scripting reference. |
 | <a id="placeholder-count"></a>`Count` | Host-computed count whose specific subject is identified by the surrounding prompt file. |
 | <a id="placeholder-currentturn"></a>`CurrentTurn` | Current untrusted user/turn content placed in the request envelope. |
 | <a id="placeholder-cursor"></a>`Cursor` | Opaque host-issued continuation or retry cursor shown for a bounded follow-up. |
@@ -960,3 +961,7 @@ The ask_user description documents the harness-owned Other choice and the Cancel
 Historical evidence recovery retains the `OutcomeJson` and tool input token contracts. Completed-turn receipts may display evidence IDs, labels, original truncation and recovery availability. Code owns scoped artifact publication, final-request grants, paging and retention; receipt prose and prompt overrides cannot confer access.
 
 `Correction-ProviderInvocation-Invalid.md` retains its existing tokens. Its host-generated `Reason` can identify incomplete tool arguments after output exhaustion and instruct smaller tool calls or file edits. Code owns exhaustion detection, whole-batch rejection and retry bounds; the prompt provides the existing correction framing.
+
+## C# scripting reference
+
+`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.

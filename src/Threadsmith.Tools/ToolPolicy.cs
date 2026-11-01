@@ -91,7 +91,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         }
 
         var scratchpadAccess = IsEligibleScratchpadAccess(tool, input, context);
-        if (!scratchpadAccess && ResourcesTargetScratchpad(tool, input, context))
+        if (!scratchpadAccess && ConfiguredTool.Unwrap(tool) is not (RunProcessTool or CSharpScriptTool) && ResourcesTargetScratchpad(tool, input, context))
         {
             return new ToolPolicyDecision(
                 false,
@@ -117,7 +117,11 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 // Only the compiled direct-write capability can use its separate folder grant.
                 _ = ConfiguredTool.Unwrap(tool) is WriteFileTool writeFile
                     ? writeFile.ValidatePath(resourcePath, context)
-                    : ToolPathRules.NormalizeAndValidateForTool(resourcePath, context, tool.Definition.Id);
+                                        : ConfiguredTool.Unwrap(tool) is ReadFileTool
+                        ? ScriptFilePolicy.ValidateRead(resourcePath, context)
+                        : ConfiguredTool.Unwrap(tool) is RunProcessTool && ToolPathRules.IsWithinScratchpad(resourcePath, context)
+                            ? ToolPathRules.NormalizeScratchpadPath(resourcePath, context)
+                            : ToolPathRules.NormalizeAndValidateForTool(resourcePath, context, tool.Definition.Id);
             }
             catch (UnauthorizedAccessException exception)
             {
@@ -336,7 +340,9 @@ internal static class ToolPathRules
 
         if (inspectFileSystem)
         {
-            RejectReparseTraversal(normalizedRoot, normalized);
+            var authorityRoot = RepositoryPathPolicy.ContainsPath(context.RepositoryPath, normalizedRoot)
+                ? context.RepositoryPath : normalizedRoot;
+            ScopedFilePaths.RejectLinks(normalized, authorityRoot);
         }
 
         return normalized;
@@ -400,31 +406,6 @@ internal static class ToolPathRules
         return normalized;
     }
 
-    private static void RejectReparseTraversal(string root, string normalized)
-    {
-        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new UnauthorizedAccessException("Tool paths cannot traverse symbolic links or junctions.");
-        }
-
-        var current = root;
-        foreach (var segment in Path.GetRelativePath(root, normalized).Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
-        {
-            current = Path.Combine(current, segment);
-            if (!File.Exists(current) && !Directory.Exists(current))
-            {
-                break;
-            }
-
-            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new UnauthorizedAccessException("Tool paths cannot traverse symbolic links or junctions.");
-            }
-        }
-    }
-
     /// <summary>Returns whether a normalized candidate equals or descends from a normalized root.</summary>
     internal static bool IsSameOrChild(string candidate, string root)
     {
@@ -434,18 +415,7 @@ internal static class ToolPathRules
     }
 
     /// <summary>Returns whether a relative path contains a reserved Windows device-name segment.</summary>
-    internal static bool ContainsReservedWindowsDeviceName(string relativePath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
-        if (!OperatingSystem.IsWindows())
-        {
-            return false;
-        }
-
-        return relativePath
-            .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
-            .Any(IsReservedWindowsDeviceName);
-    }
+    internal static bool ContainsReservedWindowsDeviceName(string relativePath) => ScopedFilePaths.ContainsReservedWindowsDeviceName(relativePath);
 
     /// <summary>Returns whether a normalized relative path matches any configured glob.</summary>
     internal static bool IsProhibited(
@@ -457,26 +427,5 @@ internal static class ToolPathRules
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         ArgumentNullException.ThrowIfNull(prohibitedPatterns);
         return RepositoryPathPolicy.IsProhibited(relativePath, prohibitedPatterns, repositoryPath, caseContext);
-    }
-
-    private static bool IsReservedWindowsDeviceName(string segment)
-    {
-        var normalized = segment.TrimEnd(' ', '.');
-        var extensionSeparator = normalized.IndexOf('.');
-        var baseName = extensionSeparator >= 0 ? normalized[..extensionSeparator] : normalized;
-        if (baseName.Equals("CON", StringComparison.OrdinalIgnoreCase)
-            || baseName.Equals("PRN", StringComparison.OrdinalIgnoreCase)
-            || baseName.Equals("AUX", StringComparison.OrdinalIgnoreCase)
-            || baseName.Equals("NUL", StringComparison.OrdinalIgnoreCase)
-            || baseName.Equals("CONIN$", StringComparison.OrdinalIgnoreCase)
-            || baseName.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return baseName.Length == 4
-            && (baseName.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
-                || baseName.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))
-            && baseName[3] is (>= '1' and <= '9') or '¹' or '²' or '³';
     }
 }

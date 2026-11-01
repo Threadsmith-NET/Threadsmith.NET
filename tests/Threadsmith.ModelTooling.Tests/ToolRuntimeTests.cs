@@ -2247,7 +2247,9 @@ public static partial class ToolRuntimeTests
         Assert.All(
             tools,
             tool => Assert.Equal(
-                tool.Definition.Id == "search"
+                tool.Definition.Id == "csharp_script"
+                    ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["CSharpScriptingReferencePath"] = ScriptFilePolicy.ReferencePath })
+                    : tool.Definition.Id == "search"
                     ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["MaximumQueryCharacters"] = "500" })
                     : tool.Definition.Id == "read_file"
                         ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string>
@@ -2459,7 +2461,8 @@ public static partial class ToolRuntimeTests
         Assert.True(properties.TryGetProperty("timeoutSeconds", out var timeoutSchema));
         Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Equal(3, properties.EnumerateObject().Count());
+        Assert.True(properties.TryGetProperty("workingDirectory", out _));
+        Assert.Equal(4, properties.EnumerateObject().Count());
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }
 
@@ -2911,7 +2914,7 @@ public static partial class ToolRuntimeTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
+                CreateScriptContext(repository));
             var expression = await engine.ExecuteAsync(
                 "Enumerable.Range(1, 4).Sum()",
                 ScriptKind.Expression,
@@ -3040,7 +3043,7 @@ public static partial class ToolRuntimeTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
+                CreateScriptContext(repository));
 
             var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context);
 
@@ -3081,7 +3084,7 @@ public static partial class ToolRuntimeTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
+                CreateScriptContext(repository));
 
             var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context, TestContext.Current.CancellationToken);
 
@@ -3849,6 +3852,17 @@ public static partial class ToolRuntimeTests
         Assert.True(firstIndex >= 0, $"Expected '{first}' in text.");
         Assert.True(secondIndex >= 0, $"Expected '{second}' in text.");
         Assert.True(firstIndex < secondIndex, $"Expected '{first}' before '{second}'.");
+    }
+
+    private static ToolInvocationContext CreateScriptContext(string repository)
+    {
+        var scratchpad = Path.Combine(repository, ".threadsmith", ".scratchpad");
+        Directory.CreateDirectory(scratchpad);
+        return CreateContext(repository) with
+        {
+            TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+            Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = scratchpad, ModelPath = ".threadsmith/.scratchpad", DisabledReason = ScratchpadDisabledReason.None },
+        };
     }
 
     private static IConfiguration CreateScriptWorkerIntegrationConfiguration()

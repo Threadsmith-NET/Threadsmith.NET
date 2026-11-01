@@ -58,6 +58,7 @@ public static class PackagedDocumentationPolicy
                 AllowedNetworkHosts = [],
                 NetworkHostRestriction = [],
                 WriteFolders = [],
+                ReadFolders = [],
                 EditableRoots = [],
                 MutationRoots = [],
             },

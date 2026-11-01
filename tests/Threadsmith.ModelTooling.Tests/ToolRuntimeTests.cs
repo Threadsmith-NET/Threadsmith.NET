@@ -3870,6 +3870,8 @@ public static partial class ToolRuntimeTests
         return new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
+                // Functional worker checks follow runner cancellation, including inside the worker.
+                ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["tools:config:csharp_script:max_output_bytes"] = "256",
                 ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
             })

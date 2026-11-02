@@ -493,7 +493,7 @@ public sealed partial class InteractionCoordinator
                         latestRunDiagnostic = null;
                     }
 
-                    if (domainEvent is DiagnosticObserved diagnostic)
+                    if (domainEvent is DiagnosticObserved diagnostic && diagnostic.Code != "ModelProviderBusy")
                     {
                         latestRunDiagnostic = diagnostic.Message;
                     }

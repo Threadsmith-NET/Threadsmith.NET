@@ -57,20 +57,24 @@ internal sealed class AnthropicModelProvider : IModelProvider
             request = Prepare(request);
             if (deadline.IsCancellationRequested)
             {
-                throw Classify(new OperationCanceledException(), deadline, cancellationToken).Exception;
+                throw Classify(new OperationCanceledException(), deadline, cancellationToken);
             }
 
             request = await ModelImages.ResolveAsync(request, _profile, deadline.Token);
             var parameters = AnthropicRequestMapper.Create(request, _profile, _compatibility);
             ModelUsage? interruptedUsage = null;
-            for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
+            await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
+                (_, token) => SendAttemptAsync(token), _profile.RetryPolicy, TimeProvider.System, _profile.Timeout, deadline.Token, cancellationToken))
+            {
+                yield return chunk;
+            }
+
+            async IAsyncEnumerable<ModelChunk> SendAttemptAsync([EnumeratorCancellation] CancellationToken token)
             {
                 var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey, _limits);
-                var deliveredOutput = false;
-                var deliveredReasoning = false;
-                Failure? failure = null;
+                Exception? failure = null;
                 using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes))
-                await using (var events = client.Messages.CreateStreaming(parameters, deadline.Token).GetAsyncEnumerator(deadline.Token))
+                await using (var events = client.Messages.CreateStreaming(parameters, token).GetAsyncEnumerator(token))
                 {
                     while (true)
                     {
@@ -105,10 +109,8 @@ internal sealed class AnthropicModelProvider : IModelProvider
                                 offeredEnvelopes.Add(envelope);
                             }
 
-                            deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunk);
-                            deliveredReasoning |= chunk.Reasoning is not null;
                             yield return chunk.Usage is { } usage
-                                ? chunk with { Usage = AnthropicUsageAccumulator.CombineAttempts(interruptedUsage, usage) }
+                                ? chunk with { Usage = ModelStreamRetry.CombineUsage(interruptedUsage, usage) }
                                 : chunk;
                         }
 
@@ -131,30 +133,11 @@ internal sealed class AnthropicModelProvider : IModelProvider
 
                 if (partial is not null)
                 {
-                    interruptedUsage = AnthropicUsageAccumulator.CombineAttempts(interruptedUsage, partial);
-                    yield return new ModelChunk { Usage = interruptedUsage };
+                    interruptedUsage = ModelStreamRetry.CombineUsage(interruptedUsage, partial);
+                    yield return new ModelChunk { Usage = interruptedUsage, IsInterruptedUsage = true };
                 }
 
-                if (failure is { Retry: true } && !deliveredOutput && attempt < _profile.RetryPolicy.MaxAttempts)
-                {
-                    if (deliveredReasoning)
-                    {
-                        yield return ModelStreamRetry.ReasoningBoundary();
-                    }
-
-                    try
-                    {
-                        await Task.Delay(failure.Delay ?? _profile.RetryPolicy.Delay, deadline.Token);
-                    }
-                    catch (OperationCanceledException exception)
-                    {
-                        throw Classify(exception, deadline, cancellationToken).Exception;
-                    }
-
-                    continue;
-                }
-
-                throw failure?.Exception ?? new ModelProviderException("Anthropic request failed without a terminal result.");
+                throw failure ?? new ModelProviderException("Anthropic request failed without a terminal result.");
             }
         }
         finally
@@ -173,52 +156,57 @@ internal sealed class AnthropicModelProvider : IModelProvider
         or MalformedModelOutputException or InvalidOperationException or ArgumentException or OverflowException or KeyNotFoundException;
     }
 
-    private static Failure Classify(Exception exception, CancellationTokenSource deadline, CancellationToken caller)
+    private static Exception Classify(Exception exception, CancellationTokenSource deadline, CancellationToken caller)
     {
         if (caller.IsCancellationRequested)
         {
-            return new Failure(new OperationCanceledException(caller), false, null);
+            return new OperationCanceledException(caller);
         }
 
         if (deadline.IsCancellationRequested || exception is OperationCanceledException)
         {
-            return new Failure(new ModelProviderTimeoutException("The Anthropic request exceeded its total deadline."), false, null);
+            return new ModelProviderTimeoutException("The Anthropic request exceeded its total deadline.");
         }
 
         // Some SDK paths wrap transport exceptions. Inspect only type and status; never copy their messages.
         for (var current = exception; current is not null; current = current.InnerException)
         {
+            if (current is AnthropicSseException { ErrorType: global::Anthropic.Models.ErrorType.RateLimitError })
+            {
+                return new TransientModelException("Anthropic stream reported a rate limit (code 429).") { IsRateLimit = true };
+            }
+
             if (current is AnthropicHttpFailureException http)
             {
                 var status = (int)http.StatusCode;
                 var retry = status is 408 or 409 or 429 or (>= 500 and <= 599);
                 Exception safe = retry
-                    ? new TransientModelException($"Anthropic request failed with retryable HTTP status {status}.")
+                    ? new TransientModelException($"Anthropic request failed with retryable HTTP status {status}.") { IsRateLimit = status == 429, RetryAfter = http.RetryAfter }
                     : new ModelProviderException($"Anthropic request was rejected with HTTP status {status}.");
-                return new Failure(safe, retry, http.RetryAfter);
+                return safe;
             }
 
             if (current is HttpRequestException or IOException)
             {
-                return new Failure(new TransientModelException($"Anthropic connection failed ({TransportFailureKind(current)})."), true, null);
+                return new TransientModelException($"Anthropic connection failed ({TransportFailureKind(current)}).");
             }
 
             if (current is TransientModelException)
             {
-                return new Failure(current, true, null);
+                return current;
             }
 
             if (current is ModelProviderException or MalformedModelOutputException)
             {
-                return new Failure(current, false, null);
+                return current;
             }
         }
 
         return exception switch
         {
-            HttpRequestException or IOException => new Failure(new TransientModelException("Anthropic connection failed."), true, null),
-            JsonException or KeyNotFoundException => new Failure(new MalformedModelOutputException("Anthropic returned malformed or incomplete protocol JSON."), false, null),
-            _ => new Failure(new ModelProviderException("Anthropic returned an invalid or unsupported response."), false, null),
+            HttpRequestException or IOException => new TransientModelException("Anthropic connection failed."),
+            JsonException or KeyNotFoundException => new MalformedModelOutputException("Anthropic returned malformed or incomplete protocol JSON."),
+            _ => new ModelProviderException("Anthropic returned an invalid or unsupported response."),
         };
     }
 
@@ -256,6 +244,4 @@ internal sealed class AnthropicModelProvider : IModelProvider
             throw new ModelProviderException("Anthropic request projection failed local schema or capacity validation.");
         }
     }
-
-    private sealed record Failure(Exception Exception, bool Retry, TimeSpan? Delay);
 }

@@ -18,6 +18,9 @@ public enum ActiveModelSelectionSource
 
     /// <summary>The current session explicitly selected the model.</summary>
     Explicit,
+
+    /// <summary>The first enabled model replaced an invalid repository selection.</summary>
+    RepositoryFallback,
 }
 
 /// <summary>One provider-neutral selectable model entry.</summary>
@@ -201,6 +204,9 @@ public sealed class ActiveModelSelectionService :
         _source = ActiveModelSelectionSource.UserDefault;
         _ = ApplyRepositorySelectionIfPresent(_configurationPath);
     }
+
+    /// <summary>Gets the warning describing automatic recovery from invalid repository selection.</summary>
+    public string? RepositorySelectionWarning { get; private set; }
 
     /// <summary>Gets enabled models in deterministic provider/model order.</summary>
     public IReadOnlyList<SelectableModelEntry> Models => _catalog.Definitions
@@ -413,6 +419,7 @@ public sealed class ActiveModelSelectionService :
 
     private bool ApplyRepositorySelectionIfPresent(string configurationPath)
     {
+        RepositorySelectionWarning = null;
         RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
         if (!File.Exists(configurationPath))
         {
@@ -440,8 +447,7 @@ public sealed class ActiveModelSelectionService :
         if (providerId is null
             || !Guid.TryParse(profileText, out var profileGuid))
         {
-            throw new InvalidDataException(
-                "Repository model selection is partial or malformed. Use /models to repair it.");
+            return ApplyRepositoryFallback("the saved selection is partial or malformed");
         }
 
         ConfiguredModelDefinition definition;
@@ -449,17 +455,14 @@ public sealed class ActiveModelSelectionService :
         {
             definition = _catalog.Get(new ModelProfileId(profileGuid));
         }
-        catch (KeyNotFoundException exception)
+        catch (KeyNotFoundException)
         {
-            throw new InvalidDataException(
-                "Repository model selection refers to a missing or disabled profile. Use /models to repair it.",
-                exception);
+            return ApplyRepositoryFallback("the saved profile is missing or disabled");
         }
 
         if (!string.Equals(providerId, definition.ProviderId, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException(
-                "Repository model provider and profile do not match. Use /models to repair them.");
+            return ApplyRepositoryFallback("the saved provider and profile do not match");
         }
 
         var fallbackReasoning = definition.Profile.ReasoningCapability.SupportsReasoningOff == false
@@ -475,6 +478,20 @@ public sealed class ActiveModelSelectionService :
 
         _preferences.SetReasoning(definition.Profile.Id, reasoning);
         _source = ActiveModelSelectionSource.Repository;
+        return true;
+    }
+
+    private bool ApplyRepositoryFallback(string reason)
+    {
+        var models = Models;
+        var fallback = models.Count > 0
+            ? models[0]
+            : throw new InvalidDataException("The selected repository model is invalid and no enabled model is available. Configure a valid model in providers.json.");
+        _preferences.SetReasoning(fallback.Profile.Id, fallback.Profile.DefaultReasoningLevel);
+        _source = ActiveModelSelectionSource.RepositoryFallback;
+        RepositorySelectionWarning = $"The selected repository model was invalid: {reason}. "
+            + $"Selected {fallback.Profile.Name} ({fallback.ProviderName}; {fallback.ProviderId}), the first valid model. "
+            + "Use /models to change and save the repository selection.";
         return true;
     }
 

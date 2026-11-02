@@ -1,5 +1,10 @@
 # Threadsmith.NET Manual Test Plan
 
+## Stale repository model selection recovery
+
+In a disposable repository, select a model with `/models`, exit, then remove or disable that profile while retaining another enabled model. Start with `--tui`; confirm output warns that the selected repository model was invalid and names the first enabled model in `/models` order as the replacement. Confirm ordinary requests use that replacement without requiring repair. Select a different model with `/models` and restart to verify persistence. Repeat with a mismatched provider/profile, partial selection, and opening another repository. Headless output must also report the warning and selected model. Record Windows/Linux/macOS terminal checks separately.
+
+
 ## MTP-279 — Multimodal input and image export
 
 **Prerequisites:** Disposable repository containing non-sensitive PNG/JPEG fixtures with visually distinguishable contents, misleading extensions, an unsupported binary file, and prohibited-path fixtures. Configure a text-only profile and verified image-input profiles for each available provider. Use an output-capable endpoint or the deterministic generated-image fixture. Have a writable `write_file` allowed folder, clipboard-capable terminal, and recorded effective limits.
@@ -2243,6 +2248,8 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 Approval-modal regression: use a benign long unbroken URL prompt without fetching it. Verify wrapped origin/path text, F2 full details and PgUp/PgDn scroll, 40x12/80x24/160x40 dimensions and resize, unchanged Deny/approval selection, and a wider frame only where margins permit. Query-value redaction remains unchanged.
 
 ## MTP-OPENROUTER — Manual provider compatibility
+
+Rate-limit regression (all four provider integrations): with a controlled provider fixture, return HTTP 429 or a protocol-native stream rate-limit error twice before a successful response. Set `retryMaxAttempts` to 3 and verify exactly three submissions, short increasing delays, and one “Model provider is currently busy ... please wait” notice with a line break before and after it and the same text role as a failure diagnostic. Repeat with limits 1 and 2, persistent throttling, reasoning-only partial output, and cancellation during backoff. Verify no busy notice when no retry is possible, no automatic replay after committed answer/tool output, no notice in model history, and the notice in the correct child pane for delegated requests. Record actual terminal checks separately from automated fixture results.
 
 **Prerequisites:** An explicitly selected manual OpenRouter profile, verified endpoint metadata, a bounded API key in the existing user secret store, and a disposable repository. Record the exact model slug, upstream routing slug and expected response provider name.
 

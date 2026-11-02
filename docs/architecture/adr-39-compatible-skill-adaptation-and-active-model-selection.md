@@ -16,7 +16,7 @@ Threadsmith-native Plan-39 packages provide signed or exact-digest manifests and
 - Reject links, path escapes, unsafe YAML features, executable auto-activation, and unsupported hook/agent/fork semantics. Tool names map only through a closed semantic table and remain subject to the central tool pipeline.
 - Keep compatibility status explicit: `Compatible`, `CompatibleWithRestrictions`, or `Unsupported`.
 - Use `ActiveModelSelectionService` as the session authority for configured provider/profile/reasoning state. New requests capture the current profile generation; existing requests retain their prior snapshot.
-- Persist repository selection as stable provider/profile ids plus a host reasoning level in `.threadsmith/config.json`. Present-invalid repository intent fails closed instead of falling back to user defaults.
+- Persist repository selection as stable provider/profile ids plus a host reasoning level in `.threadsmith/config.json`. Invalid repository selection recovers to the first enabled model in the deterministic `/models` order. Startup and repository-open output warn that the selection was invalid and name the model selected. Recovery does not rewrite repository preferences; `/models` lets the user choose and persist a replacement.
 - Runtime provider dispatch resolves the current profile for each new request. `/models` and `/reasoning` use the same authority and atomic writer.
 
 ## Consequences

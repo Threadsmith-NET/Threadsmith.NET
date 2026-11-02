@@ -1259,6 +1259,8 @@ The OpenAI-compatible adapter sends `max_completion_tokens` to the server. When 
 
 ### Repository model selection
 
+HTTP 429 and structured rate-limit errors inside response streams use the same bounded retry policy across OpenAI-compatible, OpenRouter, Codex, and Anthropic providers. `retryMaxAttempts` counts the initial request; `1` disables retries. Rate-limit retries start at a minimum of 250 ms and back off exponentially to five seconds, respecting longer configured delays and bounded `Retry-After` values. The request deadline and cancellation still apply. The output shows “Model provider is currently busy ... please wait” once per retrying request, on its own line using the failure diagnostic text role. Responses already committed as answer text, tools, or replay state are not automatically replayed.
+
 Use `/models` to open the keyboard selector. Choices show provider/model identity, context/output limits, reasoning capability, and the current marker. The selected provider id, stable profile GUID, and effective reasoning level are written together to `.threadsmith/config.json`; unrelated settings are preserved.
 
 Repository selection wins over `defaultProviderId`/`defaultModelId` in the user provider catalog. Those defaults apply only when both repository selection ids are absent. Partial, malformed, mismatched, missing, or disabled repository intent fails closed with repair guidance rather than silently selecting a user default.

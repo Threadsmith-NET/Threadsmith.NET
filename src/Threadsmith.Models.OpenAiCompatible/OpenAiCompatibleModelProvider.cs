@@ -211,9 +211,16 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCancellation.Token);
 
         var requestContent = CreateRequestContent(request, maximumOutputTokens, canonicalTools, toolNameMap);
-        HttpResponseMessage? response = null;
-        for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
+        ModelUsage? interruptedUsage = null;
+        await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
+            SendAttemptAsync, _profile.RetryPolicy, _timeProvider, _profile.Timeout, requestCancellation.Token, cancellationToken))
         {
+            yield return chunk;
+        }
+
+        async IAsyncEnumerable<ModelChunk> SendAttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken token)
+        {
+            var previousUsage = interruptedUsage;
             using var message = new HttpRequestMessage(HttpMethod.Post, _profile.Endpoint);
             if (!string.IsNullOrWhiteSpace(_apiKey))
             {
@@ -227,129 +234,82 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
             message.Content = new ReadOnlyMemoryContent(requestContent);
             message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            HttpResponseMessage response;
             try
             {
-                requestCancellation.Token.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested();
                 var pendingResponse = (_httpClient ?? throw new InvalidOperationException("Projection-only adapter cannot submit requests.")).SendAsync(
-                    message,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    requestCancellation.Token);
+                    message, HttpCompletionOption.ResponseHeadersRead, token);
                 request.SubmissionObserver?.Invoke();
                 response = await pendingResponse.ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
-                if (requestCancellation.IsCancellationRequested)
+                if (token.IsCancellationRequested)
                 {
                     throw CreateTimeoutException(exception);
                 }
 
-                // The handler can cancel connection establishment independently of the model deadline.
-                if (attempt == _profile.RetryPolicy.MaxAttempts)
-                {
-                    throw new TransientModelException(
-                        $"Model endpoint transport was cancelled before response headers after {attempt} attempts; "
-                        + "the model request deadline did not expire.",
-                        exception);
-                }
-
-                await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
-                continue;
+                throw new TransientModelException(
+                    $"Model endpoint transport was cancelled before response headers after {attempt} attempts; "
+                    + "the model request deadline did not expire.",
+                    exception);
             }
             catch (HttpRequestException exception) when (IsTransientTransportFailure(exception))
             {
-                if (attempt == _profile.RetryPolicy.MaxAttempts)
-                {
-                    throw new TransientModelException(
-                        $"Model endpoint transport remained unavailable after {attempt} attempts.",
-                        exception);
-                }
-
-                await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
-                continue;
+                throw new TransientModelException($"Model endpoint transport remained unavailable after {attempt} attempts.", exception);
             }
 
-            if (response.IsSuccessStatusCode)
+            using (response)
             {
-                var deliveredOutput = false;
-                var deliveredReasoning = false;
-                using (response)
+                if (!response.IsSuccessStatusCode)
                 {
-                    await using var chunks = ReadResponseAsync(
-                        response, request, canonicalTools, toolNameMap, maximumOutputTokens, requestCancellation, cancellationToken)
-                        .GetAsyncEnumerator(cancellationToken);
-                    while (true)
+                    var statusCode = response.StatusCode;
+                    if (statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable || (int)statusCode == 529)
                     {
-                        bool hasNext;
-                        try
+                        throw new TransientModelException($"Model endpoint remained unavailable after {attempt} attempts (HTTP {(int)statusCode}).")
                         {
-                            hasNext = await chunks.MoveNextAsync();
-                        }
-                        catch (Exception exception) when (exception is IOException or TransientModelException
-                            || (exception is HttpRequestException transport && IsTransientTransportFailure(transport)))
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                            if (requestCancellation.IsCancellationRequested)
-                            {
-                                throw CreateTimeoutException(exception);
-                            }
-
-                            if (deliveredOutput || attempt == _profile.RetryPolicy.MaxAttempts)
-                            {
-                                if (exception is TransientModelException)
-                                {
-                                    throw;
-                                }
-
-                                throw new TransientModelException(
-                                    $"Model endpoint connection ended before completion ({TransportFailureKind(exception)}).",
-                                    exception);
-                            }
-
-                            break;
-                        }
-
-                        if (!hasNext)
-                        {
-                            yield break;
-                        }
-
-                        // Answer, tool, usage and replay data commit this attempt; preliminary reasoning does not.
-                        deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunks.Current);
-                        deliveredReasoning |= chunks.Current.Reasoning is not null;
-                        yield return chunks.Current;
+                            IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
+                            RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
+                        };
                     }
+
+                    throw new ModelProviderException($"Model endpoint rejected the request with HTTP {(int)statusCode}.");
                 }
 
-                if (deliveredReasoning)
+                await using var chunks = ReadResponseAsync(
+                    response, request, canonicalTools, toolNameMap, maximumOutputTokens, requestCancellation, token).GetAsyncEnumerator(token);
+                while (true)
                 {
-                    yield return ModelStreamRetry.ReasoningBoundary();
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = await chunks.MoveNextAsync();
+                    }
+                    catch (Exception exception) when (exception is IOException
+                        || (exception is HttpRequestException transport && IsTransientTransportFailure(transport)))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        throw new TransientModelException(
+                            $"Model endpoint connection ended before completion ({TransportFailureKind(exception)}).", exception);
+                    }
+
+                    if (!hasNext)
+                    {
+                        yield break;
+                    }
+
+                    var chunk = chunks.Current;
+                    if (chunk.Usage is { } usage)
+                    {
+                        var cumulative = ModelStreamRetry.CombineUsage(previousUsage, usage);
+                        interruptedUsage = cumulative;
+                        chunk = chunk with { Usage = cumulative };
+                    }
+
+                    yield return chunk;
                 }
-
-                await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
-                continue;
             }
-
-            var statusCode = response.StatusCode;
-            response.Dispose();
-            response = null;
-            var isTransient = statusCode is HttpStatusCode.TooManyRequests
-                or HttpStatusCode.ServiceUnavailable
-                || (int)statusCode == 529;
-            if (!isTransient || attempt == _profile.RetryPolicy.MaxAttempts)
-            {
-                if (isTransient)
-                {
-                    throw new TransientModelException(
-                        $"Model endpoint remained unavailable after {attempt} attempts "
-                        + $"(HTTP {(int)statusCode}).");
-                }
-
-                throw new ModelProviderException(
-                    $"Model endpoint rejected the request with HTTP {(int)statusCode}.");
-            }
-
-            await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
         }
     }
 
@@ -442,7 +402,13 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                         exception);
                 }
 
-                if (envelope.Usage is { } reportedUsage)
+                var rateLimited = envelope.Error is { } rateLimitError && ModelStreamRetry.IsRateLimitError(rateLimitError);
+
+                if (envelope.Usage is { } reportedUsage
+                    && (!rateLimited || reportedUsage.PromptTokens != 0 || reportedUsage.CompletionTokens != 0
+                        || reportedUsage.Cost is not null || reportedUsage.PromptTokenDetails is not null
+                        || reportedUsage.CacheReadInputTokens is not null || reportedUsage.CacheCreationInputTokens is not null
+                        || reportedUsage.CompletionTokenDetails.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)))
                 {
                     if (reportedUsage.PromptTokens < 0 || reportedUsage.CompletionTokens < 0)
                     {
@@ -464,6 +430,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                         EstimateTokenCount(completionCharacters));
                     yield return new ModelChunk
                     {
+                        IsInterruptedUsage = rateLimited,
                         Usage = NormalizeUsage(
                             new ModelUsage(
                             inputCount,
@@ -481,6 +448,11 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 }
 
                 ValidateResponseIdentity(envelope.Model, envelope.Provider);
+
+                if (rateLimited)
+                {
+                    throw new TransientModelException("The model endpoint reported a rate limit inside the response stream (code 429).") { IsRateLimit = true };
+                }
 
                 if (envelope.Error is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } error)
                 {
@@ -1257,20 +1229,6 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
             .ToArray();
         toolCalls.Clear();
         return chunks;
-    }
-
-    private async Task DelayBeforeRetryAsync(
-        CancellationToken requestCancellationToken,
-        CancellationToken callerCancellationToken)
-    {
-        try
-        {
-            await Task.Delay(_profile.RetryPolicy.Delay, _timeProvider, requestCancellationToken);
-        }
-        catch (OperationCanceledException exception) when (!callerCancellationToken.IsCancellationRequested)
-        {
-            throw CreateTimeoutException(exception);
-        }
     }
 
     private static string TransportFailureKind(Exception exception)

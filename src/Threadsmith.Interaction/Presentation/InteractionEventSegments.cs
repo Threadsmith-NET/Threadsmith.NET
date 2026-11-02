@@ -52,6 +52,9 @@ internal static class InteractionEventSegments
             case DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: not null }:
             case DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: not null }:
                 break;
+            case DiagnosticObserved { Code: "ModelProviderBusy" } busy:
+                Add(segments, $"{Environment.NewLine}{busy.Message}{Environment.NewLine}", PresentationTextRole.Warning);
+                break;
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {

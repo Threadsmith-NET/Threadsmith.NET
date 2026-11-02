@@ -318,6 +318,7 @@ public sealed class JsonlModelExchangeLog
         return new
         {
             chunk.Text,
+            ProviderBusy = chunk.ProviderBusy ? true : (bool?)null,
             chunk.Output,
             chunk.Usage,
             chunk.FinishReason,

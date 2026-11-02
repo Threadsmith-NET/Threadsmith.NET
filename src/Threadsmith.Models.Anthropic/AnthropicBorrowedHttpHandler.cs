@@ -80,13 +80,7 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
             if (!response.IsSuccessStatusCode)
             {
                 // Error bodies are never read, parsed, or copied into an exception.
-                var delay = response.Headers.RetryAfter?.Delta;
-                if (delay is null && response.Headers.RetryAfter?.Date is { } date)
-                {
-                    delay = date - DateTimeOffset.UtcNow;
-                }
-
-                throw new AnthropicHttpFailureException(response.StatusCode, delay is { } value ? TimeSpan.FromMilliseconds(Math.Clamp(value.TotalMilliseconds, 0, 30000)) : null);
+                throw new AnthropicHttpFailureException(response.StatusCode, ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow));
             }
 
             var original = response.Content;

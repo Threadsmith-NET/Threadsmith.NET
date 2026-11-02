@@ -10,6 +10,130 @@ using Xunit;
 /// <summary>Provider errors carried by successful HTTP streams must not become empty-answer corrections.</summary>
 public static class OpenAiCompatibleStreamErrorTests
 {
+    /// <summary>Failed attempts retain usage both during recovery and after committed answer text.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task RateLimit_PreservesCumulativeUsage(bool afterText)
+    {
+        var prefix = afterText ? "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" : string.Empty;
+        var failure = prefix + "data: {\"error\":{\"code\":429},\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n";
+        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
+        var handler = new StreamHandler(failure, failure, success);
+        using var client = new HttpClient(handler);
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        if (afterText)
+        {
+            await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
+        }
+        else
+        {
+            await CollectAsync();
+        }
+
+        var usage = chunks.Where(chunk => chunk.Usage is not null).Select(chunk => chunk.Usage!).ToArray();
+        Assert.Equal(afterText ? 1 : 3, handler.Calls);
+        Assert.Equal(afterText ? [10L] : new[] { 10L, 20L, 40L }, usage.Select(item => item.InputTokens));
+        Assert.Equal(afterText ? 2 : 7, usage[^1].OutputTokens);
+        Assert.Equal(afterText ? 2 : 3, usage[^1].MaximumAttemptOutputTokens ?? usage[^1].OutputTokens);
+    }
+
+    /// <summary>Every attempt, including the first request, counts against the configured limit.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public static async Task RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    {
+        var handler = new StreamHandler("data: {\"error\":{\"code\":429}}\n\n");
+        using var client = new HttpClient(handler);
+        var chunks = new List<ModelChunk>();
+        await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in CreateProvider(client, maximumAttempts).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(maximumAttempts, handler.Calls);
+        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+    }
+
+    /// <summary>Rate-limit variants recover or exhaust retries without duplicate busy notices or failed-frame usage.</summary>
+    [Theory]
+    [InlineData("{\"code\":429}", false)]
+    [InlineData("{\"code\":\"429\"}", false)]
+    [InlineData("{\"type\":\"rate_limit_error\"}", false)]
+    [InlineData("{\"code\":\"rate_limit_exceeded\"}", true)]
+    public static async Task RateLimit_RetriesWithOneBusyNotice(string error, bool exhaust)
+    {
+        var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
+        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        var handler = new StreamHandler(failed, failed, exhaust ? failed : success);
+        using var client = new HttpClient(handler);
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        if (exhaust)
+        {
+            var exception = await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
+            Assert.True(exception.IsRateLimit);
+        }
+        else
+        {
+            await CollectAsync();
+            Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
+            Assert.Single(chunks, chunk => chunk.Usage is not null);
+        }
+
+        Assert.Equal(3, handler.Calls);
+        Assert.Single(chunks, chunk => chunk.ProviderBusy);
+    }
+
+    /// <summary>Cancellation while entering backoff stops resubmission.</summary>
+    [Fact]
+    public static async Task RateLimit_CancelAtBusyNotice_DoesNotResubmit()
+    {
+        var handler = new StreamHandler("data: {\"error\":{\"code\":429}}\n\n");
+        using var client = new HttpClient(handler);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var chunk in CreateProvider(client).StreamAsync(Request(), cancellation.Token))
+            {
+                Assert.True(chunk.ProviderBusy);
+                await cancellation.CancelAsync();
+            }
+        });
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>Once visible text is committed it is never replayed automatically.</summary>
+    [Fact]
+    public static async Task RateLimit_AfterText_IsTransientWithoutDuplicatingOutput()
+    {
+        var handler = new StreamHandler("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"error\":{\"code\":429}}\n\n");
+        using var client = new HttpClient(handler);
+        var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
+            await CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        Assert.True(exception.IsRateLimit);
+        Assert.Equal(1, handler.Calls);
+    }
+
     /// <summary>Errors terminate the stream before usage estimates or unfinished tools are released, without replay.</summary>
     [Theory]
     [InlineData(false)]
@@ -87,7 +211,7 @@ public static class OpenAiCompatibleStreamErrorTests
         };
     }
 
-    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client)
+    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client, int maximumAttempts = 3)
     {
         return new(client, new ModelProfile
         {
@@ -99,17 +223,17 @@ public static class OpenAiCompatibleStreamErrorTests
             ContextWindow = 32000,
             MaximumOutputTokens = 4000,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
         });
     }
 
     private sealed class StreamHandler : HttpMessageHandler
     {
-        private readonly string _body;
+        private readonly string[] _bodies;
 
-        public StreamHandler(string body)
+        public StreamHandler(params string[] bodies)
         {
-            _body = body;
+            _bodies = bodies;
         }
 
         public int Calls { get; private set; }
@@ -120,7 +244,7 @@ public static class OpenAiCompatibleStreamErrorTests
             Calls++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_body, Encoding.UTF8, "text/event-stream"),
+                Content = new StringContent(_bodies[Math.Min(Calls - 1, _bodies.Length - 1)], Encoding.UTF8, "text/event-stream"),
             });
         }
     }

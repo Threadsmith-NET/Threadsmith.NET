@@ -57,6 +57,7 @@
     <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Resilience" Version="10.8.0" />
 
     <!-- Local CPU text embeddings; SDKs isolated in Threadsmith.Embeddings.Local. -->
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />

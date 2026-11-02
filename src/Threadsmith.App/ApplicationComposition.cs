@@ -272,6 +272,11 @@ internal static class ApplicationComposition
         var startupDisplayWarnings = CreateStandingPreferenceWarnings(
             initialStandingPreferenceCount,
             initialMemoryOptions.StandingPreferenceWarningThreshold);
+        if (integration.Models.ActiveModels?.RepositorySelectionWarning is { } modelDiagnostic)
+        {
+            startupDisplayWarnings = [.. startupDisplayWarnings, modelDiagnostic];
+        }
+
         if (host.Configuration.GetSection("context:repositoryMemory").Exists())
         {
             host.LoggerFactory.CreateLogger<RepositoryMemoryService>().LogWarning(
@@ -1370,6 +1375,7 @@ internal sealed class RepositoryScopedBindingCoordinator
 
                 LastWarnings = [
                     .. candidatePolicy?.Diagnostics ?? [],
+                    .. _activeModels?.RepositorySelectionWarning is { } modelWarning ? new[] { modelWarning } : [],
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
                     .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
                 ];

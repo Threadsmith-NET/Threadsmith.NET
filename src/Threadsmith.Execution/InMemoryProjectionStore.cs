@@ -236,7 +236,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 {
                     Error = failed.Reason,
                 },
-                DiagnosticObserved diagnostic when existing is not null => existing with
+                DiagnosticObserved diagnostic when existing is not null && diagnostic.Code != "ModelProviderBusy" => existing with
                 {
                     Error = $"{diagnostic.Code}: {diagnostic.Message}",
                     Diagnostics = diagnostic.StructuredDiagnostic is null

@@ -3,7 +3,7 @@ namespace Threadsmith.Execution;
 using Threadsmith.Core;
 
 /// <summary>A sanitized transient display fragment, never a durable event or provider replay block.</summary>
-public sealed record AgentDisplayText(SessionId SessionId, RunId RunId, string Text, bool IsReasoning, bool CompletesResponse = false, Guid ResponseId = default);
+public sealed record AgentDisplayText(SessionId SessionId, RunId RunId, string Text, bool IsReasoning, bool CompletesResponse = false, Guid ResponseId = default, bool IsDiagnostic = false);
 
 /// <summary>Nonblocking bounded child display channel with explicit loss reporting.</summary>
 public sealed class AgentDisplayStream

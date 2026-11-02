@@ -236,6 +236,12 @@ public enum ModelFinishReason
 /// <summary>Provider-neutral streaming chunk.</summary>
 public sealed record ModelChunk
 {
+    /// <summary>Signals the first rate-limit retry of this request; never contributes model content or usage.</summary>
+    public bool ProviderBusy { get; init; }
+
+    /// <summary>Cumulative accounting from an interrupted attempt, which does not commit a response for retry purposes.</summary>
+    public bool IsInterruptedUsage { get; init; }
+
     /// <summary>Complete generated image bytes from a verified endpoint; never serialized or logged.</summary>
     [JsonIgnore]
     public GeneratedModelImage? GeneratedImage { get; init; }
@@ -341,6 +347,12 @@ public sealed record ScriptedSession
 /// <summary>Exception representing a retryable provider failure.</summary>
 public sealed class TransientModelException : Exception
 {
+    /// <summary>Identifies throttling so the existing retry loop can back off and report busy status.</summary>
+    public bool IsRateLimit { get; init; }
+
+    /// <summary>Optional provider-directed delay before another attempt.</summary>
+    public TimeSpan? RetryAfter { get; init; }
+
     /// <summary>Initializes a new instance of the <see cref="TransientModelException"/> class.</summary>
     public TransientModelException()
     {

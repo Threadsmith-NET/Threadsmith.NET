@@ -247,6 +247,46 @@ public sealed class AnthropicStreamFixtureTests
         Assert.Null(error.InnerException);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StreamAsync_RateLimit_RetriesAndReportsBusyOnce(bool httpStatus)
+    {
+        var failure = TestAnthropic.Event("error", new { type = "error", error = new { type = "rate_limit_error", message = "SECRET" } });
+        var handler = new TestAnthropicHandler((attempt, _) => Task.FromResult(
+            new HttpResponseMessage(httpStatus && attempt < 2 ? HttpStatusCode.TooManyRequests : HttpStatusCode.OK)
+            {
+                Content = new StringContent(attempt < 2 ? failure : TestAnthropic.TextStream(), System.Text.Encoding.UTF8, "text/event-stream"),
+            }));
+        using var client = new HttpClient(handler);
+        var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request(), TestContext.Current.CancellationToken);
+        Assert.Equal(3, handler.Requests.Count);
+        Assert.Single(chunks, chunk => chunk.ProviderBusy);
+        Assert.Contains(chunks, chunk => chunk.FinishReason is not null);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task StreamAsync_RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    {
+        var handler = new TestAnthropicHandler(TestAnthropic.Event("error", new { type = "error", error = new { type = "rate_limit_error", message = "SECRET" } }));
+        using var client = new HttpClient(handler);
+        var profile = TestAnthropic.Profile() with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero } };
+        var chunks = new List<ModelChunk>();
+        var provider = new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility());
+        await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(TestAnthropic.Request(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(maximumAttempts, handler.Requests.Count);
+        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+    }
+
     /// <summary>The host retries only its reviewed HTTP status set and disposes no shared transport.</summary>
     [Theory]
     [InlineData(408, 3)]

@@ -460,6 +460,17 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 continue;
             }
 
+            if (item.IsDiagnostic)
+            {
+                await FlushAsync(child, cancellationToken);
+                await _surface.PresentAsync(
+                    new PresentationBatch([new PresentationTextItem([
+                        new($"{Environment.NewLine}{TerminalControlEncoder.Encode(item.Text)}{Environment.NewLine}", PresentationTextRole.Warning),
+                    ])]) { Target = child.Snapshot.Target },
+                    cancellationToken);
+                continue;
+            }
+
             if (item.IsReasoning)
             {
                 if (_display.IncludeReasoningText)

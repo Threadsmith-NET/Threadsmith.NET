@@ -509,6 +509,11 @@ internal sealed class ChildAgentModelLoop
                 request,
                 cancellationToken))
             {
+                if (chunk.ProviderBusy)
+                {
+                    _display?.Publish(new AgentDisplayText(sessionId, assignment.ChildRunId, ModelStreamRetry.ProviderBusyMessage, false, IsDiagnostic: true));
+                }
+
                 if (chunk.Usage is not null)
                 {
                     usage = chunk.Usage;

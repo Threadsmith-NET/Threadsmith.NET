@@ -330,6 +330,43 @@ public sealed class Milestone17CompatibilityTests
         Assert.Equal(ActiveModelSelectionSource.Repository, service.Current.Source);
     }
 
+    /// <summary>Invalid repository selections recover to the first enabled model and remain editable.</summary>
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("partial")]
+    [InlineData("mismatch")]
+    public async Task ActiveModels_InvalidRepositorySelection_SelectsFirstValidModelAndWarns(string invalidSelection)
+    {
+        using var directory = new TemporaryDirectory();
+        var firstId = ModelProfileId.New();
+        var secondId = ModelProfileId.New();
+        var catalog = CreateModelCatalog(firstId, secondId);
+        var path = Path.Combine(directory.Path, "config.json");
+        var profile = invalidSelection == "missing" ? ModelProfileId.New() : secondId;
+        var profileText = invalidSelection == "partial" ? "not-a-guid" : profile.Value.ToString("D");
+        var original = $$$"""{"keep":42,"model":{"providerId":"provider-a","profileId":"{{{profileText}}}"}}""";
+        await File.WriteAllTextAsync(path, original, TestContext.Current.CancellationToken);
+        var preferences = new SessionModelPreferences(secondId, ReasoningLevel.None);
+
+        var service = new ActiveModelSelectionService(catalog, preferences, path);
+
+        Assert.Equal(firstId, service.Current.Profile.Id);
+        Assert.Equal(firstId, preferences.CurrentProfileId);
+        Assert.Equal(service.Models[0].Profile.DefaultReasoningLevel, service.Current.ReasoningLevel);
+        Assert.Equal(ActiveModelSelectionSource.RepositoryFallback, service.Current.Source);
+        Assert.Contains("invalid", service.RepositorySelectionWarning, StringComparison.Ordinal);
+        Assert.Contains(service.Current.Profile.Name, service.RepositorySelectionWarning, StringComparison.Ordinal);
+        Assert.Contains(service.Current.ProviderId, service.RepositorySelectionWarning, StringComparison.Ordinal);
+        Assert.Equal(original, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+        var result = await service.HandleAsync(new SelectActiveModelCommand(secondId), TestContext.Current.CancellationToken);
+        Assert.True(result.Persisted);
+        var reloaded = new ActiveModelSelectionService(catalog, new SessionModelPreferences(firstId, ReasoningLevel.None), path);
+        Assert.Equal(secondId, reloaded.Current.Profile.Id);
+        Assert.Equal(ActiveModelSelectionSource.Repository, reloaded.Current.Source);
+        Assert.Null(reloaded.RepositorySelectionWarning);
+        Assert.Contains("\"keep\": 42", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+    }
+
     /// <summary>Verifies switching resets unsupported reasoning and atomically preserves unrelated settings.</summary>
     [Fact]
     public async Task ActiveModels_Select_ResetsUnsupportedReasoningAndPersistsCompleteSelection()

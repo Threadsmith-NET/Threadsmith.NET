@@ -975,6 +975,105 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
+    /// <summary>HTTP and stream rate limits share the configured retry policy and a single busy notification.</summary>
+    [Theory]
+    [InlineData("{\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}", false)]
+    [InlineData("{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":429}}}", false)]
+    [InlineData("{}", true)]
+    public async Task Provider_RateLimit_RetriesAndReportsBusyOnce(string frame, bool httpStatus)
+    {
+        var calls = 0;
+        var handler = new RecordingHandler(_ => ++calls < 3
+            ? new HttpResponseMessage(httpStatus ? HttpStatusCode.TooManyRequests : HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: " + frame + "\n\n", Encoding.UTF8, "text/event-stream"),
+            }
+            : StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(3, calls);
+        Assert.Single(chunks, chunk => chunk.ProviderBusy);
+        Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
+    }
+
+    /// <summary>Retryable status headers permit recovery without reading an error body that would time out.</summary>
+    [Theory]
+    [InlineData(408)]
+    [InlineData(429)]
+    [InlineData(502)]
+    [InlineData(503)]
+    [InlineData(504)]
+    public async Task Provider_TransientHeaders_RetryWithoutReadingErrorBody(int status)
+    {
+        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        var calls = 0;
+        var handler = new RecordingHandler(_ => ++calls == 1
+            ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) }
+            : StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, calls);
+        Assert.False(body.Started.Task.IsCompleted);
+        Assert.Equal(status == 429 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
+    }
+
+    /// <summary>Header delay metadata survives exhausted retries without waiting for error details.</summary>
+    [Theory]
+    [InlineData(429)]
+    [InlineData(503)]
+    public async Task Provider_TransientHeaders_PreserveRetryAfter(int status)
+    {
+        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(3));
+            return response;
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero },
+        });
+
+        var error = await Assert.ThrowsAsync<TransientModelException>(async () =>
+            await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(TimeSpan.FromSeconds(3), error.RetryAfter);
+        Assert.Equal(status == 429, error.IsRateLimit);
+        Assert.False(body.Started.Task.IsCompleted);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    /// <summary>The configured maximum counts all attempts, including the original request.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task Provider_RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
+        });
+        var chunks = new List<ModelChunk>();
+        await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(maximumAttempts, handler.RequestCount);
+        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+    }
+
     /// <summary>Transport failures before a response use the configured attempt limit.</summary>
     [Theory]
     [InlineData(false)]

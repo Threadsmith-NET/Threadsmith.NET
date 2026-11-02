@@ -422,6 +422,52 @@ public static class OpenRouterProviderTests
         Assert.Equal("opaque-state", blocks[2].GetProperty("data").GetString());
     }
 
+    /// <summary>OpenRouter uses shared rate-limit recovery and its configured attempt limit.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public static async Task RateLimitStream_UsesSharedRetriesAndOneBusyNotice(int maximumAttempts)
+    {
+        using var handler = new Handler(Frame("""{"error":{"code":429,"message":"private"}}"""));
+        using var client = new HttpClient(handler);
+        var model = Model() with { RetryMaxAttempts = maximumAttempts, RetryDelayMilliseconds = 0 };
+        var chunks = new List<ModelChunk>();
+        var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in Provider(client, model).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(maximumAttempts, handler.Calls);
+        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.DoesNotContain("private", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Reported charges and cache counters survive each rate-limited attempt.</summary>
+    [Fact]
+    public static async Task RateLimit_PreservesChargesAndCacheUsage()
+    {
+        using var handler = new Handler(Frame("""{"error":{"code":429},"usage":{"prompt_tokens":10,"completion_tokens":2,"cost":0.2,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":1}}}"""));
+        using var client = new HttpClient(handler);
+        var model = Model() with { RetryMaxAttempts = 3, RetryDelayMilliseconds = 0 };
+        var usages = new List<ModelUsage>();
+        await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in Provider(client, model).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            {
+                if (chunk.Usage is { } usage)
+                {
+                    usages.Add(usage);
+                }
+            }
+        });
+        Assert.Equal(new decimal?[] { 0.2m, 0.4m, 0.6m }, usages.Select(usage => usage.ReportedCost));
+        Assert.Equal(9, usages[^1].Cache?.CacheReadTokens);
+        Assert.Equal(3, usages[^1].Cache?.CacheWriteTokens);
+    }
+
     private static string Frame(string value) => "data: " + value + "\n\n";
 
     private static string Trailer(string reason) => Frame("{\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"" + reason + "\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":8,\"cost\":0.2,\"prompt_tokens_details\":{\"cached_tokens\":2,\"cache_write_tokens\":3}}}");

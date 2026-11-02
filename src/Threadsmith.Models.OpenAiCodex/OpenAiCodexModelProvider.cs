@@ -138,131 +138,51 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
         var accessToken = AccessToken;
         var replayedAfterAuthenticationRejection = false;
-        var attempt = 0;
-        while (true)
+        await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
+            (_, token) => ClassifyStreamFailureAsync(SendAttemptAsync(token), cancellationToken),
+            _profile.RetryPolicy,
+            TimeProvider.System,
+            _profile.Timeout,
+            timeout.Token,
+            cancellationToken))
         {
-            attempt++;
-            ProviderResponseReplay.Validate(request, _profile, accessToken, "openai-codex-reasoning");
-            using var message = CreateRequest(
-                request,
-                accessToken,
-                canonicalTools,
-                toolNameMap);
-            HttpResponseMessage response;
-            try
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                var pendingResponse = _httpClient.SendAsync(
-                    message,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    timeout.Token);
-                request.SubmissionObserver?.Invoke();
-                response = await pendingResponse.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new ModelProviderTimeoutException("The Codex Responses request timed out.", exception);
-            }
-            catch (HttpRequestException exception) when (IsTransientTransportFailure(exception)
-                && attempt < _profile.RetryPolicy.MaxAttempts)
-            {
-                await Task.Delay(_profile.RetryPolicy.Delay, timeout.Token).ConfigureAwait(false);
-                continue;
-            }
+            yield return chunk;
+        }
 
-            using (response)
+        async IAsyncEnumerable<ModelChunk> SendAttemptAsync([EnumeratorCancellation] CancellationToken token)
+        {
+            // Authentication refresh remains one challenge replay, independent of transient retries.
+            while (true)
             {
+                ProviderResponseReplay.Validate(request, _profile, accessToken, "openai-codex-reasoning");
+                using var message = CreateRequest(request, accessToken, canonicalTools, toolNameMap);
+                token.ThrowIfCancellationRequested();
+                var pendingResponse = _httpClient.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
+                request.SubmissionObserver?.Invoke();
+                using var response = await pendingResponse.ConfigureAwait(false);
                 if (response.IsSuccessStatusCode)
                 {
-                    await using var chunks = ReadResponseAsync(
-                        response, request, accessToken, toolNameMap, profileOutputLimit, timeout.Token).GetAsyncEnumerator(timeout.Token);
-                    var deliveredOutput = false;
-                    var deliveredReasoning = false;
-                    var retry = false;
-                    while (true)
+                    await foreach (var chunk in ReadResponseAsync(response, request, accessToken, toolNameMap, profileOutputLimit, token))
                     {
-                        bool hasNext;
-                        try
-                        {
-                            hasNext = await chunks.MoveNextAsync().ConfigureAwait(false);
-                        }
-                        catch (Exception exception) when (!deliveredOutput
-                            && attempt < _profile.RetryPolicy.MaxAttempts
-                            && (exception is IOException or TransientModelException
-                                || (exception is HttpRequestException transport && IsTransientTransportFailure(transport))))
-                        {
-                            timeout.Token.ThrowIfCancellationRequested();
-                            retry = true;
-                            break;
-                        }
-
-                        if (!hasNext)
-                        {
-                            break;
-                        }
-
-                        // Answer, tool, usage and replay data commit this attempt; preliminary reasoning does not.
-                        deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunks.Current);
-                        deliveredReasoning |= chunks.Current.Reasoning is not null;
-                        yield return chunks.Current;
+                        yield return chunk;
                     }
 
-                    if (!retry)
-                    {
-                        yield break;
-                    }
-
-                    if (deliveredReasoning)
-                    {
-                        yield return ModelStreamRetry.ReasoningBoundary();
-                    }
+                    yield break;
                 }
-                else if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
-                    && !replayedAfterAuthenticationRejection
-                    && _refreshAccessTokenAsync is not null)
-                {
-                    string? refreshedToken;
-                    try
-                    {
-                        refreshedToken = await _refreshAccessTokenAsync(accessToken, timeout.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        throw new ModelProviderTimeoutException("The Codex credential refresh timed out.", exception);
-                    }
 
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    && !replayedAfterAuthenticationRejection && _refreshAccessTokenAsync is not null)
+                {
+                    var refreshedToken = await _refreshAccessTokenAsync(accessToken, token).ConfigureAwait(false);
                     replayedAfterAuthenticationRejection = true;
                     if (!string.IsNullOrWhiteSpace(refreshedToken))
                     {
                         accessToken = refreshedToken;
-                        attempt--;
                         continue;
                     }
                 }
 
-                if ((response.IsSuccessStatusCode || IsTransient(response.StatusCode)) && attempt < _profile.RetryPolicy.MaxAttempts)
-                {
-                    try
-                    {
-                        response.Dispose();
-                        await Task.Delay(_profile.RetryPolicy.Delay, timeout.Token).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-                    {
-                        throw new ModelProviderTimeoutException("The Codex Responses request timed out.", exception);
-                    }
-
-                    continue;
-                }
-
-                try
-                {
-                    throw await CreateFailureAsync(response, timeout.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    throw new ModelProviderTimeoutException("The Codex error response timed out.", exception);
-                }
+                throw await CreateFailureAsync(response, token).ConfigureAwait(false);
             }
         }
     }
@@ -676,6 +596,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "response.failed":
                 case "error":
                     var errorRoot = root.TryGetProperty("response", out var failedResponse) && failedResponse.ValueKind == JsonValueKind.Object ? failedResponse : root;
+                    if (ModelStreamRetry.IsRateLimitError(errorRoot))
+                    {
+                        throw new TransientModelException("The Codex Responses stream reported a rate limit (code 429).") { IsRateLimit = true };
+                    }
+
                     var errorDetails = ReadErrorIdentifiers(errorRoot);
                     throw new ModelProviderException("The Codex Responses stream reported a provider error." + (errorDetails is null ? string.Empty : $" {errorDetails}"));
             }
@@ -778,13 +703,22 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     {
         ArgumentNullException.ThrowIfNull(response);
         var statusCode = response.StatusCode;
+
+        // Retry eligibility comes from headers; an optional error body may never finish arriving.
+        if (statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
+        {
+            return new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.")
+            {
+                IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
+                RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow),
+            };
+        }
+
         var details = await ReadErrorDetailsAsync(response.Content, cancellationToken).ConfigureAwait(false);
         var suffix = details is null ? string.Empty : $" {details}";
         return statusCode switch
         {
-            HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
-                or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout =>
-                new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.{suffix}"),
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
                 new ModelProviderException($"Codex authentication is missing, expired, or unauthorized.{suffix}"),
             _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}.{suffix}"),
@@ -857,13 +791,6 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return value is { Length: > 0 } && value.Length <= maximumLength
             && value.All(character => char.IsAsciiLetterOrDigit(character)
                 || character is '_' or '-' or '.');
-    }
-
-    private static bool IsTransient(HttpStatusCode statusCode)
-    {
-        return statusCode is
-        HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
-        or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout;
     }
 
     private static string ToProviderReasoning(ReasoningLevel level)

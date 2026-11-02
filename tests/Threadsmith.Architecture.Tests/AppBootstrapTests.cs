@@ -277,6 +277,22 @@ public static partial class AppBootstrapTests
         Assert.Equal($"{Environment.NewLine}You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.{Environment.NewLine}{Environment.NewLine}", writer.ToString());
     }
 
+    /// <summary>Headless busy notices reach the diagnostic writer once, with surrounding line breaks.</summary>
+    [Fact]
+    public static async Task HeadlessBusyNotice_UsesExistingDiagnosticSubscription()
+    {
+        await using var events = new DomainEventStream();
+        await using var writer = new StringWriter();
+        await using var subscription = ShellRunner.SubscribeMemoryWarnings(events, writer);
+        var session = SessionId.New();
+        const string message = "Model provider is currently busy ... please wait";
+
+        await events.PublishAsync(new DiagnosticObserved(session, DateTimeOffset.UtcNow, "ModelProviderBusy", message), TestContext.Current.CancellationToken);
+        await events.PublishAsync(new DiagnosticObserved(session, DateTimeOffset.UtcNow, "OtherDiagnostic", "unrelated"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(Environment.NewLine + message + Environment.NewLine, writer.ToString());
+    }
+
     /// <summary>Headless intelligence diagnostics encode controls after sanitization without changing the event.</summary>
     [Theory]
     [InlineData("intelligence.monitor.failed", "Access denied: src/\u009b2Jλ.cs", "[intelligence.monitor.failed] Access denied: src/\\u009B2Jλ.cs")]

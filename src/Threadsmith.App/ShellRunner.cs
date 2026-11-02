@@ -219,7 +219,7 @@ internal static class ShellRunner
         return 2;
     }
 
-    /// <summary>Subscribes headless stderr delivery to completed built-in memory operations.</summary>
+    /// <summary>Subscribes headless stderr delivery to memory operations and operational diagnostics.</summary>
     internal static IDomainEventSubscription SubscribeMemoryWarnings(IDomainEventStream events, TextWriter output)
     {
         ArgumentNullException.ThrowIfNull(events);
@@ -236,6 +236,12 @@ internal static class ShellRunner
                     await output.WriteAsync(memoryText.AsMemory(), cancellationToken);
                 }
 
+                return;
+            }
+
+            if (domainEvent is DiagnosticObserved { Code: "ModelProviderBusy" } busy)
+            {
+                await output.WriteLineAsync((Environment.NewLine + TerminalControlEncoder.Encode(busy.Message)).AsMemory(), cancellationToken);
                 return;
             }
 

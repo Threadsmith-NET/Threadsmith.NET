@@ -1108,6 +1108,14 @@ public sealed partial class SessionApplication
         ModelOutputCoalescer output,
         CancellationToken cancellationToken)
     {
+        if (chunk.ProviderBusy)
+        {
+            await output.FlushAsync(cancellationToken);
+            await _events.PublishAsync(
+                new DiagnosticObserved(round.Registration.SessionId, DateTimeOffset.UtcNow, "ModelProviderBusy", ModelStreamRetry.ProviderBusyMessage),
+                cancellationToken);
+        }
+
         if (chunk.Reasoning is not null || chunk.Output is not null || chunk.Usage is not null
             || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null)
         {

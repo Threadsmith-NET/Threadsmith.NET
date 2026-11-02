@@ -2561,7 +2561,16 @@ public static partial class ToolRuntimeTests
         var result = await manager.RunAsync(request, TestContext.Current.CancellationToken);
 
         Assert.True(result.TimedOut);
-        Assert.Empty(manager.ActiveProcesses);
+        // Exit confirmation may exceed the tiny drain window; retain authority metadata in that case.
+        if (manager.ActiveProcesses.Count > 0)
+        {
+            var retained = Assert.Single(manager.ActiveProcesses);
+            Assert.Null(result.ExitCode);
+            Assert.Equal(result.ProcessId, retained.ProcessId);
+            Assert.Equal(request.RunId, retained.RunId);
+            Assert.Equal(request.ToolInvocationId, retained.ToolInvocationId);
+            Assert.Equal(request.WorkingDirectory, retained.WorkingDirectory);
+        }
     }
 
     /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>

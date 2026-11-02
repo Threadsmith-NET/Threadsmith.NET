@@ -12,6 +12,24 @@ using Xunit;
 /// <summary>Checks destructive scratchpad lifecycle boundaries with real filesystem state.</summary>
 public sealed class ScratchpadLifecycleTests
 {
+    /// <summary>Unconfirmed process termination prevents deletion of its working files.</summary>
+    [Fact]
+    public async Task ScratchpadCleanupWaitsForTrackedProcessDrain()
+    {
+        var processes = new StubActiveProcesses();
+        await using var fixture = await Fixture.CreateAsync(true, lifecycleProcesses: processes);
+        var token = TestContext.Current.CancellationToken;
+        await fixture.Lifecycle.StartAsync(token);
+        var file = Path.Combine(fixture.Scratchpad, "keep.txt");
+        await File.WriteAllTextAsync(file, "keep", token);
+        processes.ActiveProcesses = [new ActiveProcessInfo(123, RunId.New(), ToolInvocationId.New(), DateTimeOffset.UtcNow, fixture.Scratchpad, TimeSpan.FromSeconds(10), ProcessRequestOrigin.Host)];
+        await Assert.ThrowsAsync<IOException>(() => fixture.Lifecycle.BeginNewSessionAsync(token));
+        Assert.True(File.Exists(file));
+        processes.ActiveProcesses = [];
+        await fixture.Lifecycle.BeginNewSessionAsync(token);
+        Assert.False(File.Exists(file));
+    }
+
     /// <summary>The managed location works from existing project settings without folder grants or a permission file.</summary>
     [Fact]
     public async Task ManagedScratchpad_ProjectPreferenceNeedsNoPermissionSetup()
@@ -428,6 +446,14 @@ public sealed class ScratchpadLifecycleTests
         }
     }
 
+    private sealed class StubActiveProcesses : IProcessManager
+    {
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses { get; set; } = [];
+
+        public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default)
+            => new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance).RunAsync(request, cancellationToken);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private Fixture(string root, string repository, ScratchpadLifecycle lifecycle, WriteFileTool tool)
@@ -454,7 +480,8 @@ public sealed class ScratchpadLifecycleTests
             bool userConfigured = false,
             string[]? arguments = null,
             bool ignored = true,
-            string? legacyPath = null)
+            string? legacyPath = null,
+            IProcessManager? lifecycleProcesses = null)
         {
             var root = Directory.CreateDirectory(Path.Combine(
                 PhysicalTemporaryPath(),
@@ -525,7 +552,7 @@ public sealed class ScratchpadLifecycleTests
                 arguments ?? [],
                 configuration,
                 paths,
-                processes,
+                lifecycleProcesses ?? processes,
                 state,
                 registry,
                 NullLogger<ScratchpadLifecycle>.Instance);

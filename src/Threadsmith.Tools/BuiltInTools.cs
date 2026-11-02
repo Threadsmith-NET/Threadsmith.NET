@@ -311,7 +311,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var path = ToolPathRules.NormalizeAndValidateForTool(input.Path, context.Invocation, Definition.Id);
+        var path = ScriptFilePolicy.ValidateRead(input.Path, context.Invocation);
         var info = new FileInfo(path);
         if (!info.Exists)
         {
@@ -378,7 +378,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
         if (input.Snapshot)
         {
-            var observationCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligence && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+            var observationCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligence && !ToolPathRules.IsWithinScratchpad(path, context.Invocation) && RepositoryPathPolicy.ContainsPath(context.Invocation.RepositoryPath, path)
                 ? await intelligence.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
             if (bytes.Length > _limits.ReadFileMaximumBytes)
@@ -412,7 +412,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
             content = encoding.GetString(bytes, input.SnapshotOffset, end - input.SnapshotOffset);
             var relativePath = GetDisplayPath(path, context.Invocation);
-            if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+            if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation) && RepositoryPathPolicy.ContainsPath(context.Invocation.RepositoryPath, path))
             {
                 context.Invocation.IntelligenceSourceObserver?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), digest, observationCheckpoint);
             }
@@ -426,7 +426,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relativePath)]);
         }
 
-        var sourceCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligenceRun && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+        var sourceCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligenceRun && !ToolPathRules.IsWithinScratchpad(path, context.Invocation) && RepositoryPathPolicy.ContainsPath(context.Invocation.RepositoryPath, path)
             ? await intelligenceRun.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
         var sourceBytes = await File.ReadAllBytesAsync(path, cancellationToken);
         using var sourceStream = new MemoryStream(sourceBytes, writable: false);
@@ -465,7 +465,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
         var relative = GetDisplayPath(path, context.Invocation);
         var sourceHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(sourceBytes));
-        if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+        if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation) && RepositoryPathPolicy.ContainsPath(context.Invocation.RepositoryPath, path))
         {
             context.Invocation.IntelligenceSourceObserver?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), sourceHash, sourceCheckpoint);
         }
@@ -523,6 +523,11 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
     private static string GetDisplayPath(string path, ToolInvocationContext context)
     {
+        if (!RepositoryPathPolicy.ContainsPath(context.RepositoryPath, path) && !ToolPathRules.IsWithinScratchpad(path, context))
+        {
+            return path;
+        }
+
         var root = ToolPathRules.IsWithinScratchpad(path, context)
             ? context.Scratchpad.RootPath!
             : context.RepositoryPath;
@@ -1807,6 +1812,9 @@ public sealed record RunProcessInput : IConceptToolInput
     /// (see <see cref="ToolLimits.RunProcessDefaultTimeoutSeconds"/>).
     /// </summary>
     public int TimeoutSeconds { get; init; } = 0;
+
+    /// <summary>Optional repository-relative or absolute working directory; defaults to the repository root.</summary>
+    public string? WorkingDirectory { get; init; }
 }
 
 /// <summary>Runs one bounded command through a configured allow-listed shell.</summary>
@@ -1861,9 +1869,11 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var workingDirectory = ToolPathRules.NormalizeAndValidate(
-            ".",
-            context.Invocation);
+        var candidateDirectory = input.WorkingDirectory ?? ".";
+        var scratchpadExecution = ToolPathRules.IsWithinScratchpad(candidateDirectory, context.Invocation);
+        var workingDirectory = scratchpadExecution
+            ? ToolPathRules.NormalizeScratchpadPath(candidateDirectory, context.Invocation)
+            : ToolPathRules.NormalizeAndValidate(candidateDirectory, context.Invocation);
         var timeoutSeconds = ResolveTimeoutSeconds(input);
         if (context.Invocation.SecurityPolicy is { } policy)
         {
@@ -1880,6 +1890,9 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 FileName = _shellExecutable,
                 Arguments = CreateShellArguments(_shellExecutable, input.Command),
                 WorkingDirectory = workingDirectory,
+                EnvironmentVariables = scratchpadExecution
+                    ? ScriptFilePolicy.TemporaryEnvironment(context.Invocation.Scratchpad.RootPath ?? throw new InvalidOperationException("Scratchpad unavailable."), context.Invocation.RepositoryPath)
+                    : new Dictionary<string, string>(),
                 Timeout = TimeSpan.FromSeconds(timeoutSeconds),
                 MaximumOutputCharacters = Definition.MaximumOutputBytes / 2,
                 Origin = ProcessRequestOrigin.Model,
@@ -1922,7 +1935,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         RunProcessInput input,
         ToolInvocationContext context)
     {
-        return [context.RepositoryPath];
+        return [input.WorkingDirectory ?? context.RepositoryPath];
     }
 
     /// <inheritdoc />

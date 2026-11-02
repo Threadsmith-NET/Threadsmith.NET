@@ -268,6 +268,10 @@ public sealed record PermissionConfiguration
         [JsonPropertyName("writeFile")]
         public ToolsWriteFileSettings? WriteFile { get; init; }
 
+        /// <summary>Explicit read-only folder grants.</summary>
+        [JsonPropertyName("readFile")]
+        public ToolsWriteFileSettings? ReadFile { get; init; }
+
         /// <summary>Configuration contract for tools:runProcess.</summary>
         [JsonPropertyName("runProcess")]
         public ToolsRunProcessSettings? RunProcess { get; init; }

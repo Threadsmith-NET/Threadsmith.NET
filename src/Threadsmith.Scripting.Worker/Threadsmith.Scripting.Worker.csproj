@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
   </ItemGroup>
 
 </Project>

@@ -69,7 +69,7 @@ Ordinary repository mutations are repository-wide, independently of the legacy `
 
 Scratchpad enablement is ordinary configuration, not a separate permission setting. `scratchpad.enabled` defaults to `false`; enabling it permits only `.threadsmith/.scratchpad` under the active repository, without a second grant. Activation requires a positive repository `.gitignore` rule. Legacy `scratchpad.path` values no longer select a cleanup target. Link, containment and protected-path checks still apply. This grants only the existing scratchpad capability, not general external-folder access.
 
-Existing `tools.writeFile.allowedFolders` remains a write-only export grant. This change adds no external-directory read/edit feature and has no cleanup lifecycle. Specialized MCP identity approval, skill trust/revocation and exact outbound consent retain their existing stores and validators; those records are not interchangeable with configuration defaults.
+Existing `tools.writeFile.allowedFolders` remains a write-only export grant. It does not grant reads or source edits and has no cleanup lifecycle. Specialized MCP identity approval, skill trust/revocation and exact outbound consent retain their existing stores and validators; those records are not interchangeable with configuration defaults.
 
 This is application authorization, not an OS sandbox. An admitted build, shell, extension or local server can exercise the user's ambient OS permissions.
 
@@ -80,3 +80,7 @@ Declare it on the owning property in `PermissionConfiguration` using `Configurat
 Use `ConfigurationDocument` for bounded, case-insensitive source parsing and `RepositorySettingsCoordinator` for coordinated publication. Permission edits route through `RepositoryPermissionStore`; ordinary preferences retain their existing coordinator callers. Runtime authorization remains in the existing policy services. For structured arrays or dictionaries, annotate the whole permission-bearing property and retain the subsystem's bounded value validator.
 
 Add disposable tests through the real loader/writer for every admitted and rejected source, absent/null/empty values, aliases, defaults versus enforcement, save/reload, protected descendants and the operation that consumes the setting. Test fixtures must not launch a host that can migrate personal state. A passing Windows test does not establish macOS/Linux filesystem behavior or installed-build behavior.
+
+## C# scratchpad file access
+
+The optional `csharp_script` tool requires an active session scratchpad. Its file API reads the scratchpad and authorized repository inputs, plus explicit `tools.readFile.allowedFolders` grants from trusted permission configuration. This list defaults to empty and follows normal source validation, enforced restrictions, and child scope narrowing. `read_file` shares the same read grants; export write folders do not imply reads. Script outputs stay in the scratchpad and are deleted with the session. Python scripting is prohibited; containers are the planned future execution sandbox. See [C# scripting](csharp-scripting.md) for the on-demand API reference.

@@ -98,7 +98,11 @@ public sealed record CSharpScriptOutput(
     string? Output,
     string? Error,
     int ExecutionMs,
-    bool IsTruncated);
+    bool IsTruncated)
+{
+    /// <summary>Gets the saved session script, including failed worker executions.</summary>
+    public string? ScriptPath { get; init; }
+}
 
 /// <summary>Executes C# in a fresh isolated worker process.</summary>
 public interface ICSharpScriptEngine
@@ -117,12 +121,14 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
     private readonly IProcessManager _processManager;
     private readonly IToolConfig _toolConfig;
     private readonly string _workerPath;
+    private readonly int _maximumWriteBytes;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptEngine"/> class.</summary>
     public CSharpScriptEngine(
         IProcessManager processManager,
         IToolConfig toolConfig,
-        string workerPath)
+        string workerPath,
+        int maximumWriteBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(toolConfig);
@@ -130,6 +136,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         _processManager = processManager;
         _toolConfig = toolConfig;
         _workerPath = Path.GetFullPath(workerPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWriteBytes);
+        _maximumWriteBytes = maximumWriteBytes;
     }
 
     /// <inheritdoc />
@@ -180,9 +188,20 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
             throw new FileNotFoundException("The C# scripting worker is unavailable.", _workerPath);
         }
 
+        var scope = ScriptFilePolicy.CreateScope(context.Invocation, _maximumWriteBytes);
+        var scriptPath = ScopedFilePaths.ValidateWrite($"script-{context.ToolInvocationId.Value:N}-{Guid.NewGuid():N}.csx", scope);
+        var scriptBytes = System.Text.Encoding.UTF8.GetBytes(code);
+        if (scriptBytes.Length > _maximumWriteBytes)
+        {
+            throw new ToolArgumentValidationException("The script exceeds the configured file-write byte limit.");
+        }
+
+        await AtomicFileWriter.WriteAsync(scriptPath, scriptBytes, false, () => ScopedFilePaths.ValidateWrite(scriptPath, scope), cancellationToken);
         var workerRequest = new ScriptWorkerRequest
         {
             Code = code,
+            FileScope = scope,
+            TimeoutMilliseconds = timeoutMilliseconds,
             Kind = kind.ToString(),
             MaximumOutputBytes = maximumOutputBytes,
             MaximumCodeCharacters = maximumCodeCharacters,
@@ -216,8 +235,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
                 RunId = context.RunId,
                 FileName = launchAppHost ? _workerPath : "dotnet",
                 Arguments = arguments,
-                WorkingDirectory = Path.GetDirectoryName(_workerPath)
-                    ?? throw new InvalidOperationException("The scripting worker path has no parent directory."),
+                WorkingDirectory = scope.ScratchpadPath,
+                EnvironmentVariables = ScriptFilePolicy.TemporaryEnvironment(scope.ScratchpadPath, scope.RepositoryPath),
                 Timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds),
                 MaximumOutputCharacters = checked((maximumOutputBytes * 6) + 4096),
                 StandardInput = requestJson,
@@ -231,7 +250,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
                 null,
                 $"Script execution exceeded {timeoutMilliseconds} ms and the worker was terminated.",
                 (int)Math.Min(result.Duration.TotalMilliseconds, int.MaxValue),
-                false);
+                false)
+            { ScriptPath = scriptPath };
         }
 
         if (result.ExitCode != 0 || result.StandardOutputTruncated)
@@ -244,15 +264,17 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
                 null,
                 error,
                 (int)Math.Min(result.Duration.TotalMilliseconds, int.MaxValue),
-                result.StandardOutputTruncated || result.StandardErrorTruncated);
+                result.StandardOutputTruncated || result.StandardErrorTruncated)
+            { ScriptPath = scriptPath };
         }
 
         try
         {
-            return JsonSerializer.Deserialize<CSharpScriptOutput>(
+            var output = JsonSerializer.Deserialize<CSharpScriptOutput>(
                 result.StandardOutput,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidOperationException("The C# scripting worker returned an empty result.");
+            return output with { ScriptPath = scriptPath };
         }
         catch (JsonException exception)
         {
@@ -267,6 +289,10 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         public required string Kind { get; init; }
 
         public int MaximumOutputBytes { get; init; }
+
+        public required ScriptFileScope FileScope { get; init; }
+
+        public int TimeoutMilliseconds { get; init; }
 
         public int MaximumCodeCharacters { get; init; } = 65536;
 
@@ -295,7 +321,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         _definition = ToolDefinitionFactory.WithStringEnum(
             ToolDefinitionFactory.Create<CSharpScriptInput, CSharpScriptOutput>(
                 "csharp_script",
-                () => promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
+                () => promptLoader.Render(PromptFileNames.ToolCsharpScriptDescription, new Dictionary<string, string> { ["CSharpScriptingReferencePath"] = ScriptFilePolicy.ReferencePath }),
                 ToolCategory.CodeExecution,
                 RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovalLevel.None,
@@ -329,7 +355,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
             kind,
             context,
             cancellationToken);
-        return new ToolExecution<CSharpScriptOutput>(output, [], output.IsTruncated);
+        return new ToolExecution<CSharpScriptOutput>(output, output.ScriptPath is { } path ? [new ToolProvenanceSource("file", path)] : [], output.IsTruncated);
     }
 
     /// <inheritdoc />

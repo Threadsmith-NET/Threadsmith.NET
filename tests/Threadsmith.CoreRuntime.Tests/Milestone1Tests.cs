@@ -457,6 +457,23 @@ public static partial class Milestone1Tests
         Assert.Contains(harness.Events, item => item is RunCompleted { Succeeded: false });
     }
 
+    /// <summary>Shutdown joins cancellation even when a frontend waiter retires the same registration.</summary>
+    [Fact]
+    public static async Task SessionApplication_StopRuns_JoinsConcurrentWaiter()
+    {
+        var model = new GatedAnswerModelProvider();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: model);
+        var token = TestContext.Current.CancellationToken;
+        var session = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("shutdown"), token);
+        var run = await harness.Dispatcher.DispatchAsync(new SubmitRequestCommand(session, "request"), token);
+        await model.InitialContentEmitted.WaitAsync(token);
+        var waiter = harness.Dispatcher.DispatchAsync(new WaitForRunCommand(run), token);
+        await harness.Application.StopRunsAsync(token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter.WaitAsync(token));
+        Assert.False(harness.Application.HasActiveWork);
+        await harness.Application.StopRunsAsync(token);
+    }
+
     /// <summary>Requests for unknown sessions are rejected instead of reporting phantom success.</summary>
     [Fact]
     public static async Task SessionApplication_UnknownSession_IsRejected()
@@ -2897,7 +2914,10 @@ public static partial class Milestone1Tests
             var binding = new SessionPolicyBinding();
             binding.Publish(new EffectiveSessionPolicy
             {
-                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = repository, Fingerprint = "fixture",
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = repository,
+                Fingerprint = "fixture",
                 HasExplicitMutationCeiling = explicitRestriction,
             });
             var policy = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
@@ -6635,7 +6655,8 @@ public static partial class Milestone1Tests
             InMemoryProjectionStore projections,
             ICommandDispatcher dispatcher,
             ConcurrentBag<IDomainEvent> events,
-            SessionUsageProjection usage)
+            SessionUsageProjection usage,
+            SessionApplication application)
         {
             _stream = stream;
             _projectionSubscription = projectionSubscription;
@@ -6644,6 +6665,7 @@ public static partial class Milestone1Tests
             Dispatcher = dispatcher;
             Events = events;
             Usage = usage;
+            Application = application;
         }
 
         public ICommandDispatcher Dispatcher { get; }
@@ -6655,6 +6677,8 @@ public static partial class Milestone1Tests
         public InMemoryProjectionStore Projections { get; }
 
         public SessionUsageProjection Usage { get; }
+
+        public SessionApplication Application { get; }
 
         public static Task<SessionHarness> CreateAsync(
             ScriptedSession script,
@@ -6705,7 +6729,8 @@ public static partial class Milestone1Tests
                 projections,
                 dispatcher,
                 events,
-                usage));
+                usage,
+                application));
         }
 
         public async ValueTask DisposeAsync()

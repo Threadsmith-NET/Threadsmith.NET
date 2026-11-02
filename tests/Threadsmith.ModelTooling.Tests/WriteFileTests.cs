@@ -77,8 +77,11 @@ public static class WriteFileTests
     }
 
     /// <summary>An active scratchpad grants only its bounded destination at the lowest trust level.</summary>
-    [Fact]
-    public static async Task Scratchpad_WriteIsApprovalFreeAtUntrustedInspection()
+    [Theory]
+    [InlineData("result.log")]
+    [InlineData("script.cs")]
+    [InlineData("script.CSX")]
+    public static async Task Scratchpad_WriteIsApprovalFreeAtUntrustedInspection(string filename)
     {
         using var fixture = new Fixture();
         var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad")).FullName;
@@ -99,14 +102,14 @@ public static class WriteFileTests
         var allowed = await InvokeAsync(
             CreatePipeline(events, fixture.Tool()),
             context,
-            new WriteFileInput(Path.Combine(scratchpad, "result.log"), "iteration"));
+            new WriteFileInput(Path.Combine(scratchpad, filename), "iteration"));
         var ordinary = await InvokeAsync(
             CreatePipeline(events, fixture.Tool()),
             context,
             new WriteFileInput(".inbox/report.md", "denied"));
 
         Assert.True(allowed.Succeeded, allowed.Error);
-        Assert.Equal("iteration", await File.ReadAllTextAsync(Path.Combine(scratchpad, "result.log")));
+        Assert.Equal("iteration", await File.ReadAllTextAsync(Path.Combine(scratchpad, filename)));
         Assert.Equal(ToolErrorClassification.PolicyDenied, ordinary.ErrorClassification);
     }
 
@@ -397,7 +400,7 @@ public static class WriteFileTests
 
     /// <summary>Source files, metadata, and instruction files cannot use the report writer.</summary>
     [Theory]
-    [InlineData(".inbox/Program.cs", ToolErrorClassification.InvalidArguments)]
+    [InlineData(".inbox/Program.cs", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/AGENTS.md", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/.git/config.json", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/.threadsmith/config.json", ToolErrorClassification.PolicyDenied)]

@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Scripting;
+using Threadsmith.Core;
 
 /// <summary>Reads one bounded script request from standard input and writes one JSON result.</summary>
 public static class Program
@@ -95,22 +96,26 @@ public static class Program
                 references.Add(Assembly.LoadFrom(assemblyPath));
             }
 
+            var scope = request.FileScope ?? throw new InvalidOperationException("Scratchpad file authority is required.");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(request.TimeoutMilliseconds));
+            var globals = new ScriptGlobals(scope, deadline.Token);
+            references.Add(typeof(ScriptGlobals).Assembly);
             var options = ScriptOptions.Default
                 .WithReferences(references.Distinct())
                 .WithImports(request.AllowedAssemblies);
-            var script = CSharpScript.Create(request.Code, options);
+            var script = CSharpScript.Create(request.Code, options, typeof(ScriptGlobals));
             var compilation = script.GetCompilation();
             var syntaxTree = compilation.SyntaxTrees.Single();
-            var syntaxRoot = await syntaxTree.GetRootAsync();
+            var syntaxRoot = await syntaxTree.GetRootAsync(deadline.Token);
             if (syntaxRoot.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective)
                 || syntaxRoot.DescendantTokens().Any(token => token.ValueText is "dynamic" or "unsafe" or "stackalloc"))
             {
                 throw new InvalidOperationException(
-                    "The script uses a prohibited file, network, process, native, dynamic, or reflection capability.");
+                    "Direct file, network, process, native, dynamic, or reflection access is prohibited. For files, read the C# scripting reference and use Scratchpad.");
             }
 
             var diagnostics = compilation.GetDiagnostics();
-            if (diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            if (diagnostics.Any(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
             {
                 throw new CompilationErrorException("Script compilation failed.", diagnostics);
             }
@@ -130,12 +135,21 @@ public static class Program
                         : symbol.ContainingNamespace?.ToDisplayString() ?? string.Empty;
                     var typeName = (symbol as INamedTypeSymbol ?? symbol.ContainingType)
                         ?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+                    if (namespaceName.StartsWith("Threadsmith", StringComparison.Ordinal)
+                        && !(symbol is IPropertySymbol { Name: "Scratchpad", ContainingType.Name: "ScriptGlobals" }
+                            || symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary, ContainingType.Name: "ScratchpadFiles" }
+                            || symbol is IParameterSymbol { ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Ordinary, ContainingType.Name: "ScratchpadFiles" } }
+                            || symbol is INamedTypeSymbol { Name: "ScratchpadFiles" }))
+                    {
+                        throw new InvalidOperationException("Scripts may use only the supplied Scratchpad API, not host implementation types.");
+                    }
+
                     if (_prohibitedNamespacePrefixes.Any(prefix => namespaceName.Equals(prefix, StringComparison.Ordinal)
                             || namespaceName.StartsWith(prefix + ".", StringComparison.Ordinal))
                         || (typeName is not null && _prohibitedTypeNames.Contains(typeName, StringComparer.Ordinal)))
                     {
                         throw new InvalidOperationException(
-                            "The script uses a prohibited file, network, process, native, dynamic, or reflection capability.");
+                            "Direct file, network, process, native, dynamic, or reflection access is prohibited. For files, read the C# scripting reference and use Scratchpad.");
                     }
 
                     if (namespaceName.StartsWith("System.", StringComparison.Ordinal)
@@ -151,7 +165,9 @@ public static class Program
             var value = await CSharpScript.EvaluateAsync(
                 request.Code,
                 options,
-                cancellationToken: CancellationToken.None);
+                globals: globals,
+                globalsType: typeof(ScriptGlobals),
+                cancellationToken: deadline.Token);
             var output = value?.ToString() ?? string.Empty;
             var outputBytes = Encoding.UTF8.GetBytes(output);
             var truncated = outputBytes.Length > request.MaximumOutputBytes;
@@ -213,6 +229,10 @@ public static class Program
         public required string Kind { get; init; }
 
         public int MaximumOutputBytes { get; init; }
+
+        public ScriptFileScope? FileScope { get; init; }
+
+        public int TimeoutMilliseconds { get; init; } = 5000;
 
         public int MaximumCodeCharacters { get; init; } = 65536;
 

@@ -971,7 +971,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         {
             _clipboardHintShown = true;
             _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
-                new("Use Control-V to paste text; Control-Alt-V to paste an image\n", PresentationTextRole.Status),
+                new("Use Control-V to paste text; Control-Alt-V to paste an image or PDF; F9 to manage attachments\n", PresentationTextRole.Status),
             ])]));
         }
 
@@ -1243,9 +1243,9 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                 await EnqueueAsync(
                     () =>
                 {
-                    _notice = "Attaching image ...";
+                    _notice = "\nAttaching image ...";
                     _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
-                        new("Attaching image ...\n", PresentationTextRole.Status),
+                        new("\nAttaching image ...\n", PresentationTextRole.Status),
                     ])]));
                 },
                     cancellationToken);

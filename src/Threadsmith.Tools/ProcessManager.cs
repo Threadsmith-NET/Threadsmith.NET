@@ -344,7 +344,12 @@ public sealed class ProcessManager : IProcessManager
         }
         finally
         {
-            _active.TryRemove(processId, out _);
+            if (process.HasExited)
+            {
+                _active.TryRemove(processId, out _);
+            }
+
+            // Retain unresolved termination metadata so session cleanup cannot delete live working files.
         }
     }
 

@@ -126,6 +126,50 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Equal([Path.Combine(_paths.RepositoryRoot, "exports", "reports")], Load().WriteFolders);
     }
 
+    /// <summary>The installed reference is readable from unrelated repositories for parents and children.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ScriptingReferenceUsesOrdinaryReadTool(bool child)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting.md");
+        Assert.True(File.Exists(path));
+        var tool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
+        var context = new ToolInvocationContext
+        {
+            RepositoryPath = _paths.RepositoryRoot,
+            RequestedBy = "test",
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            IsChildAgent = child,
+            ApprovedRoots = ["src"],
+            SecurityPolicy = Load(),
+        };
+        var input = new ReadFileInput { Path = path };
+        var decision = new DefaultPolicyEngine().Evaluate(tool, input, context);
+        Assert.True(decision.IsAllowed, decision.Reason);
+        var result = await tool.ExecuteAsync(input, new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context), TestContext.Current.CancellationToken);
+        Assert.Contains(result.Value.Lines, line => line.Contains("ReadLines", StringComparison.Ordinal));
+        Assert.False(new DefaultPolicyEngine().Evaluate(tool, input, context with { DeniedToolIds = ["read_file"] }).IsAllowed);
+    }
+
+    /// <summary>Read grants require trusted sources and intersect machine restrictions independently of exports.</summary>
+    [Fact]
+    public void ReadFoldersUseTrustedPermissionSourcesAndNarrowing()
+    {
+        Assert.Empty(Load().ReadFolders);
+        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"readFile":{"allowedFolders":["inputs"]}}}""");
+        Assert.Empty(Load().ReadFolders);
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"readFile":{"allowedFolders":["inputs"]},"writeFile":{"allowedFolders":["exports"]}}}""");
+        var granted = Load();
+        Assert.Equal([Path.Combine(_paths.RepositoryRoot, "inputs")], granted.ReadFolders);
+        File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"tools":{"readFile":{"allowedFolders":["inputs/logs","inputs-sibling"]}}}}""");
+        var restricted = Load();
+        Assert.Equal([Path.Combine(_paths.RepositoryRoot, "inputs", "logs")], restricted.ReadFolders);
+        Assert.NotEqual(granted.Fingerprint, restricted.Fingerprint);
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"readFile":{"allowedFolders":[]}}}""");
+        Assert.Empty(Load().ReadFolders);
+    }
+
     /// <summary>Static preauthorization is separate from consent eligibility.</summary>
     [Fact]
     public void StaticHostAbsencePreservesConsentEligibilityWhileEmptyRestrictionDeniesAll()

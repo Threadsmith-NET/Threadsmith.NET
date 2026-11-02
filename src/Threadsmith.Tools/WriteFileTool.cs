@@ -122,27 +122,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             throw new ToolArgumentValidationException($"write_file content exceeds the configured {_limits.WriteFileMaximumContentBytes} UTF-8 byte limit.");
         }
 
-        var parent = Path.GetDirectoryName(destination) ?? throw new InvalidOperationException("The destination needs a parent folder.");
-        _ = ValidatePath(destination, context.Invocation);
-        Directory.CreateDirectory(parent);
-        _ = ValidatePath(destination, context.Invocation);
-        var temporary = Path.Combine(parent, $".threadsmith-write-{Guid.NewGuid():N}.tmp");
-        try
-        {
-            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
-            {
-                await stream.WriteAsync(bytes, cancellationToken);
-                await stream.FlushAsync(cancellationToken);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            _ = ValidatePath(destination, context.Invocation);
-            File.Move(temporary, destination, input.Overwrite);
-        }
-        finally
-        {
-            File.Delete(temporary);
-        }
+        await AtomicFileWriter.WriteAsync(destination, bytes, input.Overwrite, () => ValidatePath(destination, context.Invocation), cancellationToken);
 
         return new ToolExecution<WriteFileOutput>(new WriteFileOutput(destination, bytes.Length, sourceMessageId) { Artifact = artifact }, [], false);
     }
@@ -170,6 +150,11 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         var scratchpadDestination = ToolPathRules.IsWithinScratchpad(destination, context);
+        if (Path.GetExtension(destination).ToLowerInvariant() is ".cs" or ".csx" && !scratchpadDestination)
+        {
+            throw new UnauthorizedAccessException("Temporary C# files must be written inside the active scratchpad.");
+        }
+
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         IReadOnlyList<string> folders = context.SecurityPolicy is { } effective ? effective.WriteFolders : _configuration.GetAllowedFolders(repository);
         var allowed = scratchpadDestination || folders.Any(folder =>
@@ -203,6 +188,11 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             throw new UnauthorizedAccessException("write_file destination contains an ambiguous or reserved Windows path.");
         }
 
+        if (scratchpadDestination)
+        {
+            return ToolPathRules.NormalizeScratchpadPath(destination, context);
+        }
+
         // Reject linked ancestors, including the allowlisted folder itself and dangling links.
         for (var current = destination; current is not null; current = Path.GetDirectoryName(current))
         {
@@ -226,9 +216,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             }
         }
 
-        return scratchpadDestination
-            ? ToolPathRules.NormalizeScratchpadPath(destination, context)
-            : destination;
+        return destination;
     }
 
     /// <inheritdoc />
@@ -244,7 +232,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             throw new ToolArgumentValidationException("Use a repository-relative or fully qualified path.");
         }
 
-        if (input.ArtifactId is null && !_extensions.Contains(Path.GetExtension(input.Path)))
+        if (input.ArtifactId is null && !_extensions.Contains(Path.GetExtension(input.Path)) && Path.GetExtension(input.Path).ToLowerInvariant() is not (".cs" or ".csx"))
         {
             throw new ToolArgumentValidationException("write_file supports text artifacts: .txt, .md, .markdown, .json, .csv, .tsv, .yaml, .yml, .xml, .log, and .rst. Use the mutation workflow for source code.");
         }

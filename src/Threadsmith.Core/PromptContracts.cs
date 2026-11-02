@@ -1622,6 +1622,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),
+                    [PromptFileNames.ToolCsharpScriptDescription] = Set("CSharpScriptingReferencePath"),
                     [PromptFileNames.ToolAdvancedSemanticOmissionsSection] = Set("Items"),
                     [PromptFileNames.ToolAdvancedSemanticHiddenOmissions] = Set("HiddenCount", "Plural"),
                     [PromptFileNames.ToolCallHierarchyResultHeader] = Set(

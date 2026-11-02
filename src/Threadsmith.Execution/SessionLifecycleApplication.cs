@@ -194,6 +194,18 @@ public sealed class SessionLifecycleApplication :
         }
     }
 
+    /// <summary>Rejects repository changes while session work is active.</summary>
+    public void EnsureIdle()
+    {
+        if (_sessions.HasActiveWork)
+        {
+            throw new InvalidOperationException("Repository rebinding requires a complete safe boundary. Cancel or finish active work first.");
+        }
+    }
+
+    /// <summary>Drains session work before application resource disposal.</summary>
+    public Task StopRunsAsync(CancellationToken cancellationToken = default) => _sessions.StopRunsAsync(cancellationToken);
+
     private async Task BindRepositoryCoreAsync(
         string repositoryPath,
         Func<CancellationToken, Task>? commitRepositoryBinding,

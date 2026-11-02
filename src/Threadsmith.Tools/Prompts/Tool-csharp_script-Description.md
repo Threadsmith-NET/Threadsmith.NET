@@ -1,1 +1,1 @@
-Compiles and executes bounded C# in an isolated worker. kind is expression or statement and defaults to expression. Use for C# computation, not repository discovery or source reading.
+Compiles and executes bounded C# in the session scratchpad. kind is expression or statement and defaults to expression. Only if you elect to use csharp_script, first read its reference at {{CSharpScriptingReferencePath}}.

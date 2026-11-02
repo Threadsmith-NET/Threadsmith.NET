@@ -80,6 +80,35 @@ public sealed partial class SessionApplication :
     /// <summary>Gets whether any model or governed run is still active.</summary>
     public bool HasActiveWork => _runs.Values.Any(registration => !registration.Completion.Task.IsCompleted);
 
+    /// <summary>Cancels and joins registered runs before their dependencies and scratchpad are disposed.</summary>
+    public async Task StopRunsAsync(CancellationToken cancellationToken = default)
+    {
+        var runs = _runs.ToArray();
+        foreach (var (_, registration) in runs)
+        {
+            await registration.CancellationLifetime.CancelAsync();
+        }
+
+        foreach (var (runId, registration) in runs)
+        {
+            try
+            {
+                await registration.Completion.Task.WaitAsync(cancellationToken);
+            }
+            catch (Exception) when (registration.Completion.Task.IsCompleted && !cancellationToken.IsCancellationRequested)
+            {
+                // Terminal failure/cancellation was already published by the run; it is now joined.
+            }
+            finally
+            {
+                if (registration.Completion.Task.IsCompleted && _runs.TryRemove(new KeyValuePair<RunId, RunRegistration>(runId, registration)))
+                {
+                    registration.CancellationLifetime.Dispose();
+                }
+            }
+        }
+    }
+
     /// <summary>Creates and registers one session using the ordinary durable event boundary.</summary>
     public Task<SessionId> CreateRegisteredSessionAsync(
         string name,

@@ -53,6 +53,9 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets normalized direct artifact write roots.</summary>
     public ImmutableArray<string> WriteFolders { get; init; } = [];
 
+    /// <summary>Gets normalized additional read-only roots.</summary>
+    public ImmutableArray<string> ReadFolders { get; init; } = [];
+
     /// <summary>Gets normalized source-edit roots admitted by trusted policy and repository restrictions.</summary>
     public ImmutableArray<string> EditableRoots { get; init; } = [];
 

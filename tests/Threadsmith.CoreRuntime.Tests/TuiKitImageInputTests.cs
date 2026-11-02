@@ -90,6 +90,7 @@ public static class TuiKitImageInputTests
             var read = surface.ReadComposerAsync(new ComposerRequest("repo > ") { SessionId = SessionId.New() }, token);
             await surface.PresentAsync(new PresentationBatch([]), token);
             backend.FeedInput(Paste);
+            // Terminal output uses cursor positioning for line breaks; match the visible status.
             await ExpectAsync(backend, "Attaching image ...", token);
 
             // Text following repeated paste keys proves that the UI processed the keys while capture was blocked.

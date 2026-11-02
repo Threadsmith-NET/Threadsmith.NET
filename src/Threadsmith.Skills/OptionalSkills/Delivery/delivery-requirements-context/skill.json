@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "skillId": { "value": "delivery-requirements-context" },
+  "packageId": "local.delivery-requirements-context",
+  "version": "1.0.2",
+  "displayName": "Delivery: Requirements and Context",
+  "description": "Gather focused Jira and repository evidence and write testable expanded requirements. Stops for user review; never starts planning.",
+  "tags": ["delivery", "requirements", "context", "jira"],
+  "publisher": "Local User",
+  "license": "LicenseRef-Private",
+  "assets": [
+    { "path": "instructions/procedure.md", "bytes": 10675, "sha256": "bea77d972f2a89dd34ceab7da24b378b1e74a4fe73306e40faa15d222b90f44d", "required": true, "kind": "instructions" },
+    { "path": "schemas/input.json", "bytes": 550, "sha256": "03d6f95bfc2dfe5598624caa91d608e9450e8bad780324196048addcd48d922d", "required": true, "kind": "input-schema" },
+    { "path": "schemas/output.json", "bytes": 727, "sha256": "77ddc53eaa84bb6b45e3c599d22b2488ebae1ec4bb94d3714075fb29e235b1c4", "required": true, "kind": "output-schema" }
+  ],
+  "requirements": {
+    "requiredTools": ["read_file"],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedRead",
+    "approvalCategories": ["artifact writes", "governed evidence retrieval"],
+    "model": { "workloads": ["General"], "requiresToolCalls": true, "requiresStructuredOutput": true, "minimumContextWindow": 8192, "allowedProfiles": [], "deniedProfiles": [] },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999",
+    "inheritAvailableTools": true
+  },
+  "budget": { "contentTokens": 8000, "workflowSteps": 1, "modelTurns": 64, "toolCalls": 128, "mutations": 16, "validationAttempts": 4, "wallTime": "00:20:00" },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "delivery-requirements-context",
+    "steps": [{ "stepId": "requirements", "kind": "invokeProcedure", "instructionAsset": "instructions/procedure.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/output.json", "successProperty": "succeeded", "responseProperty": "response", "maximumIterations": 1 }]
+  }
+}

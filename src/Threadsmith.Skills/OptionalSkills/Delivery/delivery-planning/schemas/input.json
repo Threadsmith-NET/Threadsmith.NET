@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workFolder", "requirementsPath", "requirementsReviewed"],
+  "properties": {
+    "workFolder": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "requirementsPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "requirementsReviewed": { "type": "boolean", "enum": [true] },
+    "expectedRequirementsSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "additionalInstructions": { "type": "string", "maxLength": 12000 },
+    "clarificationAnswers": { "type": "string", "maxLength": 12000 }
+  }
+}

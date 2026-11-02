@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "skillId": { "value": "delivery-implementation" },
+  "packageId": "local.delivery-implementation",
+  "version": "1.0.2",
+  "displayName": "Delivery: Implementation",
+  "description": "Implement reviewed tasks sequentially, then iterate the full build/test-and-fix gate until the final state passes or report explicitly blocked. Stops before QA.",
+  "tags": ["delivery", "implementation", "validation", "testing"],
+  "publisher": "Local User",
+  "license": "LicenseRef-Private",
+  "assets": [
+    { "path": "instructions/procedure.md", "bytes": 15581, "sha256": "2774e1d942866c18d9d1e83652dbe91ceb4a98af6a5b58bf899ad7c57059f9a3", "required": true, "kind": "instructions" },
+    { "path": "schemas/input.json", "bytes": 668, "sha256": "3156c1c8afc3eb20b73b2e3e2d66e07ba40bd8165e427eb093946179d47b1d52", "required": true, "kind": "input-schema" },
+    { "path": "schemas/output.json", "bytes": 1004, "sha256": "3820bec74e78bba39264d4746d97706c7c8d9b2a1de0af52e39ced7cda899068", "required": true, "kind": "output-schema" }
+  ],
+  "requirements": {
+    "requiredTools": ["read_file", "edit_source"],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedMutation",
+    "approvalCategories": ["source edits", "artifact writes", "build and test execution"],
+    "model": { "workloads": ["CodeEdit"], "requiresToolCalls": true, "requiresStructuredOutput": true, "minimumContextWindow": 8192, "allowedProfiles": [], "deniedProfiles": [] },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999",
+    "inheritAvailableTools": true
+  },
+  "budget": { "contentTokens": 8000, "workflowSteps": 1, "modelTurns": 64, "toolCalls": 128, "mutations": 16, "validationAttempts": 4, "wallTime": "00:20:00" },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "delivery-implementation",
+    "steps": [{ "stepId": "implementation", "kind": "invokeProcedure", "instructionAsset": "instructions/procedure.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/output.json", "successProperty": "succeeded", "responseProperty": "response", "maximumIterations": 1 }]
+  }
+}

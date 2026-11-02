@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["succeeded", "status", "response", "artifacts", "questions", "limitations"],
+  "properties": {
+    "succeeded": { "type": "boolean" },
+    "status": { "type": "string", "enum": ["complete", "partial", "blocked"] },
+    "response": { "type": "string", "minLength": 1, "maxLength": 16000 },
+    "artifacts": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 1024 } },
+    "questions": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 2000 } },
+    "limitations": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 2000 } }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workFolder", "requirementsPath", "planPath", "planReviewed"],
+  "properties": {
+    "workFolder": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "requirementsPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "planPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "planReviewed": { "type": "boolean", "enum": [true] },
+    "expectedPlanSha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "additionalInstructions": { "type": "string", "maxLength": 12000 },
+    "clarificationAnswers": { "type": "string", "maxLength": 12000 }
+  }
+}

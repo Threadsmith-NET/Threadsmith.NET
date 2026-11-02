@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issue", "workFolder"],
+  "properties": {
+    "issue": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "workFolder": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "additionalInstructions": { "type": "string", "maxLength": 12000 },
+    "clarificationAnswers": { "type": "string", "maxLength": 12000 },
+    "resourcePathsOrUrls": {
+      "type": "array", "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+    }
+  }
+}

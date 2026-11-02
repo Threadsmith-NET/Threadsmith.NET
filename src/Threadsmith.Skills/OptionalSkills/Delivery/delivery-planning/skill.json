@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "skillId": { "value": "delivery-planning" },
+  "packageId": "local.delivery-planning",
+  "version": "1.0.2",
+  "displayName": "Delivery: Planning",
+  "description": "Turn user-reviewed requirements into a source-backed plan, bounded main-procedure critique and task outlines. Stops before implementation.",
+  "tags": ["delivery", "planning", "architecture"],
+  "publisher": "Local User",
+  "license": "LicenseRef-Private",
+  "assets": [
+    { "path": "instructions/procedure.md", "bytes": 13070, "sha256": "71cd70ffdd6c6a186604615a31d733c3b3ee6e2c002a36e492b92748747ed582", "required": true, "kind": "instructions" },
+    { "path": "schemas/input.json", "bytes": 607, "sha256": "1f35d2fd64693c8076dd068a86711e3d085015e650dabb6c904478982a06d37c", "required": true, "kind": "input-schema" },
+    { "path": "schemas/output.json", "bytes": 727, "sha256": "77ddc53eaa84bb6b45e3c599d22b2488ebae1ec4bb94d3714075fb29e235b1c4", "required": true, "kind": "output-schema" }
+  ],
+  "requirements": {
+    "requiredTools": ["read_file"],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedRead",
+    "approvalCategories": ["artifact writes"],
+    "model": { "workloads": ["General"], "requiresToolCalls": true, "requiresStructuredOutput": true, "minimumContextWindow": 8192, "allowedProfiles": [], "deniedProfiles": [] },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999",
+    "inheritAvailableTools": true
+  },
+  "budget": { "contentTokens": 8000, "workflowSteps": 1, "modelTurns": 64, "toolCalls": 128, "mutations": 16, "validationAttempts": 4, "wallTime": "00:20:00" },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "delivery-planning",
+    "steps": [{ "stepId": "planning", "kind": "invokeProcedure", "instructionAsset": "instructions/procedure.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/output.json", "successProperty": "succeeded", "responseProperty": "response", "maximumIterations": 1 }]
+  }
+}

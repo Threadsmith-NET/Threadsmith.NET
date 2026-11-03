@@ -1,1 +1,1 @@
-The Markdown budget omitted this associated artifact; retry this exact artifact path range.
+The Markdown budget omitted this associated artifact. Retry this exact artifact path range only if needed to resolve an outstanding question.

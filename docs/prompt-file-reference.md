@@ -8,6 +8,8 @@ This guide explains how Threadsmith uses the editable Markdown files in the depl
 
 For source-owner paths, deployed paths, byte limits, logging behavior, and the authoritative catalog metadata, see [Deployed prompt assets](operations/prompts.md).
 
+Shared implementation-validation instructions live in `System-RepositoryInspection.md`, supplied to both main and child agents; edit descriptions and feedback reference them. Repository-intelligence investigation and publication rules live in `Context-RepositoryIntelligenceCollection.md`; history and coverage prompts provide boundary-specific instructions, and `Tool-memories-Description.md` owns action and reconciliation semantics. Skill discovery, input preparation, and execution-state handling are separated across their respective descriptions and result guidance. Seven unused legacy child-output and exploration-limit assets have been removed from the catalog.
+
 ## How prompt files are used
 
 Threadsmith loads the complete shipped catalog once during startup. Each file can be replaced through the user or application `repositories/<repository-key>/prompts/<owning-project>/` directory, optionally under `models/<profile-guid>/`. Overrides are excluded from the opened repository itself. Per-file precedence is user model → user all-model → application model → application all-model → shipped. Missing replacements fall through automatically, without approval or enablement settings. The receiving model selects the view independently for parents, children, helpers, fallback, and compaction. See [override paths and precedence](operations/prompts.md#repository-and-model-overrides) for the full layout.
@@ -22,7 +24,7 @@ Ordinary delegated children receive a common host-policy message plus a role-spe
 
 The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Explicit `readOnly` child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
 
-The repository-inspection tool descriptions, semantic-first correction assets, and shared `System-RepositoryInspection.md` direct agents to use the narrowest sufficient operation: direct `read_file` for a known file, relationship-specific semantic tools for known C# declarations and direct relationships, and scoped search or syntax-pattern inspection for local variables and parameters. File inventory, shell execution, delegation, and broad semantic traversal are not substitutes for one known narrow lookup. Parent and child agents receive the same tool-selection, batching, evidence reuse, and completion guidance. Focused `code_explore` is reserved for unfamiliar or cross-cutting C# behavior, unknown discovery, and multi-hop relationships that one targeted semantic operation cannot establish; its returned source ranges count as already read and should not be retrieved again. Semantic evidence must match the reviewed revision; another revision requires ref-based evidence. This is retrieval guidance, not an expansion of tool permissions.
+The repository-inspection tool descriptions, semantic-first correction assets, and shared `System-RepositoryInspection.md` direct agents to use the narrowest sufficient operation: direct `read_file` for a known file, relationship-specific semantic tools for known C# declarations and direct relationships, and scoped search or syntax-pattern inspection for local variables and parameters. File inventory, shell execution, delegation, and broad semantic traversal are not substitutes for one known narrow lookup. Parent and child agents receive the same tool-selection, batching, evidence reuse, and completion guidance. Focused `code_explore` is reserved for unfamiliar or cross-cutting C# behavior, unknown discovery, and multi-hop relationships that one targeted semantic operation cannot establish; its returned source ranges count as already read. Re-reading needs a concrete reason, including current primary-support receipts for authorized intelligence collection. Semantic evidence must match the reviewed revision; another revision requires ref-based evidence. This is retrieval guidance, not an expansion of tool permissions.
 
 The `Tool-code_explore-OmissionsSection.md` `Items` value also includes unresolved requested filenames and permitted ambiguity alternatives, so missing file coverage is visible in the default Markdown output.
 
@@ -41,14 +43,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
+| System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Correction prompts | 24 | Host-authored ordinary tool and malformed-output retry messages. |
+| Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **300** | Complete deployed catalog. |
+| **Total** | **293** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -64,7 +66,6 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-ChildAgent-HostPolicy.md` | Common child guidance for advertised tools, inherited authority without further delegation, shared-workspace coordination, and honest responses. | `None` |
 | `System-ChildAgent-Explorer.md` | Explorer role amendment for focused inspection and useful answers. | `None` |
-| `System-ChildAgent-OutputPolicy.md` | Legacy Explorer JSON output policy retained in the catalog; unused for ordinary child responses. | `None` |
 | `System-ChildAgent-Implementer.md` | Implementer role amendment for assigned changes and validation using advertised tools, with accurate completion and limitation reporting. | `None` |
 | `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for assigned test execution, evaluation of observed results, coverage improvements, and explicit execution limits. | `None` |
@@ -187,12 +188,6 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 ### Correction prompts
 
 Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages.
-
-#### `ChildAgent` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Correction-ChildAgent-InvalidOutput.md` | Legacy Explorer-format correction retained in the catalog; unused for ordinary child responses. | [`Reason`](#placeholder-reason) |
 
 #### `csharp_pattern_search` family
 
@@ -382,7 +377,6 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-code_explore-FlowEdge.md` | `code_explore` flow-edge result line without a call site. | [`Caller`](#placeholder-caller), [`Callee`](#placeholder-callee), [`DispatchKind`](#placeholder-dispatchkind), [`Proof`](#placeholder-proof) |
 | `Tool-code_explore-FlowEdgeWithCallSite.md` | `code_explore` flow-edge result line with a call site. | [`Caller`](#placeholder-caller), [`Callee`](#placeholder-callee), [`DispatchKind`](#placeholder-dispatchkind), [`CallSiteFile`](#placeholder-callsitefile), [`CallSiteRange`](#placeholder-callsiterange), [`Proof`](#placeholder-proof) |
 | `Tool-code_explore-FlowEvidenceSection.md` | `code_explore` result block for `FlowEvidenceSection`. | [`Items`](#placeholder-items) |
-| `Tool-code_explore-Guidance-AllocationReservedStronger.md` | `code_explore` continuation guidance for reserved allocation. | `None` |
 | `Tool-code_explore-Guidance-AllocationStrongerEvidence.md` | `code_explore` continuation guidance for stronger allocated evidence. | `None` |
 | `Tool-code_explore-Guidance-ArtifactCharacterLimitRetry.md` | `code_explore` artifact character-limit retry guidance. | `None` |
 | `Tool-code_explore-Guidance-ArtifactCharacterOutputBounds.md` | `code_explore` artifact character-output bound guidance. | `None` |
@@ -395,15 +389,11 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-code_explore-Guidance-ExactSymbolAmbiguousCapped.md` | `code_explore` capped exact-symbol ambiguity guidance. | `None` |
 | `Tool-code_explore-Guidance-ExactSymbolOwnershipAmbiguous.md` | `code_explore` exact-symbol ownership ambiguity guidance. | `None` |
 | `Tool-code_explore-Guidance-FirstLineBudgetOmission.md` | `code_explore` first-line budget omission guidance. | [`StartLine`](#placeholder-startline), [`EndLine`](#placeholder-endline) |
-| `Tool-code_explore-Guidance-MaximumFileSections.md` | `code_explore` continuation guidance for the file-section limit. | `None` |
-| `Tool-code_explore-Guidance-MaximumSourceCharacters.md` | `code_explore` continuation guidance for the source-character limit. | `None` |
 | `Tool-code_explore-Guidance-NaturalLanguageNotFound.md` | `code_explore` natural-language miss guidance. | `None` |
 | `Tool-code_explore-Guidance-NaturalLanguageNotFoundProjectScope.md` | `code_explore` project-scoped natural-language miss guidance. | `None` |
 | `Tool-code_explore-Guidance-OversizedContainerOmitted.md` | `code_explore` allocation guidance for an omitted oversized container. | `None` |
 | `Tool-code_explore-Guidance-OversizedContainerReplaced.md` | `code_explore` allocation guidance for a replaced oversized container. | `None` |
-| `Tool-code_explore-Guidance-RelevanceCliffContinuation.md` | `code_explore` relevance-cliff continuation guidance. | `None` |
 | `Tool-code_explore-Guidance-SkippedCandidateRetry.md` | `code_explore` continuation guidance for a skipped candidate. | [`Reason`](#placeholder-reason) |
-| `Tool-code_explore-Guidance-SourceLimitRetry.md` | `code_explore` source-limit retry guidance. | `None` |
 | `Tool-code_explore-Guidance-SourceLineRangeRetry.md` | `code_explore` exact-line-range retry guidance. | `None` |
 | `Tool-code_explore-Guidance-SourceOutputBounds.md` | `code_explore` source-output bound guidance. | `None` |
 | `Tool-code_explore-Guidance-StableSymbolAmbiguous.md` | `code_explore` stable-symbol ambiguity guidance. | `None` |

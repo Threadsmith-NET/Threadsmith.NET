@@ -1,1 +1,1 @@
-L{{StartLine}}-L{{EndLine}} omitted because the first line exceeds the source-character budget; increase the per-file source limit for this anchor.
+L{{StartLine}}-L{{EndLine}} omitted because the first line exceeds the source-character budget. If needed to resolve the question, use a targeted read_file range at this anchor; report any remaining read limit.

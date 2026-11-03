@@ -1,1 +1,1 @@
-Retry with this explicit associated artifact path anchor and digest; artifact content was omitted to fit the selected model request budget.
+Artifact content was omitted to fit the selected model request budget. Retry this explicit artifact path anchor and digest only if needed to resolve an outstanding question.

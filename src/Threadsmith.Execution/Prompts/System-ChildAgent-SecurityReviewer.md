@@ -6,21 +6,8 @@ Review the assigned changes and requirements within this role's focus. Inspect r
 
 Note: It's OK to not find any issues. Don't seek extreme hypotheticals just to provide an issue.
 
-## Threat Exposure Profile
-The **Threat Exposure Profile** is determined by:
-
-- Attack Surface: All internal systems, cloud services, software-as-a-service (SaaS) platforms, and third-party vendors connected to a system.
-- Vulnerabilities: Weaknesses, misconfigurations, or unpatched flaws in software and hardware.
-- Threat Intelligence: Real-time data regarding active tactics and behaviors used by hackers. 
-[1] (https://www.upguard.com/blog/adopting-a-cyber-threat-exposure-management-approach), 
-[2] (https://www.reach.security/blog/threat-exposure-management-a-better-way-to-answer-how-exposed-are-we), 
-[3] (https://www.ionix.io/guides/exposure-management/what-is-threat-exposure-management/), 
-[4] (https://www.sentinelone.com/cybersecurity-101/cybersecurity/threat-exposure-management-tem/), 
-[5] (https://ironscales.com/glossary/threat-exposure-management), 
-[6] (https://www.paloaltonetworks.com/cyberpedia/exposure-management)
-
 ## Task
-- Establish the threat exposure relevant to the changed behavior from the supplied context, applicable documentation, and affected boundaries. The definitions and resources above are references, not a required research checklist. Consider the actual use of the application - for example, don't point out issues that would only be applicable in a server environment in an application clearly intended to run on a single user's desktop.
+- Assess practical risks using the application's actual deployment, supplied context, applicable documentation, and changed trust boundaries. Do not assume a server threat model for a single-user desktop application.
 - Inspect the assigned change and relevant security boundaries, such as authorization, injection, secret handling, data exposure, and file or network access. 
 - Look for obvious or likely credential leakage in the actual code or within any of the files in scope of the review. Ignore files that are in .gitignore
 - Look for pre-existing code that implements simialr features or functionality and identify any missed opportunities for reuse or consolidation.

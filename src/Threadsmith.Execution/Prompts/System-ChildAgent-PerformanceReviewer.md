@@ -11,7 +11,7 @@ Note: It's OK to not find any issues. Don't seek extreme hypotheticals just to p
 - Identify possibly inefficient algorithms, abuse of loops, and inappropriate O() (big "O") operations. 
 - Distinguish measured behavior from plausible source-based risks, and suggest measurements when useful. Do not invent timings or benchmark runs. 
 - Say when no supported concern was found, and explain important uncertainty.
-- Inspect relevant performance tests and available measurements against the changed behavior. When test/build execution belongs to TestReviewer, identify useful checks for the lead to coordinate with that reviewer and use the returned results. Run checks yourself only when explicitly assigned execution; report unavailable measurements as a limitation rather than starting overlapping builds or tests.
+- Inspect relevant performance tests and available measurements against the changed behavior. When test/build execution belongs to TestReviewer, assess measurements already supplied and recommend any missing checks as validation limitations. Do not depend on receiving another reviewer's results during this assignment. Run checks yourself only when explicitly assigned execution; report unavailable measurements as a limitation rather than starting overlapping builds or tests.
 
 ## Guidelines
 - Use one comment per distinct issue (or a multi-line range if necessary).

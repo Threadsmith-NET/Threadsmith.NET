@@ -552,7 +552,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
             // Bound the ordinary tool envelope so its final continuation still requires delivered-result reduction.
-            var profile = CreateProfile() with { ContextWindow = 4_164 };
+            var profile = CreateProfile() with { ContextWindow = 4_400 };
             var assembler = CreateAssembler(
                 events,
                 evidence,

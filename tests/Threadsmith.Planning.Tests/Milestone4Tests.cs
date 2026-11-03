@@ -105,7 +105,10 @@ public static class Milestone4Tests
         Assert.Empty(request.Tools);
         Assert.DoesNotContain("propose_plan", request.Input, StringComparison.Ordinal);
         Assert.Contains("Supporting reads are independent", request.Input, StringComparison.Ordinal);
-        Assert.Contains("Compiler feedback is advisory", request.Input, StringComparison.Ordinal);
+        Assert.Contains(
+            SecurityElement.Escape(TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)),
+            request.Input,
+            StringComparison.Ordinal);
     }
 
     /// <summary>Conversational streaming stops before retaining or publishing output beyond the host bound.</summary>

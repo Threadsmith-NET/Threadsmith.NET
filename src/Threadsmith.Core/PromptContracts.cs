@@ -597,9 +597,6 @@ public static class PromptFileNames
     /// <summary>System-prompt amendment for the Explorer role.</summary>
     public const string SystemChildAgentExplorer = "System-ChildAgent-Explorer.md";
 
-    /// <summary>Gets the stable filename for the SystemChildAgentOutputPolicy prompt asset.</summary>
-    public const string SystemChildAgentOutputPolicy = "System-ChildAgent-OutputPolicy.md";
-
     /// <summary>System guidance for read-only implementation proposals.</summary>
     public const string SystemChildAgentImplementer = "System-ChildAgent-Implementer.md";
 
@@ -653,9 +650,6 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ContextChildAgentSteering prompt asset.</summary>
     public const string ContextChildAgentSteering = "Context-ChildAgent-Steering.md";
-
-    /// <summary>Gets the stable filename for the CorrectionChildAgentInvalidOutput prompt asset.</summary>
-    public const string CorrectionChildAgentInvalidOutput = "Correction-ChildAgent-InvalidOutput.md";
 
     /// <summary>Gets the stable filename for the ToolDelegateAgentsResultHeader prompt asset.</summary>
     public const string ToolDelegateAgentsResultHeader = "Tool-delegate_agents-ResultHeader.md";
@@ -954,18 +948,6 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceAllocationStrongerEvidence prompt asset.</summary>
     public const string ToolCodeExploreGuidanceAllocationStrongerEvidence = "Tool-code_explore-Guidance-AllocationStrongerEvidence.md";
 
-    /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceMaximumFileSections prompt asset.</summary>
-    public const string ToolCodeExploreGuidanceMaximumFileSections = "Tool-code_explore-Guidance-MaximumFileSections.md";
-
-    /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceMaximumSourceCharacters prompt asset.</summary>
-    public const string ToolCodeExploreGuidanceMaximumSourceCharacters = "Tool-code_explore-Guidance-MaximumSourceCharacters.md";
-
-    /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceAllocationReservedStronger prompt asset.</summary>
-    public const string ToolCodeExploreGuidanceAllocationReservedStronger = "Tool-code_explore-Guidance-AllocationReservedStronger.md";
-
-    /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceRelevanceCliffContinuation prompt asset.</summary>
-    public const string ToolCodeExploreGuidanceRelevanceCliffContinuation = "Tool-code_explore-Guidance-RelevanceCliffContinuation.md";
-
     /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceSourceOutputBounds prompt asset.</summary>
     public const string ToolCodeExploreGuidanceSourceOutputBounds = "Tool-code_explore-Guidance-SourceOutputBounds.md";
 
@@ -1028,9 +1010,6 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceBackReferenceUsePriorSource prompt asset.</summary>
     public const string ToolCodeExploreGuidanceBackReferenceUsePriorSource = "Tool-code_explore-Guidance-BackReferenceUsePriorSource.md";
-
-    /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceSourceLimitRetry prompt asset.</summary>
-    public const string ToolCodeExploreGuidanceSourceLimitRetry = "Tool-code_explore-Guidance-SourceLimitRetry.md";
 
     /// <summary>Gets the stable filename for the ToolCodeExploreGuidanceSourceLineRangeRetry prompt asset.</summary>
     public const string ToolCodeExploreGuidanceSourceLineRangeRetry = "Tool-code_explore-Guidance-SourceLineRangeRetry.md";
@@ -1201,7 +1180,6 @@ public static class PromptFileNames
         ProviderOpenAiCodexInstructions,
         SystemChildAgentHostPolicy,
         SystemChildAgentExplorer,
-        SystemChildAgentOutputPolicy,
         SystemChildAgentImplementer,
         SystemChildAgentSecurityReviewer,
         SystemChildAgentTestReviewer,
@@ -1220,7 +1198,6 @@ public static class PromptFileNames
         ContextChildAgentEvidenceProgressPayloadOnly,
         ContextChildAgentEvidenceProgressNoProgress,
         ContextChildAgentSteering,
-        CorrectionChildAgentInvalidOutput,
         ToolDelegateAgentsResultHeader,
         ToolDelegateAgentsChildStatus,
         ToolDelegateAgentsChildSummary,
@@ -1316,10 +1293,6 @@ public static class PromptFileNames
         ToolCodeExploreGuidanceOversizedContainerReplaced,
         ToolCodeExploreGuidanceOversizedContainerOmitted,
         ToolCodeExploreGuidanceAllocationStrongerEvidence,
-        ToolCodeExploreGuidanceMaximumFileSections,
-        ToolCodeExploreGuidanceMaximumSourceCharacters,
-        ToolCodeExploreGuidanceAllocationReservedStronger,
-        ToolCodeExploreGuidanceRelevanceCliffContinuation,
         ToolCodeExploreGuidanceSourceOutputBounds,
         ToolCodeExploreGuidanceSummaryAvailability,
         ToolCodeExploreGuidanceSummaryReadEquivalent,
@@ -1341,7 +1314,6 @@ public static class PromptFileNames
         ToolCodeExploreGuidanceExactSymbolAmbiguousCapped,
         ToolCodeExploreGuidanceExactSymbolAmbiguous,
         ToolCodeExploreGuidanceBackReferenceUsePriorSource,
-        ToolCodeExploreGuidanceSourceLimitRetry,
         ToolCodeExploreGuidanceSourceLineRangeRetry,
         ToolCodeExploreGuidanceFirstLineBudgetOmission,
         ToolCodeExploreArtifactBudgetContinuationReason,
@@ -1421,7 +1393,6 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
             PromptFileNames.SystemChildAgentHostPolicy,
             PromptFileNames.SystemChildAgentExplorer,
-            PromptFileNames.SystemChildAgentOutputPolicy,
             PromptFileNames.SystemChildAgentImplementer,
             PromptFileNames.SystemChildAgentSecurityReviewer,
             PromptFileNames.SystemChildAgentTestReviewer,
@@ -1440,7 +1411,6 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextChildAgentEvidenceProgressPayloadOnly,
             PromptFileNames.ContextChildAgentEvidenceProgressNoProgress,
             PromptFileNames.ContextChildAgentSteering,
-            PromptFileNames.CorrectionChildAgentInvalidOutput,
             PromptFileNames.ToolDelegateAgentsResultHeader,
             PromptFileNames.ToolDelegateAgentsChildStatus,
             PromptFileNames.ToolDelegateAgentsChildSummary,
@@ -1746,7 +1716,6 @@ public static class PromptAssetCatalog
                         "TotalSources",
                         "TotalEvidenceItems"),
                     [PromptFileNames.ContextChildAgentSteering] = Set("Sequence", "SubmittedAt", "Text"),
-                    [PromptFileNames.CorrectionChildAgentInvalidOutput] = Set("Reason"),
                     [PromptFileNames.ToolDelegateAgentsChildDetails] = Set("AssignmentId", "DetailsJson"),
                     [PromptFileNames.ToolDelegateAgentsReviewDetails] = Set("AssignmentId", "DetailsJson"),
                     [PromptFileNames.ToolDelegateAgentsResultHeader] = Set("DelegationId", "Status"),

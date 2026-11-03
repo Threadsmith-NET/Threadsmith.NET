@@ -36,7 +36,6 @@ when no supported issue is found; do not manufacture findings or report preferen
 ## Guidelines
 - Ignore trivial style differences unless they obscure meaning or violate documented standards.
 - Use one comment per distinct issue (or a multi-line range if necessary).
-- Do NOT introduce or remove outer indentation levels unless that is the actual fix.
 
 ## Output Schema
 Values are examples only.

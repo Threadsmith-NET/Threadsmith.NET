@@ -51,7 +51,12 @@ public sealed class EditAnalysisConfigurationTests
         Assert.Equal(0, options.ImmediateObservationMilliseconds);
         Assert.Equal(1234, options.CandidateLifetimeMilliseconds);
         Assert.Equal(4567, options.FinalFeedbackWaitMilliseconds);
-        Assert.Equal(30000, new EditAnalysisOptions().FinalFeedbackWaitMilliseconds);
+        var defaults = HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().Build()).Semantic.EditAnalysis;
+        Assert.Equal(Timeout.Infinite, defaults.FinalFeedbackWaitMilliseconds);
+        Assert.Equal(Timeout.Infinite, defaults.CandidateLifetimeMilliseconds);
+        Assert.Equal(0, defaults.MaximumRetainedDiagnostics);
+        Assert.Equal(0, defaults.MaximumReportedDiagnostics);
+        Assert.Equal(0, defaults.MaximumCachedProjects);
         var captured = new DiagnosticReportingPolicy(options);
         configuration["limits:semantic:editAnalysis:excludedDiagnosticIds:0"] = "CS4014";
         Assert.False(captured.ShouldReport("CS0246", DiagnosticSeverity.Error));
@@ -81,11 +86,11 @@ public sealed class EditAnalysisConfigurationTests
     /// <summary>Invalid or unknown options fail through the host binder.</summary>
     [Theory]
     [InlineData("unknownSetting", "1")]
-    [InlineData("maximumRetainedDiagnostics", "0")]
-    [InlineData("maximumReportedDiagnostics", "65")]
+    [InlineData("maximumRetainedDiagnostics", "-1")]
+    [InlineData("maximumReportedDiagnostics", "-1")]
     [InlineData("candidateLifetimeMilliseconds", "0")]
     [InlineData("immediateObservationMilliseconds", "-1")]
-    [InlineData("finalFeedbackWaitMilliseconds", "-1")]
+    [InlineData("finalFeedbackWaitMilliseconds", "-2")]
     [InlineData("excludedDiagnosticIds:0", " ")]
     [InlineData("compilerWarningIds:0", "")]
     [InlineData("analyzers:diagnosticIds:0", " ")]

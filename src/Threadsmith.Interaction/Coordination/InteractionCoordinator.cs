@@ -1268,7 +1268,18 @@ public sealed partial class InteractionCoordinator
 
                 if (string.Equals(commandText, "/extensions", StringComparison.OrdinalIgnoreCase))
                 {
-                    await ManageExtensionsAsync(controller, lifetime.Token);
+                    try
+                    {
+                        await ManageExtensionsAsync(controller, lifetime.Token);
+                    }
+                    catch (UnauthorizedAccessException exception)
+                    {
+                        await _surface.WriteAsync(
+                            exception.Message + Environment.NewLine,
+                            PresentationTextRole.Error,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 

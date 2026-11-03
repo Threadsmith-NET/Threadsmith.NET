@@ -19,7 +19,7 @@ internal static class IntegrationComposition
         return commandLine.McpAction is null;
     }
 
-    /// <summary>Creates the extension host and auto-loads only repository-selected extensions for interactive use.</summary>
+    /// <summary>Creates a repository-bound extension host without authorizing repository-requested automatic loading.</summary>
     internal static async Task<ExtensionHost> CreateExtensionHostAsync(
         string repositoryRoot,
         bool useInteractiveTerminal,
@@ -28,17 +28,20 @@ internal static class IntegrationComposition
         InvocationLeaseAuthority leaseAuthority,
         ILoggerFactory loggerFactory,
         IConfiguration? configuration = null,
+        SessionPolicyBinding? policyBinding = null,
         CancellationToken cancellationToken = default)
     {
         var extensionHost = new ExtensionHost(
             events,
             loggerFactory.CreateLogger<ExtensionHost>(),
+            shadowCopier: new ShadowCopier(
+                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityQuietPeriodMilliseconds", 250) ?? 250),
+                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityTimeoutMilliseconds", 30000) ?? 30000)),
             capabilityRegistry: capabilityRegistry,
             leaseAuthority: leaseAuthority,
             extensionLoggerFactory: loggerFactory,
-            shadowCopier: new ShadowCopier(
-                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityQuietPeriodMilliseconds", 250) ?? 250),
-                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityTimeoutMilliseconds", 30000) ?? 30000)));
+            repositoryPath: repositoryRoot,
+            policyBinding: policyBinding);
         var selectionPath = Path.Combine(repositoryRoot, ".threadsmith", "extensions.json");
         var selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
         extensionHost.SetDiscoveryDirectory(

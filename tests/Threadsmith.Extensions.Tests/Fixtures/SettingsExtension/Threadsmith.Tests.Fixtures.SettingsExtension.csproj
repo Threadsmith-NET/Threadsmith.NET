@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.Tests.Fixtures.SettingsExtension</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ThreadsmithExtension>true</ThreadsmithExtension>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\src\Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj" Private="false" PrivateAssets="all" ExcludeAssets="runtime" />
+    <None Include="threadsmith.extension.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <Import Project="..\..\..\..\src\Threadsmith.Extensions.Abstractions\build\Threadsmith.Extensions.Abstractions.targets" />
+</Project>

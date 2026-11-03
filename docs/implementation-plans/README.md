@@ -160,6 +160,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 118 | [plan-118-staged-semantic-readiness-and-compilation-warming.md](plan-118-staged-semantic-readiness-and-compilation-warming.md) | Staged semantic readiness with demand-driven project preparation and bounded background warming |
 | 119 | [plan-119-in-process-tui-automation-api.md](plan-119-in-process-tui-automation-api.md) | In-process public API for read-only-composer TUI automation and final-answer streaming |
 | 120 | [plan-120-multimodal-input-and-file-output.md](plan-120-multimodal-input-and-file-output.md) | Multimodal model capabilities, image input and generated file export |
+| Maintenance | [maintenance-extension-secrets-and-configuration.md](maintenance-extension-secrets-and-configuration.md) | Extension settings snapshots and admitted secret access |
 | Maintenance | [maintenance-pdf-reading-and-binary-read-details.md](maintenance-pdf-reading-and-binary-read-details.md) | Bounded PDF page reading and binary byte-count presentation |
 | Maintenance | [maintenance-image-storage-and-pdf-resolution.md](maintenance-image-storage-and-pdf-resolution.md) | Image storage capacity and PDF render configuration |
 | Maintenance | [maintenance-image-pipeline-performance.md](maintenance-image-pipeline-performance.md) | Bounded image cleanup and UTF-8 request serialization |

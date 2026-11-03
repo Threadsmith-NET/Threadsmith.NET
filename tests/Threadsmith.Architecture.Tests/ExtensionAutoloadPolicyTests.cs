@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.App;
+using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Extensions.Abstractions;
 using Threadsmith.Extensions.Runtime;
@@ -14,6 +15,50 @@ using Xunit;
 /// <summary>Exercises interactive startup with executable constructor-marker fixtures.</summary>
 public static class ExtensionAutoloadPolicyTests
 {
+    /// <summary>The composed extension manager shares live repository-transition authority.</summary>
+    [Fact]
+    public static async Task RepositoryTransitionCannotReuseStartupExtensionSelection()
+    {
+        var root = Directory.CreateTempSubdirectory("threadsmith-extension-binding-").FullName;
+        try
+        {
+            var binding = new SessionPolicyBinding();
+            var policy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = root,
+                Fingerprint = "first",
+            };
+            binding.Publish(policy);
+            await using var events = new DomainEventStream();
+            var leases = new InvocationLeaseAuthority(NullLogger.Instance);
+            var capabilities = new CapabilityRegistry(leases, NullLogger<CapabilityRegistry>.Instance);
+            var host = await IntegrationComposition.CreateExtensionHostAsync(
+                root,
+                false,
+                events,
+                capabilities,
+                leases,
+                NullLoggerFactory.Instance,
+                policyBinding: binding,
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Empty(await host.DiscoverAsync(TestContext.Current.CancellationToken));
+
+            // RepositoryLifecycle publishes this same binding when /open changes repositories.
+            binding.Publish(policy with { Generation = 2, RepositoryPath = Path.Combine(root, "other"), Fingerprint = "second" });
+
+            var exception = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => ((IExtensionManager)host).LoadAsync(
+                "not-discovered", SessionId.New(), TestContext.Current.CancellationToken));
+            Assert.StartsWith("ExtensionRepositoryStale:", exception.Message);
+            Assert.Empty(host.Generations);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>Repository selection cannot reach an otherwise executable extension constructor.</summary>
     [Fact]
     public static async Task InteractiveRepositorySelectionCannotConstructExtension()
@@ -50,7 +95,10 @@ public static class ExtensionAutoloadPolicyTests
             Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
             var manifest = new ExtensionManifest
             {
-                Id = "marker", Name = "Marker", Version = "1.0.0", EntryAssembly = "Marker.dll",
+                Id = "marker",
+                Name = "Marker",
+                Version = "1.0.0",
+                EntryAssembly = "Marker.dll",
             };
             await File.WriteAllTextAsync(Path.Combine(package, "threadsmith.extension.json"), JsonSerializer.Serialize(manifest), TestContext.Current.CancellationToken);
             await File.WriteAllTextAsync(

@@ -26,7 +26,7 @@ public sealed partial class SourceEditApplicationTests
         var waited = false;
         await using var subscription = fixture.Events.Subscribe((item, _) =>
         {
-            if (item is DiagnosticObserved { Message: "Waiting for semantic feedback to complete." })
+            if (item is DiagnosticObserved { PendingSemanticEffectId: not null })
             {
                 waited = true;
                 analyzer.Publish(analyzer.Latest! with
@@ -137,7 +137,7 @@ public sealed partial class SourceEditApplicationTests
         await using var subscription = fixture.Events.Subscribe((item, _) =>
         {
             observed.Enqueue(item);
-            if (item is DiagnosticObserved { Message: "Waiting for semantic feedback to complete." })
+            if (item is DiagnosticObserved { PendingSemanticEffectId: not null })
             {
                 waitingNotice.TrySetResult();
             }
@@ -177,7 +177,7 @@ public sealed partial class SourceEditApplicationTests
 
         Assert.False(await completion);
         Assert.Contains(observed.OfType<RunCompleted>(), item => item.RunId == run && !item.Succeeded);
-        Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback" && item.Message == "Waiting for semantic feedback to complete.");
+        Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback" && item.PendingSemanticEffectId is not null);
         Assert.Equal(maximumModelRounds == 2 ? 2 : 3, provider.Requests.Count);
         if (timeout)
         {
@@ -185,7 +185,7 @@ public sealed partial class SourceEditApplicationTests
                 && item.Message.StartsWith("Validation incomplete:", StringComparison.Ordinal));
             var pendingTurn = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Continue while analysis is pending."), ct);
             Assert.True(await sessions.HandleAsync(new WaitForRunCommand(pendingTurn), ct));
-            Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Message == "Waiting for semantic feedback to complete.");
+            Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.PendingSemanticEffectId is not null);
             CompleteAnalysis();
             var next = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Check the result."), ct);
             Assert.True(await sessions.HandleAsync(new WaitForRunCommand(next), ct));
@@ -228,7 +228,7 @@ public sealed partial class SourceEditApplicationTests
             if (item is DiagnosticObserved diagnostic)
             {
                 observed.Enqueue(diagnostic);
-                if (diagnostic.Message == "Waiting for semantic feedback to complete.")
+                if (diagnostic.PendingSemanticEffectId is not null)
                 {
                     return cancellation.CancelAsync();
                 }
@@ -237,6 +237,8 @@ public sealed partial class SourceEditApplicationTests
             return Task.CompletedTask;
         });
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, cancellation.Token));
-        Assert.Single(observed);
+        var notice = Assert.Single(observed);
+        Assert.Contains(analyzerOnly ? "Waiting for analyzers" : "Waiting for compiler analysis", notice.Message, StringComparison.Ordinal);
+        Assert.Contains("You can cancel the run", notice.Message, StringComparison.Ordinal);
     }
 }

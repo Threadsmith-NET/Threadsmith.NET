@@ -12,14 +12,14 @@ public sealed record EditAnalysisOptions
     /// <summary>Exact diagnostic IDs excluded from advisory output regardless of severity.</summary>
     public string[] ExcludedDiagnosticIds { get; init; } = [];
 
-    /// <summary>Maximum retained findings per project and aggregate candidate.</summary>
-    public int MaximumRetainedDiagnostics { get; init; } = 64;
+    /// <summary>Optional retained finding limit per project and aggregate candidate; zero is unlimited.</summary>
+    public int MaximumRetainedDiagnostics { get; init; }
 
-    /// <summary>Maximum findings projected in an edit receipt.</summary>
-    public int MaximumReportedDiagnostics { get; init; } = 8;
+    /// <summary>Optional finding limit in an edit receipt; zero is unlimited.</summary>
+    public int MaximumReportedDiagnostics { get; init; }
 
-    /// <summary>Maximum cached project diagnostic bases and carried project scope.</summary>
-    public int MaximumCachedProjects { get; init; } = 32;
+    /// <summary>Optional cached project and carried-scope limit; zero is unlimited.</summary>
+    public int MaximumCachedProjects { get; init; }
 
     /// <summary>Maximum distinct omission descriptions.</summary>
     public int MaximumOmissions { get; init; } = 16;
@@ -39,11 +39,11 @@ public sealed record EditAnalysisOptions
     /// <summary>Immediate observation allowance; zero returns without waiting.</summary>
     public int ImmediateObservationMilliseconds { get; init; } = 500;
 
-    /// <summary>Maximum wait for pending compiler feedback before finishing a conversation turn; zero disables waiting.</summary>
-    public int FinalFeedbackWaitMilliseconds { get; init; } = 30000;
+    /// <summary>Wait for pending final feedback; -1 waits until completion or cancellation, zero disables waiting.</summary>
+    public int FinalFeedbackWaitMilliseconds { get; init; } = Timeout.Infinite;
 
-    /// <summary>Maximum candidate lifetime in milliseconds.</summary>
-    public int CandidateLifetimeMilliseconds { get; init; } = 30000;
+    /// <summary>Candidate lifetime in milliseconds; -1 retains work until completion, supersession or cancellation.</summary>
+    public int CandidateLifetimeMilliseconds { get; init; } = Timeout.Infinite;
 
     /// <summary>Checks real API bounds and relationships without restricting the diagnostic ID vocabulary.</summary>
     public void Validate()
@@ -52,18 +52,22 @@ public sealed record EditAnalysisOptions
         Analyzers.Validate();
         ValidateIds(CompilerWarningIds);
         ValidateIds(ExcludedDiagnosticIds);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumRetainedDiagnostics);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumReportedDiagnostics);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCachedProjects);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumRetainedDiagnostics);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumReportedDiagnostics);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumCachedProjects);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumOmissions);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticMessageCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticPathCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticProjectCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticFrameworkCharacters);
         ArgumentOutOfRangeException.ThrowIfNegative(ImmediateObservationMilliseconds);
-        ArgumentOutOfRangeException.ThrowIfNegative(FinalFeedbackWaitMilliseconds);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(CandidateLifetimeMilliseconds);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumReportedDiagnostics, MaximumRetainedDiagnostics);
+        ArgumentOutOfRangeException.ThrowIfLessThan(FinalFeedbackWaitMilliseconds, Timeout.Infinite);
+        ArgumentOutOfRangeException.ThrowIfLessThan(CandidateLifetimeMilliseconds, Timeout.Infinite);
+        ArgumentOutOfRangeException.ThrowIfZero(CandidateLifetimeMilliseconds);
+        if (MaximumRetainedDiagnostics > 0 && MaximumReportedDiagnostics > 0)
+        {
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumReportedDiagnostics, MaximumRetainedDiagnostics);
+        }
     }
 
     /// <summary>Copies and normalizes configured IDs for immutable startup ownership.</summary>

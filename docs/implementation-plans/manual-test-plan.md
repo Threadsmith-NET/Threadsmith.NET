@@ -1,5 +1,9 @@
 # Threadsmith.NET Manual Test Plan
 
+## Source-edit completion diagnostic separation
+
+In a disposable repository, complete a source-edit run with incomplete final advisory coverage (for example, omitted earlier-project coverage). Confirm `[SourceEditCompletionFailed]` starts on a new line with a blank line before it, even when the final model answer has no trailing newline. Confirm the diagnostic remains visible once and the run still reports incomplete validation. Record terminal/platform checks separately from automated projection tests.
+
 ## Stale repository model selection recovery
 
 In a disposable repository, select a model with `/models`, exit, then remove or disable that profile while retaining another enabled model. Start with `--tui`; confirm output warns that the selected repository model was invalid and names the first enabled model in `/models` order as the replacement. Confirm ordinary requests use that replacement without requiring repair. Select a different model with `/models` and restart to verify persistence. Repeat with a mismatched provider/profile, partial selection, and opening another repository. Headless output must also report the warning and selected model. Record Windows/Linux/macOS terminal checks separately.
@@ -193,7 +197,7 @@ Confirm compiler and analyzer findings include one-based file:line:column locati
 
 5. Run `dotnet_build` against a project with compiler warnings and errors. Verify the existing tool completion displays build outcome, exit code, target, captured severity counts, and semantic-style diagnostic lines with file/line/column and project/framework. Confirm a successful build's warnings remain visible without relying on the model summary. Lower `tui:limits:maximumBuildDiagnostics`, restart, and verify errors appear first with an explicit omitted count. Failed/timed-out/truncated builds must not claim complete clean coverage; replay must retain the same diagnostics.
 
-6. Make an edit whose compiler analysis remains pending when the model finishes. Verify `[AdvisorySemanticFeedback] Waiting for semantic feedback to complete.` uses the ordinary advisory text role while that edit activity is pending. Verify a live semantic spinner returns during the wait with elapsed time continuing from the original check start, not from the waiting message; completion, timeout/turn end and cancellation must clear it. If its completion is rendered first, verify no stale waiting notice appears afterward; unrelated running checks must not keep that notice visible. Completed analysis must reach another model round and render a detailed `SEMANTIC CHECKS: finalized edit feedback` block instead of the compact advisory summary. Check committed generation, coverage, counts, bounded diagnostic details and replay. Reused candidate results must explicitly say no additional compiler pass and must not repeat the original duration. Set `limits:semantic:editAnalysis:finalFeedbackWaitMilliseconds` low, restart, and verify timeout completes the turn with `Semantic checks are taking longer than expected and should be available in a future turn.` in the same role. A subsequent turn should receive completed, still-current feedback. Cancellation must stop waiting without a timeout notice.
+6. Make an edit whose compiler analysis remains pending when the model finishes. Verify a `[AdvisorySemanticFeedback] Waiting for compiler analysis`, `analyzers`, or `compiler analysis and analyzers` notice with a cancellation hint uses the ordinary advisory text role while that edit activity is pending. Verify a live semantic spinner returns during the wait with elapsed time continuing from the original check start, not from the waiting message; completion, explicitly configured timeout/turn end and cancellation must clear it. If its completion is rendered first, verify no stale waiting notice appears afterward; unrelated running checks must not keep that notice visible. Completed analysis must reach another model round and render a detailed `SEMANTIC CHECKS: finalized edit feedback` block instead of the compact advisory summary. Check committed generation, coverage, counts, bounded diagnostic details and replay. Reused candidate results must explicitly say no additional compiler pass and must not repeat the original duration. Set `limits:semantic:editAnalysis:finalFeedbackWaitMilliseconds` low, restart, and verify timeout completes the turn with an explicit final-feedback deadline message in the same role. A subsequent turn should receive completed, still-current feedback. With the default settings, compiler/analyzer work must not expire or end its final wait after 30 seconds. Confirm the animated semantic activity and elapsed time remain visible during the wait. Cancellation must stop waiting without a timeout notice.
 
 7. Verify semantic completions and finalized feedback start collapsed with `[+]`, a findings/coverage summary, and severity color (errors red, warnings/incomplete evidence amber, clean evidence success). Click to reveal the existing bracketed detail lines and click again to collapse. Test Ctrl+Up/Down then Enter/Space in output focus, resize while expanded, copy details, clear output then expand a new block, and eviction under reduced transcript budgets. Old cleared text must stay hidden, evicted details must not reappear, and oversized details must show an omission notice. Noninteractive output retains full details.
 
@@ -1172,6 +1176,7 @@ Extension SDK and runtime: stable abstractions package, drop-in discovery with c
 - **Allowed (automated):** `IExtensionManager.DiscoverAsync` lists discovered extensions with loaded/unloaded state; `LoadAsync(id)`/`UnloadAsync(id)` drive load/unload by stable id; summaries are host-owned DTOs (`ExtensionSummary`) with no extension-runtime types (§8.1). Covered by `ExtensionManagerTests`.
 - **Allowed (automated):** `ExtensionSelectionConfig.LoadOrDefault` parses `discoveryDirectory` + `autoLoad` from `.threadsmith/extensions.json`; a missing or malformed file falls back to safe defaults (load nothing).
 - **Manual (interactive):** `/extensions` opens a navigable list (Up/Down, Enter) of all discovered extensions showing `[loaded]`/`[unloaded]`, name, version, state, and tool count; selecting an entry offers Load or Unload; `Back` returns. `/help` lists the command.
+- **Manual (repository switch):** Start in repository A, use `/open` to switch to repository B, then enter `/extensions`. Confirm the restart instruction is displayed and `/help` still works in the same session.
 - **Manual (startup):** Extensions listed in `.threadsmith/extensions.json` `autoLoad` are discovered and loaded at application startup; a load failure is reported on the console without aborting startup.
 - **Constraint:** Extension selection is repo-level ONLY (`.threadsmith/extensions.json`); it is never read from the user `~/` config.
 
@@ -1566,6 +1571,19 @@ Expected: only the exact immutable handler/eligible pre-point/allowlisted code b
 3. Inspect process arguments/environment, redirected requests, logs, events, persistence, and diagnostics.
 
 Expected: no shell interpolation, command-line secret, ambient environment inheritance, orphan process, automatic redirect, secret forwarding to a changed origin, unbounded body, or leaked canary exists. Retries remain bounded and cancellation kills/stops waiting.
+
+### MTP-EXT-SETTINGS — Repository extension settings snapshots
+
+Prerequisites: use a disposable repository and a reviewed extension that exposes non-secret configuration in an observable test operation. Use its stable descriptor ID. Never put a real password in settings.
+
+1. Add its `settings` section to `.threadsmith/extensions.json`, with a string, a null value, and a logical secret reference. Add a second extension's section with a distinct non-secret marker.
+2. Load it explicitly through `/extensions`. Confirm it receives only its own values and the active repository identity. Confirm the logical reference stays a reference.
+3. Edit the values. Confirm the active generation is unchanged. Explicitly unload/load it and confirm the new values appear. Exercise hot replacement through the host API if available; old in-flight calls must retain their original view.
+4. Make a value a JSON number or exceed a documented bound, then explicitly reload or replace. Confirm `ExtensionSettingsInvalid` without configuration contents; a failed replacement leaves the predecessor active.
+5. Start in repository A, then `/open` repository B. Confirm discovery/manual loading fails with `ExtensionRepositoryStale`, and an A-generation tool cannot execute in B. Restart in B before loading extensions there.
+6. Add an `autoLoad` request and restart. Confirm no extension is constructed automatically.
+
+Expected: settings are bounded data and immutable per generation, not secret or code-execution authority. Repository switching does not reuse A's settings for a new load in B. See the [extension authoring guide](../extension-authoring/authoring-guide.md#repository-settings) for limits and the trusted in-process-code limitation.
 
 ### MTP-185 — MCP/extension adapters, recursion, and lifecycle correlation
 

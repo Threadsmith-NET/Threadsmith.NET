@@ -66,6 +66,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 7. Extension activates and registers a tool.
 8. Tool appears in the Extension Manager and tool registry.
 9. Model or user invokes the tool through the standard policy pipeline.
+10. On explicit manual load, repository settings keyed by the stable descriptor ID supply only that extension's immutable string/null view and the correct repository identity. Secret references remain references.
+11. File edits do not change an active generation. Explicit reload or replacement captures a new snapshot; old calls keep their old view. Invalid or cancelled activation leaves the active registration unchanged.
+12. Missing settings supply an empty view. Malformed or oversized settings fail explicit loading with a safe diagnostic and no configuration dump. Repository selection never authorizes automatic loading.
 
 **Verifies:** abstractions package, discovery + collectible ALC + shadow-copy + `AssemblyDependencyResolver`, capability registry + invocation leases, extension→tool-runtime integration via the standard policy pipeline, file watching (§17.21), Extension Manager projection.
 

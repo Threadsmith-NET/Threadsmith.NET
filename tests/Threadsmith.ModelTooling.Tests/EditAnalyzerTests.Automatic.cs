@@ -12,6 +12,36 @@ using Xunit;
 
 public static partial class EditAnalyzerTests
 {
+    /// <summary>Default feedback retains all findings beyond the former report and retention caps.</summary>
+    [Fact]
+    public static async Task AutomaticDefaultFeedbackRetainsAllAnalyzerFindings()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new TestSemanticSolution();
+        await ConfigureFixtureAsync(fixture.Root);
+        var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
+        var source = string.Join('\n', Enumerable.Range(0, 70).Select(index => $"namespace Probe{index} {{ public class AnalyzerProbe {{}} }}"));
+        await File.WriteAllTextAsync(file, source, ct);
+        var session = SessionId.New();
+        var workspace = WorkspaceId.New();
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(
+            events,
+            NullLogger<SemanticEngine>.Instance,
+            TestPromptLoader.Instance,
+            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } });
+        await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+
+        var result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, source, source + "\n// edit", null, ct);
+
+        Assert.Equal("completed", result.Analyzers.Status);
+        Assert.Equal(70, result.Diagnostics.Count(item => item.Code == "TS1170"));
+        Assert.Equal(result.Analyzers.ReportableFindings, result.Diagnostics.Count(item => item.Producer == "analyzer"));
+        Assert.False(result.Analyzers.Truncated);
+        Assert.False(result.DiagnosticsTruncated);
+    }
+
     /// <summary>Automatic scoped evidence preserves suggestions, shared exclusions and comparable repairs.</summary>
     [Theory]
     [InlineData(false, false)]

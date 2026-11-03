@@ -303,8 +303,11 @@ public sealed class SourceEditApplication :
             return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? feedback);
         }
 
+        var pending = GetLatestFeedback(delivery);
+        var checks = pending is { Pending: true, Analyzers.Status: "pending" } ? "compiler analysis and analyzers"
+            : pending?.Analyzers.Status == "pending" ? "analyzers" : "compiler analysis";
         await _events.PublishAsync(
-            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Waiting for semantic feedback to complete.") { PendingSemanticEffectId = delivery.EffectId },
+            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checks} to finish. You can cancel the run.") { PendingSemanticEffectId = delivery.EffectId },
             cancellationToken);
         try
         {

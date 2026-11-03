@@ -1544,6 +1544,29 @@ public static partial class Milestone1Tests
         Assert.All(manager.Changes, action => Assert.Equal(McpManagementAction.Authenticate, action));
     }
 
+    /// <summary>Rejected extension discovery reports the restart instruction and leaves the command loop usable.</summary>
+    [Fact]
+    public static async Task ExtensionDiscoveryRejectionKeepsInteractiveSessionUsable()
+    {
+        const string rejection = "ExtensionRepositoryStale: restart Threadsmith in the active repository before discovering or loading extensions.";
+        var manager = new ToggleExtensionManager
+        {
+            DiscoveryFailure = new UnauthorizedAccessException(rejection),
+        };
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/extensions", "/help", "/quit"]);
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            extensionManager: manager);
+
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains(rejection, surface.Output, StringComparison.Ordinal);
+        Assert.Contains("/open [path]", surface.Output, StringComparison.Ordinal);
+    }
+
     /// <summary>Extension checkboxes allow repeated load/unload changes and preserve actual state after blocked unload.</summary>
     [Fact]
     public static async Task ExtensionCheckboxesReconcileBlockedUnload()
@@ -6272,8 +6295,15 @@ public static partial class Milestone1Tests
 
         public IReadOnlyList<ExtensionSummary> Summaries => [.. _extensions.Values];
 
+        public Exception? DiscoveryFailure { get; init; }
+
         public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default)
         {
+            if (DiscoveryFailure is { } failure)
+            {
+                return Task.FromException<IReadOnlyList<ExtensionSummary>>(failure);
+            }
+
             return Task.FromResult(Summaries);
         }
 

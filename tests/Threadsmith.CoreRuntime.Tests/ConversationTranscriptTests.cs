@@ -10,6 +10,22 @@ using Xunit;
 /// <summary>Verifies incremental access to the existing formatted conversation transcript.</summary>
 public static class ConversationTranscriptTests
 {
+    /// <summary>Completion diagnostics start a separate paragraph after an unterminated model answer.</summary>
+    [Fact]
+    public static void SourceEditCompletionFailureIsSeparatedFromFinalAnswer()
+    {
+        var diagnostic = new DiagnosticObserved(
+            SessionId.New(), DateTimeOffset.UtcNow, "SourceEditCompletionFailed", "Validation incomplete.");
+        var segments = new List<PresentationTextSegment>();
+
+        InteractionEventSegments.Append(segments, diagnostic, string.Empty);
+
+        var output = "Nothing was committed or pushed." + string.Concat(segments.Select(segment => segment.Text));
+        Assert.Equal(
+            $"Nothing was committed or pushed.{Environment.NewLine}{Environment.NewLine}[SourceEditCompletionFailed] Validation incomplete.{Environment.NewLine}",
+            output);
+    }
+
     /// <summary>Only successes for the same exact file and completed approval batch are combined.</summary>
     [Fact]
     public static void AppliedMutationsAreGroupedByExactFileAndApprovalBatch()

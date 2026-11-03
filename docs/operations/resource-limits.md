@@ -126,17 +126,17 @@ Exclusions filter structured advisory output before bounded finding selection. R
 |---|---|---|
 | `compilerWarningIds` | `["CS4014", "CS8602", "CS8604", "CS8618"]` | Selected effective compiler warnings; empty disables warning inclusion. |
 | `excludedDiagnosticIds` | `[]` | Exact globally excluded advisory diagnostic IDs; empty filters nothing. |
-| `maximumRetainedDiagnostics` | `64` | Retained findings per project basis and aggregate candidate; errors precede new selected warnings, then unchanged warnings. |
-| `maximumReportedDiagnostics` | `8` | Receipt/model findings; must not exceed retention. |
-| `maximumCachedProjects` | `32` | Cached project bases and carried project scope. |
+| `maximumRetainedDiagnostics` | `0` | Unlimited by default; a positive value explicitly caps retained findings per project and aggregate candidate. |
+| `maximumReportedDiagnostics` | `0` | Unlimited by default; a positive value explicitly caps receipt/model findings. When both limits are positive, reporting must not exceed retention. |
+| `maximumCachedProjects` | `0` | Unlimited by default; a positive value explicitly caps cached project bases and carried project scope. |
 | `maximumOmissions` | `16` | Distinct omission descriptions. |
 | `maximumDiagnosticMessageCharacters` | `384` | Message UTF-16 units. |
 | `maximumDiagnosticPathCharacters` | `256` | Path UTF-16 units. |
 | `maximumDiagnosticProjectCharacters` | `128` | Project name UTF-16 units. |
 | `maximumDiagnosticFrameworkCharacters` | `64` | Framework name UTF-16 units. |
 | `immediateObservationMilliseconds` | `500` | Immediate wait in milliseconds; zero returns without waiting. |
-| `finalFeedbackWaitMilliseconds` | `30000` | Bounded final wait for compiler and enabled analyzer edit feedback; zero skips waiting, not validation. Pending checks at the deadline make validation incomplete and prevent successful completion; still-current results can reach a later turn. |
-| `candidateLifetimeMilliseconds` | `30000` | Candidate lifetime in milliseconds; must be positive. |
+| `finalFeedbackWaitMilliseconds` | `-1` | Wait until compiler/analyzer work completes or the run is cancelled. A positive value explicitly sets a deadline; zero skips waiting, not validation. |
+| `candidateLifetimeMilliseconds` | `-1` | No automatic expiry; work ends on completion, supersession, retirement or cancellation. A positive value explicitly sets a lifetime. |
 | `analyzers.enabled` | `false` | Opts into project-provided automatic document analyzer feedback, independently of compiler completion. |
 | `analyzers.diagnosticIds` | `[]` | Explicit performance-experiment selection only; ignored by automatic feedback, which uses project rules. |
 | `analyzers.budgetMilliseconds` | `1000` | Explicit performance-experiment deadline only; automatic feedback has no analyzer time budget. |

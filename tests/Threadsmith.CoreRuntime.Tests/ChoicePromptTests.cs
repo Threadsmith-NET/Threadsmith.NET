@@ -31,6 +31,126 @@ public static class ChoicePromptTests
         Assert.True(modal.IsClosed);
     }
 
+    /// <summary>Provider headings remain separate from choices and participate in filtering.</summary>
+    [Theory]
+    [InlineData(40, 12)]
+    [InlineData(80, 24)]
+    [InlineData(160, 40)]
+    public static void GroupedOptionsKeepHeadingsAndFilterByProviderOrModel(int width, int height)
+    {
+        var modal = new ChoiceModal(
+            "Models",
+            [
+                new("alpha", "Shared [current]") { Group = "Alpha provider" },
+                new("beta", "Shared") { Group = "Beta provider" },
+            ]);
+        var cells = new CellBuffer(width, height);
+        modal.Render(new BufferSurface(cells));
+        var initial = TUIKit.Testing.Snapshot.ToText(cells);
+        Assert.Contains("Alpha provider", initial, StringComparison.Ordinal);
+        Assert.Contains("  > Shared [current]", initial, StringComparison.Ordinal);
+        Assert.DoesNotContain("> Alpha provider", initial, StringComparison.Ordinal);
+
+        modal.HandlePaste("bEtA provider");
+        modal.Render(new BufferSurface(cells));
+        var filtered = TUIKit.Testing.Snapshot.ToText(cells);
+        Assert.Contains("Beta provider", filtered, StringComparison.Ordinal);
+        Assert.Contains("  > Shared", filtered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Alpha provider", filtered, StringComparison.Ordinal);
+        Assert.DoesNotContain("[current]", filtered, StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("Beta provider /", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        for (var index = 0; index < "bEtA provider".Length; index++)
+        {
+            modal.HandleKey(KeyEvent.Special(KeyCode.Backspace));
+        }
+
+        modal.HandlePaste("shared");
+        var large = new CellBuffer(100, 30);
+        modal.Render(new BufferSurface(large));
+        var matches = TUIKit.Testing.Snapshot.ToText(large);
+        Assert.Contains("Alpha provider", matches, StringComparison.Ordinal);
+        Assert.Contains("Beta provider", matches, StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
+        modal.Render(new BufferSurface(large));
+        Assert.Contains("  > Shared ", TUIKit.Testing.Snapshot.ToText(large), StringComparison.Ordinal);
+        modal.HandlePaste(" missing");
+        modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.False(modal.IsClosed);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Escape));
+        Assert.True(modal.IsClosed);
+    }
+
+    /// <summary>Navigation skips headings and keeps selected models visible in long lists.</summary>
+    [Fact]
+    public static void GroupedNavigationScrollsToSelectedOptionsAcrossHeadings()
+    {
+        var options = Enumerable.Range(0, 40)
+            .Select(index => new Choice(index.ToString(System.Globalization.CultureInfo.InvariantCulture), $"Model {index:D2}")
+            {
+                Group = $"Provider {index / 2:D2}",
+            }).ToArray();
+        var modal = new ChoiceModal("Models", options);
+        var cells = new CellBuffer(60, 15);
+        modal.Render(new BufferSurface(cells));
+        modal.HandleKey(KeyEvent.Special(KeyCode.PageDown));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("  > Model", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.End));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("  > Model 39", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.PageUp));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("  > Model", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Home));
+        modal.Render(new BufferSurface(cells));
+        var first = TUIKit.Testing.Snapshot.ToText(cells);
+        Assert.Contains("Provider 00", first, StringComparison.Ordinal);
+        Assert.Contains("  > Model 00", first, StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
+        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("  > Model 02", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+    }
+
+    /// <summary>Repeated paging displays every option in both directions, including across provider headings.</summary>
+    [Theory]
+    [InlineData(60, 15, 2)]
+    [InlineData(40, 12, 1)]
+    [InlineData(80, 24, 3)]
+    [InlineData(60, 15, 0)]
+    public static void PagingDoesNotSkipUnseenOptions(int width, int height, int groupSize)
+    {
+        var options = Enumerable.Range(0, 40).Select(index => new Choice(index.ToString(System.Globalization.CultureInfo.InvariantCulture), $"Model {index:D2}")
+        {
+            Group = groupSize == 0 ? null : $"Provider {index / groupSize:D2}",
+        }).ToArray();
+        foreach (var forward in new[] { true, false })
+        {
+            var modal = new ChoiceModal("Models", options);
+            var cells = new CellBuffer(width, height);
+            modal.HandleKey(KeyEvent.Special(forward ? KeyCode.Home : KeyCode.End));
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var snapshot = string.Empty;
+            for (var page = 0; page <= options.Length; page++)
+            {
+                modal.Render(new BufferSurface(cells));
+                snapshot = TUIKit.Testing.Snapshot.ToText(cells);
+                foreach (var option in options.Where(option => snapshot.Contains(option.Label, StringComparison.Ordinal)))
+                {
+                    seen.Add(option.Id);
+                }
+
+                modal.HandleKey(KeyEvent.Special(forward ? KeyCode.PageDown : KeyCode.PageUp));
+            }
+
+            Assert.Equal(options.Length, seen.Count);
+            Assert.Contains(forward ? "> Model 39" : "> Model 00", snapshot, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>Details wrap unbroken targets, survive resize, and never approve through scrolling.</summary>
     [Theory]
     [InlineData(40, 12)]

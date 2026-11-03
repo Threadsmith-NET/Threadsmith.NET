@@ -64,7 +64,7 @@ internal sealed class InteractionSessionSurface
     }
 
     /// <summary>Selects an option while retaining review evidence in the same selection surface.</summary>
-    internal async Task<int> SelectAsync(
+    internal Task<int> SelectAsync(
         string title,
         IReadOnlyList<string> choices,
         string? details,
@@ -80,9 +80,16 @@ internal sealed class InteractionSessionSurface
         var options = choices
             .Select((label, index) => new InteractionSelectionOption(index.ToString(System.Globalization.CultureInfo.InvariantCulture), label))
             .ToArray();
-        var result = await _surface.SelectAsync(
-            new InteractionSelectionRequest(title, options) { Details = details },
-            cancellationToken);
+        return SelectAsync(new InteractionSelectionRequest(title, options) { Details = details }, cancellationToken);
+    }
+
+    /// <summary>Selects a structured option and validates its stable identity before returning its original index.</summary>
+    internal async Task<int> SelectAsync(
+        InteractionSelectionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var result = await _surface.SelectAsync(request, cancellationToken);
         if (result.IsCancelled)
         {
             if (result.SelectedOptionId is null)
@@ -98,18 +105,15 @@ internal sealed class InteractionSessionSurface
             throw new InvalidOperationException("The interaction surface returned no selection identity.");
         }
 
-        if (!int.TryParse(
-                result.SelectedOptionId,
-                System.Globalization.NumberStyles.None,
-                System.Globalization.CultureInfo.InvariantCulture,
-                out var selected)
-            || selected < 0
-            || selected >= choices.Count)
+        for (var index = 0; index < request.Options.Count; index++)
         {
-            throw new InvalidOperationException("The interaction surface returned an unknown selection identity.");
+            if (string.Equals(result.SelectedOptionId, request.Options[index].Id, StringComparison.Ordinal))
+            {
+                return index;
+            }
         }
 
-        return selected;
+        throw new InvalidOperationException("The interaction surface returned an unknown selection identity.");
     }
 
     /// <summary>Presents a simple transient status.</summary>

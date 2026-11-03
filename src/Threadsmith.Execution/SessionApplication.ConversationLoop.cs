@@ -82,6 +82,7 @@ public sealed partial class SessionApplication
                         ],
                     },
                     purgeAfterCorrection: false);
+                _sourceEdits?.AcknowledgeFeedback(registration.SessionId, feedback);
             }
 
             var boundarySteering = await _steering.PauseParentAtBoundaryAsync(

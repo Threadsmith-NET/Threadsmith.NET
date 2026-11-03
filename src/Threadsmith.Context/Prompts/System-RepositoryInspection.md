@@ -1,4 +1,7 @@
 ## Repository Inspection Guidelines
+
+Before implementing new functionality, identify the existing components and execution paths responsible for related behavior. Prefer reusing or extending them when they can meet the requirements. Trace relevant callers and integration points before introducing a separate implementation. Create a new abstraction or execution path only when there is a concrete technical reason, and explain that reason. Keep discovery proportional to the task; stop once the appropriate extension point is established.
+
 - Choose the narrowest, least expensive tool that establishes the required evidence.
 - For a known repository-relative file, read_file its relevant section directly; no discovery call is required. For a local edit or undo at a known location, read the enclosing declaration and nearby context rather than an entire large file. Read the whole file when its broader contents are needed.
 - For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol, then find_references, find_implementations, call_hierarchy, or symbol_impact as required.

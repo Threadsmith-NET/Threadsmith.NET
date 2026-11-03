@@ -38,6 +38,41 @@ internal static class SourceEditAnalysisProjection
         return status + (analysis.Analyzers.Status == "disabled" ? " Compiler analysis does not establish build or test success." : " Advisory analysis does not establish build or test success.");
     }
 
+    /// <summary>Separates finished checks from sufficient, actionable final-source evidence.</summary>
+    public static string? GetCompletionIssue(SourceEditAnalysis? analysis, Guid effectId)
+    {
+        if (analysis is null || analysis.EffectId != effectId || analysis.CommittedGeneration is null
+            || analysis.Pending || analysis.Obsolete || analysis.ProjectsAnalyzed == 0
+            || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
+            || (!analysis.ErrorComparisonAvailable && (analysis.CurrentErrors > 0 || analysis.CurrentWarnings > 0))
+            || analysis.CurrentWarnings is null || analysis.DiagnosticsTruncated || analysis.ProjectsOmitted > 0)
+        {
+            return "Validation incomplete: final compiler evidence is pending, unavailable, stale, partial, truncated, or lacks comparable coverage.";
+        }
+
+        var analyzers = analysis.Analyzers;
+        if (analyzers.Status != "disabled"
+            && (analyzers.Status != "completed" || analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope
+                || analyzers.Truncated))
+        {
+            return $"Validation incomplete: enabled analyzer checks are {analyzers.Status} or have incomplete document coverage.";
+        }
+
+        if (analysis.NewErrors > 0 || analysis.Diagnostics.Any(item => item.Origin == "introduced"
+            && item.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning))
+        {
+            return "Completion blocked: introduced compiler or analyzer errors or warnings remain unresolved in the final source state.";
+        }
+
+        if (analysis.Diagnostics.Any(item => item.Origin != "initial"
+            && item.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning))
+        {
+            return "Validation incomplete: compiler or analyzer errors or warnings have unknown origin and cannot be assumed pre-existing.";
+        }
+
+        return null;
+    }
+
     /// <summary>Keeps coverage and findings while omitting counts that cannot establish completed validation.</summary>
     public static JsonObject Create(SourceEditAnalysis analysis)
     {

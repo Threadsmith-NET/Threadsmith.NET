@@ -12,6 +12,7 @@ Note: It's OK to not find any issues. Don't seek extreme hypotheticals just to p
 subsystem boundaries. Explain concrete concerns or useful improvements, relating them to the
 repository's established design where helpful. Say when the change fits that design, and distinguish
 a demonstrated conflict from a preference or missing context.
+- Scan the code base for similar functionality and identify any missed opportunities for reuse or consolidation. Duplicated code is at a minimum a P2 issue. Enforce the DRY principle.
 - Look for overall fit into established patterns in the repository. A departure may be intentional if well-implemented and
 appropriate, but should at least be an observation. 
 - Examine package usage affected by the changes for correctness, unnecessary complexity, and missed existing capabilities. Consult package documentation or implementation only to resolve a concrete concern in that usage; do not audit every dependency or seek optimizations unrelated to the change.

@@ -499,6 +499,36 @@ public static class TuiKitFrontendTests
         Assert.True(backend.IsStopped);
     }
 
+    /// <summary>Grouped choices retain stable IDs through real UI filtering, navigation, and cancellation.</summary>
+    [Theory]
+    [InlineData("\u001b[B\r", "beta", false)]
+    [InlineData("Beta\r", "beta", false)]
+    [InlineData("\u001b[27u", null, true)]
+    public static async Task GroupedSelectionPreservesIdentityAndCancellation(string input, string? expectedId, bool cancelled)
+    {
+        using var backend = new HeadlessBackend(80, 24);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            var selection = surface.SelectAsync(
+                new InteractionSelectionRequest(
+                    "Models",
+                    [
+                        new("alpha", "Shared") { Group = "Alpha" },
+                        new("beta", "Shared") { Group = "Beta" },
+                    ]),
+                token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            backend.FeedInput(input);
+            var result = await selection;
+            Assert.Equal(expectedId, result.SelectedOptionId);
+            Assert.Equal(cancelled, result.IsCancelled);
+        },
+            TestContext.Current.CancellationToken);
+        Assert.True(backend.IsStopped);
+    }
+
     /// <summary>Input before the first composer read is discarded rather than queued.</summary>
     [Fact]
     public static async Task InputBeforeFirstReadIsDiscarded()

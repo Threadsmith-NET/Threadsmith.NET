@@ -1761,7 +1761,7 @@ Expected: accepted reasoning appears only in live transient streaming when enabl
 ## MTP-245 — Repository model selector and restart
 
 1. Configure at least two enabled models under distinct providers, then start Threadsmith.
-2. Run `/models`; verify keyboard navigation, current marker, provider/model identity, context/output limits, reasoning capability, cancellation, resize, native selection, and `Ctrl+C` behavior.
+2. Run `/models`; confirm models appear indented beneath provider-name headings, with providers and models alphabetically ordered and the current marker preserved. Headings must not be selectable. Filter by a provider name and then a model name; confirm only matching groups remain and selecting a model uses its correct provider/profile, including when two providers have identically named models. Clear the filter, navigate across headings and through a long list with arrows/Home/End/PgUp/PgDn, and verify cancellation, resize, native selection, and `Ctrl+C` behavior. Confirm context/output limits and reasoning capability still reflect the selected model.
 3. Select the second model and inspect `.threadsmith/config.json`.
 4. Confirm provider id, stable profile GUID, and reasoning are updated together while unrelated properties remain.
 5. Restart and confirm the repository model is restored and handles the next request.
@@ -2246,6 +2246,8 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 **Evidence:** Record actual Windows/macOS/Linux terminal and SSH/tmux checks separately. Native notifications are deferred. Do not claim screen-reader support or cross-platform validation without running those checks.
 
 Approval-modal regression: use a benign long unbroken URL prompt without fetching it. Verify wrapped origin/path text, F2 full details and PgUp/PgDn scroll, 40x12/80x24/160x40 dimensions and resize, unchanged Deny/approval selection, and a wider frame only where margins permit. Query-value redaction remains unchanged.
+
+Grouped model-picker paging: at 60x15, use a catalog with forty models split into twenty provider groups. Press PageDown repeatedly from the first model to the last, then PageUp back to the first. Confirm every model appears on at least one page in each direction and headings never become selectable. Repeat after filtering, resizing, and with an ungrouped list.
 
 ## MTP-OPENROUTER — Manual provider compatibility
 

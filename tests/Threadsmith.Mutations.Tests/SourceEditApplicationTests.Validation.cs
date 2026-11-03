@@ -254,7 +254,8 @@ public sealed partial class SourceEditApplicationTests
             observed.Enqueue(item);
             return Task.CompletedTask;
         });
-        var edits = fixture.CreateApplication(analyzer: new AdvisoryAnalyzer([]));
+        var analyzer = new AdvisoryAnalyzer([]);
+        var edits = fixture.CreateApplication(analyzer: analyzer);
         await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
         var create = fixture.Replace(string.Empty, string.Empty, false) with
         {
@@ -265,6 +266,12 @@ public sealed partial class SourceEditApplicationTests
             },
         };
         await edits.HandleAsync(create, ct);
+        analyzer.Publish(analyzer.Latest! with
+        {
+            Revision = analyzer.Latest!.Revision + 1,
+            CurrentErrors = 1,
+            Diagnostics = [new("CS5001", "Existing entry-point error", null, null, "Example", "net10.0", "initial")],
+        });
 
         var outcome = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
 
@@ -385,7 +392,17 @@ public sealed partial class SourceEditApplicationTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             _command = command;
-            _analysis = new() { EffectId = command.EffectId, Pending = _pending, ProjectsAnalyzed = 1, ProjectsInScope = 1, CurrentErrors = 1, Omissions = _omissions };
+            _analysis = new()
+            {
+                EffectId = command.EffectId,
+                Pending = _pending,
+                ProjectsAnalyzed = 1,
+                ProjectsInScope = 1,
+                ErrorComparisonAvailable = true,
+                CurrentErrors = 0,
+                CurrentWarnings = 0,
+                Omissions = _omissions,
+            };
             return Task.FromResult<SourceEditAnalysis?>(_analysis);
         }
 

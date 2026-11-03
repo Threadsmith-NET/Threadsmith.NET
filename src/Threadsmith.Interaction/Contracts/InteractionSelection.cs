@@ -3,7 +3,11 @@ namespace Threadsmith.Interaction.Contracts;
 /// <summary>One immutable selection option.</summary>
 /// <param name="Id">Stable host-owned identity returned on selection.</param>
 /// <param name="Label">Bounded visible label.</param>
-public sealed record InteractionSelectionOption(string Id, string Label);
+public sealed record InteractionSelectionOption(string Id, string Label)
+{
+    /// <summary>Gets the optional display heading; headings are not selectable options.</summary>
+    public string? Group { get; init; }
+}
 
 /// <summary>Requests one ordered, sequential selection.</summary>
 /// <param name="Title">Bounded visible title.</param>

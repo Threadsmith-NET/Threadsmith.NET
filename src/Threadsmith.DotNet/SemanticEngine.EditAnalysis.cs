@@ -20,6 +20,7 @@ public sealed partial class SemanticEngine
 
     private readonly Dictionary<ProjectId, EditProjectBasis> _editDiagnosticBases = [];
     private readonly HashSet<ProjectId> _editedProjects = [];
+    private readonly HashSet<string> _editedDocumentPaths = new(StringComparerForCurrentPlatform());
     private EditCandidate? _editCandidate;
     private long _editDiagnosticPasses;
     private long _editCandidatePromotions;
@@ -168,6 +169,13 @@ public sealed partial class SemanticEngine
                     }));
             }
 
+            if (_editOptions.Analyzers.Enabled)
+            {
+                // Recheck earlier applied documents against this final snapshot as well.
+                documents.UnionWith(_editedDocumentPaths.SelectMany(path => source.GetDocumentIdsWithFilePath(path))
+                    .Where(id => scope.Contains(id.ProjectId)));
+            }
+
             candidate = new(
                 command,
                 repositoryPath,
@@ -183,6 +191,7 @@ public sealed partial class SemanticEngine
                     SourceGeneration = _solutionGeneration,
                     Pending = scope.Length > 0,
                     ProjectsInScope = scope.Length,
+                    ProjectsOmitted = Math.Max(0, carried.Length - carryLimit),
                     Omissions = omissions.Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).ToArray(),
                 },
                 _editOptions.CandidateLifetimeMilliseconds,
@@ -247,6 +256,8 @@ public sealed partial class SemanticEngine
                 candidate.Applied = true;
                 _hasAppliedEdits = true;
                 _editedProjects.UnionWith(candidate.Projects);
+                RememberAppliedAnalyzerDocuments(candidate);
+
                 if (candidate.VerifiedGraphGeneration == _solutionGeneration)
                 {
                     verifiedInputs = candidate.AppliedEndpoints;
@@ -306,7 +317,9 @@ public sealed partial class SemanticEngine
                 _solution,
                 _solution,
                 [],
-                [.. previous.AppliedEndpoints.Keys.SelectMany(path => _solution.GetDocumentIdsWithFilePath(Path.GetFullPath(path, previous.RepositoryPath))).Where(id => _solution.GetDocument(id) is not null).Distinct()],
+                [.. previous.AppliedEndpoints.Keys.Select(path => Path.GetFullPath(path, previous.RepositoryPath))
+                    .Concat(_editedDocumentPaths).SelectMany(path => _solution.GetDocumentIdsWithFilePath(path))
+                    .Where(id => _solution.GetDocument(id) is not null).Distinct()],
                 [.. _solution.ProjectIds],
                 false,
                 new SourceEditAnalysis
@@ -329,6 +342,7 @@ public sealed partial class SemanticEngine
             };
             _editCandidate = replacement;
             _editedProjects.UnionWith(_solution.ProjectIds);
+            RememberAppliedAnalyzerDocuments(replacement);
         }
 
         replacement.Work = AnalyzeEditCandidateAsync(replacement);
@@ -736,6 +750,23 @@ public sealed partial class SemanticEngine
                     Revision = candidate.Result.Revision + 1,
                     Omissions = updated.Omissions.Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).ToArray(),
                 };
+            }
+        }
+    }
+
+    // Caller holds _gate and has established applied ownership, including newly evaluated files.
+    private void RememberAppliedAnalyzerDocuments(EditCandidate candidate)
+    {
+        if (!_editOptions.Analyzers.Enabled)
+        {
+            return;
+        }
+
+        foreach (var id in candidate.Documents)
+        {
+            if (candidate.Solution.GetDocument(id)?.FilePath is { } path)
+            {
+                _editedDocumentPaths.Add(path);
             }
         }
     }

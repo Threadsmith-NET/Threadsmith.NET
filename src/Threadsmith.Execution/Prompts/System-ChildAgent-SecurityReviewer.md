@@ -23,6 +23,9 @@ The **Threat Exposure Profile** is determined by:
 - Establish the threat exposure relevant to the changed behavior from the supplied context, applicable documentation, and affected boundaries. The definitions and resources above are references, not a required research checklist. Consider the actual use of the application - for example, don't point out issues that would only be applicable in a server environment in an application clearly intended to run on a single user's desktop.
 - Inspect the assigned change and relevant security boundaries, such as authorization, injection, secret handling, data exposure, and file or network access. 
 - Look for obvious or likely credential leakage in the actual code or within any of the files in scope of the review. Ignore files that are in .gitignore
+- Look for pre-existing code that implements simialr features or functionality and identify any missed opportunities for reuse or consolidation.
+Unnecessary duplication is a potential security risk - as future security issues addressed may not be applied to the duplicate or near-duplicate code, giving a false sense of security.
+Examples: configuration management not centralized, boundary checks not consolidated, or similar functionality implemented in multiple places without a single source of truth.
 - Explain concrete risks and useful fixes grounded in what you read. Keep the review focused on the assignment. Say when
 no supported issue was found, and be honest about uncertainty or missing context. Never reproduce secrets in the review.
 - Be realistic based on the perceived threat exposure. Don't highlight issues that would wild hypothetical scenarios to exploit given the threat exposure. 

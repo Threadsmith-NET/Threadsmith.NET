@@ -79,15 +79,15 @@ public sealed partial class SourceEditApplicationTests
             evidenceStore: evidence,
             toolRegistry: registry,
             defaultModelProfileId: ModelProfileId.New(),
+            limits: new ExecutionLimits { MaxModelRounds = maximumModelRounds },
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance,
-            limits: new ExecutionLimits { MaxModelRounds = maximumModelRounds },
             semanticRefreshCoordinator: refresh,
             sourceEdits: edits);
         publication.Target = sessions;
         sessions.RegisterRestoredSession(fixture.SessionId);
         var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Read both supporting files, add a field, and repair any compiler error."), ct);
-        Assert.True(await sessions.HandleAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(maximumModelRounds != 6, await sessions.HandleAsync(new WaitForRunCommand(run), ct));
         if (feedbackDuringFinalAnswer)
         {
             Assert.Equal(maximumModelRounds == 6 ? 6 : 7, provider.Requests.Count);
@@ -149,9 +149,13 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal(2, observed.OfType<ToolInvocationStarted>().Count(item => item.ToolName == "edit_source"));
     }
 
-    /// <summary>New evaluated source receives committed compiler coverage through the normal full-refresh owner.</summary>
-    [Fact]
-    public async Task CreatedSourceContinuesDiagnosticsAfterGraphRefresh()
+    /// <summary>Graph-changing edits receive committed coverage and clean final evidence permits completion.</summary>
+    [Theory]
+    [InlineData("create", false)]
+    [InlineData("create", true)]
+    [InlineData("move", true)]
+    [InlineData("delete", true)]
+    public async Task GraphChangingSourceContinuesDiagnosticsAfterGraphRefresh(string operation, bool clean)
     {
         var ct = TestContext.Current.CancellationToken;
         SemanticEngineRegistry? createdEngines = null;
@@ -186,7 +190,13 @@ public sealed partial class SourceEditApplicationTests
         {
             Instructions = command.Instructions with
             {
-                Mutations = [new CreateFileMutationProposal { RelativePath = "Added.cs", Content = new() { Text = "class Added { MissingType Value; }" } }],
+                Mutations = [operation switch
+                {
+                    "create" => new CreateFileMutationProposal { RelativePath = "Added.cs", Content = new() { Text = clean ? "class Added { }" : "class Added { MissingType Value; }" } },
+                    "move" => new MoveFileMutationProposal { RelativePath = "Example.cs", DestinationRelativePath = "Moved.cs" },
+                    "delete" => new DeleteFileMutationProposal { RelativePath = "Example.cs" },
+                    _ => throw new ArgumentOutOfRangeException(nameof(operation)),
+                }],
             },
         };
         var applied = await edits.HandleAsync(command, ct);
@@ -199,7 +209,19 @@ public sealed partial class SourceEditApplicationTests
         Assert.False(analysis.Pending);
         Assert.False(analysis.Obsolete);
         Assert.NotNull(analysis.CommittedGeneration);
-        Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246" && item.File == "Added.cs" && item.Origin == "unknown");
+        Assert.False(analysis.ErrorComparisonAvailable);
+        if (clean)
+        {
+            Assert.Equal(0, analysis.CurrentErrors);
+            Assert.Equal(0, analysis.CurrentWarnings);
+        }
+        else
+        {
+            Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246" && item.File == "Added.cs" && item.Origin == "unknown");
+        }
+
+        var outcome = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
+        Assert.Equal(clean ? ExecutionCheckpointPhase.Completed : ExecutionCheckpointPhase.Failed, outcome!.Status);
     }
 
     /// <summary>Real report lifecycle edits bypass both advisory diagnostics and semantic refresh.</summary>
@@ -372,7 +394,7 @@ public sealed partial class SourceEditApplicationTests
             var latest = _inner.GetLatestAnalysis(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId);
 
             // This fixture owns the injected result's readiness and publication generation.
-            // Real committed compiler coverage is exercised by CreatedSourceContinuesDiagnosticsAfterGraphRefresh.
+            // Real committed compiler coverage is exercised by GraphChangingSourceContinuesDiagnosticsAfterGraphRefresh.
             _lateFeedback = preview with
             {
                 Revision = Math.Max(preview.Revision, latest?.Revision ?? 0) + 100,
@@ -493,8 +515,9 @@ public sealed partial class SourceEditApplicationTests
                 yield break;
             }
 
-            var expected = ordinal == 2 ? "class Example { }" : "MissingType";
-            var replacement = ordinal == 2 ? "#nullable enable\nclass Example { MissingType Value; int M(string? s) => s.Length; async System.Threading.Tasks.Task W() { System.Threading.Tasks.Task.Delay(1); await System.Threading.Tasks.Task.CompletedTask; } }" : "int";
+            const string brokenSource = "#nullable enable\nclass Example { MissingType Value; int M(string? s) => s.Length; async System.Threading.Tasks.Task W() { System.Threading.Tasks.Task.Delay(1); await System.Threading.Tasks.Task.CompletedTask; } }";
+            var expected = ordinal == 2 ? "class Example { }" : brokenSource;
+            var replacement = ordinal == 2 ? brokenSource : "#nullable enable\nclass Example { int Value; }";
             var arguments = JsonSerializer.Serialize(new
             {
                 rationale = "Apply the next source edit.",

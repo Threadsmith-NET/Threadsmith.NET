@@ -132,6 +132,7 @@ public sealed partial class SemanticEngine
         var introduced = 0;
         var resolved = 0;
         var complete = true;
+        var comparisonAvailable = !candidate.CommittedOnly;
         var truncated = false;
         var filtered = false;
         var groups = candidate.Documents.GroupBy(id => id.ProjectId).ToArray();
@@ -140,7 +141,8 @@ public sealed partial class SemanticEngine
             var before = comparison.Before[index];
             var after = comparison.After[index];
             var comparable = !candidate.CommittedOnly && before.UnavailableIds.Count == 0 && after.UnavailableIds.Count == 0 && !before.Truncated && !after.Truncated;
-            complete &= comparable;
+            complete &= candidate.CommittedOnly ? after.UnavailableIds.Count == 0 && !after.Truncated : comparable;
+            comparisonAvailable &= comparable;
             truncated |= after.Truncated;
             filtered |= before.OutputFiltered || after.OutputFiltered;
             count += after.ReportableCount ?? after.Diagnostics.Count;
@@ -153,21 +155,25 @@ public sealed partial class SemanticEngine
             var projectId = groups[index].Key;
             var basis = GetEditProjectBasis(projectId);
             var initial = basis.AnalyzerInitial;
-            if (basis.AnalyzerInitialDocuments?.SetEquals(groups[index]) != true)
-            {
-                initial = null;
-            }
-
-            if (initial is null && candidate.AnalyzerInitialKnown && comparable)
+            var initialDocuments = basis.AnalyzerInitialDocuments;
+            var matchingInitialCoverage = initialDocuments?.SetEquals(groups[index]) == true;
+            if ((initial is null || !matchingInitialCoverage) && candidate.AnalyzerInitialKnown && comparable)
             {
                 initial = preceding;
-                _editDiagnosticBases[projectId] = basis with { AnalyzerInitial = initial, AnalyzerInitialDocuments = [.. groups[index]] };
+                initialDocuments = [.. groups[index]];
+                matchingInitialCoverage = true;
+                _editDiagnosticBases[projectId] = basis with { AnalyzerInitial = initial, AnalyzerInitialDocuments = initialDocuments };
             }
 
+            // Expanding the group does not erase initial evidence for already covered documents.
+            // Newly covered documents cannot inherit a baseline captured after earlier applied edits.
+            var initialPaths = initialDocuments?.Select(id => candidate.Solution.GetDocument(id)?.FilePath)
+                .OfType<string>().ToHashSet(StringComparerForCurrentPlatform());
             var remainingInitial = initial?.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             foreach (var finding in after.Diagnostics)
             {
                 var fingerprint = AnalyzerFingerprint(finding);
+                var initialKnown = initial is not null && (matchingInitialCoverage || initialPaths?.Contains(finding.Path) == true);
                 var original = remainingInitial?.GetValueOrDefault(fingerprint) > 0;
                 if (original && remainingInitial is not null)
                 {
@@ -183,7 +189,7 @@ public sealed partial class SemanticEngine
                     finding.Line,
                     BoundEditText(after.Project, _editOptions.MaximumDiagnosticProjectCharacters),
                     "unknown",
-                    !comparable || initial is null ? "unknown" : original ? "initial" : "introduced")
+                    !comparable || !initialKnown ? "unknown" : original ? "initial" : "introduced")
                 {
                     Column = finding.Column,
                     Severity = severity,
@@ -204,8 +210,8 @@ public sealed partial class SemanticEngine
                 DocumentsInScope = candidate.Documents.Count,
                 DocumentsAnalyzed = groups.Where((_, index) => comparison.After[index].Analyzers.Count > 0).Sum(group => group.Count()),
                 ReportableFindings = count,
-                NewFindings = complete ? introduced : null,
-                ResolvedFindings = complete ? resolved : null,
+                NewFindings = comparisonAvailable ? introduced : null,
+                ResolvedFindings = comparisonAvailable ? resolved : null,
                 OutputFiltered = filtered,
                 Truncated = truncated || count > retained.Length,
                 Omissions = omissions.Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).Select(text => BoundEditText(text, _editOptions.MaximumDiagnosticMessageCharacters)).ToArray(),

@@ -2369,15 +2369,21 @@ public sealed partial class InteractionCoordinator
         }
 
         var current = await _presenter.GetActiveModelSelectionAsync(cancellationToken);
-        var models = await _presenter.ListActiveModelsAsync(cancellationToken);
-        string[] choices = [.. models.Select(entry =>
-            $"({entry.ProviderName}) {entry.Profile.Name}"
-            + (entry.Profile.Id == current.Profile.Id ? " [current]" : string.Empty))];
+        var catalog = await _presenter.ListActiveModelsAsync(cancellationToken);
+        var models = catalog
+            .OrderBy(entry => entry.ProviderName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.Profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var choices = models.Select(entry => new InteractionSelectionOption(
+            entry.Profile.Id.Value.ToString("D"),
+            entry.Profile.Name + (entry.Profile.Id == current.Profile.Id ? " [current]" : string.Empty))
+        {
+            Group = entry.ProviderName,
+        }).ToArray();
         var selected = await _surface.SelectAsync(
-            "Models (Up/Down, Enter; Esc to cancel):",
-            choices,
+            new InteractionSelectionRequest("Models (Up/Down, Enter; Esc to cancel):", choices),
             cancellationToken);
-        if (selected < 0 || selected >= models.Count)
+        if (selected < 0 || selected >= models.Length)
         {
             return false;
         }

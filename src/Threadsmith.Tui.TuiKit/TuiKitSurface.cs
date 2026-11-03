@@ -585,7 +585,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             throw new ArgumentException("Selections require distinct, stable options.", nameof(request));
         }
 
-        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label)).ToArray(), _limits, request.Details)
+        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label) { Group = option.Group }).ToArray(), _limits, request.Details)
         {
             ResolveStyle = ResolveStyle,
             SelectionMarker = _theme.Ui.SelectionMarker,

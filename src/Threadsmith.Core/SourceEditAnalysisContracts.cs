@@ -84,6 +84,9 @@ public sealed record SourceEditAnalysis
     /// <summary>Project instances in the conservative affected scope.</summary>
     public int ProjectsInScope { get; init; }
 
+    /// <summary>Previously edited project instances excluded by the bounded carried-scope limit.</summary>
+    public int ProjectsOmitted { get; init; }
+
     /// <summary>Document instances checked for syntax, or null when that phase did not complete.</summary>
     public int? SyntaxDocumentsAnalyzed { get; init; }
 

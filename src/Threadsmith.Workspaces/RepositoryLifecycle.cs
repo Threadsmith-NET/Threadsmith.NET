@@ -798,43 +798,18 @@ public sealed class RepositoryLifecycle :
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = repositoryPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            },
-        };
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
+        using var process = GitProcess.CreateProcess(repositoryPath, arguments, preserveOutputFormat: true);
 
         try
         {
-            if (!process.Start())
-            {
-                return null;
-            }
-
             var maximumOutputCharacters = _resourceLimits.MaximumProcessOutputCharacters;
-            var outputTask = ReadBoundedOutputAsync(
-                process.StandardOutput,
+            var result = await GitProcess.ExecuteAsync(
+                process,
+                (owned, token) => GitProcess.ReadBoundedAsync(owned.StandardOutput, maximumOutputCharacters, token),
                 maximumOutputCharacters,
-                cancellationToken);
-            var errorTask = ReadBoundedOutputAsync(
-                process.StandardError,
-                maximumOutputCharacters,
-                cancellationToken);
-            await process.WaitForExitAsync(cancellationToken);
-            var output = await outputTask;
-            var error = await errorTask;
-            if (process.ExitCode != 0)
+                cancellationToken: cancellationToken);
+            var error = result.Error.Text;
+            if (result.ExitCode != 0)
             {
                 if (_logger.IsEnabled(LogLevel.Debug))
                 {
@@ -847,7 +822,7 @@ public sealed class RepositoryLifecycle :
                 return null;
             }
 
-            return output;
+            return result.Output.Text;
         }
         catch (Exception exception) when (exception is Win32Exception
             or IOException
@@ -863,26 +838,6 @@ public sealed class RepositoryLifecycle :
 
             return null;
         }
-    }
-
-    private static async Task<string> ReadBoundedOutputAsync(
-        StreamReader reader,
-        int maximumCharacters,
-        CancellationToken cancellationToken)
-    {
-        var buffer = new char[4096];
-        var output = new StringBuilder(Math.Min(maximumCharacters, buffer.Length));
-        int read;
-        while ((read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken)) > 0)
-        {
-            var retained = Math.Min(read, maximumCharacters - output.Length);
-            if (retained > 0)
-            {
-                output.Append(buffer, 0, retained);
-            }
-        }
-
-        return output.ToString();
     }
 
     private static string NormalizeUnderRoot(string repositoryPath, string candidatePath)

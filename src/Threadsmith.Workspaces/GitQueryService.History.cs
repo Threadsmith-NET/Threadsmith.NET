@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Threadsmith.Core;
+using static Threadsmith.Workspaces.GitProcess;
 
 /// <summary>Streams chronological history through the existing local Git query boundary.</summary>
 public sealed partial class GitQueryService
@@ -128,7 +129,7 @@ public sealed partial class GitQueryService
             if (process is not null)
             {
                 _termination = RegisterTermination(process, _lifetime.Token);
-                _error = owner.ReadBoundedAsync(process.StandardError, _lifetime.Token);
+                _error = GitProcess.ReadBoundedAsync(process.StandardError, owner._limits.MaximumCapturedCharacters, _lifetime.Token);
             }
         }
 
@@ -254,18 +255,9 @@ public sealed partial class GitQueryService
                     await _lifetime.CancelAsync();
                     if (_process is not null)
                     {
-                        await _process.WaitForExitAsync(CancellationToken.None);
-                        if (_error is not null)
-                        {
-                            try
-                            {
-                                await _error.WaitAsync(CancellationToken.None);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                // The owning operation cancels the stderr drain on disposal.
-                            }
-                        }
+#pragma warning disable VSTHRD003 // This reader owns stderr capture; shared cleanup bounds the join after lifetime cancellation.
+                        await GitProcess.CleanupAsync(_process, null, _error);
+#pragma warning restore VSTHRD003
                     }
                 }
                 finally

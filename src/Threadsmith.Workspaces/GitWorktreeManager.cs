@@ -1,7 +1,6 @@
 namespace Threadsmith.Workspaces;
 
 using System.ComponentModel;
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
@@ -108,56 +107,21 @@ public sealed class GitWorktreeManager
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = repositoryPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            },
-        };
-        foreach (var argument in arguments)
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
+        using var process = GitProcess.CreateProcess(repositoryPath, arguments, readOnly: false);
 
         try
         {
-            if (!process.Start())
+            var result = await GitProcess.ExecuteAsync(
+                process,
+                (owned, token) => GitProcess.ReadBoundedAsync(owned.StandardOutput, _maximumProcessOutputCharacters, token),
+                _maximumProcessOutputCharacters,
+                cancellationToken: cancellationToken);
+            if (result.ExitCode != 0)
             {
-                throw new InvalidOperationException("Git did not start.");
+                throw new InvalidOperationException($"Git worktree command failed: {result.Error.Text}");
             }
 
-            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            using var cancellationRegistration = cancellationToken.Register(() =>
-            {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (InvalidOperationException)
-                {
-                    // The process exited between the state check and cancellation callback.
-                }
-            });
-            await process.WaitForExitAsync(cancellationToken);
-            var output = await outputTask;
-            var error = await errorTask;
-            if (process.ExitCode != 0)
-            {
-                throw new InvalidOperationException(
-                    $"Git worktree command failed: {error[..Math.Min(error.Length, _maximumProcessOutputCharacters)]}");
-            }
-
-            return output[..Math.Min(output.Length, _maximumProcessOutputCharacters)];
+            return result.Output.Text;
         }
         catch (Win32Exception exception)
         {
@@ -168,6 +132,10 @@ public sealed class GitWorktreeManager
             throw new InvalidOperationException(
                 "Git executable was not found on PATH. Install Git or add its executable directory to PATH.",
                 exception);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception exception)
         {

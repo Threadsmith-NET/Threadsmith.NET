@@ -1,10 +1,10 @@
 namespace Threadsmith.Workspaces;
 
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Threadsmith.Core;
+using static Threadsmith.Workspaces.GitProcess;
 
 /// <summary>Executes closed, bounded, local-only Git inspection queries.</summary>
 public sealed partial class GitQueryService : IGitQueryService
@@ -613,23 +613,19 @@ public sealed partial class GitQueryService : IGitQueryService
 
         try
         {
-            if (!process.Start())
+            var result = await GitProcess.ExecuteAsync(
+                process,
+                (owned, token) => readOutput is null
+                    ? GitProcess.ReadBoundedAsync(owned.StandardOutput, _limits.MaximumCapturedCharacters, token)
+                    : readOutput(owned.StandardOutput, token),
+                _limits.MaximumCapturedCharacters,
+                cancellationToken: timeout.Token);
+            if (result.ExitCode != 0)
             {
-                throw new InvalidOperationException("Git did not start.");
+                throw new InvalidOperationException($"Git query failed with exit code {result.ExitCode}: {result.Error.Text}");
             }
 
-            var outputTask = (readOutput ?? ReadBoundedAsync)(process.StandardOutput, timeout.Token);
-            var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
-            await using var registration = RegisterTermination(process, timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
-            var output = await outputTask;
-            var error = await errorTask;
-            if (process.ExitCode != 0)
-            {
-                throw new InvalidOperationException($"Git query failed with exit code {process.ExitCode}: {error.Text}");
-            }
-
-            return output;
+            return result.Output;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -650,33 +646,20 @@ public sealed partial class GitQueryService : IGitQueryService
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
         using var process = CreateProcess(repositoryPath, arguments);
-        process.StartInfo.RedirectStandardInput = standardInput is not null;
         try
         {
-            if (!process.Start())
+            var result = await GitProcess.ExecuteAsync(
+                process,
+                (owned, token) => ReadBoundedAsync(owned.StandardOutput.BaseStream, token),
+                _limits.MaximumCapturedCharacters,
+                standardInput,
+                timeout.Token);
+            if (result.ExitCode != 0)
             {
-                throw new InvalidOperationException("Git did not start.");
+                throw new InvalidOperationException($"Git query failed with exit code {result.ExitCode}: {result.Error.Text}");
             }
 
-            var outputTask = ReadBoundedAsync(process.StandardOutput.BaseStream, timeout.Token);
-            var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
-            await using var registration = RegisterTermination(process, timeout.Token);
-            if (standardInput is not null)
-            {
-                await process.StandardInput.WriteAsync(standardInput.AsMemory(), timeout.Token);
-                await process.StandardInput.FlushAsync(timeout.Token);
-                process.StandardInput.Close();
-            }
-
-            await process.WaitForExitAsync(timeout.Token);
-            var output = await outputTask;
-            var error = await errorTask;
-            if (process.ExitCode != 0)
-            {
-                throw new InvalidOperationException($"Git query failed with exit code {process.ExitCode}: {error.Text}");
-            }
-
-            return output;
+            return result.Output;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -686,96 +669,6 @@ public sealed partial class GitQueryService : IGitQueryService
         {
             throw new InvalidOperationException("Git executable was not found on PATH.", exception);
         }
-    }
-
-    private static Process CreateProcess(string repositoryPath, IReadOnlyList<string> arguments)
-    {
-        var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = repositoryPath,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = StrictUtf8,
-                StandardErrorEncoding = StrictUtf8,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            },
-        };
-        process.StartInfo.Environment["GIT_NO_REPLACE_OBJECTS"] = "1";
-        process.StartInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
-        process.StartInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
-        process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
-        string[] fixedArguments =
-        [
-            "--no-pager",
-            "-c",
-            "color.ui=false",
-            "-c",
-            "core.pager=cat",
-            "-c",
-            "core.quotepath=false",
-            "-c",
-            "core.fsmonitor=false",
-            "-c",
-            "diff.external=",
-            "-c",
-            "diff.trustExitCode=false",
-        ];
-        foreach (var argument in fixedArguments.Concat(arguments))
-        {
-            process.StartInfo.ArgumentList.Add(argument);
-        }
-
-        return process;
-    }
-
-    private static CancellationTokenRegistration RegisterTermination(
-        Process process,
-        CancellationToken cancellationToken)
-    {
-        return cancellationToken.Register(() =>
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException)
-            {
-            }
-        });
-    }
-
-    private async Task<BoundedText> ReadBoundedAsync(
-        StreamReader reader,
-        CancellationToken cancellationToken)
-    {
-        var builder = new StringBuilder();
-        var buffer = new char[4096];
-        var truncated = false;
-        while (true)
-        {
-            var read = await reader.ReadAsync(buffer, cancellationToken);
-            if (read == 0)
-            {
-                break;
-            }
-
-            var remaining = _limits.MaximumCapturedCharacters - builder.Length;
-            if (remaining > 0)
-            {
-                builder.Append(buffer, 0, Math.Min(read, remaining));
-            }
-
-            truncated |= read > remaining;
-        }
-
-        return new BoundedText(builder.ToString(), truncated);
     }
 
     private async Task<BoundedBytes> ReadBoundedAsync(
@@ -887,8 +780,6 @@ public sealed partial class GitQueryService : IGitQueryService
 
         return new RepositoryGitStatus(branch == "(detached)" ? null : branch, branch == "(detached)", staged, modified, untracked, conflicts, truncated);
     }
-
-    private sealed record BoundedText(string Text, bool IsTruncated);
 
     private sealed record BoundedBytes(byte[] Bytes, bool IsTruncated, bool IsBinary);
 }

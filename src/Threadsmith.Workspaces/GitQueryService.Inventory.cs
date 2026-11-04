@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
+using static Threadsmith.Workspaces.GitProcess;
 
 /// <summary>Provides normalized Git metadata through the same bounded query service as Git tools.</summary>
 public sealed partial class GitQueryService

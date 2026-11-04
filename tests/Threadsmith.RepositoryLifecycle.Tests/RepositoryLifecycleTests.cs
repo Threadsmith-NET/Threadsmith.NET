@@ -20,6 +20,66 @@ using Xunit;
 /// <summary>Verifies the Milestone 2 repository lifecycle and trust boundary.</summary>
 public static class RepositoryLifecycleTests
 {
+    /// <summary>Baseline capture suppresses repository fsmonitor commands without changing status output.</summary>
+    [Fact]
+    public static async Task RecordBaseline_RepositoryFsMonitorHook_IsNotExecuted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        await RunGitAsync("init");
+        var hookPath = Path.Combine(repository.RootPath, ".git", "fsmonitor-probe");
+        var markerPath = Path.Combine(repository.RootPath, ".git", "fsmonitor-invoked");
+        // Reuse Plan41InventoryToolTests' harmless repository-local probe.
+        await File.WriteAllTextAsync(hookPath, "#!/bin/sh\nprintf 'invoked\n' > .git/fsmonitor-invoked\nexit 0\n", ct);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hookPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await RunGitAsync("config", "core.fsmonitor", "./.git/fsmonitor-probe");
+        await RunGitAsync("config", "core.fsmonitorHookVersion", "2");
+        var expected = await RunGitAsync("status", "--short", "--untracked-files=normal");
+        Assert.True(File.Exists(markerPath));
+        File.Delete(markerPath);
+        var sessionId = SessionId.New();
+        var opened = await harness.Lifecycle.HandleAsync(
+            new OpenRepositoryCommand(sessionId, repository.RootPath, RepositoryTrustLevel.TrustedRead), ct);
+
+        var baseline = await harness.Lifecycle.HandleAsync(new RecordBaselineCommand(sessionId, opened.WorkspaceId), ct);
+
+        Assert.False(File.Exists(markerPath));
+        Assert.Equal(expected.ReplaceLineEndings("\n").Split('\n', StringSplitOptions.RemoveEmptyEntries), baseline.InitialGitStatus);
+        Assert.Null(baseline.GitRevision);
+        Assert.NotEmpty(baseline.Files);
+
+        async Task<string> RunGitAsync(params string[] arguments)
+        {
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo("git")
+                {
+                    WorkingDirectory = repository.RootPath,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                },
+            };
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
+
+            process.Start();
+            var output = process.StandardOutput.ReadToEndAsync(ct);
+            var error = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+            Assert.True(process.ExitCode == 0, await error);
+            return await output;
+        }
+    }
+
     /// <summary>Trust lookup never exposes a permissive candidate, including a failed lookup.</summary>
     [Theory]
     [InlineData(false)]

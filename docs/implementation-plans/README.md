@@ -224,6 +224,11 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-scratchpad-scripts.md](maintenance-scratchpad-scripts.md) | Session-scoped temporary C# scripts |
 | Maintenance | [maintenance-delegation-shared-context.md](maintenance-delegation-shared-context.md) | Shared delegation handoff with focused child assignments |
 | Implementation | [openrouter-provider.md](openrouter-provider.md) | Manually configured OpenRouter provider |
+| Maintenance | [01-git-execution.md](01-git-execution.md) | Consolidate Git execution |
+| Maintenance | [02-path-policy.md](02-path-policy.md) | Consolidate path checks |
+| Maintenance | [03-bounded-skill-file-reads.md](03-bounded-skill-file-reads.md) | Share safe file reading |
+| Maintenance | [04-context-snapshot-copy.md](04-context-snapshot-copy.md) | Share context snapshot copying |
+| Maintenance | [05-catalog-atomic-publication.md](05-catalog-atomic-publication.md) | Share catalog file writing |
 
 ## Update discipline
 

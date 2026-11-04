@@ -303,8 +303,11 @@ public sealed class SourceEditApplication :
             return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? feedback);
         }
 
+        var pending = GetLatestFeedback(delivery);
+        var checks = pending is { Pending: true, Analyzers.Status: "pending" } ? "compiler analysis and analyzers"
+            : pending?.Analyzers.Status == "pending" ? "analyzers" : "compiler analysis";
         await _events.PublishAsync(
-            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Waiting for semantic feedback to complete.") { PendingSemanticEffectId = delivery.EffectId },
+            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checks} to finish. You can cancel the run.") { PendingSemanticEffectId = delivery.EffectId },
             cancellationToken);
         try
         {
@@ -333,10 +336,26 @@ public sealed class SourceEditApplication :
     }
 
     /// <summary>Releases delivery bookkeeping when its ordinary conversation run ends.</summary>
-    public void CompleteRun(RunId runId)
+    public void CompleteRun(RunId runId, bool cancelled = false)
     {
         if (!_runs.TryRemove(runId, out var owner))
         {
+            return;
+        }
+
+        if (cancelled)
+        {
+            if (_rollbackEdits.TryGetValue(owner.WorkspaceId, out var applied) && applied.RunId == runId)
+            {
+                _analyzer?.DiscardCandidate(owner.WorkspaceId, applied.EffectId);
+            }
+
+            if (_feedback.TryGetValue(owner.SessionId, out var cancelledDelivery) && cancelledDelivery.RunId == runId)
+            {
+                _analyzer?.DiscardCandidate(cancelledDelivery.WorkspaceId, cancelledDelivery.EffectId);
+                _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(owner.SessionId, cancelledDelivery));
+            }
+
             return;
         }
 

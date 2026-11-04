@@ -44,7 +44,9 @@ internal sealed class ExtensionConfiguration : IExtensionConfiguration
     /// <summary>Initializes a new instance of the <see cref="ExtensionConfiguration"/> class.</summary>
     internal ExtensionConfiguration(IReadOnlyDictionary<string, string?> values)
     {
-        _values = values;
+        _values = values is System.Collections.Frozen.FrozenDictionary<string, string?> frozen
+            && ReferenceEquals(frozen.Comparer, StringComparer.Ordinal)
+            ? frozen : ExtensionSelectionConfig.Snapshot(values);
     }
 
     /// <inheritdoc />

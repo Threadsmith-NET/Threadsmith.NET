@@ -42,6 +42,8 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     private readonly IDomainEventStream _events;
     private readonly ILogger<ExtensionHost> _logger;
     private readonly ILoggerFactory _extensionLoggerFactory;
+    private readonly string? _repositoryPath;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly Dictionary<ExtensionGenerationId, ExtensionGeneration> _generations = [];
     private readonly Dictionary<string, ExtensionId> _stableIds = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
@@ -58,12 +60,16 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         ShadowCopier? shadowCopier = null,
         ICapabilityRegistry? capabilityRegistry = null,
         InvocationLeaseAuthority? leaseAuthority = null,
-        ILoggerFactory? extensionLoggerFactory = null)
+        ILoggerFactory? extensionLoggerFactory = null,
+        string? repositoryPath = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(logger);
         _events = events;
         _logger = logger;
+        _repositoryPath = repositoryPath is null ? null : Path.GetFullPath(repositoryPath);
+        _policyBinding = policyBinding;
         _extensionLoggerFactory = extensionLoggerFactory ?? NullLoggerFactory.Instance;
         _shadowCopier = shadowCopier ?? new ShadowCopier();
         _leaseAuthority = leaseAuthority ?? new(logger);
@@ -121,6 +127,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     public async Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _ = CaptureRepositoryPolicy(_repositoryPath);
         var discovered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var root = ResolveDiscoveryRoot();
         var summaries = new List<ExtensionSummary>();
@@ -131,7 +138,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             if (TryPeekExtensionId(root) is string rootId)
             {
                 discovered[rootId] = root;
-                var rootActive = FindActiveGeneration(rootId);
+                var rootActive = FindGeneration(rootId, activeOnly: false);
                 summaries.Add(BuildSummary(rootId, root, rootActive));
             }
 
@@ -145,7 +152,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 }
 
                 discovered[id] = dir;
-                var active = FindActiveGeneration(id);
+                var active = FindGeneration(id, activeOnly: false);
                 summaries.Add(BuildSummary(id, dir, active));
             }
         }
@@ -154,7 +161,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         foreach (var generation in Generations)
         {
             var id = generation.ExtensionId.Value.ToString();
-            if (!discovered.ContainsKey(id))
+            if (!summaries.Any(summary => summary.GenerationId == generation.GenerationId))
             {
                 discovered[id] = generation.StagingPath;
                 summaries.Add(BuildSummary(id, generation.StagingPath, generation));
@@ -182,7 +189,8 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(extensionId);
-        if (FindActiveGeneration(extensionId) is { } activeGeneration)
+        _ = CaptureRepositoryPolicy(_repositoryPath);
+        if (FindGeneration(extensionId) is { } activeGeneration)
         {
             return BuildSummary(extensionId, GetDiscoveredDirectory(extensionId), activeGeneration);
         }
@@ -219,7 +227,23 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(extensionId);
-        var generation = FindActiveGeneration(extensionId);
+        var generation = FindGeneration(extensionId, activeOnly: false);
+        if (generation is null)
+        {
+            return false;
+        }
+
+        var result = await UnloadAsync(generation, sessionId, cancellationToken);
+        return result.Outcome == UnloadOutcome.Unloaded;
+    }
+
+    /// <inheritdoc />
+    async Task<bool> IExtensionManager.UnloadAsync(
+        ExtensionGenerationId generationId,
+        SessionId sessionId,
+        CancellationToken cancellationToken)
+    {
+        var generation = Get(generationId);
         if (generation is null)
         {
             return false;
@@ -240,7 +264,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 
         foreach (var entry in GetDiscoveredDirectoriesSnapshot())
         {
-            if (FindActiveGeneration(entry.Key) is null)
+            if (FindGeneration(entry.Key, activeOnly: false) is null)
             {
                 summaries.Add(BuildSummary(entry.Key, entry.Value, active: null));
             }
@@ -281,21 +305,29 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         };
     }
 
-    private ExtensionGeneration? FindActiveGeneration(string extensionId)
+    private ExtensionGeneration? FindGeneration(string extensionId, bool activeOnly = true)
     {
         lock (_gate)
         {
+            ExtensionGeneration? retirementCandidate = null;
             foreach (var generation in _generations.Values)
             {
                 if (string.Equals(generation.Descriptor.Id, extensionId, StringComparison.OrdinalIgnoreCase)
                     || string.Equals(generation.ExtensionId.Value.ToString(), extensionId, StringComparison.OrdinalIgnoreCase))
                 {
-                    return generation;
+                    if (generation.State == ExtensionLifecycleState.Active)
+                    {
+                        return generation;
+                    }
+
+                    retirementCandidate ??= generation;
                 }
             }
-        }
 
-        return null;
+            // Load ignores retired generations, but presentation and unload must retain
+            // cleanup after cancellation left a generation in Deactivating or UnloadBlocked.
+            return activeOnly ? null : retirementCandidate;
+        }
     }
 
     private string ResolveDiscoveryRoot()
@@ -400,6 +432,19 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Snapshot caller-owned settings before the first await. Never infer repository identity
+        // from the process working directory or from the extension installation directory.
+        var explicitSettings = request.Configuration is { } supplied
+            ? ExtensionSelectionConfig.Snapshot(supplied) : null;
+        var repositoryPath = request.RepositoryPath is { } requestedRepository
+            ? Path.GetFullPath(requestedRepository) : _repositoryPath;
+        var repositoryPolicy = CaptureRepositoryPolicy(repositoryPath);
+        request = request with { RepositoryPath = repositoryPath, Configuration = explicitSettings };
+        var selection = explicitSettings is null && repositoryPath is not null
+            ? ExtensionSelectionConfig.Load(Path.Combine(repositoryPath, ".threadsmith", "extensions.json"), deferSettings: true)
+            : null;
         Directory.CreateDirectory(request.ShadowStagingRoot);
         var extensionId = ResolveStableId(request.Manifest?.Id);
         await _events.PublishAsync(
@@ -414,7 +459,8 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         var loadContext = new ExtensionLoadContext(entryAssemblyPath, _sharedContractAssemblyName);
         var lifecycle = new ExtensionLifecycle();
         var generationId = ExtensionGenerationId.New();
-        ExtensionGeneration generation;
+        ExtensionGeneration? generation = null;
+        var activationCompleted = false;
         try
         {
             lifecycle.TransitionTo(ExtensionLifecycleState.Validating);
@@ -430,6 +476,14 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             var instance = ConstructExtension(extensionType);
             var descriptor = ReadDescriptor(instance, request.Manifest);
             ValidatePermissions(request, descriptor);
+            if (request.Configuration is null)
+            {
+                request = request with
+                {
+                    Configuration = selection?.GetSettings(descriptor.Id)
+                        ?? System.Collections.Frozen.FrozenDictionary<string, string?>.Empty,
+                };
+            }
 
             generation = new(
                 extensionId,
@@ -442,30 +496,71 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 entryAssemblyPath)
             {
                 Budget = new(generationId),
+                RepositoryPath = repositoryPath,
             };
 
             lifecycle.TransitionTo(ExtensionLifecycleState.Activating);
             generation.State = lifecycle.State;
             await ActivateExtensionAsync(instance, generation, request, cancellationToken);
-            RegisterCapabilities(generation, replacedGenerationId);
-            lifecycle.TransitionTo(ExtensionLifecycleState.Active);
-            generation.State = lifecycle.State;
-            generation.LoadContextWeakReference = new WeakReference(loadContext);
-
-            lock (_gate)
+            activationCompleted = true;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (repositoryPolicy is not null)
             {
-                _generations[generationId] = generation;
+                _policyBinding?.Validate(repositoryPolicy);
             }
 
-            await _events.PublishAsync(
-                new ExtensionActivated(request.SessionId, DateTimeOffset.UtcNow, extensionId),
-                cancellationToken);
+            try
+            {
+                await _events.PublishCommittedBatchAsync(
+                    [new ExtensionActivated(request.SessionId, DateTimeOffset.UtcNow, extensionId)],
+                    () =>
+                    {
+                        if (repositoryPolicy is not null)
+                        {
+                            _policyBinding?.Validate(repositoryPolicy);
+                        }
+
+                        RegisterCapabilities(generation, replacedGenerationId);
+                        lifecycle.TransitionTo(ExtensionLifecycleState.Active);
+                        generation.State = lifecycle.State;
+                        generation.LoadContextWeakReference = new WeakReference(loadContext);
+                        lock (_gate)
+                        {
+                            _generations[generationId] = generation;
+                        }
+
+                        return true;
+                    },
+                    cancellationToken);
+            }
+            catch (CommittedDomainEventDeliveryException)
+            {
+                // Registration is authoritative; delivery failure must not roll back a successor.
+                _logger.LogWarning("ExtensionActivationDeliveryIncomplete: generation {GenerationId} is active but event delivery did not complete.", generationId);
+            }
+
             return generation;
         }
         catch (Exception exception)
         {
             _capabilities.RemoveGeneration(generationId);
-            _logger.LogError(exception, "Extension load failed: {Message}", exception.Message);
+            if (activationCompleted && generation is not null)
+            {
+                if (!await _unloadProcedure.RollbackActivationAsync(generation, request.SessionId))
+                {
+                    _logger.LogWarning("ExtensionActivationRollbackIncomplete: unpublished generation {GenerationId} cleanup did not complete. A restart may be necessary.", generationId);
+                }
+            }
+            else
+            {
+                loadContext.Unload();
+            }
+
+            if (exception is not OperationCanceledException)
+            {
+                _logger.LogError(exception, "Extension load failed: {Message}", exception.Message);
+            }
+
             ShadowCopier.Discard(stagingPath);
             await _events.PublishAsync(
                 new ExtensionLoadFailed(
@@ -476,6 +571,21 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 CancellationToken.None);
             throw;
         }
+    }
+
+    private EffectiveSessionPolicy? CaptureRepositoryPolicy(string? repositoryPath)
+    {
+        var policy = _policyBinding?.Current;
+        if (policy is not null && (repositoryPath is null
+            || !string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(policy.RepositoryPath)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
+        {
+            throw new UnauthorizedAccessException("ExtensionRepositoryStale: restart Threadsmith in the active repository before discovering or loading extensions.");
+        }
+
+        return policy;
     }
 
     private static void ValidateNoBundledContract(string stagingPath)
@@ -722,7 +832,8 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         CancellationToken cancellationToken)
     {
         var logger = new ExtensionLogger(CreateExtensionLogger(generation.Descriptor));
-        var configuration = new ExtensionConfiguration(request.Configuration);
+        var configuration = new ExtensionConfiguration(request.Configuration
+            ?? System.Collections.Frozen.FrozenDictionary<string, string?>.Empty);
         var collector = new ExtensionCapabilityCollector(generation);
         var hostInformation = new ExtensionHostInformation
         {

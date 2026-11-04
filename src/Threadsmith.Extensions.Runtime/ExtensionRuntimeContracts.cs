@@ -28,8 +28,9 @@ public sealed record ExtensionLoadRequest
     /// <summary>The root directory under which shadow-copied generations are staged.</summary>
     public required string ShadowStagingRoot { get; init; }
 
-    /// <summary>This extension's configuration values.</summary>
-    public IReadOnlyDictionary<string, string?> Configuration { get; init; } = new Dictionary<string, string?>();
+    /// <summary>Explicit settings, copied before loading starts. When null, use this extension's
+    /// repository settings. An explicitly empty dictionary overrides repository settings.</summary>
+    public IReadOnlyDictionary<string, string?>? Configuration { get; init; }
 }
 
 /// <summary>Host-owned record of one loaded extension generation (strategy §17.3).</summary>
@@ -105,6 +106,9 @@ public sealed class ExtensionGeneration
 
     /// <summary>The per-extension invocation budget for the current turn (plan-16, §17.15, §22.2).</summary>
     public ExtensionInvocationBudget? Budget { get; internal set; }
+
+    /// <summary>The repository identity captured with this generation's configuration.</summary>
+    internal string? RepositoryPath { get; init; }
 
     /// <summary>Records a tool capability registered during activation.</summary>
     /// <param name="tool">The tool capability.</param>

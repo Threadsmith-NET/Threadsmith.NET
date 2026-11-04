@@ -200,7 +200,7 @@ public sealed partial class SemanticEngine
             }
         }
 
-        var retained = OrderEditFindings(findings).Take(_editOptions.MaximumRetainedDiagnostics).Select(item => item.Diagnostic).ToArray();
+        var retained = OrderEditFindings(findings).Take(EditDiagnosticRetentionLimit).Select(item => item.Diagnostic).ToArray();
         var status = comparison.After.All(project => project.Analyzers.Count == 0) ? "skipped" : complete ? "completed" : "partial";
         UpdateEditResult(candidate, result => result with
         {
@@ -232,7 +232,7 @@ public sealed partial class SemanticEngine
             _owner = owner;
         }
 
-        public int MaximumRetainedDiagnostics => _owner._editOptions.MaximumRetainedDiagnostics;
+        public int MaximumRetainedDiagnostics => _owner.EditDiagnosticRetentionLimit;
 
         public bool TryBegin()
         {

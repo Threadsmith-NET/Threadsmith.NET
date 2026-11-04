@@ -27,6 +27,13 @@ public interface IExtensionManager
     /// <param name="cancellationToken">A token that cancels the unload.</param>
     /// <returns>True when the extension was loaded and has been unloaded; false when it was not loaded.</returns>
     Task<bool> UnloadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default);
+
+    /// <summary>Cooperatively unloads exactly the selected generation, including retired generations.</summary>
+    /// <param name="generationId">The generation to unload; never resolved to a successor.</param>
+    /// <param name="sessionId">The session owning the operation.</param>
+    /// <param name="cancellationToken">A token that cancels the unload.</param>
+    /// <returns>True when the selected generation was unloaded; false when missing or blocked.</returns>
+    Task<bool> UnloadAsync(ExtensionGenerationId generationId, SessionId sessionId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Host-owned, serializable summary of one extension (no extension runtime types, §7.1).</summary>
@@ -35,7 +42,7 @@ public sealed record ExtensionSummary
     /// <summary>The stable extension id (manifest descriptor id).</summary>
     public required string ExtensionId { get; init; }
 
-    /// <summary>The active generation id, or null when not loaded.</summary>
+    /// <summary>The loaded generation id, including retired generations, or null when not loaded.</summary>
     public ExtensionGenerationId? GenerationId { get; init; }
 
     /// <summary>The display name.</summary>

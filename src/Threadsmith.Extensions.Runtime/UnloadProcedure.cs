@@ -188,6 +188,46 @@ public sealed class UnloadProcedure
         };
     }
 
+    /// <summary>Retires a successfully activated generation that never reached publication.
+    /// There are no admitted calls to drain. Collection cannot be verified while its loader holds it.</summary>
+    internal async Task<bool> RollbackActivationAsync(ExtensionGeneration generation, SessionId sessionId)
+    {
+        var complete = true;
+        using var cleanupCancellation = new CancellationTokenSource(DefaultDrainTimeout);
+        try
+        {
+            // Cancel before deactivation so activation-owned workers can stop independently of
+            // the already-cancelled load caller. Bound cancellation callbacks as well as deactivation.
+            await generation.Lifetime.CancelAsync().WaitAsync(cleanupCancellation.Token);
+            await DeactivateAsync(generation, sessionId, cleanupCancellation.Token).WaitAsync(cleanupCancellation.Token);
+            complete = generation.State != ExtensionLifecycleState.DeactivationFailed;
+        }
+        catch (Exception)
+        {
+            // Best effort, just like normal deactivation. Do not replace the original load failure,
+            // leak extension exception text, or claim that non-cooperative code has stopped.
+            complete = false;
+        }
+        finally
+        {
+            generation.ClearCapabilities();
+            generation.Instance = null;
+            try
+            {
+                generation.LoadContext?.Unload();
+            }
+            catch (Exception)
+            {
+                complete = false;
+            }
+
+            generation.LoadContext = null;
+            generation.State = ExtensionLifecycleState.Unloading;
+        }
+
+        return complete;
+    }
+
     private static async Task<bool> VerifyDeadAsync(WeakReference? weakRef)
     {
         if (weakRef is null)

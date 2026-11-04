@@ -1,0 +1,9 @@
+{
+  "Id": "threadsmith.tests.settings",
+  "Name": "Settings Fixture",
+  "Version": "1.0.0",
+  "HostApiVersion": "1.0",
+  "EntryAssembly": "Threadsmith.Tests.Fixtures.SettingsExtension.dll",
+  "Capabilities": ["tool-provider"],
+  "Permissions": []
+}

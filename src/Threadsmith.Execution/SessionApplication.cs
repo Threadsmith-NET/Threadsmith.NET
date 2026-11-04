@@ -766,7 +766,7 @@ public sealed partial class SessionApplication :
         }
         finally
         {
-            _sourceEdits?.CompleteRun(runId);
+            _sourceEdits?.CompleteRun(runId, cancelled || registration.Cancellation.IsCancellationRequested);
             _steering.CompleteRun(command.SessionId, runId);
             if (_userQuestions is not null)
             {

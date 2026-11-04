@@ -63,7 +63,11 @@ internal static class InteractionEventSegments
                     null => PresentationTextRole.Warning,
                     _ => PresentationTextRole.Status,
                 };
-                if (diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
+                if (diagnostic.Code == "SourceEditCompletionFailed")
+                {
+                    Add(segments, Environment.NewLine + Environment.NewLine, diagnosticRole);
+                }
+                else if (diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
                 {
                     Add(segments, Environment.NewLine, diagnosticRole);
                 }

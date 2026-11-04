@@ -117,8 +117,8 @@ public sealed partial class SemanticEngine
                     // Reuse complete evidence only; the existing retention bound never silently truncates it.
                     if (baseline.UnavailableIds.Count != 0 || analyzed.UnavailableIds.Count != 0
                         || baseline.Truncated || analyzed.Truncated
-                        || baseline.Diagnostics.Count > _editOptions.MaximumRetainedDiagnostics
-                        || analyzed.Diagnostics.Count > _editOptions.MaximumRetainedDiagnostics)
+                        || baseline.Diagnostics.Count > EditDiagnosticRetentionLimit
+                        || analyzed.Diagnostics.Count > EditDiagnosticRetentionLimit)
                     {
                         continue;
                     }

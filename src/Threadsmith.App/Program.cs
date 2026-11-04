@@ -286,6 +286,7 @@ public static class Program
                 foundation.ExtensionLeaseAuthority,
                 loggerFactory,
                 configuration,
+                policyBinding,
                 processCancellation.Token);
         }
 

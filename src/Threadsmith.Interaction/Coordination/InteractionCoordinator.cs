@@ -1268,7 +1268,18 @@ public sealed partial class InteractionCoordinator
 
                 if (string.Equals(commandText, "/extensions", StringComparison.OrdinalIgnoreCase))
                 {
-                    await ManageExtensionsAsync(controller, lifetime.Token);
+                    try
+                    {
+                        await ManageExtensionsAsync(controller, lifetime.Token);
+                    }
+                    catch (UnauthorizedAccessException exception)
+                    {
+                        await _surface.WriteAsync(
+                            exception.Message + Environment.NewLine,
+                            PresentationTextRole.Error,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 
@@ -4604,7 +4615,8 @@ public sealed partial class InteractionCoordinator
         {
             if (summary.IsLoaded)
             {
-                var unloaded = await _extensionManager!.UnloadAsync(summary.ExtensionId, sessionId, cancellationToken);
+                var unloaded = summary.GenerationId is { } generationId
+                    && await _extensionManager!.UnloadAsync(generationId, sessionId, cancellationToken);
                 await _surface.WriteAsync(
                     unloaded
                         ? $"{summary.Name} unloaded.\n"

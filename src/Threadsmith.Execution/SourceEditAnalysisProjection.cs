@@ -41,13 +41,34 @@ internal static class SourceEditAnalysisProjection
     /// <summary>Separates finished checks from sufficient, actionable final-source evidence.</summary>
     public static string? GetCompletionIssue(SourceEditAnalysis? analysis, Guid effectId)
     {
-        if (analysis is null || analysis.EffectId != effectId || analysis.CommittedGeneration is null
-            || analysis.Pending || analysis.Obsolete || analysis.ProjectsAnalyzed == 0
-            || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
-            || (!analysis.ErrorComparisonAvailable && (analysis.CurrentErrors > 0 || analysis.CurrentWarnings > 0))
-            || analysis.CurrentWarnings is null || analysis.DiagnosticsTruncated || analysis.ProjectsOmitted > 0)
+        if (analysis is null)
         {
-            return "Validation incomplete: final compiler evidence is pending, unavailable, stale, partial, truncated, or lacks comparable coverage.";
+            return "Validation incomplete: final source analysis is unavailable.";
+        }
+
+        if (analysis.EffectId != effectId || analysis.CommittedGeneration is null || analysis.Obsolete)
+        {
+            return "Validation incomplete: analysis does not match the final committed edit.";
+        }
+
+        if (analysis.Pending)
+        {
+            return "Validation incomplete: compiler analysis is still pending.";
+        }
+
+        if (analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope || analysis.ProjectsOmitted > 0)
+        {
+            return $"Validation incomplete: {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} project instances analyzed; {analysis.ProjectsOmitted} earlier project instances omitted.";
+        }
+
+        if (analysis.CurrentWarnings is null || (!analysis.ErrorComparisonAvailable && (analysis.CurrentErrors > 0 || analysis.CurrentWarnings > 0)))
+        {
+            return "Validation incomplete: compiler warning totals or diagnostic origin comparison are unavailable.";
+        }
+
+        if (analysis.DiagnosticsTruncated)
+        {
+            return $"Validation incomplete: diagnostic evidence is truncated ({analysis.Diagnostics.Count} details retained in feedback; {analysis.CurrentErrors} compiler errors, {analysis.CurrentWarnings} compiler warnings, {analysis.Analyzers.ReportableFindings} analyzer findings). Check explicit diagnostic retention/reporting limits.";
         }
 
         var analyzers = analysis.Analyzers;

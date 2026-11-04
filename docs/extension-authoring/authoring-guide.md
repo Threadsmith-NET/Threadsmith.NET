@@ -136,9 +136,55 @@ Manifest property names are PascalCase (the host deserializes with the default J
 `CopyToOutputDirectory="PreserveNewest"` on the manifest so it lands in the extension output.
 
 The host shadow-copies the package, loads it into a collectible ALC, activates it, and registers
-its capabilities. To select which discovered extensions auto-load at startup, list their ids in the
-repo-level `.threadsmith/extensions.json` `autoLoad` array (repo-level only; never the user `~/`
-config). At runtime, `/extensions` opens a navigable list to browse, load, and unload extensions.
+its capabilities. At runtime, `/extensions` opens a navigable list to browse, load, and unload
+extensions. Review executable extension code before loading it. Repository `autoLoad` requests
+are refused before discovery or construction. Selection is not execution authority.
+
+### Repository settings
+
+Use repository-owned `.threadsmith/extensions.json` for extension-specific settings:
+
+```json
+{
+  "discoveryDirectory": ".threadsmith/extensions",
+  "settings": {
+    "com.example.my-extension": {
+      "endpoint": "https://example.invalid",
+      "credentialReference": "secrets:my-extension.password",
+      "optionalLabel": null
+    }
+  }
+}
+```
+
+A settings section uses the stable descriptor ID. IDs and setting keys are case-sensitive. Values
+must be JSON strings or null. Each activation receives only its own section through
+`context.Configuration` and the repository root through `context.HostInformation.RepositoryPath`.
+Validate your extension's key names, types and required values. Store logical references, not
+passwords. Settings are not expanded during loading and do not grant secret access. The current
+extension invocation contract does not yet expose host secret resolution.
+
+Each generation keeps an immutable snapshot. File edits take effect only after explicit unload/load
+or hot replacement. In-flight old-generation calls retain their original view. Failed or cancelled
+activation cannot publish a partial settings update. A missing file or section supplies an empty
+view. Other file/parse errors reject explicit loading with `ExtensionSettingsInvalid`, without a
+configuration dump. Invalid startup selection retains the no-autoload fallback.
+
+Limits: 256 KiB UTF-8 for the whole file (including BOM), JSON depth 8, 128 sections, 256 UTF-16 code
+units per ID/key, 128 keys per section, 8,192 code units per value and 65,536 aggregate key/value
+code units per section. Blank names, duplicate IDs/keys, duplicate root properties ignoring case,
+invalid types and exceeded limits fail. Unknown root properties are ignored but still count toward
+file/depth limits. Only this repository file is used; there is no user-level settings merge.
+
+The extension manager and discovery selection are startup-bound. After `/open` switches repositories,
+restart Threadsmith in the new repository before discovering or loading extensions. Stale manager
+operations fail with `ExtensionRepositoryStale`. A tool generation cannot execute in a different
+repository from the one captured at activation. Already admitted old-repository calls keep their
+captured settings; a repository switch does not rewrite them.
+
+Host callers may supply `ExtensionLoadRequest.Configuration` as an explicit override, including an
+empty map. Null selects repository settings. Explicit maps are bounded and copied before loading
+awaits. The host never passes the whole application configuration to an extension.
 
 ## 6. Avoid pinning your ALC (unload)
 

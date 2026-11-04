@@ -157,7 +157,7 @@ public sealed partial class SemanticEngine
             var graph = source.GetProjectDependencyGraph();
             var affected = owners.Concat(owners.SelectMany(graph.GetProjectsThatTransitivelyDependOnThisProject)).Distinct().ToArray();
             var carried = _editedProjects.Where(id => source.GetProject(id) is not null && !affected.Contains(id)).ToArray();
-            var carryLimit = Math.Max(0, _editOptions.MaximumCachedProjects - affected.Length);
+            var carryLimit = Math.Max(0, EditProjectCacheLimit - affected.Length);
             var scope = affected.Concat(carried.Take(carryLimit)).ToArray();
             if (carried.Length > carryLimit)
             {
@@ -380,7 +380,7 @@ public sealed partial class SemanticEngine
                         var evidence = CollectEditFindings(tree.GetDiagnostics(token).Where(item => item.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error), document.Project.Name, "unknown", candidate.RepositoryPath);
                         syntaxErrors += evidence.Errors;
                         filtered |= evidence.Filtered;
-                        findings.AddRange(evidence.Findings.Take(Math.Max(0, _editOptions.MaximumRetainedDiagnostics - findings.Count)));
+                        findings.AddRange(evidence.Findings.Take(Math.Max(0, EditDiagnosticRetentionLimit - findings.Count)));
                     }
                 }
 
@@ -392,10 +392,10 @@ public sealed partial class SemanticEngine
                     syntaxErrors += evidence.Errors;
                     unassignedErrors += evidence.Errors;
                     filtered |= evidence.Filtered;
-                    findings.AddRange(evidence.Findings.Take(Math.Max(0, _editOptions.MaximumRetainedDiagnostics - findings.Count)).Select(item => item with { Unassigned = true }));
+                    findings.AddRange(evidence.Findings.Take(Math.Max(0, EditDiagnosticRetentionLimit - findings.Count)).Select(item => item with { Unassigned = true }));
                 }
 
-                return (Findings: OrderEditFindings(findings).Take(_editOptions.MaximumRetainedDiagnostics).ToArray(),
+                return (Findings: OrderEditFindings(findings).Take(EditDiagnosticRetentionLimit).ToArray(),
                     DocumentsAnalyzed: documentsAnalyzed, Errors: syntaxErrors, UnassignedErrors: unassignedErrors, Filtered: filtered);
             });
             UpdateEditResult(candidate, result => result with
@@ -421,7 +421,7 @@ public sealed partial class SemanticEngine
 
                     // Rebalance across projects so earlier warnings cannot displace later errors.
                     var retained = OrderEditFindings(candidate.ProjectResults.Values.SelectMany(item => item.Current))
-                        .Take(Math.Max(0, _editOptions.MaximumRetainedDiagnostics - syntaxOnlyFindings.Length)).ToHashSet(ReferenceEqualityComparer.Instance);
+                        .Take(Math.Max(0, EditDiagnosticRetentionLimit - syntaxOnlyFindings.Length)).ToHashSet(ReferenceEqualityComparer.Instance);
                     foreach (var key in candidate.ProjectResults.Keys.ToArray())
                     {
                         var entry = candidate.ProjectResults[key];
@@ -434,7 +434,7 @@ public sealed partial class SemanticEngine
                         Revision = candidate.Result.Revision + 1,
                         ProjectsAnalyzed = results.Length,
                         CurrentErrors = syntax.UnassignedErrors + results.Sum(item => item.Count),
-                        FindingProjectionTruncated = syntaxOnlyFindings.Length + results.Sum(item => item.Current.Length) > _editOptions.MaximumReportedDiagnostics,
+                        FindingProjectionTruncated = syntaxOnlyFindings.Length + results.Sum(item => item.Current.Length) > EditDiagnosticReportLimit,
                         CurrentWarnings = results.Length == candidate.Projects.Length && candidate.SyntaxOnly.Count == 0 ? results.Sum(item => item.Warnings) : null,
                         OutputFiltered = syntax.Filtered || results.Any(item => item.Filtered),
                         FindingRetentionTruncated = results.Any(item => item.Truncated)
@@ -690,17 +690,23 @@ public sealed partial class SemanticEngine
             { Severity = severity, Column = diagnostic.Location.IsInSource ? diagnostic.Location.GetLineSpan().StartLinePosition.Character + 1 : null };
             var finding = new EditFinding(fingerprint, diagnosticProjection, New: !unchanged && before is { Truncated: false });
 
-            // Keep memory bounded while retaining errors, then new warnings, then unchanged warnings.
+            if (_editOptions.MaximumRetainedDiagnostics == 0)
+            {
+                retained.Add(finding);
+                continue;
+            }
+
+            // Honor an explicit retention limit, prioritizing errors and new warnings.
             var insert = retained.FindIndex(item => EditFindingPriority(item) > EditFindingPriority(finding));
             if (insert < 0)
             {
                 insert = retained.Count;
             }
 
-            if (insert < _editOptions.MaximumRetainedDiagnostics)
+            if (insert < EditDiagnosticRetentionLimit)
             {
                 retained.Insert(insert, finding);
-                if (retained.Count > _editOptions.MaximumRetainedDiagnostics)
+                if (retained.Count > EditDiagnosticRetentionLimit)
                 {
                     retained.RemoveAt(retained.Count - 1);
                 }
@@ -716,10 +722,16 @@ public sealed partial class SemanticEngine
 
     private static IOrderedEnumerable<EditFinding> OrderEditFindings(IEnumerable<EditFinding> findings) => findings.OrderBy(EditFindingPriority);
 
+    private int EditDiagnosticRetentionLimit => _editOptions.MaximumRetainedDiagnostics == 0 ? int.MaxValue : _editOptions.MaximumRetainedDiagnostics;
+
+    private int EditDiagnosticReportLimit => _editOptions.MaximumReportedDiagnostics == 0 ? int.MaxValue : _editOptions.MaximumReportedDiagnostics;
+
+    private int EditProjectCacheLimit => _editOptions.MaximumCachedProjects == 0 ? int.MaxValue : _editOptions.MaximumCachedProjects;
+
     private SourceEditDiagnostic[] MergeEditDiagnostics(IEnumerable<SourceEditDiagnostic> compiler, IEnumerable<SourceEditDiagnostic> analyzers)
     {
         return [.. compiler.Concat(analyzers).OrderBy(item => item.Severity == Core.DiagnosticSeverity.Error ? 0 : item.Severity == Core.DiagnosticSeverity.Warning ? 1 : 2)
-            .ThenBy(item => item.Origin == "introduced" ? 0 : 1).Take(_editOptions.MaximumReportedDiagnostics)];
+            .ThenBy(item => item.Origin == "introduced" ? 0 : 1).Take(EditDiagnosticReportLimit)];
     }
 
     private static string BoundEditText(string value, int maximum)
@@ -796,7 +808,7 @@ public sealed partial class SemanticEngine
             return basis;
         }
 
-        if (_editDiagnosticBases.Count >= _editOptions.MaximumCachedProjects)
+        if (_editDiagnosticBases.Count >= EditProjectCacheLimit)
         {
             _editDiagnosticBases.Remove(_editDiagnosticBases.Keys.First());
         }

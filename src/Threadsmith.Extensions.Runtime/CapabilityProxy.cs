@@ -96,6 +96,15 @@ public sealed class CapabilityProxy : ITool
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
+        if (_generation.RepositoryPath is { } repositoryPath
+            && !string.Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath)),
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.Invocation.RepositoryPath)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("ExtensionRepositoryStale: this extension generation belongs to another repository.");
+        }
+
         var argumentsJson = ((ExtensionToolArguments)input).Json;
 
         // Acquire a lease so plan-17 draining cannot unload the ALC while the extension is executing.

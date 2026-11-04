@@ -4615,7 +4615,8 @@ public sealed partial class InteractionCoordinator
         {
             if (summary.IsLoaded)
             {
-                var unloaded = await _extensionManager!.UnloadAsync(summary.ExtensionId, sessionId, cancellationToken);
+                var unloaded = summary.GenerationId is { } generationId
+                    && await _extensionManager!.UnloadAsync(generationId, sessionId, cancellationToken);
                 await _surface.WriteAsync(
                     unloaded
                         ? $"{summary.Name} unloaded.\n"

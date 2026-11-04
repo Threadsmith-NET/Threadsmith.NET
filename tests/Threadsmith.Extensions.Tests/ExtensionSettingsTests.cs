@@ -157,6 +157,35 @@ public sealed class ExtensionSettingsTests : IAsyncLifetime
         Assert.Equal("fresh", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("value").GetString());
     }
 
+    /// <summary>Retrying a retired row never unloads its active successor with the same manifest id.</summary>
+    [Fact]
+    public async Task Manager_unloads_selected_retired_generation_without_disabling_successor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        WriteSettings("""{"value":"first","holdFirstDeactivation":"true"}""");
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var loggerFactory = new CancellationLoggerFactory(cancellation)
+        {
+            CancellationMessage = "SettingsFixtureDeactivationWaiting",
+        };
+        var host = CreateHost(loggerFactory: loggerFactory);
+        var manager = (IExtensionManager)host;
+        await manager.LoadAsync(ExtensionId, SessionId.New(), ct);
+        var previous = Assert.Single(host.Generations);
+        WriteSettings("""{"value":"successor"}""");
+        var successor = await host.LoadReplacementAsync(previous, Request(), ct);
+        loggerFactory.Enabled = true;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manager.UnloadAsync(previous.GenerationId, SessionId.New(), cancellation.Token));
+        var retired = Assert.Single(await manager.DiscoverAsync(ct), row => row.GenerationId == previous.GenerationId);
+
+        await manager.UnloadAsync(retired.GenerationId!.Value, SessionId.New(), ct);
+
+        Assert.Equal(ExtensionLifecycleState.Active, host.Get(successor.GenerationId)!.State);
+        Assert.Equal("successor", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("value").GetString());
+        Assert.False(await manager.UnloadAsync(ExtensionGenerationId.New(), SessionId.New(), ct));
+        Assert.Equal(ExtensionLifecycleState.Active, host.Get(successor.GenerationId)!.State);
+    }
+
     /// <summary>Invalid successor settings cannot change the active registration.</summary>
     [Fact]
     public async Task Invalid_replacement_leaves_the_old_generation_and_registration_unchanged()

@@ -82,12 +82,14 @@ public sealed partial class SourceEditApplicationTests
 
     /// <summary>Late findings reach the model; ignored findings and timed-out checks cannot produce success.</summary>
     [Theory]
+    [InlineData(false, false, 0, true)]
+    [InlineData(false, true, 0, true)]
     [InlineData(false, false, 0)]
     [InlineData(true, false, 0)]
     [InlineData(false, true, 0)]
     [InlineData(true, true, 0)]
     [InlineData(false, true, 2)]
-    public async Task ConversationWaitsForFeedbackAndPreservesTimedOutResults(bool timeout, bool analyzerOnly, int maximumModelRounds)
+    public async Task ConversationWaitsForFeedbackAndPreservesTimedOutResults(bool timeout, bool analyzerOnly, int maximumModelRounds, bool cancel = false)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
@@ -169,6 +171,17 @@ public sealed partial class SourceEditApplicationTests
         var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Apply the edit."), ct);
         await waitingNotice.Task.WaitAsync(ct);
         var completion = sessions.HandleAsync(new WaitForRunCommand(run), ct);
+        if (cancel)
+        {
+            Assert.True(await sessions.HandleAsync(new CancelRunCommand(fixture.SessionId, run), ct));
+#pragma warning disable VSTHRD003 // The test owns the pending run completion resolved by cancellation above.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => completion);
+#pragma warning restore VSTHRD003
+            Assert.Null(analyzer.Latest);
+            Assert.Null(edits.TakeFeedback(fixture.SessionId, run));
+            return;
+        }
+
         if (!timeout)
         {
             Assert.False(completion.IsCompleted);
@@ -237,6 +250,9 @@ public sealed partial class SourceEditApplicationTests
             return Task.CompletedTask;
         });
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, cancellation.Token));
+        edits.CompleteRun(fixture.RunId, cancelled: true);
+        Assert.Null(analyzer.Latest);
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
         var notice = Assert.Single(observed);
         Assert.Contains(analyzerOnly ? "Waiting for analyzers" : "Waiting for compiler analysis", notice.Message, StringComparison.Ordinal);
         Assert.Contains("You can cancel the run", notice.Message, StringComparison.Ordinal);

@@ -237,6 +237,22 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         return result.Outcome == UnloadOutcome.Unloaded;
     }
 
+    /// <inheritdoc />
+    async Task<bool> IExtensionManager.UnloadAsync(
+        ExtensionGenerationId generationId,
+        SessionId sessionId,
+        CancellationToken cancellationToken)
+    {
+        var generation = Get(generationId);
+        if (generation is null)
+        {
+            return false;
+        }
+
+        var result = await UnloadAsync(generation, sessionId, cancellationToken);
+        return result.Outcome == UnloadOutcome.Unloaded;
+    }
+
     private List<ExtensionSummary> BuildSummaries()
     {
         var summaries = new List<ExtensionSummary>();

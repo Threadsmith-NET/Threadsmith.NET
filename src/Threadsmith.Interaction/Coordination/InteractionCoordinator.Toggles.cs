@@ -161,29 +161,31 @@ public sealed partial class InteractionCoordinator
         IReadOnlyList<ExtensionSummary> catalog,
         CancellationToken cancellationToken)
     {
+        var rows = catalog.ToDictionary(extension => extension.GenerationId?.ToString() ?? extension.ExtensionId, StringComparer.Ordinal);
         return surface.SelectTogglesAsync(
-            new InteractionToggleRequest("Extensions - checked means loaded", catalog.Select(extension => new InteractionToggleOption(
-                extension.ExtensionId, $"{extension.Name} ({extension.Version})", "Extensions", extension.IsLoaded, Reason: extension.ExtensionId)).ToArray()),
+            new InteractionToggleRequest("Extensions - checked means loaded", rows.Select(row => new InteractionToggleOption(
+                row.Key, $"{row.Value.Name} ({row.Value.Version})", "Extensions", row.Value.IsLoaded, Reason: $"{row.Value.ExtensionId} — {row.Value.State}")).ToArray()),
             async (id, enabled, token) =>
             {
-                var current = (await manager.DiscoverAsync(token)).FirstOrDefault(extension => extension.ExtensionId == id);
-                if (current is null)
-                {
-                    return new InteractionToggleResult(false, "The extension is no longer available; reopen Extensions.");
-                }
-
+                var selected = rows[id];
+                var current = (await manager.DiscoverAsync(token)).FirstOrDefault(extension =>
+                    selected.GenerationId is { } generationId ? extension.GenerationId == generationId : extension.ExtensionId == selected.ExtensionId);
                 string? failure = null;
-                if (current.IsLoaded != enabled)
+                if ((current?.IsLoaded == true) != enabled)
                 {
                     try
                     {
                         if (enabled)
                         {
-                            _ = await manager.LoadAsync(id, sessionId, token);
+                            current = await manager.LoadAsync(selected.ExtensionId, sessionId, token);
+                            if (current is not null)
+                            {
+                                rows[id] = current;
+                            }
                         }
-                        else
+                        else if (current?.GenerationId is { } generationId)
                         {
-                            _ = await manager.UnloadAsync(id, sessionId, token);
+                            _ = await manager.UnloadAsync(generationId, sessionId, token);
                         }
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
@@ -192,8 +194,11 @@ public sealed partial class InteractionCoordinator
                     }
                 }
 
-                var refreshed = (await manager.DiscoverAsync(token)).FirstOrDefault(extension => extension.ExtensionId == id);
-                return new InteractionToggleResult(refreshed?.IsLoaded == true, failure ?? (refreshed?.IsLoaded == enabled ? null : $"The extension did not reach the requested state ({refreshed?.State ?? "unavailable"})."));
+                var target = rows[id];
+                var refreshed = (await manager.DiscoverAsync(token)).FirstOrDefault(extension =>
+                    target.GenerationId is { } generationId ? extension.GenerationId == generationId : extension.ExtensionId == target.ExtensionId);
+                var loaded = refreshed?.IsLoaded == true;
+                return new InteractionToggleResult(loaded, failure ?? (loaded == enabled ? null : $"The extension did not reach the requested state ({refreshed?.State ?? "unavailable"})."));
             },
             cancellationToken);
     }

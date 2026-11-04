@@ -1584,11 +1584,13 @@ public static partial class Milestone1Tests
                 Assert.True(blocked.Enabled);
                 Assert.Contains("UnloadBlocked", blocked.Reason, StringComparison.Ordinal);
                 Assert.False((await change("first", false, token)).Enabled);
+                Assert.True((await change("first", true, token)).Enabled);
+                Assert.False((await change("first", false, token)).Enabled);
             }
             else
             {
                 Assert.False(request.Options.Single(option => option.Id == "first").Enabled);
-                Assert.True(request.Options.Single(option => option.Id == "second").Enabled);
+                Assert.True(request.Options.Single(option => option.Label == "second (1)").Enabled);
             }
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface, extensionManager: manager);
@@ -6309,14 +6311,19 @@ public static partial class Milestone1Tests
 
         public Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
         {
-            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = true, State = "Active" };
+            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = true, State = "Active", GenerationId = ExtensionGenerationId.New() };
             return Task.FromResult<ExtensionSummary?>(_extensions[extensionId]);
+        }
+
+        public Task<bool> UnloadAsync(ExtensionGenerationId generationId, SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            return UnloadAsync(_extensions.Values.First(extension => extension.GenerationId == generationId).ExtensionId, sessionId, cancellationToken);
         }
 
         public Task<bool> UnloadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
         {
             var blocked = extensionId == "second";
-            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = blocked, State = blocked ? "UnloadBlocked" : "Unloaded" };
+            _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = blocked, State = blocked ? "UnloadBlocked" : "Unloaded", GenerationId = blocked ? _extensions[extensionId].GenerationId : null };
             return Task.FromResult(!blocked);
         }
     }

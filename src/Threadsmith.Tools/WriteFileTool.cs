@@ -132,6 +132,14 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     {
         var repository = Path.GetFullPath(context.RepositoryPath);
         var destination = Path.GetFullPath(path, repository);
+        var caseContext = new RepositoryPathCaseContext(repository);
+        var withinRepository = false;
+        if (RepositoryPathPolicy.TryNormalizeContainedPath(repository, destination, out var containedDestination, caseContext: caseContext))
+        {
+            destination = containedDestination;
+            withinRepository = true;
+        }
+
         if (!context.AllowDirectWrites)
         {
             throw new UnauthorizedAccessException("The child assignment does not permit direct artifact writes.");
@@ -144,32 +152,28 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
 
         AuthorityControlPathGuard.Validate(destination, repository, context.SecurityPolicy?.ControlPaths, context.SecurityPolicy?.ControlDirectories);
         if (context.IsChildAgent && !context.ApprovedRoots.Any(root =>
-                ToolPathRules.IsSameOrChild(destination, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repository)))))
+                RepositoryPathPolicy.ContainsPath(Path.GetFullPath(root, repository), destination, caseContext: caseContext)))
         {
             throw new UnauthorizedAccessException("The direct write is outside the child assignment scope.");
         }
 
-        var scratchpadDestination = ToolPathRules.IsWithinScratchpad(destination, context);
+        var scratchpadDestination = ToolPathRules.IsWithinScratchpad(destination, context, caseContext: caseContext);
         if (Path.GetExtension(destination).ToLowerInvariant() is ".cs" or ".csx" && !scratchpadDestination)
         {
             throw new UnauthorizedAccessException("Temporary C# files must be written inside the active scratchpad.");
         }
 
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         IReadOnlyList<string> folders = context.SecurityPolicy is { } effective ? effective.WriteFolders : _configuration.GetAllowedFolders(repository);
-        var allowed = scratchpadDestination || folders.Any(folder =>
-        {
-            var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository));
-            var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
-            return destination.StartsWith(prefix, comparison);
-        });
-        if (!allowed)
+        var grantingRoot = scratchpadDestination ? null : folders.Select(folder => Path.GetFullPath(folder, repository))
+            .FirstOrDefault(root => RepositoryPathPolicy.ContainsPath(root, destination, caseContext: caseContext)
+                && !RepositoryPathPolicy.PathsEqual(root, destination, caseContext: caseContext));
+        if (!scratchpadDestination && grantingRoot is null)
         {
             throw new UnauthorizedAccessException($"write_file destination is outside {WriteFileConfiguration.AllowedFoldersKey} (default: .inbox). No file was written.");
         }
 
         var relative = Path.GetRelativePath(repository, destination).Replace('\\', '/');
-        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repository))
+        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repository, caseContext))
         {
             throw new UnauthorizedAccessException("write_file destination matches a prohibited path.");
         }
@@ -190,31 +194,13 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
 
         if (scratchpadDestination)
         {
-            return ToolPathRules.NormalizeScratchpadPath(destination, context);
+            return ToolPathRules.NormalizeScratchpadPath(destination, context, caseContext: caseContext);
         }
 
-        // Reject linked ancestors, including the allowlisted folder itself and dangling links.
-        for (var current = destination; current is not null; current = Path.GetDirectoryName(current))
-        {
-            FileAttributes attributes;
-            try
-            {
-                attributes = File.GetAttributes(current);
-            }
-            catch (FileNotFoundException)
-            {
-                continue;
-            }
-            catch (DirectoryNotFoundException)
-            {
-                continue;
-            }
-
-            if ((attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new UnauthorizedAccessException("write_file cannot traverse symbolic links or junctions.");
-            }
-        }
+        var authorityRoot = withinRepository
+            ? repository
+            : grantingRoot ?? throw new UnauthorizedAccessException("No folder grants this write.");
+        ScopedFilePaths.RejectLinks(destination, authorityRoot, allowMissing: true, caseContext);
 
         return destination;
     }

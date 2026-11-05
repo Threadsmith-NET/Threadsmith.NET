@@ -418,12 +418,16 @@ public static class WriteFileTests
     }
 
     /// <summary>Junctions and symlinks cannot redirect writes outside the allowlist.</summary>
-    [Fact]
-    public static async Task LinkedOutputFolder_IsDenied()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task LinkedOutputFolder_IsDenied(bool exactDestinationBeforeExternalGrant)
     {
         using var fixture = new Fixture();
         var external = Directory.CreateDirectory(Path.Combine(fixture.Root, "external")).FullName;
-        var link = Path.Combine(fixture.Repository, ".inbox");
+        var grant = exactDestinationBeforeExternalGrant
+            ? Directory.CreateDirectory(Path.Combine(fixture.Root, "grant")).FullName : fixture.Repository;
+        var link = Path.Combine(grant, ".inbox");
         if (OperatingSystem.IsWindows())
         {
             var start = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -433,8 +437,7 @@ public static class WriteFileTests
             }
 
             using var process = Process.Start(start) ?? throw new InvalidOperationException("Could not create test junction.");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await process.WaitForExitAsync(timeout.Token);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
             Assert.Equal(0, process.ExitCode);
         }
         else
@@ -445,7 +448,11 @@ public static class WriteFileTests
         try
         {
             await using var events = new DomainEventStream();
-            var result = await InvokeAsync(CreatePipeline(events, fixture.Tool()), fixture.Context, new WriteFileInput(".inbox/report.md", "denied"));
+            var destination = Path.Combine(link, "report.md");
+            var tool = exactDestinationBeforeExternalGrant
+                ? fixture.Tool(JsonConfig(JsonSerializer.Serialize(new { tools = new { writeFile = new { allowedFolders = new[] { destination, grant } } } })))
+                : fixture.Tool();
+            var result = await InvokeAsync(CreatePipeline(events, tool), fixture.Context, new WriteFileInput(destination, "denied"));
             Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
             Assert.Empty(Directory.GetFiles(external));
         }

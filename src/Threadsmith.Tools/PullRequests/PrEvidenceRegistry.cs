@@ -87,7 +87,7 @@ public sealed class PrEvidenceRegistry : IAsyncDisposable
                 ?? throw new InvalidOperationException("The requested PR snapshot is unavailable or was refreshed.");
         }
 
-        if (ToolPathRules.IsRepositoryScopeRestricted(invocation)
+        if (ToolPathRules.IsRepositoryScopeRestricted(invocation, inspectFileSystem: false)
             && captured.Output.Page.Files.Any(file => !PrEvidencePathScope.IsAllowed(file, invocation)))
         {
             throw new UnauthorizedAccessException("The captured PR includes changed files outside the current approved repository path scope.");

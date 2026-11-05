@@ -68,10 +68,12 @@ public static class AgentToolPolicy
             ];
         }
 
+        var caseContext = new RepositoryPathCaseContext(repositoryPath);
         var approvedRoots = IntersectApprovedRoots(
             parent.ApprovedRoots,
             frozenAssignment.Scope.Files.Concat(frozenAssignment.Scope.Directories),
-            repositoryPath);
+            repositoryPath,
+            caseContext);
         if (approvedRoots.Length == 0)
         {
             throw new UnauthorizedAccessException(
@@ -117,11 +119,11 @@ public static class AgentToolPolicy
             var scope = approvedRoots.Select(root => Path.GetFullPath(root, childRoot)).ToArray();
             ImmutableArray<string> NarrowRoots(ImmutableArray<string> roots) =>
             [
-                .. roots.Select(root => RepositoryPathPolicy.ContainsPath(policy.RepositoryPath, root)
-                        ? Path.GetFullPath(Path.GetRelativePath(policy.RepositoryPath, root), childRoot) : root)
-                    .SelectMany(root => scope.Select(restriction => RepositoryPathPolicy.ContainsPath(root, restriction)
-                        ? restriction : RepositoryPathPolicy.ContainsPath(restriction, root) ? root : null))
-                    .OfType<string>().Distinct(RepositoryPathPolicy.GetPathComparer(childRoot)),
+                .. RepositoryPathPolicy.IntersectRoots(
+                    roots.Select(root => RepositoryPathPolicy.TryNormalizeContainedPath(policy.RepositoryPath, root, out var contained, caseContext: caseContext)
+                        ? Path.GetFullPath(Path.GetRelativePath(policy.RepositoryPath, contained), childRoot) : root),
+                    scope,
+                    caseContext),
             ];
             return policy with
             {
@@ -147,54 +149,27 @@ public static class AgentToolPolicy
     private static string[] IntersectApprovedRoots(
         IReadOnlyList<string> parentRoots,
         IEnumerable<string> childRoots,
-        string repositoryPath)
+        string repositoryPath,
+        RepositoryPathCaseContext caseContext)
     {
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        string[] normalizedParents =
-        [
-            .. parentRoots.Select(root => NormalizeRoot(root, repositoryRoot)),
-        ];
-        string[] normalizedChildren =
-        [
-            .. childRoots.DefaultIfEmpty(".").Select(root => NormalizeRoot(root, repositoryRoot)),
-        ];
-        return
-        [
-            .. normalizedParents
-            .SelectMany(parentRoot => normalizedChildren.Select(childRoot =>
-                IsWithin(childRoot, parentRoot, comparison)
-                    ? childRoot
-                    : IsWithin(parentRoot, childRoot, comparison) ? parentRoot : null))
-            .Where(root => root is not null)
-            .Select(root => Path.GetRelativePath(repositoryRoot, root ?? repositoryRoot).Replace('\\', '/'))
-            .Distinct(comparison == StringComparison.OrdinalIgnoreCase
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal),
-        ];
+        return [.. RepositoryPathPolicy.IntersectRoots(
+                parentRoots.Select(root => NormalizeRoot(root, repositoryRoot, caseContext)),
+                childRoots.DefaultIfEmpty(".").Select(root => NormalizeRoot(root, repositoryRoot, caseContext)),
+                caseContext)
+            .Select(root => Path.GetRelativePath(repositoryRoot, root).Replace('\\', '/'))];
     }
 
-    private static string NormalizeRoot(string root, string repositoryRoot)
+    private static string NormalizeRoot(string root, string repositoryRoot, RepositoryPathCaseContext caseContext)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        if (!IsWithin(normalized, repositoryRoot, comparison))
+        if (!RepositoryPathPolicy.TryNormalizeContainedPath(repositoryRoot, normalized, out var contained, caseContext: caseContext))
         {
             throw new UnauthorizedAccessException("An approved root escapes the repository.");
         }
 
-        return normalized;
-    }
-
-    private static bool IsWithin(string candidate, string root, StringComparison comparison)
-    {
-        return candidate.Equals(root, comparison)
-            || candidate.StartsWith(root + Path.DirectorySeparatorChar, comparison);
+        return contained;
     }
 }
 

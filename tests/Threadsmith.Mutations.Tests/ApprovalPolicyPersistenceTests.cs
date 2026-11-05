@@ -75,6 +75,18 @@ public sealed class ApprovalPolicyPersistenceTests
         Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, service.CurrentPolicy);
     }
 
+    /// <summary>Disappearing repositories cannot acquire remembered consent.</summary>
+    [Fact]
+    public static async Task MissingBoundRepositoryCannotPersistConsent()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var service = await fixture.OpenAsync();
+        await service.SetPolicyAsync(MutationApprovalPolicy.TrustSession, TestContext.Current.CancellationToken);
+        Directory.Delete(fixture.Repository, recursive: true);
+        await Assert.ThrowsAnyAsync<IOException>(() => service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo, TestContext.Current.CancellationToken));
+        Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         internal const string Request = "{\"Mutation\":{\"ApprovalPolicy\":\"alwaysTrustRepo\",\"LargeDiffThreshold\":50},\"unrelated\":true}";
@@ -111,7 +123,10 @@ public sealed class ApprovalPolicyPersistenceTests
             var binding = new SessionPolicyBinding();
             binding.Publish(new EffectiveSessionPolicy
             {
-                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Repository, Fingerprint = "fixture",
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = Repository,
+                Fingerprint = "fixture",
             });
             var service = new MutationApprovalPolicyService(facts: Store, policyBinding: binding);
             await service.BindRepositoryAsync(Repository, TestContext.Current.CancellationToken);

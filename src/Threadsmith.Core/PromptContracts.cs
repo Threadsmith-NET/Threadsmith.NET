@@ -510,6 +510,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the CorrectionToolBatchValidationUnavailable prompt asset.</summary>
     public const string CorrectionToolBatchValidationUnavailable = "Correction-ToolBatch-ValidationUnavailable.md";
 
+    /// <summary>Gets the correction requiring edit feedback review before subsequent code execution.</summary>
+    public const string CorrectionToolBatchSourceEditFeedback = "Correction-ToolBatch-SourceEditFeedback.md";
+
     /// <summary>Gets the stable filename for the CorrectionToolBatchPreparationMissing prompt asset.</summary>
     public const string CorrectionToolBatchPreparationMissing = "Correction-ToolBatch-PreparationMissing.md";
 
@@ -1145,6 +1148,7 @@ public static class PromptFileNames
         CorrectionToolBatchPreflightFailed,
         CorrectionToolBatchPreflightReason,
         CorrectionToolBatchValidationUnavailable,
+        CorrectionToolBatchSourceEditFeedback,
         CorrectionToolBatchPreparationMissing,
         CorrectionToolDuplicateInvocation,
         CorrectionToolUnavailable,
@@ -1380,6 +1384,7 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionToolBatchPreflightFailed,
             PromptFileNames.CorrectionToolBatchPreflightReason,
             PromptFileNames.CorrectionToolBatchValidationUnavailable,
+            PromptFileNames.CorrectionToolBatchSourceEditFeedback,
             PromptFileNames.CorrectionToolBatchPreparationMissing,
             PromptFileNames.CorrectionToolDuplicateInvocation,
             PromptFileNames.CorrectionToolUnavailable,

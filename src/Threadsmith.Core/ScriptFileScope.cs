@@ -32,15 +32,24 @@ public static class ScopedFilePaths
     public static string ValidateRead(string path, string basePath, string repository, IEnumerable<string> roots, IReadOnlyList<string> prohibited)
     {
         var normalized = Normalize(path, basePath);
-        var readRoot = roots.FirstOrDefault(root => RepositoryPathPolicy.ContainsPath(root, normalized))
+        var caseContext = new RepositoryPathCaseContext(repository);
+        var readRoot = roots.FirstOrDefault(root => RepositoryPathPolicy.ContainsPath(root, normalized, caseContext: caseContext))
             ?? throw new UnauthorizedAccessException("File is outside the authorized read locations.");
 
-        if (RepositoryPathPolicy.IsProhibited(Path.GetRelativePath(repository, normalized).Replace('\\', '/'), prohibited, repository))
+        // One pass decides containment, adopts the repository spelling, and selects the link-walk authority.
+        var withinRepository = false;
+        if (RepositoryPathPolicy.TryNormalizeContainedPath(repository, normalized, out var containedPath, caseContext: caseContext))
+        {
+            normalized = containedPath;
+            withinRepository = true;
+        }
+
+        if (RepositoryPathPolicy.IsProhibited(Path.GetRelativePath(repository, normalized).Replace('\\', '/'), prohibited, repository, caseContext))
         {
             throw new UnauthorizedAccessException("File matches a prohibited path.");
         }
 
-        RejectLinks(normalized, RepositoryPathPolicy.ContainsPath(repository, normalized) ? repository : readRoot);
+        RejectLinks(normalized, withinRepository ? repository : readRoot, allowMissing: true, caseContext);
         return normalized;
     }
 
@@ -48,7 +57,8 @@ public static class ScopedFilePaths
     public static string ValidateWrite(string path, ScriptFileScope scope)
     {
         var normalized = Normalize(path, scope.ScratchpadPath);
-        if (!RepositoryPathPolicy.ContainsPath(scope.ScratchpadPath, normalized)
+        var caseContext = new RepositoryPathCaseContext(scope.RepositoryPath);
+        if (!RepositoryPathPolicy.ContainsPath(scope.ScratchpadPath, normalized, caseContext: caseContext)
             || RepositoryPathPolicy.GetPathComparer(normalized).Equals(Path.TrimEndingDirectorySeparator(normalized), Path.TrimEndingDirectorySeparator(scope.ScratchpadPath)))
         {
             throw new UnauthorizedAccessException("Writes must target a file or subdirectory inside the scratchpad.");
@@ -61,40 +71,16 @@ public static class ScopedFilePaths
         }
 
         AuthorityControlPathGuard.Validate(normalized, scope.RepositoryPath, scope.ControlPaths, scope.ControlDirectories);
-        RejectLinks(normalized, scope.RepositoryPath);
+        RejectLinks(normalized, scope.RepositoryPath, allowMissing: true, caseContext);
         return normalized;
     }
 
     /// <summary>Rejects links from the authority root through the target, including dangling links.</summary>
-    public static void RejectLinks(string path, string root)
-    {
-        path = Path.GetFullPath(path);
-        root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
-        if (!RepositoryPathPolicy.ContainsPath(root, path))
-        {
-            throw new UnauthorizedAccessException("File is outside its authority root.");
-        }
+    public static void RejectLinks(string path, string root) => RejectLinks(path, root, allowMissing: true);
 
-        var comparer = RepositoryPathPolicy.GetPathComparer(root);
-        for (var current = path; current is not null; current = comparer.Equals(Path.TrimEndingDirectorySeparator(current), root) ? null : Path.GetDirectoryName(current))
-        {
-            try
-            {
-                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new UnauthorizedAccessException("File access cannot traverse symbolic links or junctions.");
-                }
-            }
-            catch (FileNotFoundException)
-            {
-                // Missing descendants are valid write targets.
-            }
-            catch (DirectoryNotFoundException)
-            {
-                // Missing descendants are valid write targets.
-            }
-        }
-    }
+    /// <summary>Rejects links within an authority boundary, optionally requiring every component to exist.</summary>
+    public static void RejectLinks(string path, string root, bool allowMissing, RepositoryPathCaseContext? caseContext = null)
+        => RejectLinks(path, root, allowMissing, caseContext, File.GetAttributes);
 
     /// <summary>Detects reserved Windows device segments.</summary>
     public static bool ContainsReservedWindowsDeviceName(string relativePath)
@@ -108,6 +94,54 @@ public static class ScopedFilePaths
         return relativePath
             .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries)
             .Any(IsReservedWindowsDeviceName);
+    }
+
+    /// <summary>Inspects components in authority order using the supplied attribute reader.</summary>
+    internal static void RejectLinks(string path, string root, bool allowMissing, RepositoryPathCaseContext? caseContext, Func<string, FileAttributes> getAttributes)
+    {
+        ArgumentNullException.ThrowIfNull(getAttributes);
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var normalizedCandidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!RepositoryPathPolicy.TryNormalizeContainedPath(normalizedRoot, normalizedCandidate, null, caseContext, out var canonicalPath))
+        {
+            throw new UnauthorizedAccessException("File is outside its authority root.");
+        }
+
+        // Inspect the authority itself, then descendants. A missing component makes the
+        // entire remaining suffix absent; do not issue a failing lookup for each descendant.
+        var current = normalizedRoot;
+        while (true)
+        {
+            try
+            {
+                if ((getAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new UnauthorizedAccessException("File access cannot traverse symbolic links or junctions.");
+                }
+            }
+            catch (FileNotFoundException) when (allowMissing)
+            {
+                return;
+            }
+            catch (DirectoryNotFoundException) when (allowMissing)
+            {
+                return;
+            }
+
+            if (current.Length == canonicalPath.Length)
+            {
+                return;
+            }
+
+            var start = current.Length;
+            if (canonicalPath[start] == Path.DirectorySeparatorChar)
+            {
+                start++;
+            }
+
+            var separator = canonicalPath.IndexOf(Path.DirectorySeparatorChar, start);
+            current = separator < 0 ? canonicalPath : canonicalPath[..separator];
+        }
     }
 
     private static bool IsReservedWindowsDeviceName(string segment)

@@ -239,9 +239,11 @@ internal static class SecurityPolicyConfigurationLoader
                 }
 
                 var next = value is null ? filter : pathsAreRoots
-                    ? IntersectRoots(value, filter)
+                    ? RepositoryPathPolicy.IntersectRoots(value, filter)
                     : [.. value.Intersect(filter, StringComparer.OrdinalIgnoreCase)];
-                if (filter.Any(item => !next.Contains(item, StringComparer.OrdinalIgnoreCase)))
+                if (filter.Any(item => pathsAreRoots
+                    ? !next.Any(root => RepositoryPathPolicy.PathsEqual(root, item))
+                    : !next.Contains(item, StringComparer.OrdinalIgnoreCase)))
                 {
                     diagnostics.Add($"PolicyWideningRejected: {key}, {source.Kind} '{source.Location}', generation {generation}: only the intersection is effective. Review the filter or deliberately configure the trusted user policy.");
                 }
@@ -249,8 +251,9 @@ internal static class SecurityPolicyConfigurationLoader
                 value = next;
             }
 
-            var comparer = pathsAreRoots ? RepositoryPathPolicy.GetPathComparer(repository) : StringComparer.OrdinalIgnoreCase;
-            return value is null ? default : [.. value.Distinct(comparer).Order(comparer)];
+            return value is null ? default : pathsAreRoots
+                ? [.. RepositoryPathPolicy.DistinctRoots(value).Order(StringComparer.Ordinal)]
+                : [.. value.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
         }
 
         ImmutableArray<string> Union(string key, StringComparer comparer)
@@ -660,15 +663,6 @@ internal static class SecurityPolicyConfigurationLoader
 
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(value, repository));
     })];
-
-    private static string[] IntersectRoots(string[] ceiling, string[] filter) => [.. ceiling
-        .SelectMany(parent => filter.Select(child => IsWithin(child, parent) ? child : IsWithin(parent, child) ? parent : null))
-        .OfType<string>().Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)];
-
-    private static bool IsWithin(string candidate, string root)
-    {
-        return RepositoryPathPolicy.ContainsPath(root, candidate);
-    }
 
     private sealed record Source(string Kind, string Location, Dictionary<string, JsonElement> Values);
 }

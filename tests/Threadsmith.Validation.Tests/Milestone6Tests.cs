@@ -1416,8 +1416,10 @@ public sealed class Milestone6Tests
     }
 
     /// <summary>Test discovery rejects project paths that traverse a junction or symbolic link.</summary>
-    [Fact]
-    public async Task TestDiscoverer_LinkedProject_RejectsTraversal()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TestDiscoverer_LinkedProject_RejectsTraversal(bool linkedAuthorityRoot)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-linked-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -1436,7 +1438,7 @@ public sealed class Milestone6Tests
                 ["xunit.v3.mtp-v2"]);
 
             var exception = Assert.Throws<InvalidOperationException>(
-                () => TestDiscoverer.DiscoverProjects(root, [project]));
+                () => TestDiscoverer.DiscoverProjects(linkedAuthorityRoot ? link.LinkPath : root, [project]));
 
             Assert.Contains("symbolic link or junction", exception.Message, StringComparison.OrdinalIgnoreCase);
         }

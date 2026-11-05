@@ -1589,9 +1589,8 @@ public static partial class ToolRuntimeTests
                 Path.Combine(repository, "visible.txt"),
                 "first line\nneedle line");
             await using var events = new DomainEventStream();
-            var manager = new ProcessManager(
-                new TestSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+            var manager = new StubProcessManager(new ProcessExecutionResult(
+                42, 0, "## main\n?? visible.txt\n", string.Empty, false, false, false, TimeSpan.Zero));
             var pipeline = CreatePipeline(
                 events,
                 [new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new SearchTextTool(TestPromptLoader.Instance), new GitStatusTool(manager, TestPromptLoader.Instance)]);
@@ -1615,19 +1614,6 @@ public static partial class ToolRuntimeTests
                 ArgumentsJson = "{\"query\":\"needle\",\"glob\":\"*.txt\"}",
                 Context = context,
             });
-            var initialized = await manager.RunAsync(
-                new ProcessExecutionRequest
-                {
-                    ToolInvocationId = ToolInvocationId.New(),
-                    RunId = RunId.New(),
-                    FileName = "git",
-                    Arguments = ["init", "--quiet"],
-                    WorkingDirectory = repository,
-                    Timeout = TimeSpan.FromSeconds(30),
-                    Origin = ProcessRequestOrigin.Host,
-                },
-                TestContext.Current.CancellationToken);
-            Assert.Equal(0, initialized.ExitCode);
             var git = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
@@ -1641,13 +1627,16 @@ public static partial class ToolRuntimeTests
                 },
             });
 
-            Assert.True(read.Succeeded);
+            Assert.True(read.Succeeded, read.Error);
             Assert.Contains("needle line", read.ResultJson, StringComparison.Ordinal);
             Assert.Contains(read.Sources, source => source.Kind == "file");
             Assert.True(search.Succeeded);
             Assert.Contains(search.Sources, source => source.Range == "L2");
             Assert.True(git.Succeeded, git.Error);
             Assert.Contains(git.Sources, source => source.Kind == "git");
+            Assert.Equal(1, manager.ExecutionCount);
+            Assert.Equal("git", manager.LastRequest?.FileName);
+            Assert.Equal(repository, manager.LastRequest?.WorkingDirectory);
         }
         finally
         {
@@ -2397,9 +2386,8 @@ public static partial class ToolRuntimeTests
                 observed.Add(domainEvent);
                 return Task.CompletedTask;
             });
-            var manager = new ProcessManager(
-                new TestSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+            var manager = new StubProcessManager(new ProcessExecutionResult(
+                42, 0, "global-packages: fixture", string.Empty, false, false, false, TimeSpan.Zero));
             var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
             var pipeline = new ToolInvocationPipeline(
                 new ToolRegistry([new RunProcessTool(
@@ -2426,7 +2414,7 @@ public static partial class ToolRuntimeTests
                 },
             });
 
-            Assert.True(result.Succeeded);
+            Assert.True(result.Succeeded, result.Error);
             Assert.NotNull(result.ResultJson);
             var processResult = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson);
             Assert.NotNull(processResult);
@@ -2437,6 +2425,9 @@ public static partial class ToolRuntimeTests
                 && requested.Kind == ApprovalRequestKind.ToolInvocation
                 && requested.SchemaVersion == 2);
             Assert.Contains(observed, item => item is ApprovalGranted);
+            Assert.Equal(1, manager.ExecutionCount);
+            Assert.Equal(shell, manager.LastRequest?.FileName);
+            Assert.Contains("dotnet nuget locals all --list", manager.LastRequest!.Arguments);
             Assert.Empty(manager.ActiveProcesses);
         }
         finally

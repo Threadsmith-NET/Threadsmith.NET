@@ -39,7 +39,7 @@ public sealed record EditAnalysisOptions
     /// <summary>Immediate observation allowance; zero returns without waiting.</summary>
     public int ImmediateObservationMilliseconds { get; init; } = 500;
 
-    /// <summary>Wait for pending final feedback; -1 waits until completion or cancellation, zero disables waiting.</summary>
+    /// <summary>Wait for pending edit feedback before model continuation or completion; -1 waits until completion or cancellation, zero disables waiting.</summary>
     public int FinalFeedbackWaitMilliseconds { get; init; } = Timeout.Infinite;
 
     /// <summary>Candidate lifetime in milliseconds; -1 retains work until completion, supersession or cancellation.</summary>

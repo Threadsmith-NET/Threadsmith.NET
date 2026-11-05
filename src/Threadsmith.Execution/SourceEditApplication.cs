@@ -279,7 +279,7 @@ public sealed class SourceEditApplication :
         return _feedback.TryUpdate(sessionId, delivered with { Revision = latest.Revision }, delivered) ? latest : null;
     }
 
-    /// <summary>Observes pending compiler and enabled analyzer work once per applied effect before final completion.</summary>
+    /// <summary>Observes pending compiler and enabled analyzer work once per applied effect before model continuation or final completion.</summary>
     public async Task<SourceEditAnalysis?> WaitForFinalFeedbackAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -1,5 +1,7 @@
 namespace Threadsmith.Validation;
 
+using Threadsmith.Core;
+
 /// <summary>Provides shared fail-closed reparse-point inspection for validation targets.</summary>
 internal static class ValidationPathGuard
 {
@@ -19,25 +21,19 @@ internal static class ValidationPathGuard
         ArgumentException.ThrowIfNullOrWhiteSpace(relativeTarget);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetKind);
 
-        var current = repositoryRoot;
-        foreach (var segment in Path.GetRelativePath(repositoryRoot, targetPath)
-            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        try
         {
-            current = Path.Combine(current, segment);
-            try
-            {
-                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"{targetKind} '{relativeTarget}' traverses a symbolic link or junction.");
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                throw new InvalidOperationException(
-                    $"{targetKind} '{relativeTarget}' could not be safely inspected.",
-                    exception);
-            }
+            ScopedFilePaths.RejectLinks(targetPath, repositoryRoot, allowMissing: false);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            throw new InvalidOperationException(
+                $"{targetKind} '{relativeTarget}' could not be safely inspected for symbolic link or junction traversal.", exception);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"{targetKind} '{relativeTarget}' could not be safely inspected.", exception);
         }
     }
 }

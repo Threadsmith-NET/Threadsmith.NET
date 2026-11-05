@@ -61,8 +61,20 @@ public sealed partial class SessionApplication
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
             using var roundPromptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
-            if ((deferredFeedback ?? _sourceEdits?.TakeFeedback(registration.SessionId, runId)) is { } feedback)
+
+            // Finish pending edit checks before the model chooses its next tools, including
+            // builds and tests. Reuse the final-feedback owner, deadline and cancellation.
+            var boundaryFeedback = deferredFeedback ?? (_sourceEdits is null ? null
+                : await _sourceEdits.WaitForFinalFeedbackAsync(registration.SessionId, runId, cancellationToken));
+            if (boundaryFeedback is { } feedback)
             {
+                if (deferredFeedback is null)
+                {
+                    await _events.PublishAsync(
+                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(feedback)) { EditAnalysis = feedback },
+                        cancellationToken);
+                }
+
                 deferredFeedback = null;
                 loopState.CommitStandaloneMessage(
                     modelRound,
@@ -1618,6 +1630,7 @@ public sealed partial class SessionApplication
             .Select(tool => tool.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var semanticToolAttempted = loopState.SemanticToolAttempted;
+        var sourceEditRequested = false;
         var observedToolCalls = new ToolCallHistory(loopState.InvokedToolCalls);
         foreach (var call in pendingCalls.OrderBy(item => item.Ordinal))
         {
@@ -1650,6 +1663,19 @@ public sealed partial class SessionApplication
             }
 
             var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            if (sourceEditRequested && (definition.SideEffect == ToolSideEffect.ExecutesCode
+                || definition.Category is ToolCategory.ProcessExecution or ToolCategory.CodeExecution))
+            {
+                diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                    MalformedInvocationFailureKind.PhaseInvalidTool,
+                    call.Ordinal,
+                    call.ToolName,
+                    _prompts.Get(PromptFileNames.CorrectionToolBatchSourceEditFeedback),
+                    pendingCalls.Count);
+                return true;
+            }
+
+            sourceEditRequested |= call.ToolName.Equals("edit_source", StringComparison.OrdinalIgnoreCase);
             if (!observedToolCalls.TryAdd(definition, call.ArgumentsJson))
             {
                 diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(

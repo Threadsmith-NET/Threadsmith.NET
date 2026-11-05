@@ -1,6 +1,7 @@
 namespace Threadsmith.Tools;
 
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Core;
 
 /// <summary>Resolves the direct-write folder allowlist and fences it to the active repository.</summary>
 public sealed class WriteFileConfiguration
@@ -69,7 +70,7 @@ public sealed class WriteFileConfiguration
     internal string[] GetAllowedFolders(string repositoryPath)
     {
         var snapshot = Volatile.Read(ref _current);
-        if (!string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath)), snapshot.Repository, PathComparison))
+        if (!RepositoryPathPolicy.PathsEqual(snapshot.Repository, repositoryPath))
         {
             throw new UnauthorizedAccessException("write_file configuration belongs to another repository.");
         }
@@ -77,14 +78,11 @@ public sealed class WriteFileConfiguration
         return [.. snapshot.Folders];
     }
 
-    private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
     private string[] NarrowFolders(string repository, string[] restrictions)
     {
-        return [.. _fallbackFolders.Select(folder => Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository)))
-            .SelectMany(parent => restrictions.Select(folder => Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository)))
-                .Select(child => ToolPathRules.IsSameOrChild(child, parent) ? child : ToolPathRules.IsSameOrChild(parent, child) ? parent : null))
-            .OfType<string>().Distinct()];
+        return RepositoryPathPolicy.IntersectRoots(
+            _fallbackFolders.Select(folder => Path.GetFullPath(folder, repository)),
+            restrictions.Select(folder => Path.GetFullPath(folder, repository)));
     }
 
     private static string ValidateFolder(string? value)

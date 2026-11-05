@@ -24,7 +24,7 @@ public static class MutationRiskCalculator
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(largeDiffThreshold);
 
         var fullRoot = Path.GetFullPath(repositoryRoot);
-        var rootPrefix = Path.TrimEndingDirectorySeparator(fullRoot) + Path.DirectorySeparatorChar;
+        var caseContext = new RepositoryPathCaseContext(fullRoot);
         var outsideRepository = false;
         var configChanges = false;
         var dependencyChanges = false;
@@ -55,8 +55,7 @@ public static class MutationRiskCalculator
             {
                 var fullPath = Path.GetFullPath(relativePath, fullRoot);
                 outsideRepository |= Path.IsPathRooted(relativePath)
-                    || (!fullPath.StartsWith(rootPrefix, PathComparison)
-                        && !string.Equals(fullPath, fullRoot, PathComparison));
+                    || !RepositoryPathPolicy.ContainsPath(fullRoot, fullPath, caseContext: caseContext);
             }
             catch (Exception exception) when (exception is ArgumentException
                 or NotSupportedException
@@ -88,10 +87,6 @@ public static class MutationRiskCalculator
             TotalLinesChanged = totalLines,
         };
     }
-
-    private static StringComparison PathComparison => OperatingSystem.IsWindows()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
 }
 
 /// <summary>Locally approved repository mutation policy with invariant path and secret guardrails.</summary>
@@ -178,9 +173,9 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            EnsureNoReparsePoints(normalizedRoot, configurationPath);
+            ScopedFilePaths.RejectLinks(configurationPath, normalizedRoot);
 
-            var keepSessionChoice = string.Equals(configurationPath, _repositoryConfigurationPath, PathComparison)
+            var keepSessionChoice = _repositoryConfigurationPath is not null && RepositoryPathPolicy.PathsEqual(configurationPath, _repositoryConfigurationPath)
                 && Volatile.Read(ref _consent).Choice == MutationApprovalPolicy.TrustSession;
 
             // Fail closed before reading another repository or an unavailable/corrupt store.
@@ -226,7 +221,10 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             {
                 var root = Path.GetDirectoryName(Path.GetDirectoryName(_repositoryConfigurationPath))
                     ?? throw new InvalidOperationException("The repository policy path has no root.");
-                EnsureNoReparsePoints(root, _repositoryConfigurationPath);
+
+                // Consent cannot be persisted for a repository that disappeared after binding.
+                _ = File.GetAttributes(root);
+                ScopedFilePaths.RejectLinks(_repositoryConfigurationPath, root);
                 if (_facts is null)
                 {
                     throw new InvalidOperationException("Remembered mutation consent is unavailable in this host. Use session-only trust or configure a trust store.");
@@ -277,7 +275,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         ArgumentNullException.ThrowIfNull(relativePaths);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         var fullRoot = Path.GetFullPath(repositoryRoot);
-        var rootPrefix = Path.TrimEndingDirectorySeparator(fullRoot) + Path.DirectorySeparatorChar;
+        var caseContext = new RepositoryPathCaseContext(fullRoot);
         foreach (var relativePath in relativePaths.Select(path => path.Replace('\\', '/')))
         {
             if (Path.IsPathRooted(relativePath))
@@ -297,7 +295,11 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                 throw new MutationPolicyException("A mutation target contains an invalid path.");
             }
 
-            if (!fullPath.StartsWith(rootPrefix, PathComparison)
+            // Containment admits case aliases; the single pass adopts the root's spelling so
+            // repository-relative prohibitions cannot be bypassed through alias casing on
+            // case-insensitive filesystems.
+            if (!RepositoryPathPolicy.TryNormalizeContainedPath(fullRoot, fullPath, out var containedPath, caseContext: caseContext)
+                || RepositoryPathPolicy.PathsEqual(fullRoot, containedPath, caseContext: caseContext)
                 || relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
                     .Any(segment => string.Equals(segment, ".git", StringComparison.OrdinalIgnoreCase)))
             {
@@ -305,6 +307,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     "Mutations must stay inside the authorized repository and may not modify Git metadata.");
             }
 
+            fullPath = containedPath;
             var normalizedPath = Path.GetRelativePath(fullRoot, fullPath).Replace('\\', '/');
             var policy = _policyBinding?.Current;
             try
@@ -321,9 +324,9 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     var relativeRoot = Path.GetRelativePath(policy.RepositoryPath, root);
                     var workspaceRoot = relativeRoot == ".." || relativeRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relativeRoot)
                         ? root : Path.GetFullPath(relativeRoot, fullRoot);
-                    return fullPath.Equals(workspaceRoot, PathComparison) || fullPath.StartsWith(Path.TrimEndingDirectorySeparator(workspaceRoot) + Path.DirectorySeparatorChar, PathComparison);
+                    return RepositoryPathPolicy.ContainsPath(workspaceRoot, fullPath, caseContext: caseContext);
                 })
-                || RepositoryPathPolicy.IsProhibited(normalizedPath, policy.ProhibitedPaths, fullRoot)))
+                || RepositoryPathPolicy.IsProhibited(normalizedPath, policy.ProhibitedPaths, fullRoot, caseContext)))
             {
                 throw new MutationPolicyException("The effective security policy prohibits this mutation path.");
             }
@@ -388,45 +391,4 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         return selected == MutationApprovalPolicy.ReviewRisky || ceiling == MutationApprovalPolicy.ReviewRisky
             ? MutationApprovalPolicy.ReviewRisky : selected;
     }
-
-    private static void EnsureNoReparsePoints(string repositoryRoot, string candidatePath)
-    {
-        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
-        var fullPath = Path.GetFullPath(candidatePath);
-        var relative = Path.GetRelativePath(normalizedRoot, fullPath);
-        if (relative == ".."
-            || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-            || Path.IsPathRooted(relative))
-        {
-            throw new UnauthorizedAccessException("Repository policy persistence must stay inside the repository.");
-        }
-
-        var currentPath = normalizedRoot;
-        if ((File.GetAttributes(currentPath) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new UnauthorizedAccessException(
-                "Repository policy persistence cannot traverse a symbolic link or junction.");
-        }
-
-        foreach (var segment in relative.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries))
-        {
-            currentPath = Path.Combine(currentPath, segment);
-            if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
-            {
-                break;
-            }
-
-            if ((File.GetAttributes(currentPath) & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new UnauthorizedAccessException(
-                    "Repository policy persistence cannot traverse a symbolic link or junction.");
-            }
-        }
-    }
-
-    private static StringComparison PathComparison => OperatingSystem.IsWindows()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
 }

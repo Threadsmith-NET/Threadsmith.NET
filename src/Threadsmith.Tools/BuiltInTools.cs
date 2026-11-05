@@ -635,13 +635,20 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     public override ToolDefinition Definition => _definition;
 
     /// <inheritdoc />
-    public override async Task<ToolExecution<SearchTextOutput>> ExecuteAsync(
+    public override Task<ToolExecution<SearchTextOutput>> ExecuteAsync(
         SearchTextInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
+        => ExecuteAsync(input, context, new RepositoryPathCaseContext(context.Invocation.RepositoryPath), cancellationToken);
+
+    /// <summary>Runs a search with operation-owned directory case evidence.</summary>
+    internal async Task<ToolExecution<SearchTextOutput>> ExecuteAsync(
+        SearchTextInput input,
+        ToolExecutionContext context,
+        RepositoryPathCaseContext caseContext,
+        CancellationToken cancellationToken = default)
     {
         var matches = new List<TextSearchMatch>();
-        var prohibitedPathCaseContext = new RepositoryPathCaseContext(context.Invocation.RepositoryPath);
         var sources = new List<ToolProvenanceSource>();
         var truncated = false;
         var regex = input.UseRegularExpression
@@ -650,11 +657,11 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 RegexOptions.CultureInvariant,
                 TimeSpan.FromMilliseconds(_limits.SearchRegexTimeoutMilliseconds))
             : null;
-        var searchPath = ToolPathRules.NormalizeAndValidateForTool(input.Path ?? ".", context.Invocation, Definition.Id);
-        var scratchpadSearch = ToolPathRules.IsWithinScratchpad(input.Path ?? ".", context.Invocation);
+        var searchPath = ToolPathRules.NormalizeAndValidateForTool(input.Path ?? ".", context.Invocation, Definition.Id, caseContext: caseContext);
+        var scratchpadSearch = ToolPathRules.IsWithinScratchpad(input.Path ?? ".", context.Invocation, caseContext: caseContext);
         var repositoryPath = scratchpadSearch
             ? context.Invocation.Scratchpad.RootPath!
-            : ToolPathRules.NormalizeAndValidate(".", context.Invocation);
+            : ToolPathRules.NormalizeAndValidate(".", context.Invocation, caseContext: caseContext);
         if (!File.Exists(searchPath) && !Directory.Exists(searchPath))
         {
             throw new FileNotFoundException("The search path does not exist.", searchPath);
@@ -668,6 +675,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             searchPath,
             maximumMatches,
             scratchpadSearch,
+            caseContext,
             cancellationToken);
         if (ripgrepAttempt.Execution is not null)
         {
@@ -679,6 +687,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             searchPath,
             context,
             scratchpadSearch,
+            caseContext,
             cancellationToken);
         truncated = fileSet.IsTruncated;
         foreach (var path in fileSet.Paths)
@@ -688,7 +697,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 .Replace('\\', '/');
             if (relative.Split('/').Any(IsManagedSearchExcludedDirectory)
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative)
-                || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, prohibitedPathCaseContext)
+                || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, caseContext)
                 || IsUnsupportedSearchFile(path)
                 || !MatchesSearchGlob(input.Glob, relative))
             {
@@ -818,6 +827,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         string searchPath,
         int maximumMatches,
         bool scratchpadSearch,
+        RepositoryPathCaseContext caseContext,
         CancellationToken cancellationToken)
     {
         if (_processManager is null)
@@ -975,7 +985,8 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                     matchedPath = ToolPathRules.NormalizeAndValidateForTool(
                         candidate,
                         context.Invocation,
-                        Definition.Id);
+                        Definition.Id,
+                        caseContext: caseContext);
                 }
                 catch (Exception exception) when (
                     exception is ToolArgumentValidationException
@@ -1089,6 +1100,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         string searchPath,
         ToolExecutionContext context,
         bool scratchpadSearch,
+        RepositoryPathCaseContext caseContext,
         CancellationToken cancellationToken)
     {
         if (scratchpadSearch)
@@ -1101,6 +1113,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         var gitFileSet = await TryEnumerateGitSearchFilesAsync(
             repositoryPath,
             context,
+            caseContext,
             cancellationToken);
         if (gitFileSet is not null)
         {
@@ -1117,6 +1130,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     private async Task<SearchFileSet?> TryEnumerateGitSearchFilesAsync(
         string repositoryPath,
         ToolExecutionContext context,
+        RepositoryPathCaseContext caseContext,
         CancellationToken cancellationToken)
     {
         if (_processManager is null)
@@ -1196,7 +1210,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
             try
             {
-                var normalizedPath = ToolPathRules.NormalizeAndValidate(relativePath, context.Invocation);
+                var normalizedPath = ToolPathRules.NormalizeAndValidate(relativePath, context.Invocation, caseContext: caseContext);
                 if (!IsManagedSearchLinkOrReparsePoint(normalizedPath))
                 {
                     paths.Add(normalizedPath);

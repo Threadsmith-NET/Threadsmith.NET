@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
   </ItemGroup>
 
   <!-- Threadsmith.Core intentionally has NO project or package references. -->

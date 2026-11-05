@@ -8,6 +8,7 @@ public sealed class RepositoryPathCaseContext
     private readonly string _repositoryPath;
     private readonly Func<string, bool?> _probe;
     private readonly ConcurrentDictionary<string, bool> _directories = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool?> _containmentProbes = new(StringComparer.Ordinal);
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryPathCaseContext"/> class for one operation.</summary>
     public RepositoryPathCaseContext(string repositoryPath)
@@ -32,13 +33,16 @@ public sealed class RepositoryPathCaseContext
         return _directories.GetOrAdd(parent, Resolve);
     }
 
+    /// <summary>Probes a directory's case behavior once per operation, caching the raw result for containment checks.</summary>
+    internal bool? ProbeDirectoryCase(string directory) => _containmentProbes.GetOrAdd(Path.TrimEndingDirectorySeparator(directory), _probe);
+
     private bool Resolve(string directory)
     {
         if (Directory.Exists(directory))
         {
             // An empty mounted volume cannot inherit its parent's case behavior. Without
             // evidence, fold case for prohibitions so unknown behavior cannot grant access.
-            return _probe(directory) ?? false;
+            return ProbeDirectoryCase(directory) ?? false;
         }
 
         var parent = Path.GetDirectoryName(directory);

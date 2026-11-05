@@ -93,7 +93,7 @@ public sealed partial class SourceEditApplicationTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
-        var analyzer = new AdvisoryAnalyzer([], pending: !analyzerOnly);
+        var analyzer = new AdvisoryAnalyzer([]);
         var edits = fixture.CreateApplication(
             analyzer: analyzer,
             editOptions: new EditAnalysisOptions { FinalFeedbackWaitMilliseconds = timeout ? 1 : 30000 });
@@ -103,14 +103,23 @@ public sealed partial class SourceEditApplicationTests
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
         long feedbackReady = 0;
+        var checksStarted = false;
         double? deliveryMilliseconds = null;
         var provider = new CompletionProvider(1)
         {
             RequestObserved = request =>
             {
-                if (analyzerOnly && analyzer.Latest is { Analyzers.Status: "disabled" } latest)
+                // Introduce pending work during the answer to retain coverage of the
+                // final-response race independently of the earlier continuation wait.
+                if (!checksStarted && analyzer.Latest is { } latest)
                 {
-                    analyzer.Publish(latest with { Revision = latest.Revision + 1, Analyzers = new() { Status = "pending", DocumentsInScope = 1 } });
+                    checksStarted = true;
+                    analyzer.Publish(latest with
+                    {
+                        Revision = latest.Revision + 1,
+                        Pending = !analyzerOnly,
+                        Analyzers = analyzerOnly ? new() { Status = "pending", DocumentsInScope = 1 } : new(),
+                    });
                 }
 
                 if (feedbackReady != 0 && request.Messages.Any(message => message.SectionId == "source-edit-feedback"

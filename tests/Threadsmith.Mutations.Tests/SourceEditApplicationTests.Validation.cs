@@ -383,6 +383,8 @@ public sealed partial class SourceEditApplicationTests
 
         public Action? BeforeRead { get; set; }
 
+        public bool PendingAnalyzers { get; init; }
+
         public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
         {
             return true;
@@ -396,6 +398,7 @@ public sealed partial class SourceEditApplicationTests
             {
                 EffectId = command.EffectId,
                 Pending = _pending,
+                Analyzers = PendingAnalyzers ? new() { Status = "pending", DocumentsInScope = 1 } : new(),
                 ProjectsAnalyzed = 1,
                 ProjectsInScope = 1,
                 ErrorComparisonAvailable = true,

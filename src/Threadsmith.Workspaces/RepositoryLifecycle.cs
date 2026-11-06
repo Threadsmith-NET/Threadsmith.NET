@@ -601,9 +601,6 @@ public sealed class RepositoryLifecycle :
         }
 
         var hashes = new ConcurrentBag<WorkspaceFileHash>();
-        var capturedFiles = _mutationCoordinator is null
-            ? null
-            : new ConcurrentDictionary<string, BaselineFileSnapshot>(PathComparer);
         await Parallel.ForEachAsync(
             candidates,
             new ParallelOptions
@@ -622,14 +619,6 @@ public sealed class RepositoryLifecycle :
                 }
 
                 var relativePath = Path.GetRelativePath(session.RepositoryPath, path).Replace('\\', '/');
-                if (capturedFiles is not null)
-                {
-                    var snapshot = await BaselineFileSnapshot.CaptureAsync(path, length, token);
-                    capturedFiles[relativePath] = snapshot;
-                    hashes.Add(new WorkspaceFileHash(relativePath, snapshot.Sha256, snapshot.Bytes.LongLength));
-                    return;
-                }
-
                 await using var stream = new FileStream(
                     path,
                     FileMode.Open,
@@ -690,7 +679,8 @@ public sealed class RepositoryLifecycle :
             await _mutationCoordinator.RegisterBaselineAsync(
                 baseline,
                 isolation: null,
-                capturedFiles: capturedFiles,
+                capturedFiles: null,
+                deferRecovery: true,
                 cancellationToken: cancellationToken);
         }
 

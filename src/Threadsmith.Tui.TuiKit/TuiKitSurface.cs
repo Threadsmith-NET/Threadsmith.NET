@@ -258,6 +258,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             }
 
             _read = completion;
+            DismissStartupModal();
             _startupBlocked = false;
             _startupDetails = [];
             _startupProgress = null;

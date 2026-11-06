@@ -16,6 +16,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     private IReadOnlyList<string> _startupDetails = [];
     private long _startupDwellStart;
     private StartupTips? _startupTips;
+    private StartupModal? _startupModal;
     private Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? _startupProgress;
 
     /// <inheritdoc />
@@ -123,6 +124,8 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             modal.Progress = _startupProgress;
             _inputEpoch++;
             ClosePalette();
+            DismissStartupModal();
+            _startupModal = modal;
             _ = _app.ShowAsync<string>(modal);
 
             // Paint on the terminal owner before the host starts synchronous loading work.
@@ -190,7 +193,12 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                             _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));
                         }
 
-                        modal.RequestClose(null);
+                        // Keep successful work visible until the next stage or composer takes over.
+                        if (outcome != "Completed" || cancellationToken.IsCancellationRequested)
+                        {
+                            DismissStartupModal();
+                        }
+
                         _inputEpoch++;
                     },
                         _stop.Token);
@@ -214,6 +222,18 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     {
         ArgumentNullException.ThrowIfNull(action);
         return SelectTogglesCoreAsync(request, change, action, cancellationToken);
+    }
+
+    private void DismissStartupModal()
+    {
+        if (_startupModal is null)
+        {
+            return;
+        }
+
+        _startupModal.RequestClose(null);
+        _app.Modals.RemoveClosed();
+        _startupModal = null;
     }
 
     private async Task<RepositoryMemoryListSnapshot?> EditRepositoryMemoryAsync(

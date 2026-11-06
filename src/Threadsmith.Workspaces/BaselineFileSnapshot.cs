@@ -41,6 +41,18 @@ internal sealed class BaselineFileSnapshot
         long expectedLength,
         CancellationToken cancellationToken)
     {
+        var (bytes, sha256) = await CaptureBytesAsync(path, expectedLength, cancellationToken);
+        var snapshot = FromBytes(bytes, sha256);
+        cancellationToken.ThrowIfCancellationRequested();
+        return snapshot;
+    }
+
+    /// <summary>Captures bounded bytes and their identity before text validation.</summary>
+    internal static async Task<(byte[] Bytes, string Sha256)> CaptureBytesAsync(
+        string path,
+        long expectedLength,
+        CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentOutOfRangeException.ThrowIfNegative(expectedLength);
         if (expectedLength > Array.MaxLength)
@@ -68,9 +80,9 @@ internal sealed class BaselineFileSnapshot
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = FromBytes(bytes, Convert.ToHexStringLower(SHA256.HashData(bytes)));
+        var sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
         cancellationToken.ThrowIfCancellationRequested();
-        return snapshot;
+        return (bytes, sha256);
     }
 
     /// <summary>Takes ownership of bytes which callers must never subsequently mutate.</summary>

@@ -15,6 +15,71 @@ using Xunit;
 /// <summary>Exercises direct editing through the real writer and durable effect store.</summary>
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>Ordinary edits account for both captures while cached reads and replay add no bytes.</summary>
+    [Fact]
+    public async Task DeferredEditCountsFirstAndRefreshedRecoveryBytesWithoutCountingReplay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var measurements = new TestRecoveryByteMeasurements();
+        await using var fixture = await EditFixture.CreateAsync(ct, deferRecovery: true);
+        Assert.Equal(0, fixture.Workspace.RetainedBaselineBytes);
+        Assert.Equal(0, measurements.First);
+        Assert.Equal(0, measurements.Refresh);
+        var command = fixture.Replace("Example", "Changed", false);
+
+        var receipt = await fixture.Application.HandleAsync(command, ct);
+
+        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+        Assert.Equal(Encoding.UTF8.GetByteCount("class Example { }"), measurements.First);
+        Assert.Equal(Encoding.UTF8.GetByteCount("class Changed { }"), measurements.Refresh);
+        Assert.Equal("class Changed { }", await fixture.Workspace.ReadBaselineTextAsync("Example.cs", ct));
+        var replay = await fixture.CreateApplication().HandleAsync(command, ct);
+        Assert.Equal(SourceEditStatus.Applied, replay.Status);
+        Assert.Equal(1, fixture.Commits.Count);
+        Assert.Equal(Encoding.UTF8.GetByteCount("class Example { }"), measurements.First);
+        Assert.Equal(Encoding.UTF8.GetByteCount("class Changed { }"), measurements.Refresh);
+    }
+
+    /// <summary>Deferred direct edits retain exact rollback bytes after promotion and protect later external changes.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeferredEditRollbackPreservesOriginalBytesAndRejectsNewerContent(bool externalChange)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct, deferRecovery: true);
+        // Direct editing refreshes endpoint identities before staging; use a BOM and CRLF to
+        // distinguish exact recovery from reconstruction of decoded original text.
+        await File.WriteAllTextAsync(fixture.SourcePath, "class Example { }\r\n", Encoding.Unicode, ct);
+        var original = await File.ReadAllBytesAsync(fixture.SourcePath, ct);
+        var command = fixture.Replace("Example", "Changed", false);
+        var receipt = await fixture.Application.HandleAsync(command, ct);
+        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+        Assert.Equal("class Changed { }\r\n", await fixture.Workspace.ReadBaselineTextAsync("Example.cs", ct));
+        if (externalChange)
+        {
+            await File.WriteAllTextAsync(fixture.SourcePath, "newer external content", ct);
+        }
+
+        var rollback = await fixture.Application.HandleAsync(
+            new RollbackMutationSetCommand(command.SessionId, receipt.MutationSetId), ct);
+
+        Assert.Equal(externalChange, rollback.Conflicts.HasConflicts);
+        if (externalChange)
+        {
+            Assert.Empty(rollback.RestoredFiles);
+            Assert.Equal("newer external content", await File.ReadAllTextAsync(fixture.SourcePath, ct));
+        }
+        else
+        {
+            Assert.Contains("Example.cs", rollback.RestoredFiles);
+            Assert.Equal(original, await File.ReadAllBytesAsync(fixture.SourcePath, ct));
+            Assert.Equal("class Example { }\r\n", await fixture.Workspace.ReadBaselineTextAsync("Example.cs", ct));
+        }
+
+        Assert.Empty(await fixture.Store.GetUnresolvedEffectsAsync(RepositoryIdentity.Create(fixture.Repository), ct));
+    }
+
     /// <summary>A delete-and-recreate batch reports its net disk effect rather than claiming the file is absent.</summary>
     [Theory]
     [InlineData("class Example { }", "Unchanged")]
@@ -539,7 +604,9 @@ public sealed partial class SourceEditApplicationTests
 
         public SourceEditApplication Application { get; }
 
-        public static async Task<EditFixture> CreateAsync(CancellationToken ct, Func<DomainEventStream, ISemanticHostMutationAttribution?>? attributionFactory = null, WorkspaceResourceLimits? limits = null, MutationApprovalPolicy approvalPolicy = MutationApprovalPolicy.TrustSession)
+        public TransactionalWorkspace Workspace => Assert.IsType<TransactionalWorkspace>(_workspaces.GetWorkspace(WorkspaceId));
+
+        public static async Task<EditFixture> CreateAsync(CancellationToken ct, Func<DomainEventStream, ISemanticHostMutationAttribution?>? attributionFactory = null, WorkspaceResourceLimits? limits = null, MutationApprovalPolicy approvalPolicy = MutationApprovalPolicy.TrustSession, bool deferRecovery = false)
         {
             var root = Directory.CreateTempSubdirectory("threadsmith-direct-edit-").FullName;
             var repo = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
@@ -551,7 +618,7 @@ public sealed partial class SourceEditApplicationTests
             var workspaces = new TransactionalWorkspaceCoordinator(events, mutationApprovalPolicy: policy, semanticMutationAttribution: attributionFactory?.Invoke(events), resourceLimits: limits);
             var workspaceId = WorkspaceId.New();
             var baseline = new WorkspaceBaseline(workspaceId, repo, DateTimeOffset.UtcNow, [new("Example.cs", Hash("class Example { }"), Encoding.UTF8.GetByteCount("class Example { }"))], TrustLevel: RepositoryTrustLevel.TrustedMutation);
-            await workspaces.RegisterBaselineAsync(baseline, cancellationToken: ct);
+            await workspaces.RegisterBaselineAsync(baseline, null, null, deferRecovery, ct);
             var connection = $"Data Source={Path.Combine(root, "state.db")};Pooling=False";
             await new MigrationRunner(connection, DefaultMigrations.All).RunAsync(ct);
             await new SqliteEventStore(connection).InitializeAsync(ct);

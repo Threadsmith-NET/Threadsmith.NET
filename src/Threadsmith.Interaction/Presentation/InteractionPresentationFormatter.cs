@@ -179,8 +179,8 @@ internal static class InteractionPresentationFormatter
                 GetSemanticCheckTitle(completed.Phase, checkName),
                 GetSemanticOutcomeText(completed.Outcome),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
-                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome),
-                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome)),
+                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome, checkName),
+                GetSemanticFeedbackRole(completed.Analysis, completed.Outcome, checkName)),
             GetSemanticCheckLines(completed, limits ?? new()),
             ChildIndent: "  ");
 
@@ -234,11 +234,13 @@ internal static class InteractionPresentationFormatter
     }
 
     /// <summary>Highlights findings and evidence limitations even when the analysis operation completed successfully.</summary>
-    internal static PresentationTextRole GetSemanticFeedbackRole(SourceEditAnalysis? analysis, SemanticCheckOutcome outcome)
+    internal static PresentationTextRole GetSemanticFeedbackRole(SourceEditAnalysis? analysis, SemanticCheckOutcome outcome, string? checkName = null)
     {
+        var includeCompiler = checkName != "advisory edit analyzers";
+        var includeAnalyzers = checkName is null or "advisory edit analyzers";
         if (outcome is SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled
-            || (analysis is { Obsolete: false } && (analysis.CurrentErrors > 0 || analysis.SyntaxErrors > 0
-                || analysis.Diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))))
+            || (analysis is { Obsolete: false } && ((includeCompiler && (analysis.CurrentErrors > 0 || analysis.SyntaxErrors > 0))
+                || GetScopedDiagnostics(analysis, checkName).Any(item => item.Severity == DiagnosticSeverity.Error))))
         {
             return PresentationTextRole.Error;
         }
@@ -248,15 +250,67 @@ internal static class InteractionPresentationFormatter
             return outcome == SemanticCheckOutcome.Completed ? PresentationTextRole.Warning : GetSemanticOutcomeRole(outcome);
         }
 
-        if (analysis.Obsolete || analysis.Pending || analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
-            || analysis.Analyzers.Status is not ("disabled" or "completed" or "skipped")
-            || analysis.CurrentWarnings is null or > 0 || analysis.DiagnosticsTruncated
-            || analysis.Diagnostics.Any(item => item.Severity == DiagnosticSeverity.Warning))
+        if (analysis.Obsolete
+            || (includeCompiler && (analysis.Pending || analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
+                || analysis.CurrentWarnings is null or > 0))
+            || (includeAnalyzers && (analysis.Analyzers.Status is not ("disabled" or "completed" or "skipped")
+                || (analysis.Analyzers.Status == "completed" && analysis.Analyzers.DocumentsAnalyzed < analysis.Analyzers.DocumentsInScope)))
+            || AreScopedFindingsTruncated(analysis, checkName)
+            || GetScopedDiagnostics(analysis, checkName).Any(item => item.Severity == DiagnosticSeverity.Warning))
         {
             return PresentationTextRole.Warning;
         }
 
         return GetSemanticOutcomeRole(outcome);
+    }
+
+    /// <summary>Summarizes only the evidence owned by a check, or both producers for finalized feedback.</summary>
+    internal static string GetSemanticFeedbackSummary(SourceEditAnalysis? analysis, bool countsAvailable, string? checkName = null)
+    {
+        if (analysis is null)
+        {
+            return "details";
+        }
+
+        if (analysis.Obsolete)
+        {
+            return "obsolete evidence";
+        }
+
+        var includeCompiler = checkName != "advisory edit analyzers";
+        var includeAnalyzers = checkName is null or "advisory edit analyzers";
+        var summary = includeCompiler
+            ? analysis.Pending ? $"pending; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects"
+                : analysis.ProjectsAnalyzed == 0 ? "coverage unavailable"
+                : $"{(countsAvailable ? $"{analysis.CurrentErrors} errors in coverage" : "error totals unknown")}; {(analysis.CurrentWarnings is { } warnings ? $"{warnings} warnings" : "warnings unknown")}; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} projects"
+                    + (analysis.ProjectsAnalyzed < analysis.ProjectsInScope ? "; coverage incomplete" : string.Empty)
+            : string.Empty;
+        if (includeAnalyzers && (analysis.Analyzers.Status != "disabled" || !includeCompiler))
+        {
+            var analyzers = analysis.Analyzers;
+            summary += (summary.Length > 0 ? "; " : string.Empty)
+                + $"analyzers {analyzers.Status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} documents";
+            if (analyzers.Status is "completed" or "partial")
+            {
+                summary += $"; {analyzers.ReportableFindings} analyzer findings";
+                if (analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope)
+                {
+                    summary += "; coverage incomplete";
+                }
+            }
+        }
+
+        if (AreScopedFindingsTruncated(analysis, checkName))
+        {
+            summary += "; limited findings";
+        }
+
+        if ((includeCompiler && analysis.OutputFiltered) || (includeAnalyzers && analysis.Analyzers.OutputFiltered))
+        {
+            summary += "; exclusions apply";
+        }
+
+        return summary;
     }
 
     /// <summary>Names advisory phases consistently in live activity and retained completion blocks.</summary>
@@ -1417,6 +1471,22 @@ internal static class InteractionPresentationFormatter
         return new(TuiBlockLineKind.Item, TruncateForDisplay($"{severity} {code} {location} [{context}]: {message}"), PresentationTextRole.Muted);
     }
 
+    private static IEnumerable<SourceEditDiagnostic> GetScopedDiagnostics(SourceEditAnalysis analysis, string? checkName)
+    {
+        return checkName is null ? analysis.Diagnostics
+            : analysis.Diagnostics.Where(item => (item.Producer == "analyzer") == (checkName == "advisory edit analyzers"));
+    }
+
+    private static bool AreScopedFindingsTruncated(SourceEditAnalysis analysis, string? checkName)
+    {
+        var compilerTruncated = analysis.FindingRetentionTruncated || analysis.FindingProjectionTruncated
+            || analysis.CurrentErrors + (analysis.CurrentWarnings ?? 0) > analysis.Diagnostics.Count(item => item.Producer != "analyzer");
+        var analyzerTruncated = analysis.Analyzers.Truncated
+            || analysis.Analyzers.ReportableFindings > analysis.Diagnostics.Count(item => item.Producer == "analyzer");
+        return checkName is null ? compilerTruncated || analyzerTruncated
+            : checkName == "advisory edit analyzers" ? analyzerTruncated : compilerTruncated;
+    }
+
     private static IReadOnlyList<TuiBlockLine> GetSemanticCheckLines(SemanticCheckCompleted completed, TuiResourceLimits limits)
     {
         if (completed.Analysis is not { } analysis)
@@ -1424,12 +1494,11 @@ internal static class InteractionPresentationFormatter
             return [new(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)];
         }
 
-        return GetEditAnalysisLines(analysis, completed.Phase, completed.CheckName == "advisory edit analyzers" || completed.Outcome == SemanticCheckOutcome.Completed, limits);
+        return GetEditAnalysisLines(analysis, completed.Phase, completed.Outcome == SemanticCheckOutcome.Completed, limits, completed.CheckName);
     }
 
-    private static IReadOnlyList<TuiBlockLine> GetEditAnalysisLines(SourceEditAnalysis analysis, SemanticCheckPhase phase, bool compilerCountsAvailable, TuiResourceLimits limits)
+    private static void AppendCompilerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis, SemanticCheckPhase phase, bool compilerCountsAvailable)
     {
-        var lines = new List<TuiBlockLine>();
         var syntax = analysis.Obsolete ? "Syntax: results obsolete"
             : analysis.SyntaxDocumentsAnalyzed is > 0 && analysis.SyntaxErrors is { } syntaxErrors
                 ? $"Syntax: {analysis.SyntaxDocumentsAnalyzed} C# document instances checked; {syntaxErrors} reportable errors"
@@ -1461,50 +1530,88 @@ internal static class InteractionPresentationFormatter
         {
             lines.Add(new(TuiBlockLineKind.Item, $"Selected reportable warnings: {warnings}", PresentationTextRole.Muted));
         }
-
-        if (analysis.Analyzers.Status != "disabled")
+        else if (!analysis.Obsolete && !analysis.Pending)
         {
-            var analyzers = analysis.Analyzers;
-            var status = analysis.Obsolete ? "obsolete" : analyzers.Status;
-            lines.Add(new(TuiBlockLineKind.Item, $"Analyzers: {status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} owned document instances checked", PresentationTextRole.Muted));
-            if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
-            {
-                var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}";
-                counts += analyzers.NewFindings is { } introduced && analyzers.ResolvedFindings is { } resolved
-                    ? $"; {introduced} new; {resolved} resolved" : "; before/after comparison unavailable";
-                lines.Add(new(TuiBlockLineKind.Item, counts, PresentationTextRole.Muted));
-            }
-
-            if (analyzers.OutputFiltered)
-            {
-                lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered analyzer output", PresentationTextRole.Muted));
-            }
+            lines.Add(new(TuiBlockLineKind.Item, "Selected reportable warnings: unknown", PresentationTextRole.Muted));
         }
 
         if (analysis.OutputFiltered)
         {
-            lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered advisory output", PresentationTextRole.Muted));
+            lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered compiler output", PresentationTextRole.Muted));
+        }
+    }
+
+    private static void AppendAnalyzerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis)
+    {
+        var analyzers = analysis.Analyzers;
+        var status = analysis.Obsolete ? "obsolete" : analyzers.Status;
+        var coverage = $"Analyzers: {status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} owned document instances checked";
+        if (!analysis.Obsolete && analyzers.Status is "completed" or "partial" && analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope)
+        {
+            coverage += "; coverage incomplete";
+        }
+
+        lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
+        if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
+        {
+            var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}";
+            counts += analyzers.NewFindings is { } introduced && analyzers.ResolvedFindings is { } resolved
+                ? $"; {introduced} new; {resolved} resolved" : "; before/after comparison unavailable";
+            lines.Add(new(TuiBlockLineKind.Item, counts, PresentationTextRole.Muted));
+        }
+
+        if (analyzers.OutputFiltered)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Diagnostic exclusions filtered analyzer output", PresentationTextRole.Muted));
+        }
+    }
+
+    private static IReadOnlyList<TuiBlockLine> GetEditAnalysisLines(SourceEditAnalysis analysis, SemanticCheckPhase phase, bool compilerCountsAvailable, TuiResourceLimits limits, string? checkName = null)
+    {
+        var lines = new List<TuiBlockLine>();
+        var includeCompiler = checkName != "advisory edit analyzers";
+        var includeAnalyzers = checkName is null or "advisory edit analyzers";
+        if (includeCompiler)
+        {
+            AppendCompilerAnalysisLines(lines, analysis, phase, compilerCountsAvailable);
+        }
+
+        if (includeAnalyzers && (analysis.Analyzers.Status != "disabled" || !includeCompiler))
+        {
+            AppendAnalyzerAnalysisLines(lines, analysis);
         }
 
         if (!analysis.Obsolete)
         {
-            foreach (var diagnostic in analysis.Diagnostics.Take(limits.MaximumEditAnalysisFindings))
+            var findingsShown = 0;
+            var additionalFindings = false;
+            foreach (var diagnostic in GetScopedDiagnostics(analysis, checkName))
             {
+                if (findingsShown >= limits.MaximumEditAnalysisFindings)
+                {
+                    additionalFindings = true;
+                    break;
+                }
+
                 var message = diagnostic.Producer == "analyzer" ? "[analyzer: " + diagnostic.AnalyzerIdentity + "] " + diagnostic.Message : diagnostic.Message;
                 lines.Add(CreateDiagnosticLine(diagnostic.Severity, diagnostic.Code, diagnostic.File, diagnostic.Line, diagnostic.Column, diagnostic.Project, diagnostic.TargetFramework, diagnostic.Origin, message));
+                findingsShown++;
             }
 
-            if (analysis.Diagnostics.Count > limits.MaximumEditAnalysisFindings || analysis.DiagnosticsTruncated)
+            if (additionalFindings || AreScopedFindingsTruncated(analysis, checkName))
             {
                 lines.Add(new(TuiBlockLineKind.Item, "Findings shown are bounded; additional findings may be omitted", PresentationTextRole.Muted));
             }
         }
 
-        var scope = analysis.Analyzers.Status == "disabled"
-            ? "Scope: reportable compiler errors and selected warnings; analyzer execution, build and tests are separate"
-            : "Scope: compiler errors, selected warnings and separately scoped optional analyzers; build and tests remain separate";
+        var scope = !includeCompiler
+            ? "Scope: optional analyzer findings in owned documents; compiler analysis, build and tests are separate"
+            : !includeAnalyzers || analysis.Analyzers.Status == "disabled"
+                ? "Scope: reportable compiler errors and selected warnings; analyzer execution, build and tests are separate"
+                : "Scope: compiler errors, selected warnings and separately scoped optional analyzers; build and tests remain separate";
         lines.Add(new(TuiBlockLineKind.Item, scope, PresentationTextRole.Muted));
-        var omissions = analysis.Omissions.Concat(analysis.Analyzers.Omissions).Distinct(StringComparer.Ordinal).ToArray();
+        var omissions = (includeCompiler ? analysis.Omissions : [])
+            .Concat(includeAnalyzers ? analysis.Analyzers.Omissions : []).Distinct(StringComparer.Ordinal).ToArray();
         foreach (var omission in omissions.Take(limits.MaximumEditAnalysisOmissions))
         {
             lines.Add(new(TuiBlockLineKind.Item, "Limit: " + TruncateForDisplay(omission), PresentationTextRole.Muted));

@@ -155,8 +155,18 @@ public sealed class SemanticDisclosureTests
             Analysis = new() { EffectId = Guid.NewGuid(), ProjectsInScope = 2, ProjectsAnalyzed = 2, CurrentErrors = 1, Analyzers = new() { Status = "failed" } },
         };
         var item = ProjectEvent(completed);
-        Assert.Contains("1 errors in coverage", item.Disclosure!.Summary, StringComparison.Ordinal);
-        Assert.Contains("Reportable errors in analyzed coverage: 1 current", string.Concat(TranscriptView.Project(item, 160).Select(segment => segment.Text)), StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Warning, item.Disclosure!.Role);
+        Assert.Contains("analyzers failed", item.Disclosure.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("errors in coverage", item.Disclosure.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compiler:", string.Concat(item.Segments.Select(segment => segment.Text)), StringComparison.Ordinal);
+
+        var finalized = ProjectEvent(new DiagnosticObserved(completed.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Feedback")
+        {
+            EditAnalysis = completed.Analysis,
+        });
+        Assert.Equal(PresentationTextRole.Error, finalized.Disclosure!.Role);
+        Assert.Contains("1 errors in coverage", finalized.Disclosure.Summary, StringComparison.Ordinal);
+        Assert.Contains("Reportable errors in analyzed coverage: 1 current", string.Concat(finalized.Segments.Select(segment => segment.Text)), StringComparison.Ordinal);
     }
 
     /// <summary>Reducing retention cannot turn a surviving detail row into a disclosure header.</summary>

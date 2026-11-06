@@ -184,6 +184,15 @@ public sealed record SessionProjection : IProjection
     public MutationProjection? Mutation { get; init; }
 }
 
+/// <summary>Scalar mutation state for polling without copying session or preview collections.</summary>
+/// <remarks>Read with the session key; absent sessions or mutations yield no projection.</remarks>
+public sealed record MutationStatusProjection(
+    ProjectionKey Key,
+    MutationSetId MutationSetId,
+    MutationApprovalLevel RequiredApproval,
+    bool IsApplied,
+    bool IsRolledBack) : IProjection;
+
 /// <summary>Reviewable mutation state retained in the session projection.</summary>
 public sealed record MutationProjection(
     MutationSetId MutationSetId,

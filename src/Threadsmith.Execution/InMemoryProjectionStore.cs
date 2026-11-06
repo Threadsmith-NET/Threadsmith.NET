@@ -1,6 +1,5 @@
 namespace Threadsmith.Execution;
 
-using System.Collections.ObjectModel;
 using Threadsmith.Core;
 
 /// <summary>Builds detached session snapshots from the event stream.</summary>
@@ -86,7 +85,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 },
                 ContextAssembled assembled when existing is not null => existing with
                 {
-                    ContextInspection = CopyInspection(assembled.Inspection),
+                    ContextInspection = ContextInspectionSnapshots.Copy(assembled.Inspection),
                 },
                 PlanProposed proposed when existing is not null
                     && proposed.Plan is not null => ApplyPlanProposal(existing, pendingPlans, proposed),
@@ -272,7 +271,22 @@ public sealed class InMemoryProjectionStore : IProjectionStore
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var snapshot = _sessions.TryGetValue(key, out var value)
+            _sessions.TryGetValue(key, out var value);
+            if (typeof(TProjection) == typeof(MutationStatusProjection))
+            {
+                var mutation = value?.Mutation;
+                var status = mutation is null
+                    ? null
+                    : new MutationStatusProjection(
+                        key,
+                        mutation.MutationSetId,
+                        mutation.RequiredApproval,
+                        mutation.IsApplied,
+                        mutation.IsRolledBack);
+                return Task.FromResult(status as TProjection);
+            }
+
+            var snapshot = value is not null
                 ? value with
                 {
                     Activity = value.Activity.ToArray(),
@@ -288,7 +302,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     PendingPlans = value.PendingPlans.Select(CopyPlanProjection).ToArray(),
                     ContextInspection = value.ContextInspection is null
                         ? null
-                        : CopyInspection(value.ContextInspection),
+                        : ContextInspectionSnapshots.Copy(value.ContextInspection),
                     Mutation = value.Mutation is null
                         ? null
                         : value.Mutation with
@@ -316,6 +330,9 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 PendingApprovals = projection.PendingApprovals.ToArray(),
                 AcceptanceCriteria = projection.AcceptanceCriteria.ToArray(),
                 PendingPlans = projection.PendingPlans.Select(CopyPlanProjection).ToArray(),
+                ContextInspection = projection.ContextInspection is null
+                    ? null
+                    : ContextInspectionSnapshots.Copy(projection.ContextInspection),
             };
         }
     }
@@ -341,6 +358,9 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     PendingApprovals = projection.PendingApprovals.ToArray(),
                     AcceptanceCriteria = projection.AcceptanceCriteria.ToArray(),
                     PendingPlans = projection.PendingPlans.Select(CopyPlanProjection).ToArray(),
+                    ContextInspection = projection.ContextInspection is null
+                        ? null
+                        : ContextInspectionSnapshots.Copy(projection.ContextInspection),
                 }
                 : null;
         }
@@ -364,29 +384,6 @@ public sealed class InMemoryProjectionStore : IProjectionStore
         var items = activity as List<string> ?? [.. activity];
         items.Add(text);
         return items;
-    }
-
-    private static ContextInspectionProjection CopyInspection(
-        ContextInspectionProjection inspection)
-    {
-        return inspection with
-        {
-            TokensByCategory = new ReadOnlyDictionary<string, int>(
-                inspection.TokensByCategory.ToDictionary(
-                    pair => pair.Key,
-                    pair => pair.Value,
-                    StringComparer.Ordinal)),
-            Evidence = inspection.Evidence.ToArray(),
-            PromptAssets = inspection.PromptAssets.ToArray(),
-            ModelRationale = inspection.ModelRationale.ToArray(),
-            Reductions = inspection.Reductions.ToArray(),
-            ConversationItems = inspection.ConversationItems.Select(item => item with
-            {
-                SourceMessageIds = item.SourceMessageIds.ToArray(),
-                SourceRunIds = item.SourceRunIds.ToArray(),
-                SourceEvidenceIds = item.SourceEvidenceIds.ToArray(),
-            }).ToArray(),
-        };
     }
 
     private static ImplementationPlan CopyPlan(ImplementationPlan plan)

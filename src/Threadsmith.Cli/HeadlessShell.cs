@@ -877,8 +877,8 @@ public sealed class HeadlessShell
         var approvalRequired = false;
         while (!completion.IsCompleted)
         {
-            var current = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
-            if (current?.Mutation is { IsApplied: false, IsRolledBack: false, RequiredApproval: not MutationApprovalLevel.PolicyAutoApproved } pending)
+            var current = await _projections.GetAsync<MutationStatusProjection>(key, cancellationToken);
+            if (current is { IsApplied: false, IsRolledBack: false, RequiredApproval: not MutationApprovalLevel.PolicyAutoApproved } pending)
             {
                 StagedMutationSet? review;
                 try

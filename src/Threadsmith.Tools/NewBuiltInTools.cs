@@ -197,6 +197,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         }
 
         await AtomicFileWriter.WriteAsync(scriptPath, scriptBytes, false, () => ScopedFilePaths.ValidateWrite(scriptPath, scope), cancellationToken);
+        var executionTimeout = context.GetRemainingExecutionTimeout(TimeSpan.FromMilliseconds(timeoutMilliseconds));
+        timeoutMilliseconds = executionTimeout == Timeout.InfiniteTimeSpan ? -1 : checked((int)Math.Ceiling(executionTimeout.TotalMilliseconds));
         var workerRequest = new ScriptWorkerRequest
         {
             Code = code,
@@ -326,7 +328,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
                 RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovalLevel.None,
                 ToolSideEffect.ExecutesCode,
-                TimeSpan.FromSeconds(35),
+                TimeSpan.FromSeconds(5),
                 7 * 1024 * 1024) with
             {
                 DisplayName = "C# Script",

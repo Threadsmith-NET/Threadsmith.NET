@@ -20,7 +20,7 @@ public sealed record ToolRuntimeOptions
 /// <summary>Optional runtime overrides; omitted values retain the tool's declared defaults.</summary>
 public record ToolRuntimeOverride
 {
-    /// <summary>Elapsed deadline in milliseconds; -1 disables the outer deadline.</summary>
+    /// <summary>Whole-operation execution timeout in milliseconds; -1 is unlimited unless a mandatory ceiling applies.</summary>
     public int? TimeoutMilliseconds { get; init; }
 
     /// <summary>Maximum serialized result bytes.</summary>
@@ -70,11 +70,20 @@ internal sealed class ToolRuntimePolicy
         int Limit(string name, int fallback) => policy.ResourceLimits.GetValueOrDefault(
             "tools:runtime:byTool:" + tool.Definition.Id + ":" + name,
             policy.ResourceLimits.GetValueOrDefault("tools:runtime:defaults:" + name, fallback));
-        var milliseconds = Limit("timeoutMilliseconds", -1);
         var timeout = tool.Definition.Timeout;
-        if (milliseconds != -1 && (timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds > milliseconds))
+        if (policy.ToolTimeouts is { } timeouts)
         {
-            timeout = TimeSpan.FromMilliseconds(milliseconds);
+            var declared = ConfiguredTool.Unwrap(tool).Definition;
+            timeout = timeouts.Clamp(tool.Definition.Id, timeouts.Select(tool.Definition.Id, declared.Timeout, tool.Definition.ConfiguredTimeout));
+        }
+        else
+        {
+            // Older captured policies have no separate timeout provenance; retain their ceiling.
+            var milliseconds = Limit("timeoutMilliseconds", -1);
+            if (milliseconds != -1 && (timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds > milliseconds))
+            {
+                timeout = TimeSpan.FromMilliseconds(milliseconds);
+            }
         }
 
         var definition = tool.Definition with
@@ -89,17 +98,47 @@ internal sealed class ToolRuntimePolicy
         return new ConfiguredTool(ConfiguredTool.Unwrap(tool), definition);
     }
 
+    /// <summary>Applies invocation hints before mandatory ceilings, without changing the registered tool.</summary>
+    internal static ITool ResolveInvocation(ITool tool, object input, ToolInvocationContext context)
+    {
+        var implementation = ConfiguredTool.Unwrap(tool);
+        if (implementation is not IInvocationTimeoutTool resolver)
+        {
+            return tool;
+        }
+
+        var timeout = resolver.ResolveTimeout(input, context, tool.Definition.Timeout);
+        if (context.SecurityPolicy is { } policy)
+        {
+            timeout = policy.ToolTimeouts is { } timeouts ? timeouts.Clamp(tool.Definition.Id, timeout)
+                : timeout == Timeout.InfiniteTimeSpan || (tool.Definition.Timeout != Timeout.InfiniteTimeSpan && timeout > tool.Definition.Timeout)
+                    ? tool.Definition.Timeout : timeout;
+        }
+
+        return new ConfiguredTool(implementation, tool.Definition with { Timeout = timeout });
+    }
+
+    private readonly FrozenDictionary<string, TimeSpan> _configuredTimeouts;
     private readonly ToolRuntimeOverride _defaults;
     private readonly FrozenDictionary<string, ToolRuntimeOverride> _byTool;
     private readonly ConditionalWeakTable<ITool, ITool> _configured = [];
 
     /// <summary>Initializes a new instance of the <see cref="ToolRuntimePolicy"/> class.</summary>
-    internal ToolRuntimePolicy(ToolRuntimeOptions options)
+    internal ToolRuntimePolicy(ToolRuntimeOptions options, IReadOnlyDictionary<string, TimeSpan>? configuredTimeouts = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(options.Defaults);
         ArgumentNullException.ThrowIfNull(options.ByTool);
         options.Presentation.Validate();
+        _configuredTimeouts = (configuredTimeouts ?? new Dictionary<string, TimeSpan>()).ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+        foreach (var configured in _configuredTimeouts.Values)
+        {
+            if (configured != Timeout.InfiniteTimeSpan && (configured <= TimeSpan.Zero || configured.TotalMilliseconds > uint.MaxValue - 1L))
+            {
+                throw new ArgumentOutOfRangeException(nameof(configuredTimeouts));
+            }
+        }
+
         _defaults = options.Defaults;
         _defaults.Validate();
         foreach (var value in options.ByTool)
@@ -122,7 +161,11 @@ internal sealed class ToolRuntimePolicy
     private ITool CreateConfiguredTool(ITool tool)
     {
         _byTool.TryGetValue(tool.Definition.Id, out var specific);
-        var timeout = specific?.TimeoutMilliseconds ?? _defaults.TimeoutMilliseconds;
+        var configuredTimeout = _configuredTimeouts.TryGetValue(tool.Definition.Id, out var configured) ? configured : tool.Definition.ConfiguredTimeout;
+        var timeout = specific?.TimeoutMilliseconds is { } specificMilliseconds
+            ? TimeSpan.FromMilliseconds(specificMilliseconds)
+            : configuredTimeout ?? (_defaults.TimeoutMilliseconds is { } defaultMilliseconds
+                ? TimeSpan.FromMilliseconds(defaultMilliseconds) : (TimeSpan?)null);
         var output = specific?.MaximumOutputBytes ?? _defaults.MaximumOutputBytes;
         var concurrency = specific?.MaximumSourceConcurrency ?? _defaults.MaximumSourceConcurrency;
         if (timeout is null && output is null && concurrency is null)
@@ -132,7 +175,8 @@ internal sealed class ToolRuntimePolicy
 
         var definition = tool.Definition with
         {
-            Timeout = timeout is { } milliseconds ? TimeSpan.FromMilliseconds(milliseconds) : tool.Definition.Timeout,
+            Timeout = timeout ?? tool.Definition.Timeout,
+            ConfiguredTimeout = configuredTimeout,
             MaximumOutputBytes = output ?? tool.Definition.MaximumOutputBytes,
             Scheduling = tool.Definition.Scheduling with
             {

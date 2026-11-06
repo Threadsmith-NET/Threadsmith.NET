@@ -95,6 +95,9 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets resolved resource ceilings indexed by canonical configuration key.</summary>
     public ImmutableDictionary<string, int> ResourceLimits { get; init; } = [];
 
+    /// <summary>Gets timeout preferences separately from mandatory execution ceilings.</summary>
+    public ToolTimeoutPolicy? ToolTimeouts { get; init; }
+
     /// <summary>Gets exact assembly names admitted for the existing script worker.</summary>
     public ImmutableArray<string> ScriptAssemblies { get; init; } = [];
 

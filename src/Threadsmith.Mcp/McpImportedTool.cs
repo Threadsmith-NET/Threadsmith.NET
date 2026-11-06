@@ -124,8 +124,8 @@ public sealed class McpImportedTool : ITool
         ArgumentNullException.ThrowIfNull(context);
         var argumentsJson = ((McpArguments)input).Json;
         using var invocation = _acquireInvocation?.Invoke();
-        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCancellation.CancelAfter(_profile.RequestTimeout);
+        using var deadlineCancellation = new CancellationTokenSource(context.GetRemainingExecutionTimeout(_profile.RequestTimeout), context.TimeProvider);
+        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCancellation.Token);
         var transportStarted = _timeProvider.GetTimestamp();
         try
         {
@@ -207,6 +207,7 @@ public sealed class McpImportedTool : ITool
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
             Timeout = profile.RequestTimeout,
+            ConfiguredTimeout = profile.HasConfiguredRequestTimeout ? profile.RequestTimeout : null,
             MaximumOutputBytes = 64 * 1024,
         };
     }

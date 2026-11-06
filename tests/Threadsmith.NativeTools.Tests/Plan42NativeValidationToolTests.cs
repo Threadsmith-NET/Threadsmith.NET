@@ -1,7 +1,10 @@
 namespace Threadsmith.NativeTools.Tests;
 
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
+using Threadsmith.Execution;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Threadsmith.Validation;
 using Xunit;
@@ -526,6 +529,86 @@ public sealed class Plan42NativeValidationToolTests
             .Single(tool => tool.Definition.Id == "test_discover")
             .DeserializeInput("{\"projectPath\":\"Tests.csproj\",\"trait\":{\"name\":\"\",\"value\":\"Fast\"}}"));
         _ = JsonDocument.Parse(tools[0].Definition.InputSchema.JsonSchema);
+    }
+
+    /// <summary>Native subprocesses receive the host budget while standalone services retain their configured fallback.</summary>
+    [Theory]
+    [InlineData(null, 120000)]
+    [InlineData(600000, 600000)]
+    [InlineData(-1, -1)]
+    public async Task NativeBuildUsesHostBudgetOrStandaloneFallback(int? milliseconds, int expected)
+    {
+        using var repository = new TemporaryRepository();
+        repository.Write("App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var process = new RecordingProcessManager();
+        var service = new NativeValidationToolService(process, secretResolver: null, [], new ValidationResourceLimits { TimeoutMilliseconds = 120000 });
+        var context = CreateToolExecutionContext(repository.Path) with
+        {
+            ExecutionTimeout = milliseconds is { } timeout ? TimeSpan.FromMilliseconds(timeout) : null,
+        };
+        await new DotNetBuildTool(service, TestPromptLoader.Instance).ExecuteAsync(
+            new BuildToolRequest { TargetPath = "App.csproj" }, context, TestContext.Current.CancellationToken);
+        Assert.Equal(TimeSpan.FromMilliseconds(expected), Assert.Single(process.Requests).Timeout);
+    }
+
+    /// <summary>Discovery forwards an unlimited runtime budget through the service to the process boundary.</summary>
+    [Fact]
+    public async Task TestDiscovery_InfiniteRuntimeBudget_ReachesProcess()
+    {
+        using var repository = new TemporaryRepository();
+        repository.Write("Tests.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><PackageReference Include=\"xunit.v3\" /></ItemGroup></Project>");
+        var process = new RecordingProcessManager();
+        process.Results.Enqueue(SuccessfulRequestResult("The following Tests are available:\n  Example.Tests.SharedTest"));
+        var tool = new TestDiscoveryTool(new NativeValidationToolService(process), TestPromptLoader.Instance);
+        var registry = new ToolRegistry([tool], runtimeOptions: new()
+        {
+            Defaults = new() { TimeoutMilliseconds = 120000 },
+            ByTool = [new() { ToolId = "test_discover", TimeoutMilliseconds = -1 }],
+        });
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            registry,
+            new DefaultPolicyEngine(),
+            new AllowApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+        var context = CreateToolExecutionContext(repository.Path);
+
+        var result = await pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = context.SessionId,
+                RunId = context.RunId,
+                ToolId = "test_discover",
+                ArgumentsJson = "{\"projectPath\":\"Tests.csproj\"}",
+                Context = context.Invocation,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(Timeout.InfiniteTimeSpan, Assert.Single(process.Requests).Timeout);
+        Assert.Contains("Example.Tests.SharedTest", result.ResultJson, StringComparison.Ordinal);
+    }
+
+    /// <summary>Invalid nonpositive discovery budgets still fail before launching a process.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-2)]
+    public async Task TestDiscovery_InvalidBudget_RejectsBeforeProcess(int milliseconds)
+    {
+        using var repository = new TemporaryRepository();
+        repository.Write("Tests.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\"><ItemGroup><PackageReference Include=\"xunit.v3\" /></ItemGroup></Project>");
+        var process = new RecordingProcessManager();
+        var service = new NativeValidationToolService(process);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.DiscoverTestsAsync(
+            repository.Path,
+            RunId.New(),
+            new TestDiscoveryRequest { ProjectPath = "Tests.csproj", ExecutionTimeout = TimeSpan.FromMilliseconds(milliseconds) },
+            TestContext.Current.CancellationToken));
+
+        Assert.Empty(process.Requests);
     }
 
     private static ToolExecutionContext CreateToolExecutionContext(string repositoryPath, RunId? runId = null)

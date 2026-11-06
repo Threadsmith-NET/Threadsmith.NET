@@ -68,6 +68,9 @@ public sealed record McpConnectionProfile
     /// <summary>Maximum time for a single tool/request invocation.</summary>
     public TimeSpan RequestTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
+    /// <summary>Whether the profile explicitly selects a request timeout instead of inheriting the host default.</summary>
+    public bool HasConfiguredRequestTimeout { get; init; }
+
     /// <summary>Time to wait for an unresponsive server to drain before killing the process tree (gap #6).</summary>
     public TimeSpan DrainKillTimeout { get; init; } = TimeSpan.FromSeconds(10);
 

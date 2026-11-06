@@ -152,7 +152,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                         root,
                         runId,
                         CreatePackageArguments(project, queryContext.ConfigurationPath, category),
-                        TimeSpan.FromSeconds(60),
+                        request.ExecutionTimeout ?? TimeSpan.FromSeconds(60),
                         queryContext.EnvironmentVariables,
                         cancellationToken);
                     if (!process.TimedOut && process.ExitCode == 0)
@@ -271,7 +271,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
+            request.ExecutionTimeout ?? TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         var invocationId = CreateIdentity(string.Join('|', runId.Value, ValidationInvocationKind.FormatCheck, DateTimeOffset.UtcNow.Ticks, target));
@@ -420,7 +420,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             [project],
             traitFilter,
-            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
+            request.ExecutionTimeout ?? TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var discoveredCases = cases
             .Where(testCase => testCase.FullyQualifiedName.Length <= 1024)
@@ -523,7 +523,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
+            request.ExecutionTimeout ?? TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var selection = new TestSelection { Projects = [project] };
         var normalized = TestResultNormalizer.Normalize(project, process, selection.RelatedMutationIds);
@@ -566,7 +566,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
+            request.ExecutionTimeout ?? TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         Diagnostic[] diagnostics = [.. DiagnosticNormalizer.Normalize(

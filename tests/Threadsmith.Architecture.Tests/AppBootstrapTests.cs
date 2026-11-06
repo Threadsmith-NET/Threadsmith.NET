@@ -15,6 +15,15 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static partial class AppBootstrapTests
 {
+    /// <summary>The production search transport cannot shorten longer or unlimited execution budgets.</summary>
+    [Fact]
+    public static void WebSearchHttpClient_LeavesRequestDeadlineToExecutionToken()
+    {
+        using var client = HostFoundation.CreateWebSearchHttpClient();
+
+        Assert.Equal(Timeout.InfiniteTimeSpan, client.Timeout);
+    }
+
     /// <summary>PDF configuration reaches the production tool limits and rejects invalid values.</summary>
     [Theory]
     [InlineData(300, 4096, true)]

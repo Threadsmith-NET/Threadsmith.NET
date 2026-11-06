@@ -1397,7 +1397,7 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
                 FileName = "git",
                 Arguments = ["status", "--short", "--branch", "--untracked-files=normal"],
                 WorkingDirectory = repositoryPath,
-                Timeout = Definition.Timeout,
+                Timeout = context.GetRemainingExecutionTimeout(Definition.Timeout),
                 MaximumOutputCharacters = Definition.MaximumOutputBytes / 2,
                 Origin = ProcessRequestOrigin.Host,
             },
@@ -1832,7 +1832,7 @@ public sealed record RunProcessInput : IConceptToolInput
 }
 
 /// <summary>Runs one bounded command through a configured allow-listed shell.</summary>
-public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecutionResult>
+public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecutionResult>, IInvocationTimeoutTool
 {
     private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
@@ -1869,7 +1869,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 RepositoryTrustLevel.TrustedBuild,
                 requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
                 ToolSideEffect.ExecutesCode,
-                TimeSpan.FromSeconds(_limits.RunProcessMaxTimeoutSeconds),
+                TimeSpan.FromSeconds(Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)),
                 256 * 1024),
             "timeoutSeconds");
     }
@@ -1888,13 +1888,11 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         var workingDirectory = scratchpadExecution
             ? ToolPathRules.NormalizeScratchpadPath(candidateDirectory, context.Invocation)
             : ToolPathRules.NormalizeAndValidate(candidateDirectory, context.Invocation);
-        var timeoutSeconds = ResolveTimeoutSeconds(input);
-        if (context.Invocation.SecurityPolicy is { } policy)
-        {
-            timeoutSeconds = input.TimeoutSeconds > 0
-                ? Math.Min(input.TimeoutSeconds, policy.ResourceLimits["tools:runProcess:maxTimeoutSeconds"])
-                : policy.ResourceLimits["tools:runProcess:defaultTimeoutSeconds"];
-        }
+        var fallback = TimeSpan.FromSeconds(context.Invocation.SecurityPolicy?.ResourceLimits.GetValueOrDefault(
+            "tools:runProcess:defaultTimeoutSeconds", _limits.RunProcessDefaultTimeoutSeconds) ?? _limits.RunProcessDefaultTimeoutSeconds);
+        var timeout = context.ExecutionTimeout is null
+            ? ((IInvocationTimeoutTool)this).ResolveTimeout(input, context.Invocation, fallback)
+            : context.GetRemainingExecutionTimeout(fallback);
 
         var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
@@ -1907,7 +1905,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 EnvironmentVariables = scratchpadExecution
                     ? ScriptFilePolicy.TemporaryEnvironment(context.Invocation.Scratchpad.RootPath ?? throw new InvalidOperationException("Scratchpad unavailable."), context.Invocation.RepositoryPath)
                     : new Dictionary<string, string>(),
-                Timeout = TimeSpan.FromSeconds(timeoutSeconds),
+                Timeout = timeout,
                 MaximumOutputCharacters = Definition.MaximumOutputBytes / 2,
                 Origin = ProcessRequestOrigin.Model,
             },
@@ -1915,7 +1913,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         if (result.TimedOut)
         {
             throw new TimeoutException(
-                $"Shell command exceeded its {timeoutSeconds}-second timeout.");
+                $"Shell command exceeded its {(context.ExecutionTimeout ?? timeout).TotalSeconds}-second timeout.");
         }
 
         var truncated = result.StandardOutputTruncated || result.StandardErrorTruncated;
@@ -1923,6 +1921,16 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             result,
             [new ToolProvenanceSource("process", _shellExecutable)],
             truncated);
+    }
+
+    /// <inheritdoc />
+    TimeSpan IInvocationTimeoutTool.ResolveTimeout(object input, ToolInvocationContext context, TimeSpan configuredTimeout)
+    {
+        var requested = (RunProcessInput)input;
+        var selected = requested.TimeoutSeconds > 0 ? TimeSpan.FromSeconds(requested.TimeoutSeconds) : configuredTimeout;
+        var maximum = TimeSpan.FromSeconds(context.SecurityPolicy?.ResourceLimits.GetValueOrDefault(
+            "tools:runProcess:maxTimeoutSeconds", _limits.RunProcessMaxTimeoutSeconds) ?? _limits.RunProcessMaxTimeoutSeconds);
+        return selected == Timeout.InfiniteTimeSpan || selected > maximum ? maximum : selected;
     }
 
     /// <inheritdoc />
@@ -1993,13 +2001,6 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                         ["ShellExecutable"] = shellExecutable,
                     })),
         };
-    }
-
-    private int ResolveTimeoutSeconds(RunProcessInput input)
-    {
-        return input.TimeoutSeconds > 0
-            ? Math.Min(input.TimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)
-            : Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds);
     }
 }
 

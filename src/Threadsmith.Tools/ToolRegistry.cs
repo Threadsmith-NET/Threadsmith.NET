@@ -70,10 +70,11 @@ public sealed class ToolRegistry : IToolRegistry
         IEnumerable<ITool> tools,
         IToolStateManager? stateManager = null,
         IProgressiveToolActivationPolicy? activationPolicy = null,
-        ToolRuntimeOptions? runtimeOptions = null)
+        ToolRuntimeOptions? runtimeOptions = null,
+        IReadOnlyDictionary<string, TimeSpan>? configuredTimeouts = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
-        _runtimePolicy = new(runtimeOptions ?? new());
+        _runtimePolicy = new(runtimeOptions ?? new(), configuredTimeouts);
         _stateManager = stateManager;
         _activationPolicy = activationPolicy;
         foreach (var tool in tools)

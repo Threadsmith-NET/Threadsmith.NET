@@ -1,5 +1,7 @@
 namespace Threadsmith.Core;
 
+using System.Text.Json.Serialization;
+
 /// <summary>Authority assigned to validation evidence.</summary>
 public enum ValidationAuthority
 {
@@ -86,6 +88,10 @@ public sealed record PackageAdvisory(
 /// <summary>Typed package-health request.</summary>
 public sealed record NuGetDependencyHealthRequest
 {
+    /// <summary>Host-resolved execution budget; never accepted from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Repository-relative project path.</summary>
     public required string ProjectPath { get; init; }
 
@@ -113,6 +119,10 @@ public sealed record NuGetDependencyHealthResult(
 /// <summary>Common closed target for exploratory build, analyzer, and format operations.</summary>
 public abstract record DotNetValidationTargetRequest
 {
+    /// <summary>Host-resolved execution budget; never accepted from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Repository-relative solution or project path.</summary>
     public required string TargetPath { get; init; }
 
@@ -132,6 +142,10 @@ public sealed record AnalyzerToolRequest : DotNetValidationTargetRequest;
 /// <summary>Read-only formatter verification request.</summary>
 public sealed record FormatCheckRequest
 {
+    /// <summary>Host-resolved execution budget; never accepted from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Repository-relative solution or project path.</summary>
     public required string TargetPath { get; init; }
 }
@@ -220,6 +234,10 @@ public sealed record TestTraitSelector
 /// <summary>Typed test discovery request for one host-validated project.</summary>
 public sealed record TestDiscoveryRequest
 {
+    /// <summary>Host-resolved execution budget; never accepted from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Repository-relative test project path.</summary>
     public required string ProjectPath { get; init; }
 
@@ -262,6 +280,10 @@ public sealed record TestDiscoveryResult(
 /// <summary>Typed targeted execution by a previously issued stable identity.</summary>
 public sealed record TargetedTestRequest
 {
+    /// <summary>Host-resolved execution budget; never accepted from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Host-issued discovery identity.</summary>
     public required DiscoveredTestId TestId { get; init; }
 

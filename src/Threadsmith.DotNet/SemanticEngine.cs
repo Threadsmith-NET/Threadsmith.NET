@@ -1224,8 +1224,16 @@ public sealed partial class SemanticEngine : ISemanticEngine
     }
 
     /// <summary>Captures current loaded source text identities for refresh no-op suppression.</summary>
-    public async Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
+    public Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
         CancellationToken cancellationToken = default)
+    {
+        return GetLoadedDocumentsAsync(retainText: true, cancellationToken);
+    }
+
+    /// <summary>Captures identities without retaining decoded content when reconciliation only needs hashes.</summary>
+    internal async Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
+        bool retainText,
+        CancellationToken cancellationToken)
     {
         Solution? solution;
         SemanticLoadRequest? request;
@@ -1260,8 +1268,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 {
                     token.ThrowIfCancellationRequested();
                     var text = await document.GetTextAsync(token);
-                    var content = text.ToString();
-                    var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+                    var content = retainText ? text.ToString() : string.Empty;
+                    var identity = SemanticTextIdentity.Compute(text, token);
                     documents.Add(new SemanticDocumentRefresh(
                         Path.GetFullPath(document.FilePath ?? string.Empty),
                         content,

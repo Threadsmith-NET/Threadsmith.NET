@@ -1741,6 +1741,7 @@ public sealed class WebFetchTests
             WebFetchSourceKind sourceKind,
             IReadOnlySet<string> authorizedDirectUrlDigests,
             ToolInvocationContext? invocation = null,
+            TimeSpan? executionTimeout = null,
             CancellationToken cancellationToken = default)
         {
             CallCount++;

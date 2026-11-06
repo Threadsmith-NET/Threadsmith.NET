@@ -439,6 +439,7 @@ public interface IWebContentFetcher
         WebFetchSourceKind sourceKind,
         IReadOnlySet<string> authorizedDirectUrlDigests,
         ToolInvocationContext? invocation = null,
+        TimeSpan? executionTimeout = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -1133,11 +1134,12 @@ public sealed class WebContentFetcher : IWebContentFetcher
         WebFetchSourceKind sourceKind,
         IReadOnlySet<string> authorizedDirectUrlDigests,
         ToolInvocationContext? invocation = null,
+        TimeSpan? executionTimeout = null,
         CancellationToken cancellationToken = default)
     {
         var options = (invocation?.SecurityPolicy is { } policy ? WebFetchOptions.FromPolicy(policy) : _options.Current) with { Invocation = invocation };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(options.Timeout);
+        deadline.CancelAfter(executionTimeout ?? options.Timeout);
         WebFetchTransportResponse transport;
         try
         {

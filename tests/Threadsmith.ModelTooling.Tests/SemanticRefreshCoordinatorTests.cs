@@ -1,6 +1,7 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
+using System.Diagnostics.Metrics;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -12,6 +13,49 @@ using Xunit;
 /// <summary>Verifies external semantic refresh coordination, fencing, and recovery.</summary>
 public static class SemanticRefreshCoordinatorTests
 {
+    /// <summary>Each observation enumerates a directory once without removing installation-race checks.</summary>
+    [Fact]
+    public static async Task WatcherTopologyCombinesDiscoveryAndMembershipInEachRequiredObservation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var scope = new AsyncLocal<bool> { Value = true };
+        long visits = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, owner) =>
+        {
+            if (instrument.Name == "threadsmith.semantic.watchers.directory_visits")
+            {
+                owner.EnableMeasurementEvents(instrument);
+            }
+        };
+        listener.SetMeasurementEventCallback<long>((_, value, _, _) =>
+        {
+            if (scope.Value)
+            {
+                Interlocked.Add(ref visits, value);
+            }
+        });
+        listener.Start();
+        var roots = new HashSet<string>(PathComparer);
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            roots.Add(path);
+            return new FileSystemWatcher(path);
+        }
+
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+
+        Assert.NotEmpty(roots);
+        // Two installation boundaries each retain their independent before/after observation.
+        // Discovery and membership used to enumerate each directory separately: 8 * roots.
+        Assert.Equal(4L * roots.Count, visits);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+    }
+
     /// <summary>Actual binding boundaries produce timings without replacing freshness checks.</summary>
     [Fact]
     public static async Task StartupProgressTracksSnapshotAndMonitoringReconciliationBoundaries()

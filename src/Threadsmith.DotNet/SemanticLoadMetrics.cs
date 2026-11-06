@@ -58,6 +58,9 @@ internal static class SemanticLoadMetrics
     /// <summary>Gets actual late compiler results discarded after cancellation.</summary>
     internal static Counter<long> PreparationDiscarded { get; } = _meter.CreateCounter<long>("threadsmith.semantic.preparation.discarded");
 
+    /// <summary>Gets directory enumerations at watcher installation and recovery observation boundaries.</summary>
+    internal static Counter<long> WatcherDirectoryVisits { get; } = _meter.CreateCounter<long>("threadsmith.semantic.watchers.directory_visits");
+
     /// <summary>Gets source file reads performed by diagnostic reconciliation.</summary>
     internal static Counter<long> DiagnosticFileReads { get; } = _meter.CreateCounter<long>("threadsmith.semantic.diagnostics.file_reads");
 

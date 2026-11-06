@@ -2304,7 +2304,8 @@ public sealed class SemanticRefreshCoordinator :
                 binding,
                 path,
                 cancellationToken,
-                readAsBinary: binaryPaths.Contains(path));
+                readAsBinary: binaryPaths.Contains(path),
+                retainText: false);
             contents[path] = content with { Text = null };
         }
 
@@ -2541,53 +2542,6 @@ public sealed class SemanticRefreshCoordinator :
         return false;
     }
 
-    private static IReadOnlySet<string> CaptureRelevantWatcherEntries(
-        SemanticLoadRequest request,
-        IReadOnlyList<string> roots,
-        IReadOnlyDictionary<string, string> knownInputs)
-    {
-        var entriesByPath = new HashSet<string>(PathComparer);
-        foreach (var root in roots)
-        {
-            IEnumerable<string> entries;
-            try
-            {
-                entries = Directory.EnumerateFileSystemEntries(root);
-            }
-            catch (Exception exception) when (exception is IOException
-                or UnauthorizedAccessException)
-            {
-                continue;
-            }
-
-            try
-            {
-                foreach (var entry in entries)
-                {
-                    var normalized = NormalizePath(request, entry);
-                    if (normalized is null || SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, normalized))
-                    {
-                        continue;
-                    }
-
-                    if (!Directory.Exists(normalized)
-                        && (knownInputs.ContainsKey(normalized)
-                            || SemanticRefreshPathPolicy.Classify(request.RepositoryPath, normalized) != SemanticInputKind.None))
-                    {
-                        entriesByPath.Add(normalized);
-                    }
-                }
-            }
-            catch (Exception exception) when (exception is IOException
-                or UnauthorizedAccessException)
-            {
-                continue;
-            }
-        }
-
-        return entriesByPath;
-    }
-
     private static string? NormalizePath(WorkspaceBinding binding, string path)
     {
         return NormalizePath(binding.Request, path);
@@ -2631,7 +2585,8 @@ public sealed class SemanticRefreshCoordinator :
         WorkspaceBinding binding,
         string path,
         CancellationToken cancellationToken,
-        bool readAsBinary = false)
+        bool readAsBinary = false,
+        bool retainText = true)
     {
         if (!IsSafeForRead(binding, path))
         {
@@ -2673,6 +2628,7 @@ public sealed class SemanticRefreshCoordinator :
             var before = new FileInfo(path);
             before.Refresh();
             string? text = null;
+            string? textIdentity = null;
             byte[] contentHash;
             try
             {
@@ -2706,7 +2662,15 @@ public sealed class SemanticRefreshCoordinator :
                     using var hash = SHA256.Create();
                     await using var hashingStream = new CryptoStream(stream, hash, CryptoStreamMode.Read);
                     using var reader = new StreamReader(hashingStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
-                    text = await reader.ReadToEndAsync(cancellationToken);
+                    if (retainText)
+                    {
+                        text = await reader.ReadToEndAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        textIdentity = await SemanticTextIdentity.ComputeAsync(reader, cancellationToken);
+                    }
+
                     contentHash = hash.Hash ?? throw new InvalidDataException("The semantic input byte hash is unavailable.");
                 }
             }
@@ -2740,9 +2704,9 @@ public sealed class SemanticRefreshCoordinator :
                 && before.Length == after.Length
                 && before.LastWriteTimeUtc == after.LastWriteTimeUtc)
             {
-                var hash = readAsBinary ? contentHash : SHA256.HashData(Encoding.UTF8.GetBytes(text ?? string.Empty));
                 var byteIdentity = Convert.ToHexString(contentHash);
-                var identity = Convert.ToHexString(hash);
+                var identity = readAsBinary ? byteIdentity
+                    : textIdentity ?? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text ?? string.Empty)));
                 return new StableFileContent(true, true, text, identity) { ByteIdentity = byteIdentity };
             }
 
@@ -2777,17 +2741,11 @@ public sealed class SemanticRefreshCoordinator :
         foreach (var document in loadedDocuments)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var current = await ReadStableFileAsync(binding, document.Path, cancellationToken);
+            var current = await ReadStableFileAsync(binding, document.Path, cancellationToken, retainText: false);
             if (!current.IsStable)
             {
                 throw new InvalidDataException(
                     "A loaded semantic text document could not be verified as stable.");
-            }
-
-            if (current.Exists && current.Text is null)
-            {
-                throw new InvalidDataException(
-                    "A loaded semantic text document did not provide readable text.");
             }
 
             if (!string.Equals(
@@ -3059,12 +3017,11 @@ public sealed class SemanticRefreshCoordinator :
             {
                 try
                 {
-                    var roots = GetWatcherRoots();
-                    var before = CaptureWatcherTopology(roots);
+                    var before = CaptureWatcherTopology();
                     var existingPaths = new HashSet<string>(
                         _watchers.Select(watcher => watcher.Path),
                         PathComparer);
-                    foreach (var path in roots)
+                    foreach (var path in before.Roots)
                     {
                         if (!existingPaths.Add(path))
                         {
@@ -3081,7 +3038,7 @@ public sealed class SemanticRefreshCoordinator :
                     Volatile.Write(ref _watchedDirectories, new HashSet<string>(_watchers.Select(watcher => watcher.Path), PathComparer));
                     QueueTopologyChangeIfNeeded(
                         before,
-                        GetWatcherRoots(),
+                        CaptureWatcherTopology(),
                         changed);
                 }
                 catch
@@ -3141,9 +3098,8 @@ public sealed class SemanticRefreshCoordinator :
                 var replacements = new List<IRepositoryDirectoryObservation>();
                 try
                 {
-                    var roots = GetWatcherRoots();
-                    var before = CaptureWatcherTopology(roots);
-                    foreach (var path in roots)
+                    var before = CaptureWatcherTopology();
+                    foreach (var path in before.Roots)
                     {
                         _watchers.FirstOrDefault(watcher => PathComparer.Equals(watcher.Path, path))?.Restart();
                         var replacement = CreateWatcher(path, changed, failed);
@@ -3162,7 +3118,7 @@ public sealed class SemanticRefreshCoordinator :
                     Volatile.Write(ref _watchedDirectories, new HashSet<string>(_watchers.Select(watcher => watcher.Path), PathComparer));
                     QueueTopologyChangeIfNeeded(
                         before,
-                        GetWatcherRoots(),
+                        CaptureWatcherTopology(),
                         changed);
                 }
                 catch
@@ -3214,47 +3170,17 @@ public sealed class SemanticRefreshCoordinator :
             Volatile.Write(ref _watchedDirectories, new HashSet<string>(PathComparer));
         }
 
-        private IReadOnlyList<string> GetWatcherRoots()
+        private WatcherTopology CaptureWatcherTopology()
         {
             var prohibitedPathCaseContext = new RepositoryPathCaseContext(Request.RepositoryPath);
             var roots = new List<string>();
-            var scheduled = new HashSet<string>(PathComparer);
+            var entries = new HashSet<string>(PathComparer);
+            var scheduled = new HashSet<string>(PathComparer) { Request.RepositoryPath };
             var pending = new Stack<string>();
-            scheduled.Add(Request.RepositoryPath);
             pending.Push(Request.RepositoryPath);
             while (pending.TryPop(out var current))
             {
-                roots.Add(current);
-                try
-                {
-                    foreach (var directory in Directory.EnumerateDirectories(current))
-                    {
-                        var relative = Path.GetRelativePath(Request.RepositoryPath, directory)
-                            .Replace('\\', '/');
-                        if (SemanticRefreshPathPolicy.IsIgnoredDirectorySegment(Path.GetFileName(directory))
-                            || RepositoryPathPolicy.IsProhibited(
-                                relative,
-                                Request.ProhibitedPaths ?? [],
-                                Request.RepositoryPath,
-                                prohibitedPathCaseContext)
-                            || IsReparsePoint(directory))
-                        {
-                            continue;
-                        }
-
-                        if (scheduled.Contains(directory))
-                        {
-                            continue;
-                        }
-
-                        scheduled.Add(directory);
-                        pending.Push(directory);
-                    }
-                }
-                catch (Exception exception) when (exception is IOException
-                    or UnauthorizedAccessException)
-                {
-                }
+                CaptureDirectory(current, discoverChildren: true);
             }
 
             foreach (var path in AppliedIdentities.Keys)
@@ -3265,32 +3191,66 @@ public sealed class SemanticRefreshCoordinator :
                 }
 
                 var directory = Path.GetDirectoryName(path);
-                if (directory is null
-                    || scheduled.Contains(directory)
-                    || !IsSafeExplicitWatcherDirectory(directory))
+                if (directory is not null && !scheduled.Contains(directory) && IsSafeExplicitWatcherDirectory(directory))
                 {
-                    continue;
+                    scheduled.Add(directory);
+                    CaptureDirectory(directory, discoverChildren: false);
                 }
-
-                scheduled.Add(directory);
-                roots.Add(directory);
             }
 
-            return roots;
+            // Transfer ownership to this private snapshot; neither collection is mutated after capture.
+            return new WatcherTopology(roots.AsReadOnly(), entries);
+
+            void CaptureDirectory(string current, bool discoverChildren)
+            {
+                LifetimeCancellation.Token.ThrowIfCancellationRequested();
+                roots.Add(current);
+                SemanticLoadMetrics.WatcherDirectoryVisits.Add(1);
+                try
+                {
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+                    {
+                        LifetimeCancellation.Token.ThrowIfCancellationRequested();
+                        if (Directory.Exists(entry))
+                        {
+                            var relative = Path.GetRelativePath(Request.RepositoryPath, entry).Replace('\\', '/');
+                            if (discoverChildren
+                                && !SemanticRefreshPathPolicy.IsIgnoredDirectorySegment(Path.GetFileName(entry))
+                                && !RepositoryPathPolicy.IsProhibited(relative, Request.ProhibitedPaths ?? [], Request.RepositoryPath, prohibitedPathCaseContext)
+                                && !IsReparsePoint(entry)
+                                && scheduled.Add(entry))
+                            {
+                                pending.Push(entry);
+                            }
+
+                            continue;
+                        }
+
+                        var normalized = NormalizePath(Request, entry);
+                        if (normalized is not null
+                            && !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(Request.RepositoryPath, normalized)
+                            && (AppliedIdentities.ContainsKey(normalized)
+                                || SemanticRefreshPathPolicy.Classify(Request.RepositoryPath, normalized) != SemanticInputKind.None))
+                        {
+                            entries.Add(normalized);
+                        }
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    // Keep the existing conservative snapshot/recovery path for inaccessible entries.
+                }
+            }
         }
 
-        private IReadOnlySet<string> CaptureWatcherTopology(IReadOnlyList<string> roots)
-        {
-            return CaptureRelevantWatcherEntries(Request, roots, AppliedIdentities);
-        }
+        private sealed record WatcherTopology(IReadOnlyList<string> Roots, IReadOnlySet<string> Entries);
 
         private void QueueTopologyChangeIfNeeded(
-            IReadOnlySet<string> before,
-            IReadOnlyList<string> roots,
+            WatcherTopology before,
+            WatcherTopology after,
             Action<SemanticFileChange> changed)
         {
-            var after = CaptureWatcherTopology(roots);
-            if (!before.SetEquals(after))
+            if (!before.Entries.SetEquals(after.Entries))
             {
                 changed(new SemanticFileChange(
                     Request.SessionId,
@@ -3302,7 +3262,7 @@ public sealed class SemanticRefreshCoordinator :
             // File membership and monitoring topology have different consequences. Compare
             // discovered roots with installed coverage even when a new directory is empty.
             var installed = Volatile.Read(ref _watchedDirectories);
-            var discovered = new HashSet<string>(roots, PathComparer);
+            var discovered = new HashSet<string>(after.Roots, PathComparer);
             foreach (var directory in discovered.Except(installed, PathComparer))
             {
                 changed(new SemanticFileChange(Request.SessionId, directory, SemanticFileChangeKind.Created));
@@ -3613,7 +3573,7 @@ internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend
         CancellationToken cancellationToken)
     {
         return _semanticEngines.GetEngine(workspaceId)
-            .GetLoadedDocumentsAsync(cancellationToken);
+            .GetLoadedDocumentsAsync(retainText: false, cancellationToken);
     }
 
     /// <inheritdoc />

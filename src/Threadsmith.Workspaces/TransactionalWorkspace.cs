@@ -18,6 +18,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private static readonly Counter<long> _conflicts = WorkspaceMutationMetrics.Meter.CreateCounter<long>(
         "threadsmith.workspace.mutation.conflicts");
 
+    private static readonly Counter<long> _recoveryBytes = WorkspaceMutationMetrics.Meter.CreateCounter<long>(
+        "threadsmith.workspace.recovery.bytes",
+        "By",
+        "Cumulative bytes successfully materialized after registration; materialization is first or refresh, not retained size.");
+
     private static readonly Counter<long> _rollbacks = WorkspaceMutationMetrics.Meter.CreateCounter<long>(
         "threadsmith.workspace.mutation.rollbacks");
 
@@ -32,7 +37,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private readonly ISemanticHostMutationAttribution? _semanticMutationAttribution;
     private readonly Dictionary<MutationSetId, StagingState> _staging = [];
     private readonly IMutationTransactionObserver _transactionObserver;
+    private readonly EffectiveSessionPolicy? _baselineSecurityPolicy;
     private Dictionary<string, BaselineFileSnapshot> _baselineFiles;
+    private Dictionary<string, WorkspaceFileHash> _baselineIdentities;
     private bool _disposed;
     private MutationSetId? _lastCommittedMutationSetId;
 
@@ -73,6 +80,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             ? StringComparer.Ordinal
             : StringComparer.OrdinalIgnoreCase;
         _mutationApprovalPolicy = mutationApprovalPolicy ?? new MutationApprovalPolicyService();
+        _baselineSecurityPolicy = baseline.SecurityPolicy ?? _mutationApprovalPolicy.SecurityPolicy;
         _semanticMutationAttribution = semanticMutationAttribution;
         _transactionObserver = transactionObserver ?? NullMutationTransactionObserver.Instance;
         Isolation = isolation ?? new WorkspaceIsolation(
@@ -80,6 +88,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             baseline.RepositoryPath,
             baseline.GitRevision);
         _baselineFiles = new Dictionary<string, BaselineFileSnapshot>(_pathComparer);
+        _baselineIdentities = new Dictionary<string, WorkspaceFileHash>(_pathComparer);
     }
 
     /// <summary>Captures immutable baseline content without blocking a caller thread.</summary>
@@ -104,6 +113,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             semanticMutationAttribution,
             resourceLimits,
             capturedFiles: null,
+            deferRecovery: false,
             cancellationToken);
     }
 
@@ -131,19 +141,19 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 cancellationToken))
             {
                 var path = Path.GetRelativePath(Isolation.RepositoryPath, fullPath).Replace('\\', '/');
-                if (!_baselineFiles.ContainsKey(path))
+                if (!_baselineIdentities.ContainsKey(path))
                 {
                     throw new InvalidDataException(
                         $"Repository input '{path}' was added since the validation baseline. Previous validation evidence cannot be reused; fresh validation is required.");
                 }
             }
 
-            var paths = _baselineFiles.Keys.Concat(additionalPaths.Select(NormalizeRelativePath))
+            var paths = _baselineIdentities.Keys.Concat(additionalPaths.Select(NormalizeRelativePath))
                 .Distinct(_pathComparer);
             foreach (var path in paths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var expected = _baselineFiles.GetValueOrDefault(path)?.Sha256;
+                var expected = _baselineIdentities.GetValueOrDefault(path)?.Sha256;
                 var fullPath = ResolveConfinedPath(path, mustExist: false);
                 var actual = File.Exists(fullPath)
                     ? await HashFileAsync(fullPath, cancellationToken)
@@ -162,14 +172,22 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     }
 
     /// <inheritdoc />
-    public Task<string?> ReadBaselineTextAsync(
+    public async Task<string?> ReadBaselineTextAsync(
         string relativePath,
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        var normalized = NormalizeRelativePath(relativePath);
-        return Task.FromResult(_baselineFiles.GetValueOrDefault(normalized)?.Text);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var normalized = NormalizeRelativePath(relativePath);
+            await HydrateBaselinesAsync([normalized], cancellationToken);
+            return _baselineFiles.GetValueOrDefault(normalized)?.Text;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     /// <inheritdoc />
@@ -281,7 +299,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
 
             var approved = SelectAuthorizedMutations(state, approval);
-            var conflicts = await DetectConflictsAsync(approved, cancellationToken);
+            var conflicts = await DetectConflictsAsync(approved, captureRecovery: false, cancellationToken);
             if (conflicts.Count > 0)
             {
                 throw new WorkspaceConflictException(new ConflictReport(mutationSetId, conflicts));
@@ -367,7 +385,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
             var approved = SelectAuthorizedMutations(state, approval);
 
-            var conflicts = await DetectConflictsAsync(approved, cancellationToken);
+            var conflicts = await DetectConflictsAsync(approved, captureRecovery: false, cancellationToken);
             if (conflicts.Count > 0)
             {
                 _conflicts.Add(conflicts.Count);
@@ -826,12 +844,17 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         {
             _disposed = true;
             _staging.Clear();
+            _baselineFiles.Clear();
+            _baselineIdentities.Clear();
         }
         finally
         {
             _gate.Release();
         }
     }
+
+    /// <summary>Gets retained original content size for bounded-work verification between operations.</summary>
+    internal long RetainedBaselineBytes => _baselineFiles.Values.Sum(snapshot => snapshot.Bytes.LongLength);
 
     /// <summary>Uses the same capture admission for repository-owned snapshots and metadata-only callers.</summary>
     internal static async Task<TransactionalWorkspace> CreateAsync(
@@ -844,6 +867,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         ISemanticHostMutationAttribution? semanticMutationAttribution,
         WorkspaceResourceLimits? resourceLimits,
         IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        bool deferRecovery,
         CancellationToken cancellationToken)
     {
         var workspace = new TransactionalWorkspace(
@@ -855,7 +879,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             mutationApprovalPolicy,
             semanticMutationAttribution: semanticMutationAttribution,
             resourceLimits: resourceLimits);
-        await workspace.CaptureBaselineAsync(capturedFiles, cancellationToken);
+        await workspace.CaptureBaselineAsync(capturedFiles, deferRecovery, cancellationToken);
         return workspace;
     }
 
@@ -868,6 +892,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         ILogger<TransactionalWorkspace>? logger = null,
         long maximumBaselineContentBytes = _defaultMaximumBaselineContentBytes,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
+        bool deferRecovery = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(transactionObserver);
@@ -879,7 +904,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             maximumBaselineContentBytes,
             mutationApprovalPolicy,
             transactionObserver);
-        await workspace.CaptureBaselineAsync(null, cancellationToken);
+        await workspace.CaptureBaselineAsync(null, deferRecovery, cancellationToken);
         return workspace;
     }
 
@@ -893,13 +918,17 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var snapshots = new Dictionary<string, BaselineFileSnapshot>(_baselineFiles, _pathComparer);
-            var totalBytes = snapshots.Values.Sum(snapshot => snapshot.Bytes.LongLength);
+            var identities = new Dictionary<string, WorkspaceFileHash>(_baselineIdentities, _pathComparer);
+            var totalBytes = identities.Values.Sum(identity => identity.Length);
             var paths = changedFiles.Select(NormalizeRelativePath).Distinct(_pathComparer).ToArray();
+            long firstBytes = 0;
+            long refreshedBytes = 0;
             foreach (var path in paths)
             {
-                if (snapshots.Remove(path, out var previous))
+                snapshots.Remove(path);
+                if (identities.Remove(path, out var previous))
                 {
-                    totalBytes -= previous.Bytes.LongLength;
+                    totalBytes -= previous.Length;
                 }
             }
 
@@ -913,26 +942,37 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 }
 
                 var remaining = _maximumBaselineContentBytes - totalBytes;
-                if (new FileInfo(fullPath).Length > remaining)
+                var length = new FileInfo(fullPath).Length;
+                if (length > remaining)
                 {
                     throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
                 }
 
-                var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
-                totalBytes += bytes.LongLength;
+                var snapshot = await BaselineFileSnapshot.CaptureAsync(fullPath, length, cancellationToken);
+                totalBytes += snapshot.Bytes.LongLength;
                 if (totalBytes > _maximumBaselineContentBytes)
                 {
                     throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
                 }
 
-                snapshots[GetExistingPathSpelling(path)] = BaselineFileSnapshot.FromBytes(bytes, Hash(bytes));
+                var spelling = GetExistingPathSpelling(path);
+                snapshots[spelling] = snapshot;
+                identities[spelling] = new WorkspaceFileHash(spelling, snapshot.Sha256, snapshot.Bytes.LongLength);
+                if (_baselineFiles.ContainsKey(spelling))
+                {
+                    refreshedBytes += snapshot.Bytes.LongLength;
+                }
+                else
+                {
+                    firstBytes += snapshot.Bytes.LongLength;
+                }
             }
 
             var baseline = Baseline with
             {
                 CapturedAt = DateTimeOffset.UtcNow,
-                Files = snapshots.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                    .Select(pair => new WorkspaceFileHash(pair.Key, pair.Value.Sha256, pair.Value.Bytes.LongLength))
+                Files = identities.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Select(pair => pair.Value)
                     .ToArray(),
             };
 
@@ -948,7 +988,20 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
 
             _baselineFiles = snapshots;
+            _baselineIdentities = identities;
             Baseline = baseline;
+
+            // Count only published snapshots, not temporary captures from a failed promotion.
+            if (firstBytes > 0)
+            {
+                _recoveryBytes.Add(firstBytes, new KeyValuePair<string, object?>("materialization", "first"));
+            }
+
+            if (refreshedBytes > 0)
+            {
+                _recoveryBytes.Add(refreshedBytes, new KeyValuePair<string, object?>("materialization", "refresh"));
+            }
+
             return (baseline, invalidated);
         }
         finally
@@ -1050,6 +1103,12 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
     }
 
+    /// <summary>Limits concurrent recovery capture to the measured large-batch workload.</summary>
+    internal static bool ShouldCaptureRecoveryInParallel(int fileCount, long totalBytes, int maximumConcurrency)
+    {
+        return maximumConcurrency > 1 && fileCount >= 100 && totalBytes >= 100L * 1024 * 1024;
+    }
+
     private async Task<StagedMutationSet> StageCoreAsync(
         MutationSet mutationSet,
         bool publishReviewEvents,
@@ -1107,7 +1166,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 }
             }
 
-            var conflicts = await DetectConflictsAsync(mutationSet.Mutations, cancellationToken);
+            var conflicts = await DetectConflictsAsync(mutationSet.Mutations, captureRecovery: true, cancellationToken);
+
             var files = conflicts.Count == 0
                 ? BuildStagedFiles(mutationSet.Mutations)
                 : new Dictionary<string, StagedFile>(_pathComparer);
@@ -1157,8 +1217,111 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
     }
 
+    private async Task HydrateBaselinesAsync(IReadOnlyList<string> relativePaths, CancellationToken cancellationToken)
+    {
+        var paths = relativePaths.Distinct(_pathComparer)
+            .Where(path => !_baselineFiles.ContainsKey(path) && _baselineIdentities.ContainsKey(path))
+            .ToArray();
+        if (paths.Length == 0)
+        {
+            return;
+        }
+
+        var capturePolicy = GetRecoveryCapturePolicy();
+
+        // The workspace gate fixes identities and aggregate admitted bytes throughout capture.
+        // Workers own separate result slots; no worker mutates the baseline or publishes metrics.
+        var snapshots = new BaselineFileSnapshot[paths.Length];
+        if (!ShouldCaptureRecoveryInParallel(paths.Length, paths.Sum(path => _baselineIdentities[path].Length), _resourceLimits.MaximumConcurrentBaselineHashes))
+        {
+            for (var index = 0; index < paths.Length; index++)
+            {
+                var captured = await CaptureRecoverySnapshotAsync(paths[index], capturePolicy, cancellationToken);
+                snapshots[index] = captured.Snapshot ?? throw new InvalidOperationException($"Workspace baseline file '{paths[index]}' changed before recovery capture. A fresh baseline is required.");
+            }
+        }
+        else
+        {
+            await Parallel.ForEachAsync(
+                Enumerable.Range(0, paths.Length),
+                new ParallelOptions
+                {
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = _resourceLimits.MaximumConcurrentBaselineHashes,
+                },
+                async (index, token) =>
+                {
+                    var captured = await CaptureRecoverySnapshotAsync(paths[index], capturePolicy, token);
+                    snapshots[index] = captured.Snapshot ?? throw new InvalidOperationException($"Workspace baseline file '{paths[index]}' changed before recovery capture. A fresh baseline is required.");
+                });
+        }
+
+        PublishRecoverySnapshots(paths, snapshots, capturePolicy, cancellationToken);
+    }
+
+    private EffectiveSessionPolicy? GetRecoveryCapturePolicy()
+    {
+        // Baseline authority is generation-bound; mutation consent belongs to this read, not startup.
+        var capturePolicy = _baselineSecurityPolicy is { } baselinePolicy && _mutationApprovalPolicy.SecurityPolicy is { } currentPolicy
+            ? baselinePolicy with { MutationConsentRevision = currentPolicy.MutationConsentRevision }
+            : _baselineSecurityPolicy;
+        _mutationApprovalPolicy.ValidatePolicyGeneration(capturePolicy);
+        if (Baseline.TrustLevel < RepositoryTrustLevel.TrustedRead)
+        {
+            throw new UnauthorizedAccessException("Recovery capture requires TrustedRead.");
+        }
+
+        return capturePolicy;
+    }
+
+    private void PublishRecoverySnapshots(
+        string[] paths,
+        BaselineFileSnapshot[] snapshots,
+        EffectiveSessionPolicy? capturePolicy,
+        CancellationToken cancellationToken)
+    {
+        _mutationApprovalPolicy.ValidatePolicyGeneration(capturePolicy);
+        foreach (var path in paths)
+        {
+            _ = ResolveConfinedPath(path, mustExist: true);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        long materializedBytes = 0;
+        for (var index = 0; index < paths.Length; index++)
+        {
+            _baselineFiles.Add(paths[index], snapshots[index]);
+            materializedBytes += snapshots[index].Bytes.LongLength;
+        }
+
+        _recoveryBytes.Add(materializedBytes, new KeyValuePair<string, object?>("materialization", "first"));
+    }
+
+    private async Task<(BaselineFileSnapshot? Snapshot, string Sha256)> CaptureRecoverySnapshotAsync(
+        string relativePath,
+        EffectiveSessionPolicy? capturePolicy,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _mutationApprovalPolicy.ValidatePolicyGeneration(capturePolicy);
+        var identity = _baselineIdentities[relativePath];
+        var fullPath = ResolveConfinedPath(relativePath, mustExist: true);
+        var (bytes, sha256) = await BaselineFileSnapshot.CaptureBytesAsync(fullPath, identity.Length, cancellationToken);
+        await _transactionObserver.ObserveAsync(MutationTransactionPoint.AfterRecoveryCapture, relativePath, cancellationToken);
+        _mutationApprovalPolicy.ValidatePolicyGeneration(capturePolicy);
+        _ = ResolveConfinedPath(relativePath, mustExist: true);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Changed bytes are conflicts even when they are not valid text. Decode only originals.
+        var snapshot = HashesEqual(sha256, identity.Sha256)
+            ? BaselineFileSnapshot.FromBytes(bytes, sha256)
+            : null;
+        return (snapshot, sha256);
+    }
+
     private async Task CaptureBaselineAsync(
         IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        bool deferRecovery,
         CancellationToken cancellationToken)
     {
         var totalBytes = Baseline.Files.Sum(file => file.Length);
@@ -1173,6 +1336,12 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             cancellationToken.ThrowIfCancellationRequested();
             var relativePath = NormalizeRelativePath(file.RelativePath);
             var fullPath = ResolveConfinedPath(relativePath, mustExist: true);
+            _baselineIdentities.Add(relativePath, file);
+            if (deferRecovery)
+            {
+                continue;
+            }
+
             var snapshot = capturedFiles is null
                 ? await BaselineFileSnapshot.CaptureAsync(fullPath, file.Length, cancellationToken)
                 : capturedFiles[file.RelativePath];
@@ -1189,6 +1358,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
     private async Task<List<MutationConflict>> DetectConflictsAsync(
         IEnumerable<Mutation> mutations,
+        bool captureRecovery,
         CancellationToken cancellationToken)
     {
         Mutation[] mutationArray = [.. mutations];
@@ -1202,7 +1372,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             try
             {
                 var relativePath = NormalizeRelativePath(mutation.RelativePath);
-                var baseline = _baselineFiles.GetValueOrDefault(relativePath);
+                var baseline = _baselineIdentities.GetValueOrDefault(relativePath);
                 var exists = present.GetValueOrDefault(relativePath, baseline is not null);
                 if (exists == (mutation.Type == MutationType.CreateFile))
                 {
@@ -1211,7 +1381,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
                 if ((mutation.BaselineSha256 is { } expected && !HashesEqual(expected, baseline?.Sha256))
                     || (mutation.ExpectedIdentity is { } identity
-                        && (!HashesEqual(identity.Sha256, baseline?.Sha256) || identity.ByteLength != baseline?.Bytes.LongLength)))
+                        && (!HashesEqual(identity.Sha256, baseline?.Sha256) || identity.ByteLength != baseline?.Length)))
                 {
                     throw new InvalidOperationException("The mutation was proposed against a different baseline identity.");
                 }
@@ -1226,7 +1396,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 {
                     var destination = NormalizeRelativePath(mutation.DestinationRelativePath
                         ?? throw new ArgumentException("A move-file mutation requires a destination path."));
-                    var destinationBaseline = _baselineFiles.GetValueOrDefault(destination);
+                    var destinationBaseline = _baselineIdentities.GetValueOrDefault(destination);
                     var caseOnlyMove = _pathComparer.Equals(relativePath, destination)
                         && !string.Equals(relativePath, destination, StringComparison.Ordinal);
                     if (string.Equals(relativePath, destination, StringComparison.Ordinal)
@@ -1259,26 +1429,42 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         ConflictHashTarget[] targets = [.. checks
             .GroupBy(check => check.RelativePath, _pathComparer)
             .Select(group => new ConflictHashTarget(group.Key, group.First().FullPath))];
-        await Parallel.ForEachAsync(
-            targets,
-            new ParallelOptions
+        var recoveryTargets = captureRecovery
+            ? targets.Where(target => !_baselineFiles.ContainsKey(target.RelativePath) && _baselineIdentities.ContainsKey(target.RelativePath)).ToArray()
+            : [];
+        var capturePolicy = recoveryTargets.Length > 0 ? GetRecoveryCapturePolicy() : null;
+        foreach (var target in recoveryTargets)
+        {
+            target.CaptureRecovery = true;
+        }
+
+        // Small recovery batches avoid parallel scheduling entirely. Large captures remain bounded
+        // by both the conflict-read limit and the recovery-capture limit.
+        var parallelRecovery = ShouldCaptureRecoveryInParallel(
+            recoveryTargets.Length,
+            recoveryTargets.Sum(target => _baselineIdentities[target.RelativePath].Length),
+            _resourceLimits.MaximumConcurrentBaselineHashes);
+        if (recoveryTargets.Length > 0 && !parallelRecovery)
+        {
+            foreach (var target in targets)
             {
-                CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = _resourceLimits.MaximumConcurrentConflictHashes,
-            },
-            async (target, token) =>
-            {
-                try
+                await ReadConflictTargetAsync(target, capturePolicy, cancellationToken);
+            }
+        }
+        else
+        {
+            await Parallel.ForEachAsync(
+                targets,
+                new ParallelOptions
                 {
-                    target.ActualHash = File.Exists(target.FullPath)
-                        ? await HashFileAsync(target.FullPath, token)
-                        : null;
-                }
-                catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-                {
-                    target.Error = exception.Message;
-                }
-            });
+                    CancellationToken = cancellationToken,
+                    MaxDegreeOfParallelism = parallelRecovery
+                        ? Math.Min(_resourceLimits.MaximumConcurrentConflictHashes, _resourceLimits.MaximumConcurrentBaselineHashes)
+                        : _resourceLimits.MaximumConcurrentConflictHashes,
+                },
+                async (target, token) => await ReadConflictTargetAsync(target, capturePolicy, token));
+        }
+
         var targetsByPath = targets.ToDictionary(target => target.RelativePath, _pathComparer);
         foreach (var check in checks)
         {
@@ -1305,7 +1491,51 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
         }
 
+        if (recoveryTargets.Length > 0 && conflicts.All(conflict => conflict is null))
+        {
+            PublishRecoverySnapshots(
+                [.. recoveryTargets.Select(target => target.RelativePath)],
+                [.. recoveryTargets.Select(target => target.Snapshot ?? throw new InvalidOperationException("A recovery snapshot was not captured."))],
+                capturePolicy,
+                cancellationToken);
+        }
+
         return [.. conflicts.OfType<MutationConflict>()];
+    }
+
+    private async Task ReadConflictTargetAsync(
+        ConflictHashTarget target,
+        EffectiveSessionPolicy? capturePolicy,
+        CancellationToken cancellationToken)
+    {
+        if (target.CaptureRecovery)
+        {
+            try
+            {
+                var captured = await CaptureRecoverySnapshotAsync(target.RelativePath, capturePolicy, cancellationToken);
+                target.Snapshot = captured.Snapshot;
+                target.ActualHash = captured.Sha256;
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or IOException)
+            {
+                target.Error = exception.Message;
+            }
+
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(target.FullPath))
+            {
+                await _transactionObserver.ObserveAsync(MutationTransactionPoint.BeforeConflictHash, target.RelativePath, cancellationToken);
+                target.ActualHash = await HashFileAsync(target.FullPath, cancellationToken);
+            }
+        }
+        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
+        {
+            target.Error = exception.Message;
+        }
     }
 
     private async Task PublishStagingDiscardedAsync(StagingState state, CancellationToken cancellationToken)
@@ -2024,6 +2254,10 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
         public string? ActualHash { get; set; }
 
+        public bool CaptureRecovery { get; set; }
+
+        public BaselineFileSnapshot? Snapshot { get; set; }
+
         public string? Error { get; set; }
 
         public string FullPath { get; }
@@ -2347,10 +2581,21 @@ public sealed class TransactionalWorkspaceCoordinator :
     }
 
     /// <summary>Registers captured content through the ordinary transactional admission and replacement path.</summary>
+    internal Task RegisterBaselineAsync(
+        WorkspaceBaseline baseline,
+        WorkspaceIsolation? isolation,
+        IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        CancellationToken cancellationToken)
+    {
+        return RegisterBaselineAsync(baseline, isolation, capturedFiles, deferRecovery: false, cancellationToken);
+    }
+
+    /// <summary>Adopts lifecycle-owned hashes, or an existing complete capture, through the same replacement path.</summary>
     internal async Task RegisterBaselineAsync(
         WorkspaceBaseline baseline,
         WorkspaceIsolation? isolation,
         IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        bool deferRecovery,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(baseline);
@@ -2365,6 +2610,7 @@ public sealed class TransactionalWorkspaceCoordinator :
             semanticMutationAttribution: _semanticMutationAttribution,
             resourceLimits: _resourceLimits,
             capturedFiles: capturedFiles,
+            deferRecovery: deferRecovery,
             cancellationToken: cancellationToken);
         TransactionalWorkspace? previous;
         lock (_registrationGate)

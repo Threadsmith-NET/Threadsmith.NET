@@ -41,6 +41,7 @@ public static class McpProfileConfigurationLoader
                 SecretScope = child.GetSection("secretScope").Get<string[]>() ?? [],
                 StartupTimeout = TimeSpan.FromSeconds(child.GetValue("startupTimeoutSeconds", 30)),
                 RequestTimeout = TimeSpan.FromSeconds(child.GetValue("requestTimeoutSeconds", 60)),
+                HasConfiguredRequestTimeout = child["requestTimeoutSeconds"] is not null,
                 DrainKillTimeout = TimeSpan.FromSeconds(child.GetValue(
                     "drainKillTimeoutSeconds",
                     configuration.GetValue("mcp:defaultDrainKillTimeoutSeconds", 10))),

@@ -38,6 +38,12 @@ internal enum MutationTransactionPoint
 
     /// <summary>Immediately after compensation restores a baseline identity.</summary>
     AfterCompensationRestore,
+
+    /// <summary>After reading recovery bytes, before authority checks and snapshot publication.</summary>
+    AfterRecoveryCapture,
+
+    /// <summary>Immediately before a separate conflict-only file read.</summary>
+    BeforeConflictHash,
 }
 
 /// <summary>Observes deterministic filesystem-effect boundaries for internal fault verification.</summary>

@@ -64,6 +64,14 @@ public static class SemanticEngineInventoryTests
             var load = await engine.LoadAsync(request, cancellationToken);
             var inventory = engine.GetRefreshInventory();
 
+            var fullDocuments = await engine.GetLoadedDocumentsAsync(cancellationToken);
+            var identities = await engine.GetLoadedDocumentsAsync(retainText: false, cancellationToken);
+            Assert.NotEmpty(identities);
+            Assert.All(identities, document => Assert.Empty(document.Text));
+            Assert.Equal(
+                fullDocuments.Select(document => (document.Path, document.ContentIdentity)),
+                identities.Select(document => (document.Path, document.ContentIdentity)));
+
             Assert.NotSame(empty, inventory);
             Assert.Contains(sourcePath, inventory.SourceDocuments);
             Assert.Contains(explicitSourcePath, inventory.SourceDocuments);

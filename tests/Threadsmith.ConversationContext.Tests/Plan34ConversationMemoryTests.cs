@@ -11,7 +11,7 @@ public static class Plan34ConversationMemoryTests
 {
     /// <summary>Both qualified branches fuse while unrelated memories never fill the requested maximum.</summary>
     [Fact]
-    public static async Task Hybrid_preserves_lexical_and_semantic_only_positives()
+    public static async Task Automatic_recall_requires_semantics_and_preserves_lexical_ranking()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = CreateGenerator();
@@ -24,9 +24,10 @@ public static class Plan34ConversationMemoryTests
 
         var result = await retriever.RetrieveAsync(Query("alpha beta"));
 
-        Assert.Equal(3, result.Selected.Count);
+        Assert.Equal(2, result.Selected.Count);
         Assert.Equal(both.Id, result.Selected[0].Entry.Id);
-        Assert.Contains(result.Selected, candidate => candidate.Entry.Id == lexical.Id && candidate.LexicalRank is not null && candidate.SemanticRank is null);
+        Assert.NotNull(result.Selected[0].LexicalRank);
+        Assert.DoesNotContain(result.Selected, candidate => candidate.Entry.Id == lexical.Id);
         Assert.Contains(result.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.LexicalRank is null && candidate.SemanticRank is not null);
         Assert.DoesNotContain(result.Selected, candidate => candidate.Entry.Text == "unrelated");
     }
@@ -52,7 +53,12 @@ public static class Plan34ConversationMemoryTests
         generator.Generate = _ => throw new InvalidOperationException("offline");
         using var retriever = CreateRetriever(fixture, generator);
 
-        var result = await retriever.RetrieveAsync(Query(query));
+        var result = await retriever.SearchAsync(new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = query,
+            Options = new RepositoryMemorySearchOptions(),
+        });
 
         Assert.Equal(expected, result.Selected.Count);
         Assert.All(result.Selected, candidate => Assert.Null(candidate.SemanticRank));
@@ -127,7 +133,14 @@ public static class Plan34ConversationMemoryTests
         var atBoundary = await retriever.RetrieveAsync(Query("alpha") with { Options = new RepositoryMemoryOptions { SemanticMinimum = 1 } });
 
         Assert.Contains(belowBoundary.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.SemanticRank is not null);
-        var lexicalAtBoundary = Assert.Single(atBoundary.Selected);
+        Assert.Empty(atBoundary.Selected);
+        var explicitSearch = await retriever.SearchAsync(new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "alpha",
+            Options = new RepositoryMemorySearchOptions { SemanticMinimum = 1 },
+        });
+        var lexicalAtBoundary = Assert.Single(explicitSearch.Selected);
         Assert.Equal(lexical.Id, lexicalAtBoundary.Entry.Id);
         Assert.NotNull(lexicalAtBoundary.LexicalRank);
         Assert.Null(lexicalAtBoundary.SemanticRank);
@@ -183,7 +196,7 @@ public static class Plan34ConversationMemoryTests
         Assert.Equal(8_000, observed?.Length);
     }
 
-    /// <summary>Embedding-space changes rebuild complete vectors, while unsupported rebuilds remain lexical-only.</summary>
+    /// <summary>Embedding-space changes rebuild complete vectors; failed rebuilds cannot enter automatic recall.</summary>
     [Fact]
     public static async Task Incompatible_space_rebuild_failure_never_mixes_vectors()
     {
@@ -199,8 +212,9 @@ public static class Plan34ConversationMemoryTests
 
         var result = await retriever.RetrieveAsync(Query("alpha beta"));
 
-        Assert.Null(Assert.Single(result.Selected).SemanticRank);
+        Assert.Empty(result.Selected);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("rebuild failed", StringComparison.Ordinal));
+        Assert.Equal("semantic scoring unavailable", Assert.Single(result.SearchDetails!.Candidates).Outcome);
     }
 
     /// <summary>Cancellation during inference propagates and leaves no poisoned ranking cache.</summary>
@@ -257,7 +271,8 @@ public static class Plan34ConversationMemoryTests
         var sameTurn = await retriever.RetrieveAsync(query);
         var recovered = await retriever.RetrieveAsync(query with { UserTurnId = RunId.New() });
 
-        Assert.Null(Assert.Single(degraded.Selected).SemanticRank);
+        Assert.Empty(degraded.Selected);
+        Assert.Empty(sameTurn.Selected);
         Assert.True(sameTurn.RankingCacheHit);
         Assert.NotNull(Assert.Single(recovered.Selected).SemanticRank);
         Assert.Equal(3, generator.Calls);

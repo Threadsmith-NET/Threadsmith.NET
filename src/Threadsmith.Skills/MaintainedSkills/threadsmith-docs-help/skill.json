@@ -65,7 +65,7 @@
   "budget": {
     "contentTokens": 6000,
     "workflowSteps": 2,
-    "modelTurns": 4,
+    "modelTurns": 32,
     "toolCalls": 12,
     "mutations": 0,
     "validationAttempts": 0,

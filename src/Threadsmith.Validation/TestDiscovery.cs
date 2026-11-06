@@ -190,7 +190,10 @@ public sealed class TestDiscoverer
             throw new ArgumentException("Test discovery requires a non-default run id.", nameof(runId));
         }
 
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        if (timeout != Timeout.InfiniteTimeSpan)
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+        }
 
         var cases = new List<TestCase>();
         foreach (var project in projects)

@@ -504,6 +504,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
             tool = ToolRuntimePolicy.ApplyCeiling(tool, request.Context.SecurityPolicy);
+            tool = ToolRuntimePolicy.ResolveInvocation(tool, input, request.Context);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
             or ToolArgumentValidationException
@@ -713,9 +714,14 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
+        executionContext = executionContext with
+        {
+            ExecutionTimeout = tool.Definition.Timeout,
+            ExecutionDeadline = tool.Definition.Timeout == Timeout.InfiniteTimeSpan ? null : _timeProvider.GetUtcNow() + tool.Definition.Timeout,
+        };
+        using var executionDeadline = new CancellationTokenSource(tool.Definition.Timeout, _timeProvider);
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        timeoutCancellation.CancelAfter(tool.Definition.Timeout);
+            cancellationToken, executionDeadline.Token);
         var executionStarted = _timeProvider.GetTimestamp();
         IReadOnlyList<string> observedConcepts = [];
         try

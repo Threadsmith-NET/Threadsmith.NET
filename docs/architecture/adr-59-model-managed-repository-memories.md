@@ -48,6 +48,14 @@ The local adapter now follows the user-supplied `MlNetAllMiniLML12V2` / `MpnetEm
 
 Source/package/asset hashes, independent original-engine goldens, and offline regeneration are maintained in the source-repository [embedding fixture documentation](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/tests/Threadsmith.Embeddings.Local.Tests/Fixtures/README.md). The already pinned 0.47 minimum is retained only while it remains calibration-optimal on the unchanged fixture; the report exposes the highest equivalent cutoff separately. Held-out queries and realistic model-written notes evaluate recall and false inclusions without selecting a new threshold.
 
+## Mandatory semantic admission for automatic recall
+
+Automatic situational recall for both Ordinary and Intelligence ownership requires a valid compatible embedding with cosine similarity strictly greater than the effective partition-specific `Recall:SemanticMinimum`. The existing hybrid retriever reuses its semantic match set to admit candidates before fusion, reranking, and comparison/result limits. Lexical evidence contributes its existing RRF ranks only for admitted memories. Concepts cannot independently qualify a candidate.
+
+This supersedes independent lexical qualification, lexical-only degradation, and concept-only admission for automatic situational recall only. Disabled or failed reranking cannot restore rejected candidates. If semantic scoring is unavailable, automatic situational recall is empty with bounded diagnostics distinguishing unavailable scoring from threshold rejection. Ranking-cache identity includes the host-owned admission policy and threshold.
+
+Standing preferences, explicit search, and reconciliation keep their existing behavior. The default `0.47`, range `[-1,1]`, strict comparison, embedding model/space, tokenization, normalization, query truncation, and reranker scoring are unchanged. No database migration or vector rebuild is required by this admission change. Fewer memories, including zero, may be recalled; passing the threshold does not prove task applicability.
+
 ## Configurable semantic qualification refinement
 
 The calibrated `0.47` value is the default for both `tools:config:memories:Recall:SemanticMinimum` and `tools:config:memories:Reconciliation:SemanticMinimum`, not a fixed embedding-generator policy. Normal machine, user, repository, session, CLI, and `THREADSMITH_` environment layering supplies the effective value. It must be a finite double in `[-1, 1]`; semantic cosine qualifies only when it is strictly greater than that value. Raising the minimum makes semantic retrieval more selective, lowering it admits weaker matches, and `1` admits no semantic candidate. The lexical branch and its qualification remain independent.

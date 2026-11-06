@@ -5,7 +5,9 @@ using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Scripting.Worker;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
 
@@ -280,6 +282,57 @@ public sealed class ScratchpadScriptTests : IDisposable
         Assert.Empty(Directory.EnumerateFiles(scope.ScratchpadPath));
     }
 
+    /// <summary>The unconfigured script budget stays at five seconds and explicit overrides reach the worker.</summary>
+    [Theory]
+    [InlineData(null, null, null, 5000)]
+    [InlineData(120000, null, null, 120000)]
+    [InlineData(120000, 300000, null, 300000)]
+    [InlineData(120000, 300000, 2000, 2000)]
+    [InlineData(120000, 300000, 600000, 600000)]
+    [InlineData(120000, null, -1, -1)]
+    public async Task ScriptPipeline_PropagatesFallbackOrOverrideToWorker(int? general, int? configured, int? specific, int expected)
+    {
+        var scope = CreateScope();
+        var process = new RecordingProcessManager();
+        var engine = new CSharpScriptEngine(process, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var tool = new CSharpScriptTool(engine, TestPromptLoader.Instance);
+        var registry = new ToolRegistry(
+            [tool],
+            runtimeOptions: new()
+            {
+                Defaults = new() { TimeoutMilliseconds = general },
+                ByTool = specific is { } timeout ? [new() { ToolId = "csharp_script", TimeoutMilliseconds = timeout }] : [],
+            },
+            configuredTimeouts: configured is { } setting
+                ? new Dictionary<string, TimeSpan> { ["csharp_script"] = TimeSpan.FromMilliseconds(setting) } : null);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            registry,
+            new DefaultPolicyEngine(),
+            new AllowApprovalPolicy(),
+            events,
+            new PassthroughSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FixedClock());
+
+        var result = await pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "csharp_script",
+                ArgumentsJson = "{\"code\":\"6 * 7\"}",
+                Context = CreateContext(scope) with { AllowedExecutables = ["dotnet"] },
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotNull(process.Request);
+        Assert.Equal(TimeSpan.FromMilliseconds(expected), process.Request.Timeout);
+        using var payload = JsonDocument.Parse(process.Request.StandardInput!);
+        Assert.Equal(expected, payload.RootElement.GetProperty("TimeoutMilliseconds").GetInt32());
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
@@ -308,6 +361,33 @@ public sealed class ScratchpadScriptTests : IDisposable
     private sealed class PassthroughSanitizer : IOutputSanitizer
     {
         public string Sanitize(string value) => value;
+    }
+
+    private sealed class FixedClock : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+    }
+
+    private sealed class RecordingProcessManager : IProcessManager
+    {
+        public ProcessExecutionRequest? Request { get; private set; }
+
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
+
+        public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Request = request;
+            return Task.FromResult(new ProcessExecutionResult(
+                1,
+                0,
+                JsonSerializer.Serialize(new CSharpScriptOutput(true, "42", null, 0, false)),
+                string.Empty,
+                false,
+                false,
+                false,
+                TimeSpan.Zero));
+        }
     }
 
     private sealed class UnusedProcessManager : IProcessManager

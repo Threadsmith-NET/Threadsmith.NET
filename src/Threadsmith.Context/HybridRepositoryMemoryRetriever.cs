@@ -51,6 +51,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             QueryBounded = bounded,
             Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
             Ownership = RepositoryMemoryOwnership.Ordinary,
+            RequireSemanticMatch = true,
             UserTurnId = request.UserTurnId,
             Concepts = request.Concepts,
             IntentConcepts = request.IntentConcepts,
@@ -119,7 +120,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 : "strict";
             var policyKey = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? "off"
                 : string.Join(':', MemoryIntentSnapshot.PolicyVersion, request.SituationalConceptFilterMode, request.UserTurnId, request.IntentEpoch, request.IntentConcepts?.CacheKey);
-            string RankingKey(long revision) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, revision, request.Ownership, request.IncludeStandingPreferences, request.AllowEmbeddingRebuild, policyKey, recallKey, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+            string RankingKey(long revision) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, revision, request.Ownership, request.IncludeStandingPreferences, request.AllowEmbeddingRebuild, request.RequireSemanticMatch, policyKey, recallKey, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
             string? DegradedKey(string key) => request.UserTurnId is { } turn ? key + ":degraded:" + turn.Value.ToString("D") : null;
             RepositoryMemoryRetrievalResult? CachedRanking(string key)
             {
@@ -223,7 +224,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 catch (Exception exception)
                 {
                     embedding = null;
-                    diagnostics.Add($"Semantic retrieval is unavailable ({exception.GetType().Name}); using qualified lexical matches only.");
+                    diagnostics.Add(request.RequireSemanticMatch
+                        ? $"Semantic retrieval is unavailable ({exception.GetType().Name}); automatic situational memories were omitted."
+                        : $"Semantic retrieval is unavailable ({exception.GetType().Name}); using qualified lexical matches only.");
                 }
             }
 
@@ -314,7 +317,12 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 .Where(item => item.Matches.Length > 0)
                 .OrderBy(item => item.Id.Value)
                 .ToDictionary(item => item.Id, item => item.Matches);
-            var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id) || conceptMatches.ContainsKey(entry.Id))
+
+            // Reuse semantic qualification before any candidate window or fallback is constructed.
+            // Lexical evidence still contributes its existing RRF rank for admitted memories.
+            var ranked = snapshot.Entries.Where(entry => request.RequireSemanticMatch
+                    ? semantic.ContainsKey(entry.Id)
+                    : lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id) || conceptMatches.ContainsKey(entry.Id))
                 .Select(entry =>
                 {
                     int? lexicalRank = lexical.TryGetValue(entry.Id, out var rank) ? rank : null;
@@ -366,6 +374,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 qualifiedById.TryGetValue(entry.Id, out var qualified);
                 scoredById.TryGetValue(entry.Id, out var scored);
                 var outcome = selectedIds.Contains(entry.Id) ? "selected"
+                    : request.RequireSemanticMatch && !semantic.ContainsKey(entry.Id)
+                        ? embedding is null || !IsCompatible(entry, model) ? "semantic scoring unavailable" : "semantic threshold"
                     : request.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce && policyDecisions.GetValueOrDefault(entry.Id) == "concept_nonmatch_policy" ? "concept_nonmatch_policy"
                     : qualified is null ? "no branch match"
                     : scored is not null ? "result limit"
@@ -679,7 +689,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 if (embedding.WasTruncated || embedding.InputTokenCount > model.MaxInputTokens
                     || !EmbeddingValidation.IsValid(model, embedding))
                 {
-                    AddRebuildDiagnostic(diagnostics, $"Memory {entry.Id.Value:D}: embedding cannot represent complete content; lexical retrieval remains available. Inspect and shorten this imported memory.");
+                    AddRebuildDiagnostic(diagnostics, $"Memory {entry.Id.Value:D}: embedding cannot represent complete content; automatic semantic admission is unavailable. Explicit lexical search remains available. Inspect and shorten this imported memory.");
                     continue;
                 }
 
@@ -694,7 +704,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             }
             catch (Exception exception)
             {
-                AddRebuildDiagnostic(diagnostics, $"Memory {entry.Id.Value:D}: embedding rebuild failed ({exception.GetType().Name}); lexical retrieval remains available.");
+                AddRebuildDiagnostic(diagnostics, $"Memory {entry.Id.Value:D}: embedding rebuild failed ({exception.GetType().Name}); automatic semantic admission is unavailable. Explicit lexical search remains available.");
             }
         }
 

@@ -1557,8 +1557,9 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
             authorization.Url,
             authorization.SourceKind,
             authorization.AuthorizedDirectUrlDigests,
-            cancellationToken: cancellationToken,
-            invocation: context.Invocation);
+            invocation: context.Invocation,
+            executionTimeout: context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout),
+            cancellationToken: cancellationToken);
         var modelResult = new WebFetchModelResult(
             response.Provenance.FinalUrl,
             response.Title,

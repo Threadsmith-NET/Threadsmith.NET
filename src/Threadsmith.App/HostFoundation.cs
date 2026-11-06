@@ -266,6 +266,39 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Gets the governed tool invocation pipeline.</summary>
     internal ToolInvocationPipeline ToolPipeline { get; }
 
+    /// <summary>Creates the search transport with request deadlines owned by the execution token.</summary>
+    internal static HttpClient CreateWebSearchHttpClient()
+    {
+        return new HttpClient(new SocketsHttpHandler
+        {
+            // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
+            // matches the model-transport host default. See Plan 67 (AR-04).
+            AllowAutoRedirect = false,
+            AutomaticDecompression = System.Net.DecompressionMethods.GZip
+                | System.Net.DecompressionMethods.Deflate,
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+        })
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+    }
+
+    /// <summary>Captures explicitly configured operational timeouts from the ordinary layered configuration.</summary>
+    internal static IReadOnlyDictionary<string, TimeSpan> CreateConfiguredToolTimeouts(IConfiguration configuration)
+    {
+        var configuredTimeouts = new Dictionary<string, TimeSpan>(StringComparer.OrdinalIgnoreCase);
+        if (configuration.GetValue<int?>("limits:validation:timeoutMilliseconds") is { } validationTimeout)
+        {
+            foreach (var id in new[] { "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "test_discover", "test_run_targeted" })
+            {
+                configuredTimeouts[id] = TimeSpan.FromMilliseconds(validationTimeout);
+            }
+        }
+
+        return configuredTimeouts;
+    }
+
     /// <summary>Binds and validates resource settings, rejecting misspelled or unsupported keys.</summary>
     internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration, IConfiguration? trustedConfiguration = null)
     {
@@ -1059,16 +1092,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             webFetchOptions,
             promptLoader);
         var webSearchClient = new BraveWebSearchClient(
-            new HttpClient(new SocketsHttpHandler
-            {
-                // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
-                // matches the model-transport host default. See Plan 67 (AR-04).
-                AllowAutoRedirect = false,
-                AutomaticDecompression = System.Net.DecompressionMethods.GZip
-                    | System.Net.DecompressionMethods.Deflate,
-                ConnectTimeout = TimeSpan.FromSeconds(10),
-                PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-            }),
+            CreateWebSearchHttpClient(),
             secretResolver,
             webSearchOptions,
             promptLoader);
@@ -1155,7 +1179,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 tools,
                 stateManager,
                 webFetchAuthorization,
-                trustedConfiguration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true)),
+                trustedConfiguration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true),
+                CreateConfiguredToolTimeouts(configuration)),
             webFetchAuthorization,
             directFetchApprovalPrompt);
     }

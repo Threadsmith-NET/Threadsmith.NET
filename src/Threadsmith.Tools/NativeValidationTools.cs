@@ -37,7 +37,7 @@ public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDe
         var result = await _service.InspectPackagesAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            input,
+            input with { ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout) },
             cancellationToken);
         return new(
             result,
@@ -178,7 +178,7 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
             token => _service.CheckFormatAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            input,
+            input with { ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout) },
             token),
             cancellationToken);
         return new(
@@ -379,7 +379,7 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
         var result = await _service.DiscoverTestsAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            input,
+            input with { ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout) },
             cancellationToken);
         return new(
             result,
@@ -482,7 +482,7 @@ public sealed class TargetedTestTool : Tool<TargetedTestInput, TargetedTestResul
             token => _service.RunTargetedTestAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            request,
+            request with { ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout) },
             token),
             cancellationToken);
         return new(
@@ -564,7 +564,7 @@ public abstract class NativeValidationTargetTool<TRequest> : Tool<TRequest, Vali
             token => RunAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            input,
+            input with { ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout) },
             token),
             cancellationToken);
         return new(
@@ -625,7 +625,7 @@ internal static class NativeValidationToolDefinitions
             trust,
             ApprovalLevel.None,
             executable ? ToolSideEffect.ExecutesCode : ToolSideEffect.ReadOnly,
-            executable ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(10),
+            executable ? TimeSpan.FromMilliseconds(new ValidationResourceLimits().TimeoutMilliseconds) : TimeSpan.FromSeconds(10),
             1024 * 1024) with
         {
             // Source changes can require the same validation request again.

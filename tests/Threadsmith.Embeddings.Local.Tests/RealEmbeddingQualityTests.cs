@@ -72,12 +72,12 @@ public sealed class RealEmbeddingQualityTests
         Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, changed.SearchDetails?.Reranker);
     }
 
-    /// <summary>Long questions recover concept-only recall in both partitions without weakening complete comparisons.</summary>
+    /// <summary>Long questions rerank admitted memories in both partitions without allowing concept-only admission.</summary>
     [Theory]
     [InlineData(RepositoryMemoryOwnership.Ordinary)]
     [InlineData(RepositoryMemoryOwnership.Intelligence)]
     [Trait("Category", "Integration")]
-    public static async Task LongQuestionsRecoverConceptOnlyRecall(RepositoryMemoryOwnership ownership)
+    public static async Task LongQuestionsRequireSemanticAdmissionBeforeReranking(RepositoryMemoryOwnership ownership)
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
             || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
@@ -155,10 +155,27 @@ public sealed class RealEmbeddingQualityTests
                 IntelligenceEnabled = true,
                 Concepts = ["authoring"],
             };
-            var recall = await retriever.RetrieveAsync(recallRequest, ct);
+            var rejected = await retriever.RetrieveAsync(recallRequest, ct);
+            Assert.Empty(rejected.Selected);
+            Assert.Equal(preference, Assert.Single(rejected.StandingPreferences).Text);
+            var rejectedDetails = ownership == RepositoryMemoryOwnership.Intelligence ? rejected.IntelligenceSearchDetails : rejected.SearchDetails;
+            Assert.Equal(RepositoryMemorySearchBranchStatus.NotRequired, rejectedDetails?.Reranker);
+            Assert.All(rejectedDetails!.Candidates, candidate => Assert.Equal("semantic threshold", candidate.Outcome));
+
+            // This fixture's permissive threshold isolates long-question reranking, not default relevance.
+            var admittedRequest = recallRequest with
+            {
+                Options = options with
+                {
+                    SemanticMinimum = -1,
+                    Intelligence = options.Intelligence with { Recall = options.Intelligence.Recall with { SemanticMinimum = -1 } },
+                },
+            };
+            var recall = await retriever.RetrieveAsync(admittedRequest, ct);
             var target = Assert.Single(recall.Selected, item => item.Entry.Id == ids[1]);
             Assert.Null(target.LexicalRank);
-            Assert.Null(target.SemanticRank);
+            Assert.NotNull(target.SemanticRank);
+            Assert.True(target.CosineSimilarity > -1);
             Assert.Equal(ids[1], recall.Selected[0].Entry.Id);
 
             Assert.Equal(preference, Assert.Single(recall.StandingPreferences).Text);
@@ -356,7 +373,7 @@ public sealed class RealEmbeddingQualityTests
     private static string[] Rank(Candidate[] candidates, double threshold, string branch)
     {
         var semantic = candidates.Where(value => value.Cosine > threshold).OrderByDescending(value => value.Cosine).ThenBy(value => value.StableId, StringComparer.Ordinal).Select((value, index) => (value.Id, Rank: index + 1)).ToDictionary(value => value.Id, value => value.Rank);
-        return [.. candidates.Select(value => new
+        return [.. candidates.Where(value => branch == "lexical" || semantic.ContainsKey(value.Id)).Select(value => new
         {
             value.Id,
             value.StableId,

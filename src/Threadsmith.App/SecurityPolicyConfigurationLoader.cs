@@ -105,6 +105,14 @@ internal static class SecurityPolicyConfigurationLoader
         }
     }
 
+    private static readonly (string Key, bool Seconds, string[] Tools)[] TimeoutMappings =
+    [
+        ("tools:runProcess:defaultTimeoutSeconds", true, ["run_process"]),
+        ("tools:config:csharp_script:timeout_ms", false, ["csharp_script"]),
+        ("webFetch:timeoutSeconds", true, ["web_fetch"]),
+        ("webSearch:provider:timeoutSeconds", true, ["web_search"]),
+    ];
+
     private static readonly string[] ListKeys =
 [.. ConfigurationPermissionCatalog.Properties
         .Where(property => property.Shape == PermissionInputShape.List).Select(property => property.Path)];
@@ -394,6 +402,7 @@ internal static class SecurityPolicyConfigurationLoader
             MutationDefault = mutationDefault,
             LargeDiffThreshold = threshold,
             ResourceLimits = limits.ToImmutable(),
+            ToolTimeouts = ResolveToolTimeouts(trusted, [.. restrictions]),
             ScriptAssemblies = [.. assemblies.Order(StringComparer.OrdinalIgnoreCase)],
             ControlPaths = [paths.MachineConfiguration, paths.UserConfiguration, paths.RepositoryConfiguration,
                 paths.SessionConfiguration, paths.UserProviderCatalog, paths.RepositoryProviderCatalog,
@@ -426,6 +435,13 @@ internal static class SecurityPolicyConfigurationLoader
             requireShellApproval.ToString(), parallelEnabled.ToString(), mutationCeiling.ToString(), mutationDefault.ToString(), hasExplicitMutationCeiling.ToString(), threshold.ToString(CultureInfo.InvariantCulture),
             localPermissions.Revision.ToString(CultureInfo.InvariantCulture),
             string.Join('|', policy.ScriptAssemblies),
+            JsonSerializer.Serialize(new
+            {
+                policy.ToolTimeouts.Default,
+                ByTool = policy.ToolTimeouts.ByTool.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+                policy.ToolTimeouts.Maximum,
+                MaximumByTool = policy.ToolTimeouts.MaximumByTool.OrderBy(pair => pair.Key, StringComparer.Ordinal),
+            }),
             string.Join('|', policy.ResourceLimits.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Key + "=" + pair.Value.ToString(CultureInfo.InvariantCulture))),
         });
         _ = WebFetchOptions.FromPolicy(policy);
@@ -513,7 +529,7 @@ internal static class SecurityPolicyConfigurationLoader
             provenance.Add(new PolicyInputSource("tools:runtime:byTool", "Environment", "THREADSMITH_ launch environment"));
         }
 
-        foreach (var key in ListKeys.Concat(ScalarKeys).Concat(ResourceDefaults.Keys))
+        foreach (var key in ListKeys.Concat(ScalarKeys).Concat(ResourceDefaults.Keys).Concat(TimeoutMappings.Select(mapping => mapping.Key)).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var section = configuration.GetSection(key);
             var children = section.GetChildren().ToArray();
@@ -653,6 +669,109 @@ internal static class SecurityPolicyConfigurationLoader
             }
         }
     }
+
+    private static ToolTimeoutPolicy ResolveToolTimeouts(Source[] trusted, Source[] restrictions)
+    {
+        var preferences = ImmutableDictionary.CreateBuilder<string, TimeSpan>(StringComparer.OrdinalIgnoreCase);
+        var overrides = ImmutableDictionary.CreateBuilder<string, TimeSpan>(StringComparer.OrdinalIgnoreCase);
+        var maximums = ImmutableDictionary.CreateBuilder<string, TimeSpan>(StringComparer.OrdinalIgnoreCase);
+        TimeSpan? fallback = null;
+        TimeSpan? maximum = null;
+        foreach (var source in trusted.Concat(restrictions))
+        {
+            var enforced = IsRestriction(source);
+            if (ReadTimeout(source, "tools:runtime:defaults:timeoutMilliseconds", false) is { } value)
+            {
+                if (enforced)
+                {
+                    maximum = NarrowTimeout(maximum, value);
+                }
+                else
+                {
+                    fallback = value;
+                }
+            }
+
+            foreach (var mapping in TimeoutMappings)
+            {
+                if (ReadTimeout(source, mapping.Key, mapping.Seconds) is not { } timeout)
+                {
+                    continue;
+                }
+
+                foreach (var toolId in mapping.Tools)
+                {
+                    if (enforced)
+                    {
+                        maximums[toolId] = NarrowTimeout(maximums.TryGetValue(toolId, out var prior) ? prior : null, timeout);
+                    }
+                    else
+                    {
+                        preferences[toolId] = timeout;
+                    }
+                }
+            }
+
+            if (!source.Values.TryGetValue("tools:runtime:byTool", out var array))
+            {
+                continue;
+            }
+
+            if (!enforced)
+            {
+                overrides.Clear();
+            }
+
+            // Shape and numeric values were validated by ResolveRuntimeOverrides.
+            foreach (var item in array.EnumerateArray())
+            {
+                var fields = item.EnumerateObject().ToDictionary(property => property.Name, property => property.Value, StringComparer.OrdinalIgnoreCase);
+                if (!fields.TryGetValue("timeoutMilliseconds", out var timeoutNode))
+                {
+                    continue;
+                }
+
+                var id = fields["toolId"].GetString() ?? throw Invalid(source, "tools:runtime:byTool");
+                var timeout = TimeSpan.FromMilliseconds(int.Parse(timeoutNode.ToString(), CultureInfo.InvariantCulture));
+                if (enforced)
+                {
+                    maximums[id] = NarrowTimeout(maximums.TryGetValue(id, out var prior) ? prior : null, timeout);
+                }
+                else
+                {
+                    overrides[id] = timeout;
+                }
+            }
+        }
+
+        foreach (var pair in overrides)
+        {
+            preferences[pair.Key] = pair.Value;
+        }
+
+        return new ToolTimeoutPolicy { Default = fallback, ByTool = preferences.ToImmutable(), Maximum = maximum, MaximumByTool = maximums.ToImmutable() };
+    }
+
+    private static TimeSpan? ReadTimeout(Source source, string key, bool seconds)
+    {
+        if (!source.Values.TryGetValue(key, out var node))
+        {
+            return null;
+        }
+
+        if (!int.TryParse(node.ToString(), CultureInfo.InvariantCulture, out var value)
+            || (value <= 0 && !(value == -1 && key.StartsWith("tools:runtime:", StringComparison.OrdinalIgnoreCase))))
+        {
+            throw Invalid(source, key);
+        }
+
+        var timeout = seconds ? TimeSpan.FromSeconds(value) : TimeSpan.FromMilliseconds(value);
+        return timeout.TotalMilliseconds <= uint.MaxValue - 1L ? timeout : throw Invalid(source, key);
+    }
+
+    private static TimeSpan NarrowTimeout(TimeSpan? prior, TimeSpan next) =>
+        prior is null || prior == Timeout.InfiniteTimeSpan ? next
+            : next == Timeout.InfiniteTimeSpan || prior < next ? prior.Value : next;
 
     private static string[] NormalizeRoots(string[] values, string repository) => [.. values.Select(value =>
     {

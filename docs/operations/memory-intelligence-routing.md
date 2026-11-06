@@ -2,6 +2,8 @@
 
 Standing preferences remain required, query-independent context in ID order. They do not use situational result limits, concept eligibility, cross-encoder slots, or the situational token budget. Memory-disabled and stateless runs keep their existing gates.
 
+Automatic ordinary and intelligence situational recall requires a valid compatible embedding with cosine similarity strictly greater than the partition's configured `Recall.SemanticMinimum`. Lexical evidence ranks only admitted candidates; concepts, caches, and reranker fallback cannot bypass admission. Unavailable semantic scoring returns no automatic situational memories. Explicit search and reconciliation retain independent hybrid discovery. Standing preferences remain query-independent.
+
 ## Settings and rollback
 
 Settings live under `tools.config.memories` in `.threadsmith/config.json`. Merge these fields into existing configuration; do not replace other settings.
@@ -38,7 +40,7 @@ Existing configurations with no automatic-recall key retain legacy behavior. Onb
 
 `Recall.SituationalConceptFilterMode` accepts `Off`, `Shadow`, and `Enforce`. Off is the default. Invalid values resolve to Off with a configuration diagnostic included in recall diagnostics. `Recall.Concepts.Enabled` still controls candidate expansion independently.
 
-- **Off:** baseline eligibility.
+- **Off:** baseline semantic-admitted eligibility. Shadow and Enforce fallback also retain mandatory semantic admission.
 - **Shadow:** same candidates, scores, comparisons and submitted memory text as Off; reports hypothetical eligibility decisions.
 - **Enforce:** discovered tagged ordinary situational candidates need an exact normalized current-instruction concept match. Untagged candidates retain baseline eligibility. Missing, stale, cross-run, cross-repository, overflowed or mixed-origin evidence falls back to baseline.
 

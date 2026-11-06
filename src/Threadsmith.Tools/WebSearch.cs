@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
@@ -14,6 +15,10 @@ using Threadsmith.Core;
 /// <summary>Provider-neutral bounded web-search request.</summary>
 public sealed record WebSearchRequest
 {
+    /// <summary>Host-resolved execution budget, excluded from model input.</summary>
+    [JsonIgnore]
+    public TimeSpan? ExecutionTimeout { get; init; }
+
     /// <summary>Plain text disclosed to the provider, within the configured character bound and the provider's 75-word bound.</summary>
     public required string Query { get; init; }
 
@@ -224,7 +229,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
     {
         WebSearchRequestContract.Validate(request, _options.MaximumFreshnessDays, _options.MaximumQueryCharacters);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(_options.Timeout);
+        deadline.CancelAfter(request.ExecutionTimeout ?? _options.Timeout);
         var secretRequest = new SecretResolutionRequest
         {
             Reference = SecretReference.Parse(_options.SecretReference),
@@ -467,7 +472,12 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         CancellationToken cancellationToken = default)
     {
         ValidateInput(input);
-        var response = await _client.SearchAsync(input, cancellationToken);
+        var response = await _client.SearchAsync(
+            input with
+            {
+                ExecutionTimeout = context.ExecutionTimeout is null ? null : context.GetRemainingExecutionTimeout(Definition.Timeout),
+            },
+            cancellationToken);
         if (_fetchAuthorization is not null)
         {
             response = response with

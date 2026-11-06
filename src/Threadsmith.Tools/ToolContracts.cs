@@ -269,6 +269,9 @@ public sealed record ToolDefinition
     /// <summary>Maximum invocation duration.</summary>
     public TimeSpan Timeout { get; init; }
 
+    /// <summary>Explicit tool configuration that takes precedence over a general runtime default.</summary>
+    public TimeSpan? ConfiguredTimeout { get; init; }
+
     /// <summary>Optional total budget starting at pipeline admission, including scheduling and source waits.
     /// The implementation must honor the forwarded absolute deadline while joining its owned work.</summary>
     public TimeSpan? AdmissionTimeout { get; init; }
@@ -640,6 +643,24 @@ public sealed record ToolExecutionContext(
     /// <summary>Absolute deadline established at pipeline admission, including time already spent waiting.</summary>
     public DateTimeOffset? Deadline { get; init; }
 
+    /// <summary>Resolved whole-operation timeout; null denotes a direct invocation without runtime resolution.</summary>
+    public TimeSpan? ExecutionTimeout { get; init; }
+
+    /// <summary>Execution deadline shared by inner operations, distinct from admission waiting.</summary>
+    public DateTimeOffset? ExecutionDeadline { get; init; }
+
+    /// <summary>Returns the remaining shared execution budget without restarting its clock.</summary>
+    public TimeSpan GetRemainingExecutionTimeout(TimeSpan fallback)
+    {
+        if (ExecutionDeadline is not { } deadline)
+        {
+            return ExecutionTimeout ?? fallback;
+        }
+
+        var remaining = deadline - TimeProvider.GetUtcNow();
+        return remaining > TimeSpan.Zero ? remaining : throw new TimeoutException("The tool execution deadline expired.");
+    }
+
     /// <summary>Host clock used to interpret the absolute deadline.</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
@@ -649,6 +670,13 @@ public sealed record ToolExecutionContext(
     /// <summary>Original pipeline cancellation, distinct from its linked execution timeout.</summary>
     [JsonIgnore]
     internal CancellationToken? CallerCancellation { get; init; }
+}
+
+/// <summary>Resolves supported invocation timeout hints and tool-specific hard limits.</summary>
+internal interface IInvocationTimeoutTool
+{
+    /// <summary>Returns the requested or configured timeout, bounded by the tool's hard maximum.</summary>
+    TimeSpan ResolveTimeout(object input, ToolInvocationContext context, TimeSpan configuredTimeout);
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>

@@ -10,6 +10,16 @@ The [repository permissions guide](repository-permissions.md) defines configurat
 
 Machine and user values are defaults, followed by user-owned repository choices and supported launch inputs. Explicit machine `enforced` values restrict the result. Repository permission values do not impose restrictions; no user files are automatically rewritten. Null and malformed authority values fail their owning validator; missing optional files are allowed. Explicit empty grant arrays remain distinct from absence.
 
+## Tool timeout precedence
+
+A general runtime timeout is a fallback, not a ceiling. Selection uses a supported positive invocation hint first, then `tools.runtime.byTool`, explicit tool-specific settings (such as `tools.runProcess.defaultTimeoutSeconds`), `tools.runtime.defaults.timeoutMilliseconds`, and finally the tool's built-in default. Shorter and longer tool-specific values both override the general fallback.
+
+Explicit machine-enforced global and per-tool ceilings still restrict the selected timeout. `run_process` also remains bounded by `tools.runProcess.maxTimeoutSeconds`; that maximum does not select its default. `-1` means unlimited where supported, but cannot bypass a finite enforced ceiling or caller cancellation.
+
+The shared execution pipeline passes its remaining budget to process, script, MCP request, web request, and native-validation execution paths. Their inner operation timers no longer independently reapply a shorter default. Connection, startup, drain, cleanup, admission, and other independent safety limits remain separate. Direct service calls without a pipeline budget retain their own defaults.
+
+Native validation's explicit `limits.validation.timeoutMilliseconds` remains an ordinary layered setting, including repository/session, CLI, and environment overrides. Running tests through `run_process` still uses the shell tool's settings; the host does not infer a tool identity from command text.
+
 ## Key and consumer catalog
 
 “Narrow” below identifies settings that explicit machine enforcement can restrict. “Trusted” settings load from their declared trusted sources. Repository/session permission definitions are ignored silently. Specialized defaults and detailed field validation remain owned by the existing adapters; their definition identity is captured in the session policy and changes require restart.
@@ -30,7 +40,7 @@ Machine and user values are defaults, followed by user-owned repository choices 
 | `mutation:largeDiffThreshold` | Narrow maximum; 500 changed lines | Mutation review classification |
 | `tools:runtime:defaults:timeoutMilliseconds` | Narrow; -1 means unlimited, not numerically most restrictive | `ToolRuntimePolicy`, invocation timeout |
 | `tools:runtime:defaults:maximumOutputBytes`, `maximumSourceConcurrency` | Narrow; no additional override (`int.MaxValue`); tool-specific defaults still apply | Runtime wrapper and source concurrency limiter |
-| `tools:runtime:byTool` | Whole trusted override array; repository per-tool limits narrow; no default entries | Runtime wrapper; repository default caps also bound per-tool overrides |
+| `tools:runtime:byTool` | Whole trusted override array; no default entries; repository permission values ignored | Runtime wrapper; tool-specific timeout overrides the ordinary fallback, while explicit machine ceilings still apply |
 | `tools:parallel:enabled`, `maximumConcurrency` | Narrow AND/min; true/4 | Batch wave planning from captured policy |
 | `tools:parallel:failureMode` | Ordinary; `CompleteStarted` | Existing scheduler failure handling |
 | `tools:runProcess:defaultTimeoutSeconds`, `maxTimeoutSeconds` | Narrow; 30/60; effective default fits maximum | `RunProcessTool` |

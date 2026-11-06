@@ -38,6 +38,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 
 | # | File | Capability |
 |---|---|---|
+| Maintenance | [maintenance-strict-semantic-memory-recall.md](maintenance-strict-semantic-memory-recall.md) | Mandatory semantic admission for automatic ordinary and intelligence recall |
 | 1 | `plan-01-repository-bootstrap.md` | Repository bootstrap and architecture enforcement |
 | 2 | `plan-02-core-commands-events-projections.md` | Core commands, events, projections, and cancellation |
 | 3 | `plan-03-tui-application-shell.md` | Conversation-first inline terminal |

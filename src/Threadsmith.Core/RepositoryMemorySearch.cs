@@ -15,7 +15,10 @@ public sealed record RepositoryMemorySearchRequest
     /// <summary>Allows legacy automatic maintenance; explicit read-only search disables it.</summary>
     public bool AllowEmbeddingRebuild { get; init; } = true;
 
-    /// <summary>Only the ordinary conversational route opts into eligibility filtering.</summary>
+    /// <summary>Requires strict semantic admission before ranking and limits. Automatic recall sets this; explicit search and reconciliation retain independent branch discovery.</summary>
+    public bool RequireSemanticMatch { get; init; }
+
+    /// <summary>Only the ordinary conversational route opts into concept eligibility filtering.</summary>
     public SituationalConceptFilterMode SituationalConceptFilterMode { get; init; }
 
     /// <summary>Current instruction evidence, separate from legacy discovery concepts.</summary>
@@ -67,7 +70,7 @@ public sealed record RepositoryMemorySearchRequest
 /// <summary>Search qualification and selection bounds independent of context admission and storage capacity.</summary>
 public sealed record RepositoryMemorySearchOptions
 {
-    /// <summary>Strict semantic discovery floor.</summary>
+    /// <summary>Strict semantic discovery floor; mandatory candidate admission for automatic recall.</summary>
     public double SemanticMinimum { get; init; } = RepositoryMemoryOptions.DefaultSemanticMinimum;
 
     /// <summary>Maximum returned candidates; zero disables selection.</summary>

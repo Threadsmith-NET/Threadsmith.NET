@@ -84,7 +84,7 @@ public static class MemoryRerankingTests
         Assert.Equal(baseline.Selected.Take(2).Select(item => item.Entry.Id), result.Selected.Select(item => item.Entry.Id));
         Assert.Equal(2, result.SearchDetails!.Candidates.Count(item => item.Outcome == "selected"));
         Assert.Single(result.SearchDetails.Candidates, item => item.Outcome == "comparison window");
-        Assert.Single(result.SearchDetails.Candidates, item => item.Outcome == "no branch match");
+        Assert.Single(result.SearchDetails.Candidates, item => item.Outcome == "semantic threshold");
     }
 
     /// <summary>Raw negative logits order candidates; result limits bound selection.</summary>

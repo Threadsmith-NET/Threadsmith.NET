@@ -485,13 +485,13 @@ Ordinary configuration; repository rebinding supported. Binding: `src/Threadsmit
 | `MaximumListBytes` | `49152` | Serialized entry limit for memory responses. |
 | `Recall:MaximumResults` | `3` | Situational context admissions; zero disables situational recall. |
 | `Recall:MaximumQueryCharacters` | `8000` | Conversational retrieval query bound. |
-| `Recall:SemanticMinimum` / `Reconciliation:SemanticMinimum` | `0.47` | Independent strict cosine discovery thresholds. |
+| `Recall:SemanticMinimum` / `Reconciliation:SemanticMinimum` | `0.47` | Mandatory strict cosine admission for automatic recall; independent semantic discovery threshold for reconciliation. Finite `[-1,1]`. |
 | `Recall:RerankerEnabled` | `false` | Optional recall reranking. |
 | `Reconciliation:Enabled` | `false` | Checks manual/model adds against both memory types. |
 | `Reconciliation:RerankerEnabled` | `true` | Required while reconciliation is enabled. |
 | `Recall:RerankerCandidateLimit` / `Reconciliation:RerankerCandidateLimit` | `8` / `20` | Independent positive hybrid comparison windows. |
 | `Recall:Concepts:Enabled` / `Reconciliation:Concepts:Enabled` | `false` / `true` | Independent concept discovery switches. |
-| `Recall:Concepts:CandidateLimit` / `Reconciliation:Concepts:CandidateLimit` | `4` | Reserved concept-only comparison slots per scenario. |
+| `Recall:Concepts:CandidateLimit` / `Reconciliation:Concepts:CandidateLimit` | `4` | Reserved concept-only slots for explicit search/reconciliation; cannot bypass automatic semantic admission. |
 | `Recall:Fuzzy:Enabled` / `Reconciliation:Fuzzy:Enabled` | `false` | One policy for both text and concept spelling alternatives per scenario. |
 | `Recall:Fuzzy:MaximumDistance` / `Reconciliation:Fuzzy:MaximumDistance` | `1` | Native weighted edit-cost bound. |
 | `Recall:Lexical:MaximumExpansionsPerTerm` / `Reconciliation:Lexical:MaximumExpansionsPerTerm` | `3` | One to three text alternatives per unmatched term. |

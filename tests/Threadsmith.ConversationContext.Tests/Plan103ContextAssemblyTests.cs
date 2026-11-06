@@ -179,6 +179,75 @@ public static class Plan103ContextAssemblyTests
         Assert.Equal(assembled.ModelInput, (await assembler.AssembleAsync(request)).ModelInput);
     }
 
+    /// <summary>Assembly results, input diagnostics, snapshots and published events never expose cached collections.</summary>
+    [Fact]
+    public static async Task Inspection_collections_are_detached_at_assembly_and_dispatch_boundaries()
+    {
+        // Arrange through the existing assembler and retriever path.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((domainEvent, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            observed.Add(domainEvent);
+            return Task.CompletedTask;
+        });
+        var support = new RepositoryMemorySupport { Path = "src/original.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow };
+        RepositoryMemorySupport[] supports = [support];
+        string[] terms = ["original"];
+        var retriever = new TestRetriever(CreateEntry("memory") with { Supports = supports })
+        {
+            SearchDetails = new()
+            {
+                Candidates = new RepositoryMemoryCandidateSearchEvidence[]
+                {
+                    new(RepositoryMemoryId.New(), "selected", 1, null, false, null, null, null) { MatchedTerms = terms },
+                },
+            },
+        };
+        var assembler = CreateAssembler(events, retriever);
+        var request = CreateRequest(fixture);
+        var result = await assembler.AssembleAsync(request, cancellationToken);
+        var published = Assert.Single(observed.OfType<ContextAssembled>()).Inspection;
+
+        // Act: mutate upstream inputs, the assembly result, and an event payload.
+        supports[0] = support with { Path = "changed-input" };
+        terms[0] = "changed-input";
+        Assert.IsType<RepositoryMemorySupport[]>(published.RepositoryMemoryItems[0].Supports)[0] = support with { Path = "changed-event" };
+        Assert.IsType<string[]>(published.RepositoryMemorySearch!.Candidates[0].MatchedTerms)[0] = "changed-event";
+        Assert.IsType<RepositoryMemorySupport[]>(result.Inspection.RepositoryMemoryItems[0].Supports)[0] =
+            support with { Path = "changed-result" };
+        var first = Assert.IsType<ContextInspectionProjection>(assembler.GetInspection(request.RunId));
+
+        // Assert: cached data and repeated retrieval remain independent.
+        Assert.Equal("memory", first.RepositoryMemoryItems[0].Text);
+        Assert.Equal(support, first.RepositoryMemoryItems[0].Supports[0]);
+        Assert.Equal("original", first.RepositoryMemorySearch!.Candidates[0].MatchedTerms[0]);
+        Assert.IsType<RepositoryMemorySupport[]>(first.RepositoryMemoryItems[0].Supports)[0] = support with { Path = "changed-snapshot" };
+        Assert.IsType<string[]>(first.RepositoryMemorySearch.Candidates[0].MatchedTerms)[0] = "changed-snapshot";
+        Assert.Equal(support, assembler.GetInspection(request.RunId)!.RepositoryMemoryItems[0].Supports[0]);
+        Assert.Equal("original", assembler.GetInspection(request.RunId)!.RepositoryMemorySearch!.Candidates[0].MatchedTerms[0]);
+
+        RepositoryMemoryInclusion[] inclusions = [new(retriever.Entry.Id, retriever.Entry.Revision)];
+        var expectedInclusion = inclusions[0];
+        await assembler.UpdateRepositoryMemoryDispatchInspectionAsync(
+            request.SessionId, request.RunId, new(inclusions, "recorded", 1.25), cancellationToken);
+        inclusions[0] = expectedInclusion with { Revision = 999 };
+        var updatedEvent = observed.OfType<ContextAssembled>().Last().Inspection;
+        Assert.IsType<RepositoryMemoryInclusion[]>(updatedEvent.RepositoryMemoryDispatch!.Inclusions)[0] = expectedInclusion with { Revision = 888 };
+        Assert.IsType<RepositoryMemorySupport[]>(updatedEvent.RepositoryMemoryItems[0].Supports)[0] = support with { Path = "changed-update-event" };
+        var memoryEvent = Assert.Single(observed.OfType<MemoriesIncluded>());
+        Assert.Equal(support, memoryEvent.Items[0].Supports[0]);
+        Assert.IsType<RepositoryMemorySupport[]>(memoryEvent.Items[0].Supports)[0] = support with { Path = "changed-memory-event" };
+        var dispatched = Assert.IsType<ContextInspectionProjection>(assembler.GetInspection(request.RunId));
+        Assert.Equal(expectedInclusion, Assert.Single(dispatched.RepositoryMemoryDispatch!.Inclusions));
+        Assert.Equal(support, dispatched.RepositoryMemoryItems[0].Supports[0]);
+        Assert.IsType<RepositoryMemoryInclusion[]>(dispatched.RepositoryMemoryDispatch.Inclusions)[0] = expectedInclusion with { Revision = 777 };
+        Assert.Equal(expectedInclusion, Assert.Single(assembler.GetInspection(request.RunId)!.RepositoryMemoryDispatch!.Inclusions));
+    }
+
     private static RepositoryMemoryEntry CreateEntry(string text)
     {
         return new()
@@ -233,6 +302,8 @@ public static class Plan103ContextAssemblyTests
 
         public RepositoryMemoryEntry Entry { get; set; }
 
+        public RepositoryMemorySearchDetails? SearchDetails { get; init; }
+
         public int Calls { get; private set; }
 
         public RepositoryMemoryRetrievalRequest? Request { get; private set; }
@@ -242,7 +313,10 @@ public static class Plan103ContextAssemblyTests
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
             Request = request;
-            return Task.FromResult(new RepositoryMemoryRetrievalResult([new RepositoryMemoryRetrievalCandidate(Entry, 0.03, 1, 2, 0.9, 7.25)], []));
+            return Task.FromResult(new RepositoryMemoryRetrievalResult([new RepositoryMemoryRetrievalCandidate(Entry, 0.03, 1, 2, 0.9, 7.25)], [])
+            {
+                SearchDetails = SearchDetails,
+            });
         }
     }
 

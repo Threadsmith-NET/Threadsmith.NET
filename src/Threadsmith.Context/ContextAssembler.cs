@@ -795,7 +795,7 @@ public sealed class ContextAssembler : IContextAssembler
         };
         lock (_gate)
         {
-            _inspections[request.RunId] = inspection;
+            _inspections[request.RunId] = ContextInspectionSnapshots.Copy(inspection);
             if (_inspectionNodes.Remove(request.RunId, out var existingNode))
             {
                 _inspectionOrder.Remove(existingNode);
@@ -832,7 +832,7 @@ public sealed class ContextAssembler : IContextAssembler
         activity?.SetTag("threadsmith.context.evidence.omitted", candidates.Length - selected.Count);
         activity?.SetStatus(ActivityStatusCode.Ok);
         await _events.PublishAsync(
-            new ContextAssembled(request.SessionId, DateTimeOffset.UtcNow, inspection),
+            new ContextAssembled(request.SessionId, DateTimeOffset.UtcNow, ContextInspectionSnapshots.Copy(inspection)),
             cancellationToken);
         return new ContextAssemblyResult(
             modelInput,
@@ -863,25 +863,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
 
             return _inspections.TryGetValue(runId, out var inspection)
-                ? inspection with
-                {
-                    TokensByCategory = new ReadOnlyDictionary<string, int>(
-                        inspection.TokensByCategory.ToDictionary(
-                            pair => pair.Key,
-                            pair => pair.Value,
-                            StringComparer.Ordinal)),
-                    Evidence = inspection.Evidence.ToArray(),
-                    PromptAssets = inspection.PromptAssets.ToArray(),
-                    ModelRationale = inspection.ModelRationale.ToArray(),
-                    Reductions = inspection.Reductions.ToArray(),
-                    ConversationItems = inspection.ConversationItems.Select(item => item with
-                    {
-                        SourceMessageIds = item.SourceMessageIds.ToArray(),
-                        SourceRunIds = item.SourceRunIds.ToArray(),
-                        SourceEvidenceIds = item.SourceEvidenceIds.ToArray(),
-                    }).ToArray(),
-                    RepositoryMemoryItems = inspection.RepositoryMemoryItems.ToArray(),
-                }
+                ? ContextInspectionSnapshots.Copy(inspection)
                 : null;
         }
     }
@@ -942,7 +924,8 @@ public sealed class ContextAssembler : IContextAssembler
 
                 var submitted = dispatch.Inclusions.ToHashSet();
                 additions = [.. inspection.RepositoryMemoryItems.Where(item => item.Included
-                    && submitted.Contains(new(item.Id, item.Revision)) && displayed.Add(JsonSerializer.Serialize(new { item.Id, item.Revision, item.Text, item.Ownership, item.Supports })))];
+                    && submitted.Contains(new(item.Id, item.Revision)) && displayed.Add(JsonSerializer.Serialize(new { item.Id, item.Revision, item.Text, item.Ownership, item.Supports })))
+                    .Select(item => item with { Supports = item.Supports.ToArray() })];
             }
         }
 
@@ -990,7 +973,7 @@ public sealed class ContextAssembler : IContextAssembler
         if (updated is not null)
         {
             await _events.PublishAsync(
-                new ContextAssembled(sessionId, DateTimeOffset.UtcNow, updated),
+                new ContextAssembled(sessionId, DateTimeOffset.UtcNow, ContextInspectionSnapshots.Copy(updated)),
                 cancellationToken);
         }
     }

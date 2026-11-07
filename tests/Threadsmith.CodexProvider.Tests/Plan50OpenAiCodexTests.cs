@@ -224,11 +224,14 @@ public sealed class Plan50OpenAiCodexTests
     }
 
     /// <summary>Catalog snapshots contain metadata only and round-trip dynamic models.</summary>
-    [Fact]
-    public async Task CatalogCache_RoundTripsDynamicModelsWithoutToken()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CatalogCache_RoundTripsDynamicModelsWithoutToken(bool relativePath)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-{Guid.NewGuid():N}");
-        var path = Path.Combine(root, "models.json");
+        var absolutePath = Path.Combine(root, "models.json");
+        var path = relativePath ? Path.GetRelativePath(Environment.CurrentDirectory, absolutePath) : absolutePath;
         var cache = new OpenAiCodexCatalogCache(path);
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
@@ -242,6 +245,23 @@ public sealed class Plan50OpenAiCodexTests
 
             Assert.Equal("dynamic", Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(loaded?.Models ?? [])).ModelId);
             Assert.DoesNotContain("not-a-jwt", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+            using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            Assert.Equal(3, payload.RootElement.GetProperty("SchemaVersion").GetInt32());
+            Assert.Equal("dynamic", payload.RootElement.GetProperty("Models")[0].GetProperty("ModelId").GetString());
+
+            var replacement = configuration with { Models = [configuration.Models[0] with { Name = "Replacement" }] };
+            await cache.SaveAsync(replacement, TestContext.Current.CancellationToken);
+            Assert.Equal("Replacement", Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models).Name);
+
+            var previous = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+            using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            await canceled.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cache.SaveAsync(configuration, canceled.Token));
+            Assert.Equal(previous, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+            Assert.Empty(Directory.GetFiles(root, "*.tmp"));
+
+            await cache.ClearAsync();
+            Assert.Null(await cache.LoadAsync(TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -250,6 +270,25 @@ public sealed class Plan50OpenAiCodexTests
                 Directory.Delete(root, recursive: true);
             }
         }
+    }
+
+    /// <summary>Filename-only paths remain unsupported without silently broadening the cache path contract.</summary>
+    [Fact]
+    public async Task CatalogCache_FilenameOnlyPathRetainsRejection()
+    {
+        var path = $"threadsmith-codex-{Guid.NewGuid():N}.json";
+        var cache = new OpenAiCodexCatalogCache(path);
+        var configuration = new OpenAiCodexProviderConfiguration
+        {
+            Id = "openai-codex",
+            Name = "OpenAI Codex",
+            Models = [],
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() => cache.SaveAsync(configuration, TestContext.Current.CancellationToken));
+
+        Assert.False(File.Exists(path));
+        Assert.Empty(Directory.GetFiles(Environment.CurrentDirectory, path + "*"));
     }
 
     /// <summary>Malformed catalog payloads are ignored before model projection.</summary>

@@ -50,7 +50,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     ];
 
     private readonly ITerminalBackend _backend;
-    private readonly TuiResourceLimits _limits;
     private readonly Func<CancellationToken, Task<string?>> _readClipboard;
     private readonly TuiApplication _app;
     private readonly Channel<Update> _updates = Channel.CreateBounded<Update>(new BoundedChannelOptions(64)
@@ -61,26 +60,48 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TuiKitComposer _ordinary;
-    private readonly TuiKitComposer _secondary;
-    private readonly TuiKitComposer _steering;
-    private readonly AgentViews _agents;
-    private readonly AgentTabStrip _tabs;
     private readonly OutputPane _outputPane;
     private readonly ComposerPane _composerPane;
     private Size _layoutSize;
 
-    private TranscriptView SelectedTranscript => _agents.Selected.Transcript;
+    private TranscriptView SelectedTranscript => Agents.Selected.Transcript;
 
     private readonly CachedTextRun _terminalTooSmall = new();
     private readonly Action _interrupt;
     private readonly bool _suppressStyles;
-    private readonly TuiKitCommandDiscovery _discovery;
-    private readonly ComposerCommandCompletion _completion;
-    private readonly ComposerAutocomplete _autocomplete;
+    private readonly Lazy<TuiKitComposer> _ordinaryWorkspace;
+    private readonly Lazy<TuiKitComposer> _secondaryWorkspace;
+    private readonly Lazy<TuiKitComposer> _steeringWorkspace;
+    private readonly Lazy<AgentViews> _agentWorkspace;
+    private readonly Lazy<TuiKitCommandDiscovery> _commandDiscovery;
+    private readonly Lazy<ComposerCommandCompletion> _commandCompletion;
+    private readonly Lazy<ComposerAutocomplete> _commandAutocomplete;
+    private readonly Lazy<AgentTabStrip> _agentTabs;
+    private TuiResourceLimits _limits;
+    private bool _workspaceInitialized;
     private CommandPaletteModal? _paletteModal;
     private ComposerCompletionTarget? _paletteTarget;
-    private TuiKitComposer _composer;
+
+    private TuiKitComposer OrdinaryComposer => _ordinaryWorkspace.Value;
+
+    private TuiKitComposer SecondaryComposer => _secondaryWorkspace.Value;
+
+    private TuiKitComposer SteeringComposer => _steeringWorkspace.Value;
+
+    private AgentViews Agents => _agentWorkspace.Value;
+
+    private TuiKitCommandDiscovery Discovery => _commandDiscovery.Value;
+
+    private ComposerCommandCompletion Completion => _commandCompletion.Value;
+
+    private ComposerAutocomplete Autocomplete => _commandAutocomplete.Value;
+
+    private TuiKitComposer Composer
+    {
+        get => field ??= OrdinaryComposer;
+        set;
+    }
+
     private TuiKitStyles _styles;
     private ConfiguredTheme _theme;
     private Task? _loop;
@@ -108,21 +129,26 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private InteractionActivity? _formattedActivity;
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitSurface"/> class.</summary>
-    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null, TuiResourceLimits? limits = null, IImageArtifactStore? images = null, Func<CancellationToken, Task<ClipboardCapture>>? captureClipboard = null)
+    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null, TuiResourceLimits? limits = null, IImageArtifactStore? images = null, Func<CancellationToken, Task<ClipboardCapture>>? captureClipboard = null, bool deferWorkspace = false)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(interrupt);
         limits ??= new();
         limits.Validate();
         _limits = limits;
-        _ordinary = new TuiKitComposer(limits);
-        _secondary = new TuiKitComposer(limits);
-        _steering = new TuiKitComposer(limits);
+        _ordinaryWorkspace = new(CreateComposer);
+        _secondaryWorkspace = new(CreateComposer);
+        _steeringWorkspace = new(CreateComposer);
+        _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits));
+        _agentTabs = new(() => new AgentTabStrip(Agents, SelectAgent, ResolveStyle));
+        _commandDiscovery = new(() => new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits));
+        _commandCompletion = new(() => new ComposerCommandCompletion(Discovery));
+        _commandAutocomplete = new(() => new ComposerAutocomplete(Discovery, Completion, CompleteCommand));
         _backend = backend ?? new TuiKitConsoleBackend();
-        _readClipboard = readClipboard ?? (token => ClipboardReader.ReadAsync(limits, token));
+        _readClipboard = readClipboard ?? (token => ClipboardReader.ReadAsync(_limits, token));
         _imageArtifacts = images;
         _captureClipboard = captureClipboard ?? (readClipboard is null
-            ? token => ClipboardReader.CaptureAsync(limits, token)
+            ? token => ClipboardReader.CaptureAsync(_limits, token)
             : async token => new ClipboardCapture(await _readClipboard(token), null));
         if (backend is null && (!_backend.IsInteractive
             || string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)))
@@ -135,15 +161,9 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _interrupt = interrupt;
         _suppressStyles = TuiThemeResolver.ShouldSuppressStyles(false, Environment.GetEnvironmentVariable("NO_COLOR"), Environment.GetEnvironmentVariable("TERM"));
         _styles = new TuiKitStyles(theme, _suppressStyles);
-        _composer = _ordinary;
-        _agents = new AgentViews(ResolveOutputStyle, limits);
-        _tabs = new AgentTabStrip(_agents, SelectAgent, ResolveStyle);
         _outputPane = new OutputPane(this);
         _composerPane = new ComposerPane(this);
         _layoutSize = _backend.Size;
-        _discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits);
-        _completion = new ComposerCommandCompletion(_discovery);
-        _autocomplete = new ComposerAutocomplete(_discovery, _completion, CompleteCommand);
         _app = new TuiApplication(_backend)
         {
             CtrlCPolicy = CtrlCPolicy.Custom,
@@ -154,18 +174,15 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             Hyperlinks = HyperlinkMode.Auto,
         };
         _app.Bind("title", new TextRow(() => "Threadsmith.NET", () => ResolveStyle(PresentationTextRole.TitleBarRole)));
-        _app.Bind("tabs", _tabs);
         _app.Bind("transcript", _outputPane);
         _app.Bind("composer", _composerPane);
         _app.MouseReceived += RouteMouse;
         _app.Bind("status", new TextRow(
             StatusText,
             () => _status is null ? CellStyle.Default : _styles.Resolve(PresentationTextRole.SessionStatus)));
-        foreach (var composer in new[] { _ordinary, _secondary, _steering })
+        if (!deferWorkspace)
         {
-            composer.CopyRequested = Copy;
-            composer.PasteRequested = () => RequestPaste(null);
-            composer.ImagePasteRequested = () => RequestPaste(null, image: true);
+            InitializeWorkspace();
         }
 
         _app.Focus("composer");
@@ -183,15 +200,15 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                     _terminalTooSmall.Draw(surface, 0, 0, "Terminal too small: need 40 x 12", CellStyle.Default);
                 }
             }
-            else if (surface is BufferSurface root
+            else if (_workspaceInitialized && surface is BufferSurface root
                 && _app.Layout?.FindById("composer") is { } composerRegion
                 && _app.Layout?.FindById("transcript") is { } outputRegion)
             {
-                _autocomplete.Render(
+                Autocomplete.Render(
                     root,
                     ComposerScreenRect(composerRegion.ContentRect(surface.Size)),
                     OutputScreenRect(outputRegion.ContentRect(surface.Size)),
-                    _composer.VisibleCaret,
+                    Composer.VisibleCaret,
                     ResolveStyle(PresentationTextRole.Default),
                     ResolveStyle(PresentationTextRole.SelectionHighlight));
             }
@@ -218,10 +235,10 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         SupportsRetainedActivity: true,
         SupportsRetainedRunHints: true);
 
-    private ComposerPurpose CurrentPurpose => ReferenceEquals(_composer, _ordinary)
-        ? ComposerPurpose.Conversation : ReferenceEquals(_composer, _secondary) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
+    private ComposerPurpose CurrentPurpose => ReferenceEquals(Composer, OrdinaryComposer)
+        ? ComposerPurpose.Conversation : ReferenceEquals(Composer, SecondaryComposer) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
 
-    private bool CanEdit => _questionDraft is null && ReferenceEquals(_agents.Selected, _agents.Main) && (!_startupBlocked || _activeInput is not null);
+    private bool CanEdit => _workspaceInitialized && _questionDraft is null && ReferenceEquals(Agents.Selected, Agents.Main) && (!_startupBlocked || _activeInput is not null);
 
     private bool DiscoveryEnabled => CanEdit && _app.FocusedRegion == "composer" && !_app.Modals.IsActive
         && ModalFrame.Fits(_backend.Size) && !_stop.IsCancellationRequested;
@@ -262,14 +279,15 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _startupBlocked = false;
             _startupDetails = [];
             _startupProgress = null;
+            _processStartupProgress = null;
             _startupPhases.Clear();
             ClosePalette();
             _prompt = request.Prompt;
-            _composer.OnFocusChanged(false);
-            _composer = request.Purpose switch { ComposerPurpose.Secondary => _secondary, ComposerPurpose.Steering => _steering, _ => _ordinary };
+            Composer.OnFocusChanged(false);
+            Composer = request.Purpose switch { ComposerPurpose.Secondary => SecondaryComposer, ComposerPurpose.Steering => SteeringComposer, _ => OrdinaryComposer };
             if (request.Purpose != ComposerPurpose.Conversation)
             {
-                _composer.Text = string.Empty;
+                Composer.Text = string.Empty;
             }
 
             if (_submittedSteering is { } submitted)
@@ -282,16 +300,16 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                 else if (request.Purpose == ComposerPurpose.Conversation)
                 {
                     // A run that finished before pausing must not lose the submitted draft.
-                    _composer.Text = submitted + _composer.Text;
+                    Composer.Text = submitted + Composer.Text;
                     _submittedSteering = null;
                 }
             }
 
-            _composer.OnFocusChanged(true);
+            Composer.OnFocusChanged(true);
             _inputEpoch++;
             if (request.Purpose != ComposerPurpose.Conversation)
             {
-                SelectAgent(_agents.Main);
+                SelectAgent(Agents.Main);
             }
 
             if (CanEdit)
@@ -326,11 +344,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                         _read = null;
                     }
 
-                    _composer.OnFocusChanged(false);
+                    Composer.OnFocusChanged(false);
                     ClosePalette();
-                    _composer = _ordinary;
+                    Composer = OrdinaryComposer;
                     _prompt = DefaultPrompt;
-                    _composer.OnFocusChanged(true);
+                    Composer.OnFocusChanged(true);
                     _inputEpoch++;
                 },
                     _stop.Token);
@@ -359,7 +377,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         return EnqueueAsync(
             () =>
         {
-            _agents.Present(batch);
+            Agents.Present(batch);
             _pendingIdleYield |= batch.Target is null && batch.Items.OfType<PresentationTextItem>().Any(item => item.WakeIdleInput);
             if (batch.Target is null)
             {
@@ -466,7 +484,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         }
         finally
         {
-            _autocomplete.Dispose();
+            if (_commandAutocomplete.IsValueCreated)
+            {
+                Autocomplete.Dispose();
+            }
+
             try
             {
                 await Task.WhenAll(_clipboardRead, _utilityModal).ConfigureAwait(false);
@@ -566,7 +588,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _styles = new TuiKitStyles(theme, _suppressStyles);
         foreach (var warning in ThemeDiagnostics)
         {
-            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]));
+            Agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]));
         }
     },
         cancellationToken);
@@ -576,6 +598,31 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     internal void ReleaseActiveInput(ActiveInputLease lease)
     {
         Interlocked.CompareExchange(ref _activeInput, null, lease);
+    }
+
+    private TuiKitComposer CreateComposer()
+    {
+        return new TuiKitComposer(_limits)
+        {
+            CopyRequested = Copy,
+            PasteRequested = () => RequestPaste(null),
+            ImagePasteRequested = () => RequestPaste(null, image: true),
+        };
+    }
+
+    private void InitializeWorkspace()
+    {
+        if (_workspaceInitialized)
+        {
+            throw new InvalidOperationException("The workspace is already initialized.");
+        }
+
+        Composer = OrdinaryComposer;
+        _ = SecondaryComposer;
+        _ = SteeringComposer;
+        _ = Autocomplete;
+        _app.Bind("tabs", _agentTabs.Value);
+        _workspaceInitialized = true;
     }
 
     private async Task<InteractionSelectionResult> SelectCoreAsync(InteractionSelectionRequest request, CancellationToken cancellationToken)
@@ -624,8 +671,8 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _started.TrySetResult();
             while (!cancellationToken.IsCancellationRequested)
             {
-                if (_pendingIdleYield && _read is not null && ReferenceEquals(_composer, _ordinary)
-                    && _composer.Text.Length == 0 && !_app.Modals.IsActive)
+                if (_pendingIdleYield && _read is not null && ReferenceEquals(Composer, OrdinaryComposer)
+                    && Composer.Text.Length == 0 && !_app.Modals.IsActive)
                 {
                     if (_read.TrySetResult(new InteractionInput(false, string.Empty, _stop.Token, InteractionInputKind.IdleOutputYield)))
                     {
@@ -773,7 +820,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         if (key.Modifiers == KeyModifiers.Ctrl && key.Code is KeyCode.Left or KeyCode.Right
             && _app.FocusedRegion == "transcript")
         {
-            if (_agents.Cycle(key.Code == KeyCode.Left ? -1 : 1))
+            if (Agents.Cycle(key.Code == KeyCode.Left ? -1 : 1))
             {
                 AgentSelectionChanged();
             }
@@ -810,11 +857,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         if (key.Code == KeyCode.F3 && key.Modifiers == KeyModifiers.None)
         {
             if (_utilityModal.IsCompleted && DiscoveryEnabled
-                && _completion.Capture(_composer.Buffer, CurrentPurpose, _inputEpoch, allowEmpty: true) is { } target)
+                && Completion.Capture(Composer.Buffer, CurrentPurpose, _inputEpoch, allowEmpty: true) is { } target)
             {
                 _paletteTarget = target;
                 var modal = new CommandPaletteModal(
-                    _discovery,
+                    Discovery,
                     string.Empty,
                     () => _backend.Size,
                     ResolveStyle,
@@ -854,11 +901,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         if (key.Code == KeyCode.F6 || (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == (KeyModifiers.Ctrl | KeyModifiers.Shift)))
         {
-            Copy(_app.FocusedRegion == "transcript" ? SelectedTranscript.SelectedText() : key.Code == KeyCode.F6 ? _composer.Buffer.Selection : _composer.Text);
+            Copy(_app.FocusedRegion == "transcript" ? SelectedTranscript.SelectedText() : key.Code == KeyCode.F6 ? Composer.Buffer.Selection : Composer.Text);
             return true;
         }
 
-        if (_autocomplete.HandleKey(key))
+        if (Autocomplete.HandleKey(key))
         {
             lease?.DisarmEscape();
             return true;
@@ -898,7 +945,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
             if (key.Rune == 't')
             {
-                if (_read is not null && ReferenceEquals(_composer, _ordinary) && _composer.Text.Length == 0)
+                if (_read is not null && ReferenceEquals(Composer, OrdinaryComposer) && Composer.Text.Length == 0)
                 {
                     _read.TrySetResult(new InteractionInput(true, string.Empty, _stop.Token, InteractionInputKind.ToggleThinking));
                 }
@@ -910,29 +957,29 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         switch (TuiKitInput.ResolveSubmit(key))
         {
             case SubmitDecision.InsertNewline:
-                _composer.InsertText("\n");
+                Composer.InsertText("\n");
                 RefreshDiscovery();
                 return true;
             case SubmitDecision.Submit:
                 if (_read is null)
                 {
-                    if (lease?.Steer() == true && !string.IsNullOrWhiteSpace(_composer.Text))
+                    if (lease?.Steer() == true && !string.IsNullOrWhiteSpace(Composer.Text))
                     {
-                        _submittedSteering = _composer.Text;
+                        _submittedSteering = Composer.Text;
                         CommitComposerInput(_submittedSteering);
                     }
 
                     return true;
                 }
 
-                var quitting = string.Equals(_composer.Text.Trim(), "/quit", StringComparison.OrdinalIgnoreCase);
+                var quitting = string.Equals(Composer.Text.Trim(), "/quit", StringComparison.OrdinalIgnoreCase);
                 if (_failedImageSubmission is not null && CurrentPurpose == ComposerPurpose.Conversation && !quitting)
                 {
                     _notice = "F9: recover or discard the preserved failed submission first";
                     return true;
                 }
 
-                var input = new InteractionInput(true, _composer.Text, _stop.Token)
+                var input = new InteractionInput(true, Composer.Text, _stop.Token)
                 {
                     Images = CurrentPurpose == ComposerPurpose.Conversation ? _draftImages.ToArray() : [],
                 };
@@ -955,23 +1002,28 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private void CommitComposerInput(string text)
     {
-        if (ReferenceEquals(_composer, _ordinary) && text.Length > 0)
+        if (ReferenceEquals(Composer, OrdinaryComposer) && text.Length > 0)
         {
-            _agents.Main.Transcript.EchoInput(_prompt, text);
+            Agents.Main.Transcript.EchoInput(_prompt, text);
         }
 
-        _composer.History.Add(text);
-        _composer.Text = string.Empty;
+        Composer.History.Add(text);
+        Composer.Text = string.Empty;
         _inputEpoch++;
         RefreshDiscovery();
     }
 
     private void RefreshDiscovery()
     {
+        if (!_workspaceInitialized)
+        {
+            return;
+        }
+
         if (!_clipboardHintShown && CanEdit && !_app.Modals.IsActive && ModalFrame.Fits(_backend.Size))
         {
             _clipboardHintShown = true;
-            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+            Agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
                 new("Use Control-V to paste text; Control-Alt-V to paste an image or PDF; F9 to manage attachments\n", PresentationTextRole.Status),
             ])]));
         }
@@ -982,12 +1034,12 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _paletteTarget = null;
         }
 
-        _autocomplete.Refresh(_composer.Buffer, CurrentPurpose, _inputEpoch, DiscoveryEnabled);
+        Autocomplete.Refresh(Composer.Buffer, CurrentPurpose, _inputEpoch, DiscoveryEnabled);
     }
 
     private void CompleteCommand(string name)
     {
-        var target = _paletteTarget ?? _autocomplete.Target;
+        var target = _paletteTarget ?? Autocomplete.Target;
         if (!CanEdit || target is null || _app.FocusedRegion != "composer" || !ModalFrame.Fits(_backend.Size))
         {
             return;
@@ -995,7 +1047,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         try
         {
-            _completion.TryApply(target, _composer.Buffer, CurrentPurpose, _inputEpoch, name);
+            Completion.TryApply(target, Composer.Buffer, CurrentPurpose, _inputEpoch, name);
         }
         catch (Exception exception) when (exception is InvalidOperationException or EncoderFallbackException or DecoderFallbackException)
         {
@@ -1092,7 +1144,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return $"{refreshFrames[refreshFrame]} {refresh.Format()}";
         }
 
-        if (_agents.Selected.Snapshot is { } child)
+        if (Agents.Selected.Snapshot is { } child)
         {
             return PrependUnseenOutput(child.Activity ?? child.State.ToString());
         }
@@ -1165,8 +1217,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private void HandleControlC()
     {
+        if (!_workspaceInitialized)
+        {
+            _interrupt();
+            return;
+        }
+
         var transcriptSelection = SelectedTranscript.SelectedText();
-        var composerSelection = _composer.Buffer.Selection;
+        var composerSelection = Composer.Buffer.Selection;
         var focusedSelection = _app.FocusedRegion == "transcript" ? transcriptSelection : composerSelection;
         var remainingSelection = _app.FocusedRegion == "transcript" ? composerSelection : transcriptSelection;
         var selection = focusedSelection.Length > 0 ? focusedSelection : remainingSelection;
@@ -1216,7 +1274,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         try
         {
-            _composer.InsertText(text);
+            Composer.InsertText(text);
             RefreshDiscovery();
         }
         catch (Exception exception) when (exception is InvalidOperationException or EncoderFallbackException or DecoderFallbackException)
@@ -1229,7 +1287,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         if ((modal is not null || CanEdit) && _clipboardRead.IsCompleted)
         {
-            _clipboardRead = PasteClipboardAsync(modal, filterText, _composer, _inputEpoch, image, _stop.Token);
+            _clipboardRead = PasteClipboardAsync(modal, filterText, Composer, _inputEpoch, image, _stop.Token);
         }
     }
 
@@ -1245,7 +1303,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                     () =>
                 {
                     _notice = "\nAttaching image ...";
-                    _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+                    Agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
                         new("\nAttaching image ...\n", PresentationTextRole.Status),
                     ])]));
                 },
@@ -1279,7 +1337,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                 {
                     modal.HandlePaste(text);
                 }
-                else if (CanEdit && modal is null && !_app.Modals.IsActive && ReferenceEquals(_composer, composer) && epoch == _inputEpoch)
+                else if (CanEdit && modal is null && !_app.Modals.IsActive && ReferenceEquals(Composer, composer) && epoch == _inputEpoch)
                 {
                     Paste(text);
                 }
@@ -1329,14 +1387,17 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                 return true;
             }
 
-            var handled = _owner._composer.HandleKey(key);
+            var handled = _owner.Composer.HandleKey(key);
             _owner.RefreshDiscovery();
             return handled;
         }
 
         public void OnFocusChanged(bool focused)
         {
-            _owner._composer.OnFocusChanged(focused && _owner.CanEdit);
+            if (_owner._workspaceInitialized)
+            {
+                _owner.Composer.OnFocusChanged(focused && _owner.CanEdit);
+            }
         }
 
         public bool HandleMouse(MouseEvent mouse)
@@ -1348,14 +1409,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
             var region = _owner._app.Layout?.FindById("composer")?.ContentRect(_owner._backend.Size) ?? default;
             var rect = WorkspaceLayout.ComposerContent(new Size(region.Width, region.Height));
-            var handled = _owner._composer.HandleMouse(WorkspaceLayout.Translate(mouse, rect));
+            var handled = _owner.Composer.HandleMouse(WorkspaceLayout.Translate(mouse, rect));
             _owner.RefreshDiscovery();
             return handled;
         }
 
         public void Render(ISurface surface)
         {
-            if (surface.Size.Height < 1)
+            if (!_owner._workspaceInitialized || surface.Size.Height < 1)
             {
                 return;
             }
@@ -1369,12 +1430,12 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
             var view = buffer.CreateView(WorkspaceLayout.ComposerContent(surface.Size));
             var promptWidth = PromptWidth(view.Size.Width);
-            _owner._composer.FirstRowOffset = promptWidth;
-            _owner._composer.Style = _owner.ResolvePaneStyle(PresentationTextRole.Default, PresentationTextRole.ComposerBackgroundPaneRole);
-            _owner._composer.Render(view);
+            _owner.Composer.FirstRowOffset = promptWidth;
+            _owner.Composer.Style = _owner.ResolvePaneStyle(PresentationTextRole.Default, PresentationTextRole.ComposerBackgroundPaneRole);
+            _owner.Composer.Render(view);
             _prompt.Draw(view, 0, 0, _owner._prompt, _owner.ResolvePaneStyle(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
             if (_owner.CanEdit && _owner.CurrentPurpose == ComposerPurpose.Conversation
-                && ReferenceEquals(_owner._composer, _owner._ordinary) && _owner._draftImages.Count > 0)
+                && ReferenceEquals(_owner.Composer, _owner.OrdinaryComposer) && _owner._draftImages.Count > 0)
             {
                 var attachments = $" {_owner._draftImages.Count} image(s) — F9 paste/remove ";
                 _prompt.Draw(surface, 2, 0, attachments, background);

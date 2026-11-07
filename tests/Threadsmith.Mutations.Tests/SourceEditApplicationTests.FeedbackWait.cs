@@ -263,7 +263,6 @@ public sealed partial class SourceEditApplicationTests
         Assert.Null(analyzer.Latest);
         Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
         var notice = Assert.Single(observed);
-        Assert.Contains(analyzerOnly ? "Waiting for analyzers" : "Waiting for compiler analysis", notice.Message, StringComparison.Ordinal);
-        Assert.Contains("You can cancel the run", notice.Message, StringComparison.Ordinal);
+        Assert.Equal(analyzerOnly ? "Waiting for analyzers to finish." : "Waiting for compiler analysis to finish.", notice.Message);
     }
 }

@@ -7,6 +7,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="TUIKit" />
     <InternalsVisibleTo Include="Threadsmith.App" />
+    <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
     <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />
     <InternalsVisibleTo Include="Threadsmith.SessionStatus.Tests" />
   </ItemGroup>

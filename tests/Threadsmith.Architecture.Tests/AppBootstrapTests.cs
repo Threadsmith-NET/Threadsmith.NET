@@ -64,7 +64,27 @@ public static partial class AppBootstrapTests
         }).Build();
         using var loggerFactory = LoggerFactory.Create(_ => { });
         await Assert.ThrowsAnyAsync<ArgumentException>(() => HostFoundation.CreateAsync(
-            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance));
+            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(database));
+    }
+
+    /// <summary>Event stream configuration failures identify the actual configuration key before persistence begins.</summary>
+    [Theory]
+    [InlineData("events:subscriberCapacity")]
+    [InlineData("events:committedDeliveryTimeoutMilliseconds")]
+    public static async Task InvalidEventConfigurationNamesSetting(string key)
+    {
+        using var temporary = new TemporaryDirectory("invalid-event-policy");
+        var database = temporary.GetPath("must-not-create.db");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["persistence:path"] = database,
+            [key] = "0",
+        }).Build();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var failure = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => HostFoundation.CreateAsync(
+            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Contains(key, Program.FormatErrorDetails(failure), StringComparison.Ordinal);
         Assert.False(File.Exists(database));
     }
 
@@ -507,8 +527,65 @@ public static partial class AppBootstrapTests
         Assert.Contains(path, message, StringComparison.Ordinal);
         Assert.Contains("LineNumber: 170", message, StringComparison.Ordinal);
         Assert.Contains("BytePositionInLine: 1", message, StringComparison.Ordinal);
-        Assert.Contains("Check the indicated JSON file", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Check the indicated JSON file", message, StringComparison.Ordinal);
         Assert.DoesNotContain(" at ", message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Real JSON and document-shape failures retain their source file and useful parser diagnostics.</summary>
+    [Theory]
+    [InlineData("{broken", "LineNumber")]
+    [InlineData("[]", "JSON object")]
+    [InlineData("{\"theme\":1,\"Theme\":2}", "case-alias duplicates")]
+    public static void ConfigurationFilesIdentifySourceAndCause(string json, string expectedCause)
+    {
+        using var temporary = new TemporaryDirectory("configuration-diagnostics");
+        var paths = CreatePaths(temporary.Root);
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.UserConfiguration)!);
+        File.WriteAllText(paths.UserConfiguration, json);
+        var failure = Record.Exception(() => ConfigurationBootstrap.Build([], paths));
+        Assert.NotNull(failure);
+
+        var message = ConfigurationBootstrap.FormatLoadError(failure);
+        Assert.Contains(paths.UserConfiguration, message, StringComparison.Ordinal);
+        Assert.Contains(expectedCause, message, StringComparison.Ordinal);
+    }
+
+    /// <summary>All configuration failure shapes retain their setting and cause through shared error reporting.</summary>
+    [Theory]
+    [InlineData("Recall:SemanticMinimum", "65", "SemanticMinimum", "65")]
+    [InlineData("Recall:MaximumResults", "many", "Recall:MaximumResults", "many")]
+    [InlineData("Recall:RerankerEnabled", "sometimes", "Recall:RerankerEnabled", "Boolean")]
+    [InlineData("SemanticMinimum", "0.7", "SemanticMinimum", "has moved")]
+    [InlineData("Recall:Scoring:Enabled", "true", "Recall:Scoring", "has been retired")]
+    public static void ConfigurationFailuresPreserveSettingAndCause(string key, string value, string expectedSetting, string expectedCause)
+    {
+        using var temporary = new TemporaryDirectory("configuration-diagnostics");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"tools:config:memories:{key}"] = value,
+        }).Build();
+        var failure = Record.Exception(() => new RepositoryMemoryConfiguration(configuration, configuration, temporary.Root));
+        Assert.NotNull(failure);
+
+        var wrapper = new InvalidOperationException("Host services failed", failure);
+        foreach (var message in new[] { Program.FormatErrorDetails(wrapper), Program.FormatFatalError(wrapper), ConfigurationBootstrap.FormatLoadError(wrapper) })
+        {
+            Assert.Contains(expectedSetting, message, StringComparison.Ordinal);
+            Assert.Contains(expectedCause, message, StringComparison.Ordinal);
+            Assert.DoesNotContain("Check the indicated JSON file", message, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Long wrapper messages retain file context and the nested cause.</summary>
+    [Fact]
+    public static void ErrorDetailsKeepContextAndCauseWhenBounded()
+    {
+        var failure = new InvalidDataException("config.json " + new string('x', 600), new FormatException("SemanticMinimum must be a number."));
+        var message = Program.FormatErrorDetails(failure);
+        Assert.StartsWith("config.json ", message, StringComparison.Ordinal);
+        Assert.EndsWith("SemanticMinimum must be a number.", message, StringComparison.Ordinal);
+        Assert.Equal(512, message.Length);
+        Assert.Equal("An unexpected error occurred.", Program.FormatErrorDetails(new Exception("  ")));
     }
 
     /// <summary>Unexpected process failures are reported as bounded single-line messages without stack traces.</summary>
@@ -1147,6 +1224,8 @@ public static partial class AppBootstrapTests
         var accessToken = await ModelComposition.GetOptionalCodexAccessTokenAsync(
             _ => Task.FromException<string?>(new HttpRequestException("offline")),
             loggerFactory.CreateLogger("test"),
+            null,
+            TestContext.Current.CancellationToken,
             TestContext.Current.CancellationToken);
 
         Assert.Null(accessToken);

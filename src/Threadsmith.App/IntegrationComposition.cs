@@ -29,6 +29,7 @@ internal static class IntegrationComposition
         ILoggerFactory loggerFactory,
         IConfiguration? configuration = null,
         SessionPolicyBinding? policyBinding = null,
+        Func<string, Task>? reportDiagnostic = null,
         CancellationToken cancellationToken = default)
     {
         var extensionHost = new ExtensionHost(
@@ -55,7 +56,15 @@ internal static class IntegrationComposition
         var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
         const string diagnostic = "ExtensionAutoloadNotAuthorized: repository extension selection does not authorize code execution. Autoload was skipped before discovery or construction. Use explicit manual extension loading only after reviewing the code; moving the selection file does not grant authority.";
         startupLogger.LogWarning("{Diagnostic} Source: {SelectionPath}", diagnostic, selectionPath);
-        await Console.Error.WriteLineAsync(diagnostic);
+        if (reportDiagnostic is not null)
+        {
+            await reportDiagnostic(diagnostic);
+        }
+        else
+        {
+            await Console.Error.WriteLineAsync(diagnostic);
+        }
+
         return extensionHost;
     }
 
@@ -73,6 +82,7 @@ internal static class IntegrationComposition
         IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
         SessionPolicyBinding? policyBinding = null,
+        SemanticStartupProgress? startupProgress = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
@@ -85,6 +95,7 @@ internal static class IntegrationComposition
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(prompts);
 
+        using var startup = startupProgress?.Begin("mcp", "MCP initialization and connections", cancellationToken: cancellationToken);
         var resourceLimits = trustedConfiguration.GetSection("mcp:limits").Get<McpResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
         resourceLimits.Validate();
         IBrowserLauncher browserLauncher = useInteractiveTerminal
@@ -139,9 +150,7 @@ internal static class IntegrationComposition
             sanitizer,
             loggerFactory.CreateLogger<McpManager>(),
             maximumConcurrentConnections: trustedConfiguration.GetValue("mcp:maximumConcurrentConnections", 4),
-            limits: resourceLimits,
             connectedCallback: connectedCallback,
-            policyBinding: policyBinding,
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
                 var capturedPolicy = policyBinding?.Current;
@@ -178,10 +187,14 @@ internal static class IntegrationComposition
                     },
                     token);
                 return decision.Succeeded;
-            });
+            },
+            limits: resourceLimits,
+            policyBinding: policyBinding,
+            startupProgress: startupProgress);
         try
         {
             await manager.AutoConnectAsync(cancellationToken);
+            startup?.Complete();
             return manager;
         }
         catch

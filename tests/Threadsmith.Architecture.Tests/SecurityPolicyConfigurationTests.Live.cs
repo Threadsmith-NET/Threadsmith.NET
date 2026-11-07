@@ -29,7 +29,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         var userDirectory = Path.GetDirectoryName(providerPaths.UserConfiguration)!;
         var secrets = new SecretResolver(
             [new EnvironmentSecretProvider(), new UserFileSecretProvider(Path.Combine(userDirectory, "secrets", "config.json"))]);
-        using var models = await ModelComposition.CreateAsync(trusted, providerPaths, secrets, NullLoggerFactory.Instance, trustedConfiguration: trusted);
+        using var models = await ModelComposition.CreateAsync(trusted, providerPaths, secrets, NullLoggerFactory.Instance, trustedConfiguration: trusted, cancellationToken: TestContext.Current.CancellationToken);
         var profile = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_POLICY_PROFILE") is { Length: > 0 } selected
             ? models.TrustedCatalog.Get(new ModelProfileId(Guid.Parse(selected)))
             : models.StartupProfile ?? throw new InvalidOperationException("A configured live model is required.");

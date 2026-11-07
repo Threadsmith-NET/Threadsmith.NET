@@ -1,6 +1,6 @@
 # Display progress from early startup
 
-**Status:** Planned
+**Status:** Implemented; automated validation passed; physical-terminal and timing verification remain pending.
 **Delivery track:** Maintenance
 **Prerequisites:** Follow [AGENTS.md](../../AGENTS.md), the [C# guardrails](../guardrails/portable-csharp-guardrails.md), and [planning governance](planning-governance.md). Preserve unrelated working changes.
 
@@ -132,7 +132,7 @@ Use stable display order within concurrent groups. Completion order must not rea
 
 Show the latest rows that fit. Let older completed rows move out of view. Reserve space for active work and the total startup timer. For concurrent work, keep active rows visible within the available space.
 
-Shrink decorative content and tips before hiding active status. Handle resize and small terminals without overlap.
+Keep the original startup logo and tagline visible from the first frame, reserving the banner and tips before completed history or ordinary diagnostics. Allow the startup modal to grow to 32 rows. If the terminal cannot fit the full banner alongside active work, timers, and fatal details, retain a compact Threadsmith.NET name. Admit decorative splines only into remaining space. Handle resize and small terminals without overlap.
 
 ### Safe concurrency
 
@@ -295,3 +295,58 @@ The following decisions are resolved:
 - **Priority:** Improve first display and progress coverage. Treat measured speed improvements as secondary.
 
 No user decisions remain open.
+
+## Implementation trace
+
+The inspected startup order was command routing → configuration/scaffolding/migration/policy → deployed and repository prompts → foundation storage and services → models → MCP → application memory/scratchpad/skills → extension configuration → terminal → repository/trust/solution → semantic readiness → composer. The early terminal now surrounds that established composition sequence.
+
+Existing modal order was completed loading summaries → semantic phases in enum order → Reticulating Splines → current loading summary. New host groups precede these items; repository opening now uses the same startup modal. Required choices remain on the existing modal stack.
+
+The compatible skill catalog owns the only startup refresh of native and Claude catalogs. Complete source configuration is the prerequisite; both tasks join before publication. Overlapping refresh calls serialize, and a failing child cancels and observes its sibling. The current MCP manager performs sequential auto-connect through its existing shared connection limiter; this change instruments that path without adding an additional connection scheduler.
+
+## Validation and review evidence (2026-11-07)
+
+Implementation and validation use the active checkout on branch `maintenance/early-startup-modal`. No changes were staged, committed, or pushed.
+
+Automated coverage exercises the real terminal loop with a controlled backend: the first emitted frame precedes host initialization, later configuration/service attachment is single-use, fatal errors require acknowledgment, cancellation releases pending semantic readiness and acknowledgment waits, and terminal state is restored. Projection tests cover overflow at 40×12 and 100×30, visible fatal causes, textual states, and frozen failure timers. Catalog tests cover concurrent children, sibling cancellation/join, serialized refresh requests, initial binding reuse, and verification updates made between native completion and combined publication. Progress tests cover stable ordering and bounded-history eviction while preserving active operations.
+
+Commands and results:
+
+- `pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot (Join-Path $PWD 'artifacts/test-ripgrep')` — passed; staged the verified fixture used by the real-ripgrep tests.
+- `dotnet restore src/Threadsmith.sln` — passed.
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` — passed with zero warnings and errors on the final code.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` — 5,225 passed, 71 skipped, zero failed (5,296 total), including the follow-up logo, tip-overflow, and named solution/project status cases.
+- `$changedSourceFiles = @(git diff --name-only -- '*.cs') + @(git ls-files --others --exclude-standard -- '*.cs'); dotnet format src/Threadsmith.sln --verify-no-changes --no-restore --include $changedSourceFiles` — passed on the final code.
+- `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include $changedSourceFiles` — exit 1 for 20 existing suggestions on unchanged lines. Compared each reported location with `HEAD`; no suggestion points into added or modified code. These concern existing named-argument order, logging, parentheses, test helpers, LINQ chains, conditional access, and asynchronous disposal. No rule was disabled.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` — passed (118 packaged files).
+- `git diff --check` — passed.
+
+The first full run exposed a combined-catalog regression: publishing the earlier native refresh result discarded verification updates made while Claude refresh was still running. Publication again reads the latest native snapshot under the existing lock, and the regression test now waits explicitly for native completion. A new binding test's empty-source fixture was also corrected. One unchanged repository-settings test failed with Windows file-move access denied during fixture setup; all three cases passed on isolated rerun (`dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj --configuration Debug --no-build --filter-method "*Onboarding_supplies_history_without_model_requests_and_requires_every_page"`), and the subsequent full suite passed. Its original environment failure was not reproduced or attributed to a proven cause.
+
+A separate reviewer started with clean context and traced the implementation against the plan and surrounding execution paths. Valid findings corrected semantic-readiness cancellation, redundant initial skill binding refresh, bounded-history eviction, fatal text at minimum dimensions, and optional credential cancellation classification. Follow-up review covered the fixes, frozen failure timing, post-readiness failure routing, concurrent verification publication, explicit test barriers, and single process cancellation ownership. The final review reported no concrete remaining findings. Feedback was resolved through existing execution and ownership paths rather than additional parallel machinery.
+
+Physical-terminal checks on Windows, Linux and macOS remain pending. An attempted Windows PTY launch was rejected by the tool's `CreateProcessW` with access denied before the application started; controlled-backend tests are not physical-terminal evidence. macOS/Linux builds and tests, real provider/MCP I/O, and comparable cold/warm before/after startup measurements were not run. The suite's 71 skips include environment-gated live, asset, clipboard, symbolic-link, and explicit experiment checks. No startup-speed improvement or cross-platform CI success is claimed.
+
+Detailed local logs are under `artifacts/early-startup-*`; these generated files are not part of the change set.
+
+The user subsequently observed that tips disappeared when startup history overflowed. The layout reserved space for all completed rows before tips, making the tip area shrink to zero. It now reserves tip space after active work, diagnostics, and timers, then fits completed history into the remaining area. The regression test fails before the fix at both 40×12 and 100×30 and passes afterward, checking stable tip placement, active work, the total timer, and newest history. A fresh, focused adversarial review found no remaining issue. The full suite above, scoped formatting and suggestion-level analyzer checks for `StartupModal.cs` and `StartupModalLayoutTests.cs`, and the packaged-documentation preflight pass. Follow-up logs are under `artifacts/startup-tips-*`; physical-terminal verification remains manual.
+
+The user also identified loss of the original startup logo. Its unchanged ASCII banner and tagline now have one shared presentation constant, used by the initial, coordinator, and fatal startup paths. Startup alone requests up to 32 modal rows. Branding and tips are reserved before completed history, ordinary diagnostics, and decorative splines; narrow or short terminals retain a compact product name instead of clipped ASCII art. Regression coverage checks every original banner line before and after overflow at 80×24, 100×30, and 100×40, compact branding at 40×12, concurrent active work, and full branding at 100×17 and with a diagnostic backlog. The emitted-frame test also verifies the original tagline before host initialization. Clean-context review found a decoration/diagnostic priority issue in the first revision; the fix and added cases were re-reviewed with no remaining findings. Final build, scoped formatting/analyzers, packaged-documentation preflight, and the full suite pass (5,223 passed, 71 skipped, zero failed). Logs are under `artifacts/startup-logo-*`.
+
+The solution/project filename now appears directly in the existing `Loading solution <filename>` or `Loading project <filename>` status row. The separate remembered-solution startup detail callback was removed. Existing operation timing, outcomes, and retained completed rows remain the sole presentation path. Tests cover remembered startup without a separate header, solution/project/slnx and nested-path filenames, failure/cancellation, and the named completed row remaining visible through semantic startup. A fresh focused review found no concrete defects. The final build, scoped formatting, packaged-documentation preflight, and full suite passed (5,225 passed, 71 skipped, zero failed). The scoped suggestion-level analyzer check returned exit 1 for 16 pre-existing suggestions, each verified on an unchanged line against `HEAD`; no new diagnostic was suppressed. Logs are under `artifacts/startup-solution-label-*`.
+
+Early startup now displays only `Total startup` as its aggregate timer. The redundant `Starting Threadsmith` row measured the same overall period and has been removed through an explicitly absent operation label, including its reserved layout row. Named operation timers and the fatal outcome still use the existing current-operation row. Updated first-frame and overflow tests check the total timer without a duplicate or anonymous running row. A fresh focused review found no concrete defects. The final build, scoped formatting and suggestion-level analyzer checks, packaged-documentation preflight, and full suite passed (5,225 passed, 71 skipped, zero failed). Logs are under `artifacts/startup-total-*`.
+
+
+Startup failure follow-up: fatal details now follow the status rows and total timer, with a blank line immediately before the final Enter/Esc confirmation. Error rows own space outside completed-history overflow. At minimum terminal size, clipped details explicitly announce that the diagnostic will be shown on exit; the existing terminal owner emits the retained sanitized diagnostic to stderr after Enter restores the terminal. Cancellation still exits immediately. The shared startup/process formatter retains nested causes and bounds long messages while preserving their beginning and end. Configuration file reads retain filename, parser location, and original exception category; scalar conversion, range, retired-setting, and document-shape failures are covered. Event-stream configuration validation now identifies its actual keys before allocating resources. No live user configuration was changed.
+
+A fresh read-only adversarial review identified minimum-size diagnostic clipping and an event-capacity validation error that lacked its configuration key. Both were fixed through the existing modal, acknowledgment, formatter, and configuration binding paths; the reviewer re-traced the fixes and reported no remaining actionable findings. Regression coverage includes both thrown and reported/nonzero failure paths, with a stderr writer asserting that the terminal has stopped before the diagnostic is written.
+
+Follow-up validation uses `artifacts/startup-failure-*` logs. `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` passed with zero warnings/errors. Focused architecture/bootstrap/startup tests passed (120), and modal layout tests passed (15). Scoped `dotnet format src/Threadsmith.sln --verify-no-changes --no-restore --include $changedSourceFiles` passed; the final whitespace verification also passed. The suggestion-level command `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include $changedSourceFiles` returned exit 2 for three pre-existing suggestions on unchanged statements, verified against HEAD: CA1869 in ConfigurationBootstrap, RCS1205 in HostFoundation, and RCS1227 in AppBootstrapTests. No diagnostic was suppressed. Physical-terminal behavior, live integrations, and macOS/Linux execution remain unverified.
+
+The final full command `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` passed on Windows: 5,247 passed, 71 skipped, zero failures (5,318 total). The final packaged-documentation preflight (`pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1`) and `git diff --check` passed. This validation used the active `maintenance/early-startup-modal` checkout.
+
+
+Before submission, a new full-branch adversarial review compared all committed, working, and new files against `origin/main`. Independent host and terminal reviews traced surrounding execution paths, with an additional skill-catalog ownership/publication review. No further actionable findings remained. The PR submission contract tests (`pwsh -NoProfile -File eng/Test-PrSubmission.ps1`) passed. Cross-platform evidence is owned by the exact-revision submission gate and subsequent PR checks; source review and local Windows tests do not substitute for those runs.
+
+Branch-wide formatting verification passed using all changed C# files against `origin/main`, including new files. The corresponding suggestion-level analyzer check reported 38 existing suggestions; every reported line maps to an unchanged line against `origin/main`. No rule was suppressed. Logs are under `artifacts/startup-branch-*`.

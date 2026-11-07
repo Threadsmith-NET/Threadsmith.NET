@@ -11,7 +11,7 @@ using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tools;
 using Threadsmith.Tui.TuiKit;
 
-/// <summary>Runs the selected terminal projection and owns process-global cancellation registration.</summary>
+/// <summary>Runs the selected terminal projection using the process-owned cancellation source.</summary>
 internal static class ShellRunner
 {
     /// <summary>Runs interactive or headless commands and translates Ctrl+C into a clean process result.</summary>
@@ -22,22 +22,6 @@ internal static class ShellRunner
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(processCancellation);
 
-        // CancelKeyPress is process-global, so unregister it before disposing the source. The handler tolerates
-        // the narrow shutdown race where a second Ctrl+C arrives while resources are being released.
-        void OnCancelKeyPress(object? _, ConsoleCancelEventArgs eventArgs)
-        {
-            eventArgs.Cancel = true;
-            try
-            {
-                processCancellation.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // Shutdown already owns cancellation and no active operation remains.
-            }
-        }
-
-        Console.CancelKeyPress += OnCancelKeyPress;
         try
         {
             if (!context.CommandLine.UseInteractiveTerminal)
@@ -169,12 +153,12 @@ internal static class ShellRunner
         catch (OperationCanceledException) when (processCancellation.IsCancellationRequested)
         {
             // User cancellation is a normal terminal outcome rather than an unhandled task-cancellation error.
-            await Console.Out.WriteLineAsync("Cancelled.");
+            if (context.EarlySurface is null)
+            {
+                await Console.Out.WriteLineAsync("Cancelled.");
+            }
+
             return 130;
-        }
-        finally
-        {
-            Console.CancelKeyPress -= OnCancelKeyPress;
         }
     }
 
@@ -385,6 +369,9 @@ internal static class ShellRunner
 /// <summary>Collects immutable shell dependencies produced by earlier startup phases.</summary>
 internal sealed record ShellRunContext
 {
+    /// <summary>Gets the terminal already running since process startup.</summary>
+    internal TuiKitSurface? EarlySurface { get; init; }
+
     /// <summary>Shared binary capability of the existing artifact store.</summary>
     internal IImageArtifactStore? ImageArtifacts { get; init; }
 

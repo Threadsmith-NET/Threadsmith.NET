@@ -10,29 +10,38 @@ using TUIKit.Modals;
 /// <summary>A modal startup projection that discards all ordinary keys and paste.</summary>
 internal sealed class StartupModal : Modal
 {
-    private readonly string _logo;
-    private readonly string _label;
+    private static readonly string[] CompactLogo = ["Threadsmith.NET"];
+    private readonly string[] _logoLines;
+    private readonly int _logoWidth;
+    private readonly string? _label;
     private readonly long _started;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _splinesDuration = TimeSpan.FromMilliseconds(Random.Shared.Next(500, 1001));
     private readonly Action _cancel;
     private readonly Func<PresentationTextRole, CellStyle> _style;
-    private readonly IReadOnlyList<string> _completed;
-    private readonly IReadOnlyList<string> _details;
-    private readonly CachedTextRun _text = new();
+    private readonly IReadOnlyList<SemanticStartupPhaseSnapshot> _completed;
+
+    private readonly List<SemanticStartupPhaseSnapshot> _rows = [];
+    private readonly List<RowCache> _rowCache = [];
+    private readonly List<CachedTextRun> _lineRuns = [];
+    private string? _fatalDetail;
+    private int _fatalWidth;
+    private string[] _fatalLines = [];
     private string? _tip;
     private int _tipWidth;
     private string[] _tipLines = [];
-    private bool _isComplete;
+    private SemanticStartupPhaseState _state;
     private TimeSpan? _completedElapsed;
 
     /// <summary>Initializes a new instance of the <see cref="StartupModal"/> class.</summary>
-    internal StartupModal(string logo, string label, IReadOnlyList<string> completed, Action cancel, Func<PresentationTextRole, CellStyle> style, IReadOnlyList<string>? details = null, TimeProvider? timeProvider = null)
+    /// <remarks>A null label omits a separate current-operation row.</remarks>
+    internal StartupModal(string logo, string? label, IReadOnlyList<SemanticStartupPhaseSnapshot> completed, Action cancel, Func<PresentationTextRole, CellStyle> style, IReadOnlyList<string>? details = null, TimeProvider? timeProvider = null)
     {
-        _logo = logo;
+        _logoLines = logo.ReplaceLineEndings("\n").Split('\n');
+        _logoWidth = _logoLines.Max(UnicodeWidth.GetWidth);
         _label = label;
         _completed = completed;
-        _details = details ?? [];
+        Details = details ?? [];
         _timeProvider = timeProvider ?? TimeProvider.System;
         _started = _timeProvider.GetTimestamp();
         _cancel = cancel;
@@ -40,7 +49,7 @@ internal sealed class StartupModal : Modal
     }
 
     /// <summary>Gets the real monotonic duration of this operation.</summary>
-    internal TimeSpan Elapsed => _completedElapsed ?? _timeProvider.GetElapsedTime(_started);
+    internal TimeSpan Elapsed => Operation?.Snapshot.Elapsed ?? _completedElapsed ?? _timeProvider.GetElapsedTime(_started);
 
     /// <summary>Gets the independent decorative timer, capped at its randomly selected duration.</summary>
     internal TimeSpan SplinesElapsed
@@ -61,6 +70,21 @@ internal sealed class StartupModal : Modal
     /// <summary>Gets or sets the bounded semantic phase snapshot source.</summary>
     internal Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? Progress { get; set; }
 
+    /// <summary>Gets or sets the semantic source without copying the process history every frame.</summary>
+    internal Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? SemanticProgress { get; set; }
+
+    /// <summary>Gets or sets informational diagnostics on the terminal owner.</summary>
+    internal IReadOnlyList<string> Details { get; set; }
+
+    /// <summary>Gets or sets the common operation timer.</summary>
+    internal SemanticStartupProgress.Operation? Operation { get; set; }
+
+    /// <summary>Gets or sets the process-wide startup elapsed time.</summary>
+    internal Func<TimeSpan>? TotalElapsed { get; set; }
+
+    /// <summary>Gets or sets the fatal-outcome acknowledgment.</summary>
+    internal Action? Acknowledge { get; set; }
+
     /// <inheritdoc />
     public override bool HandleKey(KeyEvent key)
     {
@@ -68,6 +92,11 @@ internal sealed class StartupModal : Modal
         if (key.Code == KeyCode.Escape || (key.Code == KeyCode.Character && key.Rune == 'c' && key.Modifiers == KeyModifiers.Ctrl))
         {
             _cancel();
+        }
+
+        if (key.Code == KeyCode.Enter)
+        {
+            Acknowledge?.Invoke();
         }
 
         return true;
@@ -82,7 +111,7 @@ internal sealed class StartupModal : Modal
     /// <inheritdoc />
     public override void Render(ISurface surface)
     {
-        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default), expandHeight: true);
+        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default), expandHeight: true, preferredSize: new Size(90, 32));
         if (view is null)
         {
             return;
@@ -99,84 +128,211 @@ internal sealed class StartupModal : Modal
         }
 
         var progress = Progress?.Invoke() ?? [];
-        var showSplines = _label.StartsWith("Loading ", StringComparison.Ordinal);
-        var currentRows = showSplines ? 2 : 1;
-        var reservedPhaseRows = Math.Min(1, progress.Count);
-        var reservedCompletedRows = Math.Min(1, _completed.Count);
-        var reservedRows = currentRows + reservedPhaseRows + reservedCompletedRows;
+        var semantic = SemanticProgress?.Invoke() ?? [];
+        _rows.Clear();
+        AppendRows(progress, labeled: true);
+        AppendRows(semantic, labeled: true);
+        for (var index = 0; index < _completed.Count; index++)
+        {
+            _rows.Add(_completed[index]);
+        }
 
-        // Budget the latest work and timers first; tips also need their separating gap.
-        var tipHeight = Math.Min(_tipLines.Length, Math.Max(0, view.Size.Height - reservedRows - 1));
-        var tipGap = tipHeight > 0 ? 1 : 0;
-        var progressHeight = view.Size.Height - tipHeight - tipGap;
-        var lines = _logo.ReplaceLineEndings("\n").Split('\n');
-        var logoHeight = Math.Min(lines.Length, Math.Max(0, progressHeight - _completed.Count - _details.Count - progress.Count - currentRows - 1));
+        AppendRows(progress, labeled: false);
+        AppendRows(semantic, labeled: false);
+        var activeCount = 0;
+        foreach (var row in _rows)
+        {
+            if (row.State == SemanticStartupPhaseState.Running)
+            {
+                activeCount++;
+            }
+        }
+
+        // Fatal confirmation owns its final row and a blank separator outside the history viewport.
+        var currentRows = (_label is null ? 0 : 1) + (TotalElapsed is null ? 0 : 1) + (Acknowledge is null ? 0 : 2);
+        var details = Details;
+        if (Acknowledge is not null)
+        {
+            var fatalDetail = Details.Count == 0 ? null : Details[^1];
+            if (_fatalDetail != fatalDetail || _fatalWidth != view.Size.Width)
+            {
+                _fatalDetail = fatalDetail;
+                _fatalWidth = view.Size.Width;
+                _fatalLines = fatalDetail is null ? [] : [.. TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(fatalDetail)), _fatalWidth)
+                    .Select(line => line.ToPlainString())];
+            }
+
+            details = _fatalLines;
+        }
+
+        var historyMinimum = Acknowledge is null ? Math.Max(activeCount, Math.Min(1, _rows.Count)) : 0;
+        var requiredRows = currentRows + historyMinimum + (Acknowledge is null ? 0 : details.Count);
+        var lines = _logoLines;
+        if (_logoWidth > view.Size.Width
+            || lines.Length + 1 + requiredRows + (_tipLines.Length > 0 ? 2 : 0) > view.Size.Height)
+        {
+            lines = CompactLogo;
+        }
+
+        // Keep branding and tips outside the completed-history viewport.
+        var logoHeight = lines.Length;
+        var logoGap = view.Size.Height > logoHeight + requiredRows ? 1 : 0;
+        var tipHeight = Math.Min(_tipLines.Length, Math.Max(0, view.Size.Height - logoHeight - logoGap - requiredRows - 1));
+        var progressHeight = view.Size.Height - tipHeight - (tipHeight > 0 ? 1 : 0);
+        var showSplines = _label?.StartsWith("Loading ", StringComparison.Ordinal) == true
+            && progressHeight - logoHeight - logoGap > requiredRows;
+        if (showSplines)
+        {
+            currentRows++;
+        }
+
         for (var index = 0; index < logoHeight; index++)
         {
-            _text.Draw(view, 0, index, lines[index], _style(PresentationTextRole.Brand));
+            Draw(view, index, lines[index], PresentationTextRole.Brand);
         }
 
-        var y = logoHeight > 0 ? logoHeight + 1 : 0;
-        var detailCapacity = Math.Max(0, progressHeight - y - currentRows - reservedPhaseRows - reservedCompletedRows);
-        foreach (var detail in _details.Take(detailCapacity))
+        var y = logoHeight + logoGap;
+        var detailCapacity = Math.Max(0, progressHeight - y - currentRows - historyMinimum);
+        var fatalDetailRows = Acknowledge is null ? 0 : Math.Min(details.Count, detailCapacity);
+        if (Acknowledge is null)
         {
-            _text.Draw(view, 0, y++, detail, _style(PresentationTextRole.Status));
-        }
-
-        // Preserve room for the latest real work and the current overall timer on small terminals.
-        var availableRows = Math.Max(0, progressHeight - y - currentRows);
-        var completedCapacity = progress.Count == 0
-            ? availableRows
-            : Math.Max(0, availableRows - Math.Min(progress.Count, Math.Max(1, availableRows - 1)));
-        foreach (var phase in _completed.TakeLast(completedCapacity))
-        {
-            _text.Draw(view, 0, y++, phase, _style(PresentationTextRole.Success));
-        }
-
-        foreach (var phase in progress.TakeLast(Math.Max(0, progressHeight - y - currentRows)))
-        {
-            var role = phase.State switch
+            var detailStart = Math.Max(0, details.Count - detailCapacity);
+            for (var index = detailStart; index < details.Count; index++)
             {
-                SemanticStartupPhaseState.Completed => PresentationTextRole.Success,
-                SemanticStartupPhaseState.Failed => PresentationTextRole.Error,
-                SemanticStartupPhaseState.Cancelled => PresentationTextRole.Warning,
-                _ => PresentationTextRole.Status,
-            };
-            var label = phase.Phase switch
+                Draw(view, y++, details[index], PresentationTextRole.Status);
+            }
+        }
+
+        var capacity = Math.Max(0, progressHeight - y - currentRows - fatalDetailRows);
+        var skipActive = Math.Max(0, activeCount - capacity);
+        var skipHistory = Math.Max(0, _rows.Count - activeCount - Math.Max(0, capacity - activeCount));
+        foreach (var phase in _rows)
+        {
+            if (phase.State == SemanticStartupPhaseState.Running ? skipActive-- > 0 : skipHistory-- > 0)
             {
-                SemanticStartupPhase.CaptureSnapshots => "Capture file snapshots",
-                SemanticStartupPhase.OpenWorkspace => "Open/evaluate solution",
-                SemanticStartupPhase.ConfineInputs => "Check input boundaries",
-                SemanticStartupPhase.PrepareCompilation => "Prepare compilation",
-                SemanticStartupPhase.StartMonitoring => "Start file monitoring",
-                SemanticStartupPhase.ReadDocuments => "Read document snapshots",
-                SemanticStartupPhase.ReconcileSnapshots => "Reconcile file snapshots",
-                _ => phase.Phase.ToString(),
-            };
-            _text.Draw(view, 0, y++, $"{phase.Elapsed.TotalSeconds:0.0}s {label} {phase.State}", _style(role));
+                continue;
+            }
+
+            while (_rowCache.Count <= y)
+            {
+                _rowCache.Add(new RowCache());
+            }
+
+            var cache = _rowCache[y];
+            if (cache.Snapshot != phase || cache.Width != view.Size.Width)
+            {
+                cache.Snapshot = phase;
+                cache.Width = view.Size.Width;
+                var label = phase.Label ?? phase.Phase switch
+                {
+                    SemanticStartupPhase.CaptureSnapshots => "Capture file snapshots",
+                    SemanticStartupPhase.OpenWorkspace => "Open/evaluate solution",
+                    SemanticStartupPhase.ConfineInputs => "Check input boundaries",
+                    SemanticStartupPhase.PrepareCompilation => "Prepare compilation",
+                    SemanticStartupPhase.StartMonitoring => "Start file monitoring",
+                    SemanticStartupPhase.ReadDocuments => "Read document snapshots",
+                    SemanticStartupPhase.ReconcileSnapshots => "Reconcile file snapshots",
+                    _ => phase.Phase.ToString(),
+                };
+                var detail = phase.Detail is null ? string.Empty : $" — {phase.Detail}";
+                cache.Text = FormatRow(phase.Elapsed, label, phase.State, detail, view.Size.Width);
+            }
+
+            Draw(view, y++, cache.Text, Role(phase.State));
         }
 
         if (showSplines && y < progressHeight - 1)
         {
-            _text.Draw(view, 0, y++, $"{SplinesElapsed.TotalSeconds:0.0}s Reticulating Splines ...{(SplinesCompleted ? " Completed" : string.Empty)}", _style(SplinesCompleted ? PresentationTextRole.Success : PresentationTextRole.Status));
+            Draw(view, y++, $"{SplinesElapsed.TotalSeconds:0.0}s Reticulating Splines ...{(SplinesCompleted ? " Completed" : string.Empty)}", SplinesCompleted ? PresentationTextRole.Success : PresentationTextRole.Status);
         }
 
-        _text.Draw(
-            view,
-            0,
-            y,
-            $"{Elapsed.TotalSeconds:0.0}s {_label}{(_isComplete ? " Completed" : string.Empty)}",
-            _style(_isComplete ? PresentationTextRole.Success : PresentationTextRole.Status));
+        if (_label is not null)
+        {
+            var operation = Operation?.Snapshot;
+            var state = operation?.State ?? _state;
+            Draw(view, y++, FormatRow(operation?.Elapsed ?? Elapsed, _label, state, string.Empty, view.Size.Width), Role(state));
+        }
+
+        if (TotalElapsed is { } total && y < progressHeight)
+        {
+            Draw(view, y++, $"{total().TotalSeconds:0.0}s Total startup", PresentationTextRole.Status);
+        }
+
+        for (var index = 0; index < fatalDetailRows; index++)
+        {
+            var text = index == fatalDetailRows - 1 && fatalDetailRows < details.Count
+                ? "… Full error shown on exit."
+                : details[index];
+            Draw(view, y++, text, PresentationTextRole.Error);
+        }
+
+        if (Acknowledge is not null && y + 1 < progressHeight)
+        {
+            Draw(view, y + 1, "press Enter to exit; Esc cancels", PresentationTextRole.Warning);
+        }
+
         for (var index = 0; index < tipHeight; index++)
         {
-            _text.Draw(view, 0, view.Size.Height - tipHeight + index, _tipLines[index], _style(PresentationTextRole.Default));
+            Draw(view, view.Size.Height - tipHeight + index, _tipLines[index], PresentationTextRole.Default);
         }
     }
 
     /// <summary>Marks a successful phase for its final rendered frame.</summary>
     internal void Complete()
     {
-        _completedElapsed ??= Elapsed;
-        _isComplete = true;
+        Finish(SemanticStartupPhaseState.Completed);
+    }
+
+    /// <summary>Freezes the operation outcome independently of decoration.</summary>
+    internal void Finish(SemanticStartupPhaseState state, TimeSpan? elapsed = null)
+    {
+        _completedElapsed ??= elapsed ?? Elapsed;
+        _state = state;
+    }
+
+    private void AppendRows(IReadOnlyList<SemanticStartupPhaseSnapshot> source, bool labeled)
+    {
+        for (var index = 0; index < source.Count; index++)
+        {
+            var row = source[index];
+            if ((row.Label is not null) == labeled)
+            {
+                _rows.Add(row);
+            }
+        }
+    }
+
+    private void Draw(ISurface surface, int y, string text, PresentationTextRole role)
+    {
+        while (_lineRuns.Count <= y)
+        {
+            _lineRuns.Add(new CachedTextRun());
+        }
+
+        _lineRuns[y].Draw(surface, 0, y, text, _style(role));
+    }
+
+    private static string FormatRow(TimeSpan elapsed, string label, SemanticStartupPhaseState state, string detail, int width)
+    {
+        var text = TranscriptView.Safe($"{elapsed.TotalSeconds:0.0}s {label} {state}{detail}");
+        return UnicodeWidth.GetWidth(text) <= width ? text : TranscriptView.Safe($"{elapsed.TotalSeconds:0.0}s {state} {label}{detail}");
+    }
+
+    private static PresentationTextRole Role(SemanticStartupPhaseState state) => state switch
+    {
+        SemanticStartupPhaseState.Completed => PresentationTextRole.Success,
+        SemanticStartupPhaseState.Failed => PresentationTextRole.Error,
+        SemanticStartupPhaseState.Cancelled => PresentationTextRole.Warning,
+        SemanticStartupPhaseState.Skipped => PresentationTextRole.Default,
+        _ => PresentationTextRole.Status,
+    };
+
+    private sealed class RowCache
+    {
+        internal SemanticStartupPhaseSnapshot? Snapshot { get; set; }
+
+        internal int Width { get; set; }
+
+        internal string Text { get; set; } = string.Empty;
     }
 }

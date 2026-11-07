@@ -379,7 +379,9 @@ internal sealed class HostFoundation : IAsyncDisposable
         ConfigurationPaths paths,
         ILoggerFactory loggerFactory,
         IPromptLoader promptLoader,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        SemanticStartupProgress? startupProgress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
@@ -387,6 +389,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(promptLoader);
 
+        var progress = startupProgress ?? new SemanticStartupProgress();
+        using var composition = progress.Begin("host", "Host services", cancellationToken: cancellationToken);
         var operationalLimits = LoadOperationalLimits(configuration, trustedConfiguration);
         var maximumCorrectiveTurns = configuration.GetValue("execution:maxCorrectiveTurns", 3);
         var executionLimits = new ExecutionLimits
@@ -415,9 +419,12 @@ internal sealed class HostFoundation : IAsyncDisposable
         executionLimits.Validate();
         var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
         var codeExploreOptions = CodeExploreConfiguration.FromConfiguration(configuration);
-        var events = new DomainEventStream(TimeSpan.FromMilliseconds(trustedConfiguration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000)));
-        var projections = new InMemoryProjectionStore(executionLimits);
+        var committedDeliveryTimeout = trustedConfiguration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(committedDeliveryTimeout, "events:committedDeliveryTimeoutMilliseconds");
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(subscriberCapacity, "events:subscriberCapacity");
+        var events = new DomainEventStream(TimeSpan.FromMilliseconds(committedDeliveryTimeout));
+        var projections = new InMemoryProjectionStore(executionLimits);
         var projectionSubscription = events.Subscribe(
             (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                 ? Task.CompletedTask
@@ -448,7 +455,9 @@ internal sealed class HostFoundation : IAsyncDisposable
                 paths,
                 sanitizer,
                 events,
-                loggerFactory);
+                loggerFactory,
+                progress,
+                cancellationToken);
             var eventStore = persistence.EventStore;
             var factsDirectory = Path.Combine(
                 Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -457,7 +466,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             var repositoryFacts = new SqliteRepositoryFactsStore(
                 $"Data Source={Path.Combine(factsDirectory, "repository-facts.db")}",
                 paths.UserConfiguration);
-            await repositoryFacts.InitializeAsync();
+            await progress.RunAsync("repository.facts", "Repository facts", repositoryFacts.InitializeAsync, cancellationToken);
             persistenceSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                     ? Task.CompletedTask
@@ -495,7 +504,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     new UserFileSecretProvider(paths.UserSecretsConfiguration, secretLimits),
                 ],
                 secretLimits);
-            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic);
+            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic, startupProgress: progress);
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
             repositoryFileObserver = new RepositoryFileObserver();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(
@@ -630,6 +639,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 policyBinding: policyBinding,
                 prompts: promptLoader);
+            composition?.Complete();
             return new HostFoundation(
                 events,
                 projections,
@@ -821,7 +831,9 @@ internal sealed class HostFoundation : IAsyncDisposable
         ConfigurationPaths paths,
         SecretOutputSanitizer sanitizer,
         IDomainEventStream events,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        SemanticStartupProgress progress,
+        CancellationToken cancellationToken)
     {
         var memoryOptions = new RepositoryMemoryConfiguration(configuration, configuration, paths.RepositoryRoot).CaptureCurrent();
         var databasePath = Path.GetFullPath(
@@ -830,9 +842,9 @@ internal sealed class HostFoundation : IAsyncDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)
             ?? throw new InvalidOperationException("The persistence path has no parent directory."));
         var eventStore = new SqliteEventStore($"Data Source={databasePath}");
-        await eventStore.InitializeAsync();
+        await progress.RunAsync("database.initialize", "Database initialization", eventStore.InitializeAsync, cancellationToken);
         var migrations = new MigrationRunner($"Data Source={databasePath}", DefaultMigrations.ForRepositoryMemoryCapacity(memoryOptions.MaxNumberOfRepoMemories));
-        await migrations.RunAsync();
+        await progress.RunAsync("database.migrate", "Database migrations", migrations.RunAsync, cancellationToken);
         if (migrations.LastBackupPath is { } backupPath)
         {
             var migrationLogger = loggerFactory.CreateLogger<MigrationRunner>();
@@ -852,8 +864,11 @@ internal sealed class HostFoundation : IAsyncDisposable
             sanitizer,
             TimeProvider.System,
             maximumRetainedImageBytes: configuration.GetValue("persistence:maximumRetainedImageBytes", ArtifactStore.DefaultMaximumRetainedImageBytes));
-        await artifactStore.InitializeAsync();
-        await new RedactionAudit(
+        await progress.RunAsync("artifacts", "Artifact storage", artifactStore.InitializeAsync, cancellationToken);
+        await progress.RunAsync(
+            "redaction",
+            "Redaction audit",
+            token => new RedactionAudit(
             eventStore,
             artifactStore,
             sanitizer,
@@ -862,7 +877,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 Enabled = configuration.GetValue("persistence:redactionAudit:enabled", true),
                 RepairArtifacts = configuration.GetValue("persistence:redactionAudit:repairArtifacts", true),
             },
-            loggerFactory.CreateLogger<RedactionAudit>()).RunAsync();
+            loggerFactory.CreateLogger<RedactionAudit>()).RunAsync(token),
+            cancellationToken);
         var connectionString = $"Data Source={databasePath}";
         var skillStateStore = new SqliteSkillStateStore(connectionString);
         var conversationStore = new SqliteConversationStore(
@@ -897,7 +913,10 @@ internal sealed class HostFoundation : IAsyncDisposable
                 TimeSpan.FromDays(30)),
         };
         var executionStore = new ExecutionCheckpointStore(connectionString);
-        await new RetentionService(
+        await progress.RunAsync(
+            "retention",
+            "Retention maintenance",
+            token => new RetentionService(
             eventStore,
             artifactStore,
             retentionOptions,
@@ -905,7 +924,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             TimeProvider.System,
             conversationStore,
             skillStateStore,
-            executionStore).RunAsync();
+            executionStore).RunAsync(token),
+            cancellationToken);
         return new PersistenceServices(
             eventStore,
             conversationStore,

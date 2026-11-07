@@ -183,7 +183,7 @@ public sealed class AnthropicCompositionTests
 
         internal Task<(EffectiveModelProviderCatalog? Ordinary, EffectiveModelProviderCatalog? Trusted)> LoadAsync()
         {
-            return ModelComposition.LoadCatalogsAsync(_configuration, _configuration, Paths, new OpenAiCompatibleProviderRegistration(), Registry, NullLoggerFactory.Instance, Secrets, _http, TestContext.Current.CancellationToken);
+            return ModelComposition.LoadCatalogsAsync(_configuration, _configuration, Paths, new OpenAiCompatibleProviderRegistration(), Registry, NullLoggerFactory.Instance, Secrets, _http, null, TestContext.Current.CancellationToken);
         }
     }
 

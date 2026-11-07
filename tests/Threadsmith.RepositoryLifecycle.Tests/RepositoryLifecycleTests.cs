@@ -1095,7 +1095,7 @@ public static class RepositoryLifecycleTests
         Assert.Collection(
             surface.TransientStatuses,
             text => Assert.StartsWith("Opening repository...", text, StringComparison.Ordinal),
-            text => Assert.StartsWith("Loading solution ...", text, StringComparison.Ordinal),
+            text => Assert.StartsWith("Loading solution Sample.sln", text, StringComparison.Ordinal),
             text => Assert.StartsWith("Semantic confidence: Loading...", text, StringComparison.Ordinal));
     }
 
@@ -1127,9 +1127,9 @@ public static class RepositoryLifecycleTests
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>Remembered-solution startup details belong to the splash instead of the model transcript.</summary>
+    /// <summary>Remembered solutions use the named loading row without a separate header or transcript message.</summary>
     [Fact]
-    public static async Task InteractionCoordinator_RememberedSolution_UsesStartupDetails()
+    public static async Task InteractionCoordinator_RememberedSolution_UsesNamedLoadingRow()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
         File.Copy(repository.SolutionPath, Path.Combine(repository.RootPath, "Second.sln"));
@@ -1141,8 +1141,9 @@ public static class RepositoryLifecycleTests
 
         await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead, cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(["Remembered: Sample.sln"], surface.StartupDetails);
-        Assert.True(surface.DetailsShownDuringSemanticLoading);
+        Assert.Empty(surface.StartupDetails);
+        Assert.Contains("Loading solution Sample.sln", surface.StartupLabels);
+        Assert.DoesNotContain("Remembered:", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Loading remembered solution", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
     }
@@ -1253,7 +1254,7 @@ public static class RepositoryLifecycleTests
 
         public IReadOnlyList<string> StartupDetails { get; private set; } = [];
 
-        public bool DetailsShownDuringSemanticLoading { get; private set; }
+        public List<string> StartupLabels { get; } = [];
 
         public string Output => _output.ToString();
 
@@ -1297,11 +1298,7 @@ public static class RepositoryLifecycleTests
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation awaited by this test surface.")]
         public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
         {
-            if (label == "Semantic Loading ...")
-            {
-                DetailsShownDuringSemanticLoading = StartupDetails.Count > 0;
-            }
-
+            StartupLabels.Add(label);
             return operation.WaitAsync(cancellationToken);
         }
     }

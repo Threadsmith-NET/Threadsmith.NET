@@ -3,16 +3,22 @@ namespace Threadsmith.Tui.TuiKit;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
+using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
+using Threadsmith.Telemetry;
 using TUIKit.Modals;
 
 /// <summary>Owns startup, command-help, and immediate-toggle modal lifetimes on the existing terminal runtime.</summary>
 internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface, IRepositoryMemoryListSurface
 {
-    private readonly List<string> _startupPhases = [];
+    private readonly List<SemanticStartupPhaseSnapshot> _startupPhases = [];
+    private SemanticStartupProgress _startupTiming = new();
+    private Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? _processStartupProgress;
+    private bool _startupConfigured;
+    private bool _startupServicesAttached;
     private IReadOnlyList<string> _startupDetails = [];
     private long _startupDwellStart;
     private StartupTips? _startupTips;
@@ -95,14 +101,20 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     {
         ArgumentNullException.ThrowIfNull(details);
         var snapshot = details.ToArray();
-        return EnqueueAsync(() => _startupDetails = snapshot, cancellationToken);
+        return EnqueueAsync(
+            () =>
+        {
+            _startupDetails = snapshot;
+            _startupModal?.Details = snapshot;
+        },
+            cancellationToken);
     }
 
     /// <inheritdoc />
     [SuppressMessage("Usage", "VSTHRD003", Justification = "The host owns and independently observes the operation represented by this modal.")]
     public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
     {
-        return ShowStartupAsync(logo, label, _ => operation, cancellationToken);
+        return ShowStartupAsync(logo, label, operation.WaitAsync, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -114,14 +126,17 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     /// <inheritdoc />
     public async Task ShowStartupAsync(string logo, string label, Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
     {
-        var modal = new StartupModal(logo, label, _startupPhases.ToArray(), _interrupt, ResolveStyle, _startupDetails);
+        using var tracked = _startupTiming.Measure($"outer.{_startupPhases.Count}", label, cancellationToken);
+        var modal = new StartupModal(logo, label, _startupPhases.ToArray(), _interrupt, ResolveStyle, _startupDetails) { Operation = tracked };
         await EnqueueAsync(
             () =>
         {
             _startupBlocked = true;
             _startupTips ??= new StartupTips(TipsCatalog.All);
             modal.Tips = _startupTips;
-            modal.Progress = _startupProgress;
+            modal.Progress = () => _processStartupProgress?.Invoke() ?? [];
+            modal.SemanticProgress = () => _startupProgress?.Invoke() ?? [];
+            modal.TotalElapsed = () => Stopwatch.GetElapsedTime(_startupDwellStart);
             _inputEpoch++;
             ClosePalette();
             DismissStartupModal();
@@ -136,7 +151,8 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         var outcome = "Completed";
         try
         {
-            await operation(cancellationToken).WaitAsync(cancellationToken);
+            await operation(cancellationToken);
+            tracked?.Complete();
         }
         catch (OperationCanceledException)
         {
@@ -150,6 +166,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         }
         finally
         {
+            tracked.Dispose();
             try
             {
                 if (!_stop.IsCancellationRequested && outcome == "Completed")
@@ -178,19 +195,16 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                         () =>
                     {
                         var completed = $"{modal.Elapsed.TotalSeconds:0.0}s {label} {outcome}";
-                        if (outcome == "Completed")
-                        {
-                            _startupPhases.Add(completed);
-                        }
+                        _startupPhases.Add(tracked.Snapshot);
 
                         if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal) && modal.SplinesCompleted)
                         {
-                            _startupPhases.Add($"{modal.SplinesElapsed.TotalSeconds:0.0}s Reticulating Splines ... Completed");
+                            _startupPhases.Add(new(default, SemanticStartupPhaseState.Completed, modal.SplinesElapsed) { Label = "Reticulating Splines ..." });
                         }
 
                         if (outcome != "Completed")
                         {
-                            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));
+                            Agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));
                         }
 
                         // Keep successful work visible until the next stage or composer takes over.
@@ -222,6 +236,109 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     {
         ArgumentNullException.ThrowIfNull(action);
         return SelectTogglesCoreAsync(request, change, action, cancellationToken);
+    }
+
+    /// <summary>Emits the first modal frame before configuration or services start.</summary>
+    internal Task BeginProcessStartupAsync(SemanticStartupProgress progress, Func<IReadOnlyList<SemanticStartupPhaseSnapshot>> snapshots, CancellationToken cancellationToken)
+    {
+        return EnqueueAsync(
+            () =>
+        {
+            _startupTiming = progress;
+            _processStartupProgress = snapshots;
+            _startupBlocked = true;
+            _startupTips = new StartupTips(TipsCatalog.All);
+            _startupDwellStart = Stopwatch.GetTimestamp();
+            _startupModal = new StartupModal(StartupBanner.Text, null, [], _interrupt, ResolveStyle)
+            {
+                Tips = _startupTips,
+                Progress = snapshots,
+                TotalElapsed = () => Stopwatch.GetElapsedTime(_startupDwellStart),
+            };
+            _ = _app.ShowAsync<string>(_startupModal);
+            _app.RenderOnce();
+        },
+            cancellationToken);
+    }
+
+    /// <summary>Applies configuration once, before session state or editable input exists.</summary>
+    internal Task ConfigureStartupAsync(IConfiguration configuration, CancellationToken cancellationToken)
+    {
+        var (catalog, defaultId) = TuiThemeConfigurationLoader.Load(configuration);
+        var themes = new SessionThemePreferences(catalog, defaultId);
+        var display = TuiDisplayOptions.Load(configuration);
+        return EnqueueAsync(
+            () =>
+        {
+            if (_startupConfigured)
+            {
+                throw new InvalidOperationException("Startup display configuration is already attached.");
+            }
+
+            _startupConfigured = true;
+            _limits = display.Limits;
+            _theme = themes.ActiveTheme;
+            _styles = new TuiKitStyles(_theme, _suppressStyles);
+            InitializeWorkspace();
+        },
+            cancellationToken);
+    }
+
+    /// <summary>Attaches image storage once before the composer is available.</summary>
+    internal Task AttachStartupServicesAsync(IImageArtifactStore? images, CancellationToken cancellationToken)
+    {
+        return EnqueueAsync(
+            () =>
+        {
+            if (_startupServicesAttached)
+            {
+                throw new InvalidOperationException("Startup services are already attached.");
+            }
+
+            _startupServicesAttached = true;
+            _imageArtifacts = images;
+        },
+            cancellationToken);
+    }
+
+    /// <summary>Routes an early diagnostic through the terminal owner.</summary>
+    internal Task ReportStartupDiagnosticAsync(string message, CancellationToken cancellationToken)
+    {
+        var safe = TranscriptView.Safe(new SecretOutputSanitizer().Sanitize(message));
+        safe = safe.Length > 512 ? safe[..512] : safe;
+        return SetStartupDetailsAsync(_startupDetails.TakeLast(7).Append(safe).ToArray(), cancellationToken);
+    }
+
+    /// <summary>Keeps a fatal outcome visible until Enter, cancellation, or terminal loss.</summary>
+    internal async Task<string> AcknowledgeStartupFailureAsync(string message, CancellationToken cancellationToken)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
+        if (!string.IsNullOrWhiteSpace(message))
+        {
+            await ReportStartupDiagnosticAsync(message, lifetime.Token);
+        }
+
+        var failureDetail = string.Empty;
+        var acknowledged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failedElapsed = Stopwatch.GetElapsedTime(_startupDwellStart);
+        await EnqueueAsync(
+            () =>
+        {
+            failureDetail = _startupDetails.Count == 0 ? "Startup failed." : _startupDetails[^1];
+            DismissStartupModal();
+            _startupModal = new StartupModal(StartupBanner.Text, "Startup", _startupPhases.ToArray(), _interrupt, ResolveStyle, _startupDetails)
+            {
+                Progress = _processStartupProgress,
+                Acknowledge = () => acknowledged.TrySetResult(),
+                TotalElapsed = () => failedElapsed,
+            };
+            _startupModal.Finish(SemanticStartupPhaseState.Failed, failedElapsed);
+            _ = _app.ShowAsync<string>(_startupModal);
+            _app.RenderOnce();
+        },
+            lifetime.Token);
+        await acknowledged.Task.WaitAsync(lifetime.Token);
+        return failureDetail;
     }
 
     private void DismissStartupModal()

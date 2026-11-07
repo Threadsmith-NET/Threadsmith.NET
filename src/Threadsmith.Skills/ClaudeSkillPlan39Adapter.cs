@@ -16,13 +16,16 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     private readonly IClaudeSkillCompatibilityCatalog _claude;
     private readonly ISkillCatalog _native;
     private readonly Lock _gate = new();
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemanticStartupProgress? _startupProgress;
     private SkillCatalogSnapshot _snapshot = new() { CreatedAt = DateTimeOffset.MinValue };
 
     /// <summary>Initializes a new instance of the <see cref="CompatibleSkillCatalog"/> class.</summary>
-    public CompatibleSkillCatalog(ISkillCatalog native, IClaudeSkillCompatibilityCatalog claude)
+    public CompatibleSkillCatalog(ISkillCatalog native, IClaudeSkillCompatibilityCatalog claude, SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(native);
         ArgumentNullException.ThrowIfNull(claude);
+        _startupProgress = startupProgress;
         _native = native;
         _claude = claude;
     }
@@ -42,26 +45,60 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     /// <inheritdoc />
     public async Task<SkillCatalogSnapshot> RefreshAsync(CancellationToken cancellationToken = default)
     {
-        _ = await _native.RefreshAsync(cancellationToken);
-        var claude = await _claude.RefreshAsync(cancellationToken);
-        SkillCatalogSnapshot next;
-        lock (_gate)
+        await _refreshGate.WaitAsync(cancellationToken);
+        try
         {
-            next = new SkillCatalogSnapshot
-            {
-                Generation = checked(_snapshot.Generation + 1),
-                Candidates = _native.Snapshot.Candidates
-                    .Concat(claude.Select(ProjectMetadata))
-                    .OrderBy(item => item.Metadata.SkillId.Value, StringComparer.Ordinal)
-                    .ThenBy(item => item.Provenance.Scope)
-                    .ThenBy(item => item.Provenance.Source, StringComparer.Ordinal)
-                    .ToArray(),
-                CreatedAt = DateTimeOffset.UtcNow,
-            };
-            _snapshot = next;
-        }
+            using var parent = _startupProgress?.Begin("skills", "Compatible skill catalog", cancellationToken: cancellationToken);
+            using var siblings = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        return next;
+            // Both catalogs have complete source configuration. Publish only after both refreshes join.
+            var nativeTask = RefreshAsync("skills.native", "Native skill catalog", 0, _native.RefreshAsync);
+            var claudeTask = RefreshAsync("skills.claude", "Claude skill catalog", 0, _claude.RefreshAsync);
+            await Task.WhenAll(nativeTask, claudeTask);
+            var claude = await claudeTask;
+
+            async Task<T> RefreshAsync<T>(string id, string label, int order, Func<CancellationToken, Task<T>> refresh)
+            {
+                using var operation = _startupProgress?.Begin(id, label, order, "skills", siblings.Token);
+                try
+                {
+                    var result = await refresh(siblings.Token);
+                    operation?.Complete();
+                    return result;
+                }
+                catch
+                {
+                    // Mark the original branch before cancelling its sibling.
+                    operation?.Dispose();
+                    await siblings.CancelAsync();
+                    throw;
+                }
+            }
+
+            SkillCatalogSnapshot next;
+            lock (_gate)
+            {
+                next = new SkillCatalogSnapshot
+                {
+                    Generation = checked(_snapshot.Generation + 1),
+                    Candidates = _native.Snapshot.Candidates
+                        .Concat(claude.Select(ProjectMetadata))
+                        .OrderBy(item => item.Metadata.SkillId.Value, StringComparer.Ordinal)
+                        .ThenBy(item => item.Provenance.Scope)
+                        .ThenBy(item => item.Provenance.Source, StringComparer.Ordinal)
+                        .ToArray(),
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                _snapshot = next;
+            }
+
+            parent?.Complete();
+            return next;
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
     }
 
     /// <inheritdoc />

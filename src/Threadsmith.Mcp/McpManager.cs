@@ -26,6 +26,7 @@ public sealed class McpManager :
     ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>
 {
     private readonly McpResourceLimits _limits;
+    private readonly SemanticStartupProgress? _startupProgress;
     private readonly SessionPolicyBinding? _policyBinding;
     private readonly IMcpAdapter _adapter;
     private readonly Func<McpConnectionResult, CancellationToken, Task>? _connectedCallback;
@@ -53,7 +54,8 @@ public sealed class McpManager :
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null,
         Func<McpConnectionProfile, McpImportedCapability, CancellationToken, Task<bool>>? explicitReadAuthorizer = null,
         McpResourceLimits? limits = null,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(profiles);
         ArgumentNullException.ThrowIfNull(adapter);
@@ -61,6 +63,7 @@ public sealed class McpManager :
         ArgumentNullException.ThrowIfNull(identityManager);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        _startupProgress = startupProgress;
         _limits = limits ?? new();
         _policyBinding = policyBinding;
         _limits.Validate();
@@ -110,9 +113,15 @@ public sealed class McpManager :
     {
         ThrowIfDisposed();
         foreach (var profile in _profiles.Values
-            .Where(profile => profile.AutoConnect && profile.Trust != McpTrustLevel.Untrusted)
             .OrderBy(profile => profile.Id, StringComparer.Ordinal))
         {
+            using var operation = _startupProgress?.Begin($"mcp.{profile.Id}", _sanitizer.Sanitize($"MCP {profile.Id}"), parentId: "mcp", cancellationToken: cancellationToken);
+            if (!profile.AutoConnect || profile.Trust == McpTrustLevel.Untrusted)
+            {
+                operation?.Skip();
+                continue;
+            }
+
             var request = new McpManagementRequest
             {
                 Action = McpManagementAction.Connect,
@@ -125,10 +134,15 @@ public sealed class McpManager :
             cancellationToken.ThrowIfCancellationRequested();
             if (!result.Succeeded)
             {
+                operation?.Fail($"{result.FailureKind}; continuing without this connection.");
                 _logger.LogWarning(
                     "MCP profile '{ProfileId}' failed to auto-connect: {FailureKind}.",
                     profile.Id,
                     result.FailureKind);
+            }
+            else
+            {
+                operation?.Complete();
             }
         }
     }

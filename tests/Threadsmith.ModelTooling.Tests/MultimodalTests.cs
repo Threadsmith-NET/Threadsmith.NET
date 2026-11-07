@@ -619,10 +619,16 @@ public sealed partial class MultimodalTests
             Events = new DomainEventStream();
             Invocation = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
             var configuration = new ConfigurationBuilder().Build();
-            var registry = new ToolRegistry([
-                new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer(), limits, artifacts: store),
-                new WriteFileTool(new WriteFileConfiguration(configuration, configuration, root), conversations, TestPromptLoader.Instance, artifacts: store),
-            ]);
+            var registry = new ToolRegistry(
+                [
+                    new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer(), limits, artifacts: store),
+                    new WriteFileTool(new WriteFileConfiguration(configuration, configuration, root), conversations, TestPromptLoader.Instance, artifacts: store),
+                ],
+                runtimeOptions: new ToolRuntimeOptions
+                {
+                    // Content tests follow runner cancellation, not production wall-clock deadlines.
+                    Defaults = new ToolRuntimeOverride { TimeoutMilliseconds = -1 },
+                });
             Pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         }
 

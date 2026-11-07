@@ -3,6 +3,7 @@ namespace Threadsmith.Models.Anthropic;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Threadsmith.Core;
 
 /// <summary>Versioned secret-free metadata snapshot for bounded offline fallback.</summary>
 public sealed record AnthropicModelCatalogCacheEntry
@@ -130,30 +131,7 @@ public sealed class AnthropicModelCatalogCache
             throw new ModelProviderException("Anthropic cache metadata exceeds its byte limit.");
         }
 
-        ValidatePath();
-        var directory = Path.GetDirectoryName(_path) ?? throw new InvalidOperationException("Cache directory is missing.");
-        Directory.CreateDirectory(directory);
-        ValidatePath();
-        var temporary = Path.Combine(directory, Path.GetFileName(_path) + "." + Guid.NewGuid().ToString("N") + ".tmp");
-        try
-        {
-            await using (var stream = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, true))
-            {
-                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            ValidatePath();
-            File.Move(temporary, _path, overwrite: true);
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
-        }
+        await AtomicFileWriter.WriteAsync(_path, bytes, overwrite: true, ValidatePath, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Invalidates account eligibility after explicit credential rejection without removing secrets.</summary>

@@ -365,6 +365,87 @@ public sealed class AnthropicCatalogTests
         Assert.Empty((await cache.LoadAsync("primary", "secrets:models:anthropic", CancellationToken.None))?.Models ?? throw new InvalidOperationException());
     }
 
+    /// <summary>Valid replacements round-trip, while rejected stores preserve the last complete snapshot.</summary>
+    [Fact]
+    public async Task CacheReplacementRetainsValidationAndCancellation()
+    {
+        using var temporary = new TemporaryDirectory();
+        var path = System.IO.Path.Combine(temporary.Path, "new", "cache.json");
+        var cache = new AnthropicModelCatalogCache(path);
+        var token = TestContext.Current.CancellationToken;
+        var entry = Entry();
+        await cache.StoreAsync(entry, token);
+        var loaded = await cache.LoadAsync("primary", "secrets:models:anthropic", token);
+        Assert.Equal("claude-opus-5", Assert.Single(loaded!.Models).ModelId);
+        var replacement = entry with { Models = [Model("claude-sonnet-5")] };
+
+        await cache.StoreAsync(replacement, token);
+
+        loaded = await cache.LoadAsync("primary", "secrets:models:anthropic", token);
+        Assert.Equal("claude-sonnet-5", Assert.Single(loaded!.Models).ModelId);
+        var previous = await File.ReadAllBytesAsync(path, token);
+        await Assert.ThrowsAsync<ArgumentException>(() => cache.StoreAsync(entry with { Models = [Model(), Model()] }, token));
+        var bounded = new AnthropicModelCatalogCache(path, new AnthropicResourceLimits { MaximumMetadataBytes = previous.Length });
+        var oversized = entry with { Models = [Model() with { DisplayName = new string('x', 256) }] };
+        await Assert.ThrowsAsync<ModelProviderException>(() => bounded.StoreAsync(oversized, token));
+        using var canceled = CancellationTokenSource.CreateLinkedTokenSource(token);
+        await canceled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cache.StoreAsync(entry, canceled.Token));
+        Assert.Equal(previous, await File.ReadAllBytesAsync(path, token));
+        Assert.Empty(Directory.GetFiles(temporary.Path, "*.tmp", SearchOption.AllDirectories));
+    }
+
+    /// <summary>A link introduced after construction is still rejected before publication.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CacheStoreRejectsLinkedPaths(bool directoryLink)
+    {
+        using var temporary = new TemporaryDirectory();
+        var token = TestContext.Current.CancellationToken;
+        var targetDirectory = System.IO.Path.Combine(temporary.Path, "target");
+        Directory.CreateDirectory(targetDirectory);
+        var target = System.IO.Path.Combine(targetDirectory, "cache.json");
+        await File.WriteAllTextAsync(target, "previous", token);
+        var link = System.IO.Path.Combine(temporary.Path, directoryLink ? "linked-directory" : "linked.json");
+        var path = directoryLink ? System.IO.Path.Combine(link, "cache.json") : link;
+        var cache = new AnthropicModelCatalogCache(path);
+        try
+        {
+            try
+            {
+                if (directoryLink)
+                {
+                    Directory.CreateSymbolicLink(link, targetDirectory);
+                }
+                else
+                {
+                    File.CreateSymbolicLink(link, target);
+                }
+            }
+            catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+            {
+                Assert.Skip("Symbolic link creation is unavailable: " + exception.GetType().Name);
+            }
+
+            await Assert.ThrowsAsync<IOException>(() => cache.StoreAsync(Entry(), token));
+
+            Assert.Equal("previous", await File.ReadAllTextAsync(target, token));
+            Assert.Empty(Directory.GetFiles(targetDirectory, "*.tmp"));
+        }
+        finally
+        {
+            if (directoryLink && Directory.Exists(link))
+            {
+                Directory.Delete(link);
+            }
+            else if (!directoryLink && File.Exists(link))
+            {
+                File.Delete(link);
+            }
+        }
+    }
+
     /// <summary>Checks repository model policy can change without changing trusted snapshot.</summary>
     [Fact]
     public void RepositoryModelPolicyCanChangeWithoutChangingTrustedSnapshot()

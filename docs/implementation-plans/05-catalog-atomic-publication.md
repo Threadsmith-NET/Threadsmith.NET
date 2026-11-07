@@ -1,6 +1,6 @@
 # Plan 05: Share catalog file writing
 
-**Status:** Proposed. Not implemented.
+**Status:** Implemented. Local validation has the blockers recorded in §16.
 **Delivery track:** Maintenance.
 **Prerequisites:** Read repository instructions. Inspect current code. Use the required .NET SDK.
 
@@ -111,10 +111,40 @@ Cleanup can fail because of file-system errors. Preserve the existing helper's e
 
 ## 16 Documentation
 
-Record changed files, removed duplicate code, tests, and deviations here. Update other documentation only if a documented behavior changes.
+### Implementation record
+
+- Both provider caches now serialize locally and call `AtomicFileWriter.WriteAsync` with overwrite enabled and the caller's cancellation token. Their separate temporary-file publication code was removed.
+- Anthropic retains entry validation, serializer settings, its serialized byte limit, and `ValidatePath` at all three shared-writer checkpoints. Codex retains its model projection and serializer settings; its callback is a no-op because the original writer had no path validation callback.
+- `AtomicFileWriter.cs` required no changes. OAuth and credential writing, public signatures, schemas, loading, clearing, and invalidation remain unchanged. No package, setting, or migration was added.
+- Added `tests/Threadsmith.CoreRuntime.Tests/AtomicFileWriterTests.cs` for successful publication, validation order and controlled failures, cancellation, replacement refusal, and temporary-file cleanup. Extended `AnthropicCatalogTests.cs` and `Plan50OpenAiCodexTests.cs` for provider round trips, replacement, rejection, cancellation, and path compatibility.
+- The three production files and two existing test files listed in §8 matched the baseline before implementation. Work used branch `refactor/catalog-atomic-publication` and .NET SDK `10.0.403`, permitted by the repository's patch roll-forward policy.
+
+### Validation record
+
+Commands ran on Windows in the active checkout:
+
+- `dotnet test --project tests/Threadsmith.CodexProvider.Tests/Threadsmith.CodexProvider.Tests.csproj --configuration Debug --filter-method "*CatalogCache*"` before replacing the writer: 6 passed. This characterized absolute, directory-relative, and filename-only paths against the original implementation.
+- `dotnet restore src/Threadsmith.sln`: passed.
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` through the native build tool: passed with no reported diagnostics.
+- `dotnet test --project tests/Threadsmith.AnthropicProvider.Tests/Threadsmith.AnthropicProvider.Tests.csproj --configuration Debug --no-build`: 194 passed, 2 skipped because Windows symbolic-link creation privileges were unavailable. Those linked-path cases remain blocked locally.
+- `dotnet test --project tests/Threadsmith.CodexProvider.Tests/Threadsmith.CodexProvider.Tests.csproj --configuration Debug --no-build`: 76 passed, 2 existing opt-in live-image cases skipped.
+- `dotnet test --project tests/Threadsmith.CoreRuntime.Tests/Threadsmith.CoreRuntime.Tests.csproj --configuration Debug --no-build`: 963 passed, 4 existing opt-in cases skipped.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4`: 5,197 passed, 71 skipped, 1 failed. The failure was `Milestone6Tests.BuildExecutor_CancelledBuild_ThrowsCancellation`: the delayed child process did not publish its PID. The test and its build-executor path are unchanged and do not call either provider cache.
+- `dotnet test --project tests/Threadsmith.Validation.Tests/Threadsmith.Validation.Tests.csproj --configuration Debug --no-build --filter-method "*BuildExecutor_CancelledBuild_ThrowsCancellation"`: the same failure reproduced alone; no unrelated repair was made.
+- `dotnet format src/Threadsmith.sln --verify-no-changes --no-restore --include <changed C# paths>`: passed. The included paths were both provider caches, both changed provider test files, and `AtomicFileWriterTests.cs`.
+- `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include <same changed C# paths>`: reported four existing `RCS1261` suggestions outside modified ranges, one in Anthropic cache loading and three in Codex transport tests. No new related findings remained; this info-level check was not clean.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1`, `pwsh -NoProfile -File eng/Test-PrSubmission.ps1`, and `git diff --check`: passed. The submission-script check uses fixtures; it is not hosted CI evidence.
+
+Linux and macOS checks and hosted three-platform CI were not run. Nothing was staged, committed, or pushed.
+
+### Adversarial review
+
+Production review found no concrete introduced defect after checking callback order, cancellation forwarding, serialization, path compatibility, and existing callers. The parent inspected the complete diff to cover the reviewer's unavailable Git access and confirmed credential and package files were unchanged.
+
+Test review noted that provider cancellation tests use pre-canceled tokens. The shared-writer test cancels deterministically after directory creation, before temporary-file writing; it does not simulate cancellation after a completed write. This is a coverage limit, not evidence of a production regression. No production injection hook or alternate publication path was added merely to expand that test. Existing helper cleanup exceptions and filesystem race limits remain unchanged.
 
 ## 17 Open Decisions
 
-Check the Codex path contract before implementation. Report any required behavior change before making it.
+Resolved: absolute paths and relative paths with a directory component remain supported. Filename-only paths throw `ArgumentException` in both implementations because their parent directory is empty. No normalization or path authorization policy was added, and no accepted path form changed.
 
 This plan uses simplified technical English. It is not a certified ASD-STE100 compliance document.

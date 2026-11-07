@@ -1,6 +1,7 @@
 namespace Threadsmith.Models.OpenAiCodex;
 
 using System.Text.Json;
+using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Maintains the bounded user-owned snapshot of models returned after Codex authentication.</summary>
@@ -64,22 +65,12 @@ public sealed class OpenAiCodexCatalogCache
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var directory = Path.GetDirectoryName(_path);
-        if (directory is not null)
-        {
-            Directory.CreateDirectory(directory);
-        }
-
-        var temporary = $"{_path}.{Guid.NewGuid():N}.tmp";
         OpenAiCodexModelConfiguration[] models =
         [
             .. configuration.Models.Cast<OpenAiCodexModelConfiguration>(),
         ];
-        await File.WriteAllBytesAsync(
-            temporary,
-            JsonSerializer.SerializeToUtf8Bytes(new CachePayload(CurrentSchemaVersion, models)),
-            cancellationToken).ConfigureAwait(false);
-        File.Move(temporary, _path, overwrite: true);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new CachePayload(CurrentSchemaVersion, models));
+        await AtomicFileWriter.WriteAsync(_path, bytes, overwrite: true, static () => { }, cancellationToken).ConfigureAwait(false);
     }
 
     private sealed record CachePayload(int SchemaVersion, IReadOnlyList<OpenAiCodexModelConfiguration>? Models);

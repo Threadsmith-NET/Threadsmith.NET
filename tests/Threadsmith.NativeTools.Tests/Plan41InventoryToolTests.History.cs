@@ -21,7 +21,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("commit", "--allow-empty", "-m", "empty change");
         await repository.RunGitAsync("merge", "--no-ff", "feature", "-m", "integrate feature");
         var pinned = (await repository.RunGitAsync("rev-parse", "HEAD")).Trim();
-        await using var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, ct);
+        await using var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct);
         await repository.RunGitAsync("commit", "--allow-empty", "-m", "after pin");
         var commits = new List<GitCommitSummary>();
         GitLogResult page;
@@ -56,7 +56,7 @@ public sealed partial class Plan41InventoryToolTests
         }
 
         await File.WriteAllTextAsync(Path.Combine(repository.Path, ".git", "shallow"), boundary + "\n", ct);
-        var service = new GitQueryService();
+        var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using (var reader = await service.OpenHistoryAsync(repository.Path, 2, ct))
         {
             var page = await reader.ReadPageAsync(16, 4096, ct);
@@ -80,7 +80,7 @@ public sealed partial class Plan41InventoryToolTests
         var messagePath = Path.Combine(repository.Path, "message.txt");
         await File.WriteAllTextAsync(messagePath, new string('m', 128 * 1024), ct);
         await repository.RunGitAsync("commit", "--allow-empty", "-F", messagePath);
-        await using (var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, ct))
+        await using (var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct))
         {
             var page = await reader.ReadPageAsync(1, 4096, ct);
             Assert.NotNull(page.NextCollectionPage);
@@ -109,7 +109,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("add", ".");
         await repository.RunGitAsync("commit", "-m", message);
         var hash = (await repository.RunGitAsync("rev-parse", "HEAD")).Trim();
-        await using var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, ct);
+        await using var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct);
         var segments = new List<GitCommitSummary>();
         GitLogResult page;
         do
@@ -136,7 +136,7 @@ public sealed partial class Plan41InventoryToolTests
         var ct = TestContext.Current.CancellationToken;
         await using var repository = await TestRepository.CreateAsync();
         await repository.RunGitAsync("checkout", "--orphan", "unborn");
-        await using (var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, ct))
+        await using (var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct))
         {
             var page = await reader.ReadPageAsync(16, 4096, ct);
             Assert.Empty(page.Commits);
@@ -145,14 +145,14 @@ public sealed partial class Plan41InventoryToolTests
         }
 
         var plain = Directory.CreateDirectory(Path.Combine(repository.Path, "plain")).FullName;
-        await using (var reader = await new GitQueryService().OpenHistoryAsync(plain, ct))
+        await using (var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(plain, ct))
         {
             Assert.False((await reader.ReadPageAsync(16, 4096, ct)).IsGitRepository);
         }
 
         await repository.RunGitAsync("checkout", "main");
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        await using (var reader = await new GitQueryService().OpenHistoryAsync(repository.Path, cancellation.Token))
+        await using (var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, cancellation.Token))
         {
             await cancellation.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => reader.ReadPageAsync(16, 4096, cancellation.Token));

@@ -476,7 +476,7 @@ public static class AgentModelSelectorTests
         var assignment = CreateAssignment();
 
         Assert.Throws<InvalidOperationException>(() => selector.SelectForRequest(
-            assignment with { Deadline = DateTimeOffset.UtcNow.AddSeconds(-1) }, CreateRequest(assignment)));
+            assignment with { Deadline = DateTimeOffset.MinValue }, CreateRequest(assignment)));
         Assert.Throws<InvalidOperationException>(() => selector.SelectForRequest(
             assignment, CreateRequest(assignment) with { RunId = RunId.New() }));
     }
@@ -583,7 +583,7 @@ public static class AgentModelSelectorTests
             Objective = "Inspect the selected scope.",
             OutputSchema = AgentAssignment.ResponseSchema,
             StoppingCondition = "Return your response.",
-            Deadline = DateTimeOffset.UtcNow.AddMinutes(5),
+            Deadline = DateTimeOffset.MaxValue,
             Scope = new AgentAssignmentScope(),
             Policy = new AgentPolicySnapshot
             {

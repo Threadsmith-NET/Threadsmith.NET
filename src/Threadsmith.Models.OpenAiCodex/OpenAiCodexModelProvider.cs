@@ -13,6 +13,7 @@ using Threadsmith.Models;
 internal sealed class OpenAiCodexModelProvider : IModelProvider
 {
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _timeProvider;
     private readonly ModelProfile _profile;
     private readonly Func<string, CancellationToken, Task<string?>>? _refreshAccessTokenAsync;
 
@@ -21,12 +22,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         HttpClient httpClient,
         ModelProfile profile,
         string accessToken,
-        Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync)
+        Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         _httpClient = httpClient;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _profile = profile;
         AccessToken = accessToken;
         _refreshAccessTokenAsync = refreshAccessTokenAsync;
@@ -130,18 +133,15 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         ValidateCapacity(request, canonicalTools, outputReserve);
         request = await ModelImages.ResolveAsync(request, _profile, cancellationToken);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (_profile.Timeout > TimeSpan.Zero)
-        {
-            timeout.CancelAfter(_profile.Timeout);
-        }
+        using var deadline = new CancellationTokenSource(_profile.Timeout > TimeSpan.Zero ? _profile.Timeout : Timeout.InfiniteTimeSpan, _timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
 
         var accessToken = AccessToken;
         var replayedAfterAuthenticationRejection = false;
         await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
             (_, token) => ClassifyStreamFailureAsync(SendAttemptAsync(token), cancellationToken),
             _profile.RetryPolicy,
-            TimeProvider.System,
+            _timeProvider,
             _profile.Timeout,
             timeout.Token,
             cancellationToken))

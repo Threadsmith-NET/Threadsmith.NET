@@ -22,7 +22,7 @@ public sealed class PrFetchTests
     public async Task UrlOnlySelectsMatchingEnabledAccount(bool bitbucket)
     {
         using var handler = new PrHandler(bitbucket);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var options = Options(bitbucket);
         options = options with
         {
@@ -73,7 +73,7 @@ public sealed class PrFetchTests
     public void UrlRoutingReportsAmbiguousOrMissingAccounts(bool disabled)
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new TestSecrets();
         var options = Options(false);
         options = options with
@@ -104,7 +104,7 @@ public sealed class PrFetchTests
     public async Task ConfiguredPatternsSelectAccountAndPreserveExplicitOverride(bool bitbucket)
     {
         using var handler = new PrHandler(bitbucket);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var options = Options(bitbucket);
         var host = bitbucket ? "bitbucket.org" : "github.com";
         var route = bitbucket ? "pull-requests" : "pull";
@@ -139,7 +139,7 @@ public sealed class PrFetchTests
     public void InvalidRoutingPatternsAreRejected(string pattern)
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var options = Options(false);
         options = options with
         {
@@ -157,7 +157,7 @@ public sealed class PrFetchTests
     public void RepositoryEnableOverrideCannotManufactureOutboundConsent()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         var root = Path.Combine(Path.GetTempPath(), "threadsmith-pr-consent-" + Guid.NewGuid().ToString("N"));
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -178,7 +178,7 @@ public sealed class PrFetchTests
     public async Task FileInventoryModeCompletesWithoutDiff_AndHasSeparateCacheIdentity(bool bitbucket)
     {
         using var handler = new PrHandler(bitbucket) { MultipleFilePages = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(bitbucket), bitbucket);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
@@ -208,7 +208,7 @@ public sealed class PrFetchTests
     {
         var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + string.Concat(Enumerable.Repeat("+Unicode 😀 changed line\n", 1000));
         using var handler = new PrHandler(bitbucket) { DiffText = diff, MultipleFilePages = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(bitbucket), bitbucket);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
@@ -229,7 +229,7 @@ public sealed class PrFetchTests
     public async Task ActivityDetailShowsCompletedAcquisition()
     {
         using var handler = new PrHandler(false) { MultipleFilePages = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
@@ -247,7 +247,7 @@ public sealed class PrFetchTests
     public async Task CrossOriginRedirectFailsBeforeSecondRequest()
     {
         using var handler = new PrHandler(false) { MetadataRedirect = "https://other.example/collect" };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new TestSecrets();
         var tool = CreateTool(http, secrets, Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
@@ -273,7 +273,7 @@ public sealed class PrFetchTests
             },
         };
         using var handler = new PrHandler(true) { RedirectDiff = true, ExpectedCredential = Convert.ToBase64String(Encoding.UTF8.GetBytes("user@example.org:test-credential")) };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), options, true);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var pages = await ReadAllAsync(tool, Input(true), Context(scope));
@@ -285,7 +285,7 @@ public sealed class PrFetchTests
     public async Task OversizedDiffFailsWithoutCompletePage()
     {
         using var handler = new PrHandler(false) { DiffText = new string('x', 3000) };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false) with { MaximumResponseBytes = 1500 }, false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ReadAllAsync(tool, Input(false), Context(scope)));
@@ -299,7 +299,7 @@ public sealed class PrFetchTests
     public async Task CachedCallsStillPassCurrentPipelinePolicy(bool denyTool)
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new TestSecrets();
         var tool = CreateTool(http, secrets, Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
@@ -308,7 +308,7 @@ public sealed class PrFetchTests
         var requests = handler.Requests;
         var resolutions = secrets.Calls;
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ToolInvocationRequest
         {
             SessionId = context.SessionId,
@@ -336,7 +336,7 @@ public sealed class PrFetchTests
     public async Task ProviderScopePagingAndCache_AreSharedByParentAndChild(bool bitbucket)
     {
         using var handler = new PrHandler(bitbucket);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new TestSecrets();
         var options = Options(bitbucket);
         var tool = CreateTool(http, secrets, options, bitbucket);
@@ -416,7 +416,7 @@ public sealed class PrFetchTests
             ChangedPath = ".env",
             DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+new\n",
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(bitbucket), bitbucket);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var baseContext = Context(scope);
@@ -440,7 +440,7 @@ public sealed class PrFetchTests
             ChangedPath = "src/changed.cs",
             DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+new\n",
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var baseContext = Context(scope);
@@ -465,7 +465,7 @@ public sealed class PrFetchTests
             ChangeRevisionAfterMetadataRequests = 3,
             DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+secret\n",
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var baseContext = Context(scope);
@@ -486,7 +486,7 @@ public sealed class PrFetchTests
     public async Task ScopedDiffBuffer_EnforcesCacheCeilingBeforePublish()
     {
         using var handler = new PrHandler(false) { DiffText = new string('x', 3000) };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(
             http,
             new TestSecrets(),
@@ -515,13 +515,13 @@ public sealed class PrFetchTests
     public async Task ConcurrentReadersShareFetch_OneWaiterCancellationDoesNotCancelOwner()
     {
         using var handler = new PrHandler(false) { HoldMetadata = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
         using var waiter = new CancellationTokenSource();
         var first = tool.ExecuteAsync(Input(false), context, waiter.Token);
-        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await handler.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         var second = tool.ExecuteAsync(Input(false), context with { RunId = RunId.New() });
 
         await waiter.CancelAsync();
@@ -540,12 +540,12 @@ public sealed class PrFetchTests
     public async Task RefreshReplacesInflightGeneration_AndConcurrentRefreshJoins()
     {
         using var handler = new PrHandler(false) { HoldMetadata = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
         var old = tool.ExecuteAsync(Input(false), context);
-        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await handler.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         var refresh = tool.ExecuteAsync(Input(false) with { Refresh = true }, context);
         var joined = tool.ExecuteAsync(Input(false) with { Refresh = true }, context);
         handler.Release.TrySetResult();
@@ -563,7 +563,7 @@ public sealed class PrFetchTests
     public async Task ProviderMovementFailsAcquisition_AndLaterCallCanRetry()
     {
         using var handler = new PrHandler(false) { ChangeRevision = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
@@ -580,11 +580,11 @@ public sealed class PrFetchTests
     public async Task OwnerCancellationAndDisposalTerminateInflightHttp()
     {
         using var handler = new PrHandler(false) { HoldMetadata = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         var scope = new ToolOperationScope(CancellationToken.None);
         var pending = tool.ExecuteAsync(Input(false), Context(scope));
-        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await handler.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         await scope.DisposeAsync();
 #pragma warning disable VSTHRD003 // Observe the caller task started above after disposing its owner.
@@ -598,7 +598,7 @@ public sealed class PrFetchTests
     public async Task CacheIsBounded_AndDoesNotServeACompleteResultAfterFailure()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false) with { MaximumCacheBytes = 32 }, false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(Input(false), Context(scope)));
@@ -610,7 +610,7 @@ public sealed class PrFetchTests
     public async Task DifferentOperationsNeverReuseSnapshots()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var first = new ToolOperationScope(CancellationToken.None);
         await using var second = new ToolOperationScope(CancellationToken.None);
@@ -625,7 +625,7 @@ public sealed class PrFetchTests
     public void ProviderMismatchAndDisabledAccountsFailBeforeSecretsOrHttp()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new TestSecrets();
         var options = Options(false);
         var tool = CreateTool(http, secrets, options, false);
@@ -667,7 +667,7 @@ public sealed class PrFetchTests
     public void DuplicateMetadataPreservesHistory_WithoutChangingOrdinaryTools()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var definition = CreateTool(http, new TestSecrets(), Options(false), false).Definition;
         var history = new ToolCallHistory();
         Assert.True(history.TryAdd(definition, "{}"));
@@ -703,12 +703,12 @@ public sealed class PrFetchTests
     {
         var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + new string('x', 2_000_000);
         using var handler = new PrHandler(false) { DiffText = diff, MultipleFilePages = true };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
@@ -807,7 +807,7 @@ public sealed class PrFetchTests
     public async Task InsufficientRemainingContextDoesNotStartAcquisition()
     {
         using var handler = new PrHandler(false);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
@@ -829,6 +829,7 @@ public sealed class PrFetchTests
     {
         return new()
         {
+            TimeoutSeconds = 0,
             PageCharacters = 256,
             Providers = new Dictionary<string, PullRequestProviderOptions>
             {

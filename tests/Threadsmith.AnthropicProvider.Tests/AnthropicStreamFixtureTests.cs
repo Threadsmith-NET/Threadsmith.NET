@@ -14,7 +14,7 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_TextAndCacheUsage_NormalizesOnce()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream("hello", new { input_tokens = 100, cache_creation_input_tokens = 200, cache_read_input_tokens = 300, output_tokens = 10 }));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request());
         Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
         var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage;
@@ -33,7 +33,7 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_CacheCounterAvailability_PreservesNull(bool reported)
     {
         object usage = reported ? new { input_tokens = 100, output_tokens = 0, cache_creation_input_tokens = 0, cache_read_input_tokens = 0 } : new { input_tokens = 100, output_tokens = 0 };
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: usage)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: usage))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request());
         var cache = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage?.Cache;
         Assert.NotNull(cache);
@@ -56,7 +56,7 @@ public sealed class AnthropicStreamFixtureTests
     {
         using var document = JsonDocument.Parse(details);
         var finalUsage = new { output_tokens = 10, output_tokens_details = document.RootElement };
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: new { input_tokens = 100, output_tokens = 0, cache_creation_input_tokens = 0, cache_read_input_tokens = 0 }, finalUsage: finalUsage)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: new { input_tokens = 100, output_tokens = 0, cache_creation_input_tokens = 0, cache_read_input_tokens = 0 }, finalUsage: finalUsage))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request());
         var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
         Assert.Equal(100, usage.InputTokens);
@@ -72,7 +72,7 @@ public sealed class AnthropicStreamFixtureTests
     [InlineData("{\"a\":\"fragmented\"}")]
     public async Task StreamAsync_CompleteTool_EnvelopePrecedesTools(string arguments)
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(arguments, secondTool: true)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(arguments, secondTool: true))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] });
         var envelopeIndex = chunks.FindIndex(chunk => chunk.ResponseEnvelope is not null);
         var toolIndex = chunks.FindIndex(chunk => chunk.Output is ToolRequestModelOutput);
@@ -91,7 +91,7 @@ public sealed class AnthropicStreamFixtureTests
     [InlineData("{\"a\":")]
     public async Task StreamAsync_InvalidArguments_EmitsNoTool(string arguments)
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(arguments)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(arguments))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
         {
@@ -108,7 +108,7 @@ public sealed class AnthropicStreamFixtureTests
     [Fact]
     public async Task StreamAsync_EofAfterStopReason_RejectsIncompleteResponse()
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(messageStop: false)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(messageStop: false))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
@@ -130,7 +130,7 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_NonToolTerminalReason_NeverExecutesCalls(string reason)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream("{", stopReason: reason));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
@@ -176,8 +176,8 @@ public sealed class AnthropicStreamFixtureTests
                 usage = new { output_tokens = 25 },
             });
         var handler = new TestAnthropicHandler(fixture);
-        using var client = new HttpClient(handler);
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(thinking: true), "test-key", TestAnthropic.Compatibility(thinking: true));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(thinking: true), "test-key", TestAnthropic.Compatibility(thinking: true), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var chunks = new List<ModelChunk>();
 
         var error = await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
@@ -221,7 +221,7 @@ public sealed class AnthropicStreamFixtureTests
             "name" => TestAnthropic.ToolStream().Replace("lookup", "unadvertised", StringComparison.Ordinal),
             _ => TestAnthropic.ToolStream(thinking: true).Replace("signed-canary-A", string.Empty, StringComparison.Ordinal).Replace("\"signature\":\"B\"", "\"signature\":\"\"", StringComparison.Ordinal),
         };
-        using var client = new HttpClient(new TestAnthropicHandler(fixture));
+        using var client = new HttpClient(new TestAnthropicHandler(fixture)) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAnyAsync<MalformedModelOutputException>(async () =>
         {
@@ -240,7 +240,7 @@ public sealed class AnthropicStreamFixtureTests
         var fixture = TestAnthropic.Start() + TestAnthropic.Block(0, new { type = "text", text = "visible" })
             + TestAnthropic.Event("error", new { type = "error", error = new { type = "overloaded_error", message = "SECRET_BODY_CANARY" } });
         var handler = new TestAnthropicHandler(fixture);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var error = await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
         Assert.DoesNotContain("SECRET_BODY_CANARY", error.ToString(), StringComparison.Ordinal);
         Assert.Single(handler.Requests);
@@ -258,7 +258,7 @@ public sealed class AnthropicStreamFixtureTests
             {
                 Content = new StringContent(attempt < 2 ? failure : TestAnthropic.TextStream(), System.Text.Encoding.UTF8, "text/event-stream"),
             }));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request(), TestContext.Current.CancellationToken);
         Assert.Equal(3, handler.Requests.Count);
         Assert.Single(chunks, chunk => chunk.ProviderBusy);
@@ -272,10 +272,10 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.Event("error", new { type = "error", error = new { type = "rate_limit_error", message = "SECRET" } }));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero } };
         var chunks = new List<ModelChunk>();
-        var provider = new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility());
+        var provider = new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
         await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
             await foreach (var chunk in provider.StreamAsync(TestAnthropic.Request(), TestContext.Current.CancellationToken))
@@ -302,7 +302,7 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_HttpFailure_BoundedHostRetries(int status, int attempts)
     {
         var handler = new TestAnthropicHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status) { Content = new StringContent("SECRET_ERROR_BODY") }));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var exception = await Assert.ThrowsAnyAsync<Exception>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
         Assert.Equal(attempts, handler.Requests.Count);
         Assert.DoesNotContain("SECRET_ERROR_BODY", exception.ToString(), StringComparison.Ordinal);
@@ -314,9 +314,9 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_ResponseBound_FailsBeforeTools()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumStreamedBytes = 128 };
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility()), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider()), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }));
         Assert.Single(handler.Requests);
     }
 
@@ -327,7 +327,7 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_InvalidUsage_FailsSafely(bool overflow)
     {
         object initial = overflow ? new { input_tokens = long.MaxValue, cache_creation_input_tokens = 1, output_tokens = 10 } : new { input_tokens = 100, cache_creation_input_tokens = 0, output_tokens = 50 };
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: initial)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.TextStream(startUsage: initial))) { Timeout = Timeout.InfiniteTimeSpan };
         var error = await Assert.ThrowsAnyAsync<Exception>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
         Assert.True(error is ModelProviderException or MalformedModelOutputException);
         Assert.Null(error.InnerException);
@@ -337,7 +337,7 @@ public sealed class AnthropicStreamFixtureTests
     [Fact]
     public async Task StreamAsync_SingleToolPolicy_RejectsMultipleCalls()
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(secondTool: true)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(secondTool: true))) { Timeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAsync<MalformedInvocationException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()], AllowMultipleToolCalls = false }));
     }
 
@@ -345,16 +345,16 @@ public sealed class AnthropicStreamFixtureTests
     [Fact]
     public async Task StreamAsync_ToolCallBound_RejectsSecondCall()
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(secondTool: true)));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(secondTool: true))) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumToolCalls = 1 };
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }));
     }
 
     /// <summary>An envelope the consumer never transfers to host state is zeroed on iterator disposal.</summary>
     [Fact]
     public async Task StreamAsync_UnclaimedEnvelope_IsReleasedWhenEnumerationStops()
     {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream()));
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream())) { Timeout = Timeout.InfiniteTimeSpan };
         ModelResponseReplayEnvelope? unclaimed = null;
         await using (var iterator = Provider(client).StreamAsync(TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }).GetAsyncEnumerator())
         {
@@ -375,6 +375,6 @@ public sealed class AnthropicStreamFixtureTests
 
     private static AnthropicModelProvider Provider(HttpClient client)
     {
-        return new(client, TestAnthropic.Profile(), "test-key", TestAnthropic.Compatibility());
+        return new(client, TestAnthropic.Profile(), "test-key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
     }
 }

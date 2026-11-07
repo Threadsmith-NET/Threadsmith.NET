@@ -125,7 +125,7 @@ public sealed partial class DeployedPromptLoaderTests
                     allReadersEntered.TrySetResult();
                 }
 
-                await releaseReaders.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await releaseReaders.Task.WaitAsync(TestContext.Current.CancellationToken);
                 return index % 2 == 0
                     ? loader.Get(definition.FileName)
                     : loader.Render(definition.FileName, values);
@@ -134,14 +134,14 @@ public sealed partial class DeployedPromptLoaderTests
 
         try
         {
-            await allReadersEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await allReadersEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
             releaseReaders.TrySetResult();
         }
 
-        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5));
+        var results = await Task.WhenAll(tasks).WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.All(
             results.Where((_, index) => index % 2 == 0),

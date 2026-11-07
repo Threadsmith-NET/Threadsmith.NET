@@ -305,7 +305,7 @@ public static class SemanticRefreshCoordinatorTests
         await coordinator.BindAsync(repository.CreateRequest());
 
         await File.WriteAllTextAsync(repository.SourcePath, "public class Watched { }");
-        var observed = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var observed = await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SemanticRefreshReason.ExternalChange, observed.Reason);
         Assert.Equal(SemanticRefreshMode.Incremental, observed.Mode);
@@ -399,7 +399,7 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(SemanticRefreshMode.Full, recovery.Mode);
 
         await File.WriteAllTextAsync(repository.SourcePath, "public class AfterRecovery { }");
-        var result = await externalCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var result = await externalCompletion.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SemanticRefreshReason.ExternalChange, result.Reason);
         Assert.Equal(SemanticRefreshMode.Incremental, result.Mode);
@@ -786,7 +786,7 @@ public static class SemanticRefreshCoordinatorTests
         var second = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         await cancelledWaiter.CancelAsync();
 #pragma warning disable VSTHRD003 // The assertion intentionally observes a task started above.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
@@ -821,13 +821,13 @@ public static class SemanticRefreshCoordinatorTests
         var ensure = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await firstBarrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstBarrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         await File.WriteAllTextAsync(repository.SourcePath, "public class Second { }");
         await coordinator.ObserveChangeAsync(repository.CreateChange());
         Assert.Empty(observed.OfType<SemanticRefreshCompleted>());
         firstBarrier.Release.TrySetResult();
-        await secondBarrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondBarrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Empty(observed.OfType<SemanticRefreshCompleted>());
         secondBarrier.Release.TrySetResult();
         var result = await ensure;
@@ -866,7 +866,7 @@ public static class SemanticRefreshCoordinatorTests
         var ensure = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await firstBarrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstBarrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         await File.WriteAllTextAsync(repository.SolutionPath, "external graph change");
         await coordinator.ObserveChangeAsync(new SemanticFileChange(
@@ -875,7 +875,7 @@ public static class SemanticRefreshCoordinatorTests
             SemanticFileChangeKind.Changed,
             SemanticRefreshReason.ExternalChange));
         firstBarrier.Release.TrySetResult();
-        await secondBarrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await secondBarrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Empty(observed.OfType<SemanticRefreshCompleted>());
         secondBarrier.Release.TrySetResult();
         var result = await ensure;
@@ -905,7 +905,7 @@ public static class SemanticRefreshCoordinatorTests
         var admission = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var firstForce = coordinator.ForceRefreshAsync(repository.SessionId);
         var secondForce = coordinator.ForceRefreshAsync(repository.SessionId);
@@ -944,7 +944,7 @@ public static class SemanticRefreshCoordinatorTests
         var failed = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         barrier.Release.TrySetResult();
 
 #pragma warning disable VSTHRD003 // The assertion intentionally observes a task started above.
@@ -1023,7 +1023,7 @@ public static class SemanticRefreshCoordinatorTests
             ["Source.cs"]);
         try
         {
-            await reading.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await reading.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.Equal(1, coordinator.GetActiveHostMutationCount(repository.SessionId));
             Assert.Equal(0, backend.RefreshCount);
         }
@@ -1037,7 +1037,7 @@ public static class SemanticRefreshCoordinatorTests
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
 
-        Assert.Equal(SemanticRefreshReason.HostMutation, (await completed.Task.WaitAsync(TimeSpan.FromSeconds(10))).Reason);
+        Assert.Equal(SemanticRefreshReason.HostMutation, (await completed.Task.WaitAsync(TestContext.Current.CancellationToken)).Reason);
         Assert.Equal(1, backend.RefreshCount);
         Assert.Equal(0, coordinator.GetActiveHostMutationCount(repository.SessionId));
     }
@@ -1149,7 +1149,7 @@ public static class SemanticRefreshCoordinatorTests
             return Task.CompletedTask;
         });
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(backend, events);
+        await using var coordinator = CreateCoordinator(backend, events, timeProvider: new AdvancingTimeProvider());
         await coordinator.BindAsync(repository.CreateRequest());
         const string hostContent = "host semantic input";
         var createdPath = Path.Combine(repository.Root, "Generated.cs");
@@ -1225,7 +1225,7 @@ public static class SemanticRefreshCoordinatorTests
             return Task.CompletedTask;
         });
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(backend, events);
+        await using var coordinator = CreateCoordinator(backend, events, timeProvider: new AdvancingTimeProvider());
         await coordinator.BindAsync(repository.CreateRequest());
         var registration = Assert.IsType<SemanticHostMutationRegistration>(
             await coordinator.RegisterExpectedWritesAsync(
@@ -1290,7 +1290,7 @@ public static class SemanticRefreshCoordinatorTests
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
-        var timeProvider = new AdjustableTimeProvider();
+        var timeProvider = new AdvancingTimeProvider();
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         await using var coordinator = CreateCoordinator(
             backend,
@@ -2007,7 +2007,7 @@ public static class SemanticRefreshCoordinatorTests
         await coordinator.BindAsync(repository.CreateRequest());
 
         var force = coordinator.ForceRefreshAsync(repository.SessionId);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(repository.SourcePath, "public class ChangedDuringFull { }");
         barrier.Release.TrySetResult();
         var result = await force;
@@ -2034,7 +2034,7 @@ public static class SemanticRefreshCoordinatorTests
         await coordinator.BindAsync(repository.CreateRequest());
 
         var force = coordinator.ForceRefreshAsync(repository.SessionId);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         await File.WriteAllBytesAsync(referencePath, [3, 2, 1]);
         barrier.Release.TrySetResult();
@@ -2343,7 +2343,8 @@ public static class SemanticRefreshCoordinatorTests
             await using var engine = new SemanticEngine(
                 events,
                 NullLogger<SemanticEngine>.Instance,
-                TestPromptLoader.Instance);
+                TestPromptLoader.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             await engine.LoadAsync(new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -2422,7 +2423,7 @@ public static class SemanticRefreshCoordinatorTests
                 cancellationToken);
             await File.WriteAllTextAsync(Path.Combine(repository, "Source.cs"), "public class Source { }", cancellationToken);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             await engine.LoadAsync(
                 new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), repository, project, RepositoryTrustLevel.TrustedBuild),
                 cancellationToken);
@@ -2521,7 +2522,7 @@ public static class SemanticRefreshCoordinatorTests
             repository.SolutionPath));
         var firstLoad = await loader.WaitForStartAsync(repository.SessionId);
         firstLoad.Release.TrySetResult();
-        await firstCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await firstCompletion.Task.WaitAsync(TestContext.Current.CancellationToken);
         var aliasSessionId = SessionId.New();
         var aliasCompletion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -2536,7 +2537,7 @@ public static class SemanticRefreshCoordinatorTests
             aliasSessionId,
             DateTimeOffset.UtcNow,
             repository.SolutionPath));
-        await aliasCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await aliasCompletion.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, loader.LoadCount);
         Assert.True(coordinator.TryGetWorkspaceId(aliasSessionId, out var workspaceId));
@@ -2588,7 +2589,7 @@ public static class SemanticRefreshCoordinatorTests
             aliasSessionId,
             DateTimeOffset.UtcNow,
             alternateSolutionPath));
-        await publicationGate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await publicationGate.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, loader.LoadCount);
         Assert.False(coordinator.TryAdmitCurrent(
@@ -2598,7 +2599,7 @@ public static class SemanticRefreshCoordinatorTests
         publicationGate.Release.TrySetResult();
         var load = await loader.WaitForStartAsync(aliasSessionId);
         load.Release.TrySetResult();
-        await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await completion.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.True(coordinator.IsCurrent(aliasSessionId));
     }
 
@@ -2668,7 +2669,7 @@ public static class SemanticRefreshCoordinatorTests
         var oldEnsure = coordinator.EnsureCurrentAsync(
             firstRepository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         while (observed.TryDequeue(out _))
         {
         }
@@ -2718,7 +2719,7 @@ public static class SemanticRefreshCoordinatorTests
         var ensure = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         while (observed.TryDequeue(out _))
         {
         }
@@ -2795,7 +2796,7 @@ public static class SemanticRefreshCoordinatorTests
         var ensure = coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         while (observed.TryDequeue(out _))
         {
         }
@@ -2803,7 +2804,7 @@ public static class SemanticRefreshCoordinatorTests
         var disposal = coordinator.DisposeAsync().AsTask();
         Assert.False(coordinator.TryGetWorkspaceId(repository.SessionId, out _));
         barrier.Release.TrySetResult();
-        await disposal.WaitAsync(TimeSpan.FromSeconds(5));
+        await disposal.WaitAsync(TestContext.Current.CancellationToken);
 #pragma warning disable VSTHRD003 // The assertion intentionally observes a task started above.
         await Assert.ThrowsAnyAsync<Exception>(() => ensure);
 #pragma warning restore VSTHRD003
@@ -2826,11 +2827,11 @@ public static class SemanticRefreshCoordinatorTests
 
         var observation = Task.Run(async () =>
             await coordinator.ObserveChangeAsync(repository.CreateChange()));
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         await coordinator.DisposeAsync();
         barrier.Release.Set();
-        await observation.WaitAsync(TimeSpan.FromSeconds(5));
+        await observation.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>An active backend disposal remains visible when no shutdown boundary explains it.</summary>
@@ -2846,11 +2847,11 @@ public static class SemanticRefreshCoordinatorTests
 
         var observation = Task.Run(async () =>
             await coordinator.ObserveChangeAsync(repository.CreateChange()));
-        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         barrier.Release.Set();
 
         await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
-            await observation.WaitAsync(TimeSpan.FromSeconds(5)));
+            await observation.WaitAsync(TestContext.Current.CancellationToken));
     }
 
     private static SemanticRefreshCoordinator CreateCoordinator(
@@ -3107,10 +3108,7 @@ public static class SemanticRefreshCoordinatorTests
             if (barrier is not null)
             {
                 barrier.Started.TrySetResult();
-                if (!barrier.Release.Wait(TimeSpan.FromSeconds(5)))
-                {
-                    throw new TimeoutException("Synthetic inventory disposal was not released.");
-                }
+                barrier.Release.Wait(TestContext.Current.CancellationToken);
 
                 throw new ObjectDisposedException(nameof(SemanticEngineRegistry));
             }
@@ -3210,7 +3208,7 @@ public static class SemanticRefreshCoordinatorTests
                 }
                 else
                 {
-                    await barrier.Release.Task.WaitAsync(TimeSpan.FromSeconds(30), CancellationToken.None);
+                    await barrier.Release.Task.WaitAsync(TestContext.Current.CancellationToken);
                 }
             }
 
@@ -3363,11 +3361,11 @@ public static class SemanticRefreshCoordinatorTests
                 sessionId,
                 static _ => new TaskCompletionSource<LoadBarrier>(
                     TaskCreationOptions.RunContinuationsAsynchronously));
-            return started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            return started.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
     }
 
-    private sealed class CallbackTimeProvider : TimeProvider
+    private sealed class CallbackTimeProvider : FakeTimeProvider
     {
         private readonly Action _onDelay;
 
@@ -3379,22 +3377,9 @@ public static class SemanticRefreshCoordinatorTests
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             _onDelay();
-            return base.CreateTimer(callback, state, dueTime, period);
-        }
-    }
-
-    private sealed class AdjustableTimeProvider : TimeProvider
-    {
-        private long _utcOffsetTicks;
-
-        public override DateTimeOffset GetUtcNow()
-        {
-            return TimeProvider.System.GetUtcNow().AddTicks(Volatile.Read(ref _utcOffsetTicks));
-        }
-
-        public void Advance(TimeSpan elapsed)
-        {
-            Interlocked.Add(ref _utcOffsetTicks, elapsed.Ticks);
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Advance(dueTime);
+            return timer;
         }
     }
 

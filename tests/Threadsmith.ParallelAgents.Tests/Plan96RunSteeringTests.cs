@@ -128,7 +128,7 @@ public static class Plan96RunSteeringTests
             runId,
             request.PauseId,
             new string('x', RunSteeringCoordinator.MaximumSteeringCharacters + 1)));
-        Assert.Empty(await boundary.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Empty(await boundary.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Equal(
             RunSteeringPauseRequestStatus.Accepted,
             coordinator.RequestPause(sessionId, runId).Status);

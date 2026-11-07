@@ -186,6 +186,7 @@ public sealed record WebSearchOptions
 /// <summary>Cancellable, bounded adapter for the compiled Brave Search HTTP API.</summary>
 public sealed class BraveWebSearchClient : IWebSearchClient
 {
+    private readonly TimeProvider _timeProvider;
     private readonly SemaphoreSlim _rateGate = new(1, 1);
     private readonly HttpClient _httpClient;
     private readonly WebSearchOptions _options;
@@ -198,7 +199,8 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         HttpClient httpClient,
         ISecretResolver secretResolver,
         WebSearchOptions options,
-        IPromptLoader prompts)
+        IPromptLoader prompts,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(secretResolver);
@@ -210,6 +212,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         _secretResolver = secretResolver;
         _options = options;
         _prompts = prompts;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Initializes a new instance of the <see cref="BraveWebSearchClient"/> class for legacy hosts and tests.</summary>
@@ -217,8 +220,9 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         HttpClient httpClient,
         ISecretStore secretStore,
         WebSearchOptions options,
-        IPromptLoader prompts)
-        : this(httpClient, new LegacySecretStoreResolver(secretStore), options, prompts)
+        IPromptLoader prompts,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, new LegacySecretStoreResolver(secretStore), options, prompts, timeProvider)
     {
     }
 
@@ -228,8 +232,8 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         CancellationToken cancellationToken = default)
     {
         WebSearchRequestContract.Validate(request, _options.MaximumFreshnessDays, _options.MaximumQueryCharacters);
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(request.ExecutionTimeout ?? _options.Timeout);
+        using var executionDeadline = new CancellationTokenSource(request.ExecutionTimeout ?? _options.Timeout, _timeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, executionDeadline.Token);
         var secretRequest = new SecretResolutionRequest
         {
             Reference = SecretReference.Parse(_options.SecretReference),
@@ -250,7 +254,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
             ValidateFinalUri(response.RequestMessage?.RequestUri);
             if (IsTransient(response.StatusCode) && attempt < _options.RetryLimit)
             {
-                await Task.Delay(GetRetryDelay(response, attempt), deadline.Token);
+                await Task.Delay(GetRetryDelay(response, attempt), _timeProvider, deadline.Token);
                 continue;
             }
 
@@ -321,13 +325,13 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         await _rateGate.WaitAsync(cancellationToken);
         try
         {
-            var remaining = _options.MinimumRequestInterval - (DateTimeOffset.UtcNow - _lastRequest);
+            var remaining = _options.MinimumRequestInterval - (_timeProvider.GetUtcNow() - _lastRequest);
             if (remaining > TimeSpan.Zero)
             {
-                await Task.Delay(remaining, cancellationToken);
+                await Task.Delay(remaining, _timeProvider, cancellationToken);
             }
 
-            _lastRequest = DateTimeOffset.UtcNow;
+            _lastRequest = _timeProvider.GetUtcNow();
         }
         finally
         {

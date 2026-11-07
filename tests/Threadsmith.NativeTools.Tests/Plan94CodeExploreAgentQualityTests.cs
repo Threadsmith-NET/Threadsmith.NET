@@ -1027,7 +1027,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
             _ownsRepositoryPath = ownsRepositoryPath;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateAgentQuestionLimits() });
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateAgentQuestionLimits() }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public AdvancedSemanticQueryService Service { get; }
@@ -1063,7 +1063,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
             }
 
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

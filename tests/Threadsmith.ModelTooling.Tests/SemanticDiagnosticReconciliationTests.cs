@@ -19,7 +19,7 @@ public static class SemanticDiagnosticReconciliationTests
         using var fixture = new RepositoryFixture(3, 32);
         await using var events = new DomainEventStream();
         using var measurement = new ReconciliationMeasurement();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         var engine = registry.GetEngine(request.Baseline.WorkspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
@@ -58,7 +58,7 @@ public static class SemanticDiagnosticReconciliationTests
         using var fixture = new RepositoryFixture(3, 32, linkedProject: true);
         await using var events = new DomainEventStream();
         using var measurement = new ReconciliationMeasurement();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var (_, request, _) = await fixture.LoadAsync(events, registry);
         var engine = registry.GetEngine(request.Baseline.WorkspaceId);
         var path = Path.Combine(fixture.Root, "File0.cs");
@@ -84,7 +84,7 @@ public static class SemanticDiagnosticReconciliationTests
     {
         using var fixture = new RepositoryFixture(3, 32);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         var gate = new BlockingPublicationGate();
         await using var refresh = new SemanticRefreshCoordinator(
@@ -120,7 +120,7 @@ public static class SemanticDiagnosticReconciliationTests
         using var fixture = new RepositoryFixture(24, 96_000);
         await using var events = new DomainEventStream();
         using var measurement = new ReconciliationMeasurement();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
         measurement.Reset();

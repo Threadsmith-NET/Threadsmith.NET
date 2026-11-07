@@ -16,7 +16,7 @@ public static class OpenAiCompatibleCacheTests
     public static async Task RequestContextPreservesWirePrefix()
     {
         var handler = new CaptureHandler("{}");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = Provider(client, promptCacheKeyEnabled: true);
         var cacheAffinityId = Guid.NewGuid();
         var request = new ModelStreamRequest
@@ -75,7 +75,7 @@ public static class OpenAiCompatibleCacheTests
     public static async Task PromptCacheKeyIsOptInForCompatibleEndpoints()
     {
         var handler = new CaptureHandler("{}");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
 
         _ = await Provider(client).StreamAsync(
             new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" },
@@ -94,7 +94,7 @@ public static class OpenAiCompatibleCacheTests
     [InlineData("{\"cache_read_input_tokens\":600,\"cache_creation_input_tokens\":400}", 600L, 400L)]
     public static async Task CacheCountersRetainAvailability(string fields, long? reads, long? writes)
     {
-        using var client = new HttpClient(new CaptureHandler(fields));
+        using var client = new HttpClient(new CaptureHandler(fields)) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client).StreamAsync(new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" }, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
@@ -120,7 +120,7 @@ public static class OpenAiCompatibleCacheTests
     public static async Task ReasoningCountersRetainAvailability(string details, long? expected)
     {
         var fields = $$"""{"completion_tokens_details":{{details}}}""";
-        using var client = new HttpClient(new CaptureHandler(fields));
+        using var client = new HttpClient(new CaptureHandler(fields)) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client).StreamAsync(new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" }, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
@@ -135,7 +135,7 @@ public static class OpenAiCompatibleCacheTests
     [InlineData("created_cache_tokens")]
     public static async Task NegativeCacheCountersAreRejected(string field)
     {
-        using var client = new HttpClient(new CaptureHandler("{\"prompt_tokens_details\":{\"" + field + "\":-1}}"));
+        using var client = new HttpClient(new CaptureHandler("{\"prompt_tokens_details\":{\"" + field + "\":-1}}")) { Timeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
             await Provider(client).StreamAsync(new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" }, TestContext.Current.CancellationToken)
                 .ToListAsync(TestContext.Current.CancellationToken));
@@ -159,6 +159,7 @@ public static class OpenAiCompatibleCacheTests
         {
             Id = ModelProfileId.New(),
             Name = "synthetic",
+            Timeout = TimeSpan.Zero,
             Provider = "openai-compatible",
             ModelId = "synthetic",
             Endpoint = new Uri("https://models.example/v1/chat/completions"),
@@ -167,7 +168,8 @@ public static class OpenAiCompatibleCacheTests
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1 },
         },
-        promptCacheKeyEnabled: promptCacheKeyEnabled);
+        promptCacheKeyEnabled: promptCacheKeyEnabled,
+        timeProvider: new AdvancingTimeProvider());
     }
 
     private sealed class CaptureHandler : HttpMessageHandler

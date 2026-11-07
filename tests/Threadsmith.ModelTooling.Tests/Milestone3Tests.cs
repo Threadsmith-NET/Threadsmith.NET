@@ -45,7 +45,7 @@ public static class Milestone3Tests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var loaded = await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(root));
         var generated = await engine.FindSymbolsAsync("GeneratedMarker");
@@ -67,7 +67,7 @@ public static class Milestone3Tests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestSemanticSolution.CreateLoadRequest(root);
         await engine.LoadAsync(request);
 
@@ -131,7 +131,8 @@ public static class Milestone3Tests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            TimeSpan.FromMilliseconds(100));
+            TimeSpan.FromMilliseconds(100),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestSemanticSolution.CreateLoadRequest(root);
         await engine.LoadAsync(request);
 
@@ -166,7 +167,7 @@ public static class Milestone3Tests
         var request = TestSemanticSolution.CreateLoadRequest(brokenRoot);
         try
         {
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             File.Delete(Path.Combine(brokenRoot, "Contracts", "Contracts.csproj"));
 
             var broken = await engine.LoadAsync(request with
@@ -188,7 +189,7 @@ public static class Milestone3Tests
         Directory.CreateDirectory(invalidRoot);
         try
         {
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var invalidSolution = Path.Combine(invalidRoot, "Invalid.sln");
             await File.WriteAllTextAsync(invalidSolution, "not a solution");
 
@@ -224,7 +225,7 @@ public static class Milestone3Tests
                 Path.Combine(root, "Caller.cs"),
                 "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -275,7 +276,7 @@ public static class Milestone3Tests
                 callerPath,
                 "namespace Demo;\npublic sealed class Caller\n{\n    public string Name => Missing.Value;\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -330,7 +331,7 @@ public static class Milestone3Tests
                 servicePath,
                 "namespace Demo;\npublic sealed class Service\n{\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -371,7 +372,8 @@ public static class Milestone3Tests
             events,
             NullLoggerFactory.Instance,
             TestPromptLoader.Instance,
-            TimeSpan.FromMilliseconds(100));
+            TimeSpan.FromMilliseconds(100),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var observer = new SemanticLifecycleObserver(
             engines,
             events,
@@ -410,10 +412,10 @@ public static class Milestone3Tests
             sessionId,
             DateTimeOffset.UtcNow,
             Path.Combine(root, "SmallDotNetSolution.sln"),
-            workspaceId)).WaitAsync(TimeSpan.FromSeconds(5));
+            workspaceId)).WaitAsync(TestContext.Current.CancellationToken);
 
-        var confidence = await confidenceObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        var completion = await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var confidence = await confidenceObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var completion = await completionObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.PartialCompilation, confidence);
         Assert.Equal(SemanticConfidenceLevel.PartialCompilation.ToString(), completion.Confidence);
         await engines.GetEngine(workspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
@@ -433,7 +435,7 @@ public static class Milestone3Tests
             var sessionId = SessionId.New();
             var workspaceId = WorkspaceId.New();
             await using var events = new DomainEventStream();
-            await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             await using var observer = new SemanticLifecycleObserver(
                 engines,
                 events,
@@ -465,7 +467,7 @@ public static class Milestone3Tests
                 solutionPath,
                 workspaceId));
 
-            var completion = await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var completion = await completionObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.Equal(SemanticConfidenceLevel.None.ToString(), completion.Confidence);
             Assert.Equal(SemanticConfidenceLevel.None, engines.GetConfidence(workspaceId));
         }
@@ -490,7 +492,8 @@ public static class Milestone3Tests
             events,
             NullLoggerFactory.Instance,
             TestPromptLoader.Instance,
-            TimeSpan.FromMilliseconds(100));
+            TimeSpan.FromMilliseconds(100),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var compiledLoad = await engines.LoadAsync(
             new SemanticLoadRequest(
@@ -531,7 +534,7 @@ public static class Milestone3Tests
         TestContext.Current.TestOutputHelper?.WriteLine($"Two independent fixture copies: {Stopwatch.GetElapsedTime(copyStarted).TotalMilliseconds:F2} ms");
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var firstEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var firstEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await firstEngine.LoadAsync(TestSemanticSolution.CreateLoadRequest(firstFixture.Root), cancellationToken);
         await firstEngine.WaitForWarmAsync(cancellationToken);
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, firstEngine.Confidence);
@@ -544,7 +547,7 @@ public static class Milestone3Tests
             "net10.0",
             "Contracts.GeneratedMSBuildEditorConfig.editorconfig");
         using var lockedOutput = new FileStream(generatedConfiguration, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-        await using var secondEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var secondEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var secondLoad = await secondEngine.LoadAsync(TestSemanticSolution.CreateLoadRequest(secondFixture.Root), cancellationToken);
         await secondEngine.WaitForWarmAsync(cancellationToken);
         Assert.DoesNotContain(secondLoad.Diagnostics, diagnostic => diagnostic.StartsWith("Failure:", StringComparison.Ordinal));
@@ -559,7 +562,7 @@ public static class Milestone3Tests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new SemanticLoadRequest(
             SessionId.New(),
             WorkspaceId.New(),
@@ -626,7 +629,7 @@ public static class Milestone3Tests
                 Path.Combine(root, "Oversized.cs"),
                 "TargetSymbol();" + new string('x', (1024 * 1024) + 1));
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             await engine.LoadAsync(new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -887,8 +890,9 @@ public static class Milestone3Tests
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(handler),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         const string visibleContent = "# code_explore result\nvisible markdown";
         const string hiddenContent = "{\"hidden\":\"structured-sidecar\"}";
 
@@ -944,7 +948,7 @@ public static class Milestone3Tests
             "tools",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -1004,7 +1008,7 @@ public static class Milestone3Tests
             "code-explore-schema-help",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var tool = new CodeExploreOutputFormattingTool(
             new CodeExploreTool(new UnusedCodeExploreService(), TestPromptLoader.Instance),
             new CodeExploreOutputOptions(),
@@ -1057,8 +1061,9 @@ public static class Milestone3Tests
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(handler),
-            CreateProfile(_capableProfileId, "system-merge", toolCalls: true, combinedCost: 1));
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "system-merge", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -1097,8 +1102,9 @@ public static class Milestone3Tests
             return Response(HttpStatusCode.OK, stream);
         });
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(handler),
-            CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1));
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider, new ModelStreamRequest
         {
@@ -1146,7 +1152,7 @@ public static class Milestone3Tests
             "tools",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -1195,7 +1201,7 @@ public static class Milestone3Tests
             "tools",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var git = new UnusedGitQueryService();
         ToolDefinition[] definitions =
         [
@@ -1264,7 +1270,7 @@ public static class Milestone3Tests
             "tools",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -1313,7 +1319,7 @@ public static class Milestone3Tests
         {
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
         };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
@@ -1345,7 +1351,7 @@ public static class Milestone3Tests
             "capable",
             toolCalls: true,
             combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
@@ -1396,10 +1402,11 @@ public static class Milestone3Tests
         var effectiveCatalog = registration.CreateLegacyCatalog(
             new ConfiguredModelCatalog([prohibited, allowed]));
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             effectiveCatalog,
             (_, _) => Task.FromResult<string?>(null),
-            _cheapProfileId);
+            _cheapProfileId,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
@@ -1477,9 +1484,10 @@ public static class Milestone3Tests
             return Response(HttpStatusCode.OK, fixture);
         });
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 6),
-            "secret-value");
+            "secret-value",
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -1550,9 +1558,10 @@ public static class Milestone3Tests
             }),
             "\n\ndata: [DONE]\n");
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
             CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
-            maximumStreamedCharacters: 16_000);
+            maximumStreamedCharacters: 16_000,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1585,9 +1594,10 @@ public static class Milestone3Tests
             }),
             "\n\ndata: [DONE]\n");
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
             profile,
-            maximumStreamedCharacters: 24_000);
+            maximumStreamedCharacters: 24_000,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -1628,8 +1638,9 @@ public static class Milestone3Tests
             },
         }) + "\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var tool = new DateTimeTool(TestPromptLoader.Instance);
         var request = new ModelStreamRequest
         {
@@ -1663,8 +1674,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"datetime\",\"arguments\":\"\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var request = new ModelStreamRequest
         {
@@ -1694,8 +1706,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"datetime\",\"arguments\":\"{datetime}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1732,8 +1745,9 @@ public static class Milestone3Tests
             usage = new { prompt_tokens = 20, completion_tokens = outputTokens },
         });
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, "data: " + chunk + "\n\ndata: [DONE]\n")))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, "data: " + chunk + "\n\ndata: [DONE]\n")))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1758,8 +1772,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{'path':'README.md'}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1794,8 +1809,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"dynamic_tool\",\"arguments\":\"{invalid}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1824,8 +1840,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"read_file\",\"arguments\":\"\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -1854,8 +1871,9 @@ public static class Milestone3Tests
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"content\":\"estimated output\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -1892,13 +1910,15 @@ public static class Milestone3Tests
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero },
         };
 
-        await CollectAsync(new OpenAiCompatibleModelProvider(new HttpClient(handler), profile));
+        await CollectAsync(new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
 
         Assert.Equal(2, attempts);
         var rejected = new OpenAiCompatibleModelProvider(
             new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
-                Response(HttpStatusCode.BadRequest, string.Empty)))),
-            profile);
+                Response(HttpStatusCode.BadRequest, string.Empty))))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            profile,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var exception = await Assert.ThrowsAsync<ModelProviderException>(() => CollectAsync(rejected));
         Assert.Equal(RetryClassification.Permanent, ModelFailureClassifier.Classify(exception));
     }
@@ -1924,7 +1944,7 @@ public static class Milestone3Tests
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero },
         };
 
-        await CollectAsync(new OpenAiCompatibleModelProvider(new HttpClient(handler), profile));
+        await CollectAsync(new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
 
         Assert.Equal(2, attempts);
 
@@ -1933,8 +1953,10 @@ public static class Milestone3Tests
                 Task.FromException<HttpResponseMessage>(new HttpRequestException(
                     HttpRequestError.NameResolutionError,
                     "temporary DNS failure",
-                    null)))),
-            profile);
+                    null))))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            profile,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         Exception exception = await Assert.ThrowsAsync<TransientModelException>(() => CollectAsync(unavailable));
         Assert.Equal(RetryClassification.TransientProvider, ModelFailureClassifier.Classify(exception));
     }
@@ -1945,8 +1967,10 @@ public static class Milestone3Tests
     {
         var provider = new OpenAiCompatibleModelProvider(
             new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
-                Response(HttpStatusCode.OK, "data: {not-json}\n")))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+                Response(HttpStatusCode.OK, "data: {not-json}\n"))))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var exception = await Assert.ThrowsAsync<MalformedModelOutputException>(
             () => CollectAsync(provider));
@@ -1970,8 +1994,9 @@ public static class Milestone3Tests
             Content = new StreamContent(blockingStream),
         };
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(response))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(response))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         using var cancellation = new CancellationTokenSource();
         await using var enumerator = provider.StreamAsync(
             new ModelStreamRequest { RunId = RunId.New(), Input = "cancel", Seed = 42 },
@@ -1989,8 +2014,11 @@ public static class Milestone3Tests
     [Fact]
     public static async Task OpenAiAdapter_ProfileTimeout_IsNormalizedAsProviderFailure()
     {
+        var clock = new ObservedTimeProvider();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new RecordingHandler(async (_, cancellationToken) =>
         {
+            started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
@@ -2002,10 +2030,12 @@ public static class Milestone3Tests
         {
             Timeout = TimeSpan.FromMilliseconds(50),
         };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: clock);
 
-        var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(() =>
-            CollectAsync(provider));
+        var collecting = CollectAsync(provider);
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(profile.Timeout);
+        var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => collecting.WaitAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(RetryClassification.TransientProvider, ModelFailureClassifier.Classify(exception));
     }
@@ -2019,8 +2049,9 @@ public static class Milestone3Tests
             + "\"finish_reason\":\"stop\"}]}\n\n"
             + "data: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -2043,8 +2074,9 @@ public static class Milestone3Tests
             + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
             + "data: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -2062,8 +2094,9 @@ public static class Milestone3Tests
             + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
             + "data: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -2082,8 +2115,9 @@ public static class Milestone3Tests
             + "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"high\",\"reasoning\":\"ignored\",\"reasoning_text\":\"ignored\"},\"finish_reason\":\"stop\"}]}\n\n"
             + "data: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
-            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))),
-            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1));
+            new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan },
+            CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await CollectAsync(provider);
 
@@ -2115,8 +2149,8 @@ public static class Milestone3Tests
         { SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium] };
         var nonReasoningProfile = CreateProfile(_capableProfileId, "non-reasoning", toolCalls: true, combinedCost: 1);
 
-        var reasoningProvider = new OpenAiCompatibleModelProvider(new HttpClient(reasoningHandler), reasoningProfile);
-        var nonReasoningProvider = new OpenAiCompatibleModelProvider(new HttpClient(nonReasoningHandler), nonReasoningProfile);
+        var reasoningProvider = new OpenAiCompatibleModelProvider(new HttpClient(reasoningHandler) { Timeout = Timeout.InfiniteTimeSpan }, reasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var nonReasoningProvider = new OpenAiCompatibleModelProvider(new HttpClient(nonReasoningHandler) { Timeout = Timeout.InfiniteTimeSpan }, nonReasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(reasoningProvider, new ModelStreamRequest
         {
@@ -2152,7 +2186,7 @@ public static class Milestone3Tests
         var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1)
             with
         { SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low] };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), reasoningProfile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, reasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -2179,7 +2213,7 @@ public static class Milestone3Tests
         var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1)
             with
         { SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High] };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), reasoningProfile);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, reasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await CollectAsync(provider, new ModelStreamRequest
         {
@@ -2458,7 +2492,7 @@ public static class Milestone3Tests
         var application = new SessionApplication(
             stream,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.MaxValue)),
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -2483,7 +2517,7 @@ public static class Milestone3Tests
             new ModelChunk { Usage = new ModelUsage(10, 2, EstimatedCost: 0.1m) },
             new ModelChunk { Usage = new ModelUsage(10, 2, EstimatedCost: 0.1m) },
             new ModelChunk { Text = "answer", Usage = new ModelUsage(10, 3, EstimatedCost: 0.2m) });
-        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromHours(1), 1m));
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.MaxValue, 1m));
         var usage = new SessionUsageProjection();
         await using var stream = new DomainEventStream();
         var application = new SessionApplication(
@@ -2518,7 +2552,7 @@ public static class Milestone3Tests
         {
             Failure = fails ? new InvalidOperationException("provider failed before usage") : null,
         };
-        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromHours(1)));
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.MaxValue));
         var usage = new SessionUsageProjection();
         await using var stream = new DomainEventStream();
         var application = new SessionApplication(
@@ -2557,7 +2591,7 @@ public static class Milestone3Tests
     {
         var provider = new CapturingModelProvider(
             new ModelChunk { Text = "answer", Usage = new ModelUsage(10, 3) });
-        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 1, TimeSpan.FromHours(1)));
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 1, TimeSpan.MaxValue));
         var usage = new SessionUsageProjection();
         await using var stream = new DomainEventStream();
         var application = new SessionApplication(
@@ -2600,7 +2634,7 @@ public static class Milestone3Tests
         var application = new SessionApplication(
             stream,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.MaxValue)),
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             sessionPreferences: preferences,
@@ -2626,7 +2660,7 @@ public static class Milestone3Tests
         var application = new SessionApplication(
             stream,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.MaxValue)),
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),

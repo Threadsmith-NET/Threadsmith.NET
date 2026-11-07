@@ -28,7 +28,7 @@ public sealed class Plan50OpenAiCodexTests
             var path = Path.Combine(root, "token.json");
             await File.WriteAllTextAsync(path, "{\"AccessToken\":\"old\",\"RefreshToken\":\"refresh\",\"ExpiresAt\":\"2020-01-01T00:00:00Z\"}", token);
             using var handler = new HangingHandler();
-            using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler), path);
+            using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, path);
             using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
             var refresh = oauth.GetAccessTokenAsync(caller.Token);
             await handler.Started.Task.WaitAsync(token);
@@ -125,7 +125,7 @@ public sealed class Plan50OpenAiCodexTests
             ]}
             """;
         var handler = new RecordingHandler(_ => JsonResponse(response));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var catalog = await client.DiscoverAsync(
             CreateJwt("account-1"),
@@ -150,7 +150,7 @@ public sealed class Plan50OpenAiCodexTests
         var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
             ? JsonResponse("{\"tag_name\":\"rust-v0.156.1\"}")
             : JsonResponse("{\"models\":[{\"slug\":\"gpt-6-astra\",\"display_name\":\"GPT-6 Astra\"}]}"));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var catalog = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -167,7 +167,7 @@ public sealed class Plan50OpenAiCodexTests
         var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
             ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
             : JsonResponse("{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}"));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var catalog = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -185,7 +185,7 @@ public sealed class Plan50OpenAiCodexTests
         var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
             ? JsonResponse(JsonSerializer.Serialize(new { tag_name = tag }))
             : JsonResponse("{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}"));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         _ = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
 
@@ -196,8 +196,11 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task Discovery_MissingSlug_ReturnsActionableDiagnostic()
     {
-        var client = new OpenAiCodexCatalogClient(new HttpClient(new RecordingHandler(_ => JsonResponse(
-            "{\"models\":[{\"id\":\"codex-id\",\"display_name\":\"Only Display\"}]}"))));
+        var client = new OpenAiCodexCatalogClient(
+            new HttpClient(new RecordingHandler(_ => JsonResponse(
+            "{\"models\":[{\"id\":\"codex-id\",\"display_name\":\"Only Display\"}]}")))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverAsync(
             "not-a-jwt",
@@ -212,8 +215,11 @@ public sealed class Plan50OpenAiCodexTests
     [Fact]
     public async Task Discovery_NoUsableModelIdentifiers_ReturnsActionableDiagnostic()
     {
-        var client = new OpenAiCodexCatalogClient(new HttpClient(new RecordingHandler(_ => JsonResponse(
-            "{\"models\":[{\"display_name\":\"Only Display\"}]}"))));
+        var client = new OpenAiCodexCatalogClient(
+            new HttpClient(new RecordingHandler(_ => JsonResponse(
+            "{\"models\":[{\"display_name\":\"Only Display\"}]}")))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverAsync(
             "not-a-jwt",
@@ -235,7 +241,9 @@ public sealed class Plan50OpenAiCodexTests
         var cache = new OpenAiCodexCatalogCache(path);
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
-                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}"))))
+                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}")))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
 
         try
@@ -360,7 +368,7 @@ public sealed class Plan50OpenAiCodexTests
         var path = Path.Combine(root, "token.json");
         var handler = new RecordingHandler(_ => JsonResponse(
             "{\"access_token\":\"access-value\",\"refresh_token\":\"refresh-value\",\"expires_in\":3600}"));
-        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler), path);
+        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, path);
         var challenge = OpenAiCodexOAuthManager.CreateBrowserChallenge(
             new Uri("http://localhost:1455/auth/callback"));
 
@@ -400,7 +408,7 @@ public sealed class Plan50OpenAiCodexTests
         var path = Path.Combine(root, "token.json");
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(path, "{}", TestContext.Current.CancellationToken);
-        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(new RecordingHandler(_ => JsonResponse("{}"))), path);
+        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(new RecordingHandler(_ => JsonResponse("{}"))) { Timeout = Timeout.InfiniteTimeSpan }, path);
 
         try
         {
@@ -441,7 +449,9 @@ public sealed class Plan50OpenAiCodexTests
         });
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
-                $$"""{"models":[{"slug":"dynamic","display_name":"Dynamic","context_window":128000,"default_reasoning_level":"{{reasoning}}","supported_reasoning_levels":["{{reasoning}}"]}]}"""))))
+                $$"""{"models":[{"slug":"dynamic","display_name":"Dynamic","context_window":128000,"default_reasoning_level":"{{reasoning}}","supported_reasoning_levels":["{{reasoning}}"]}]}""")))
+            { Timeout = Timeout.InfiniteTimeSpan },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
         var registration = new OpenAiCodexProviderRegistration();
         var effectiveCatalog = new EffectiveModelProviderCatalog(
@@ -459,7 +469,8 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(registration.ProviderInstructionAsset, profile.ProviderInstructionAsset);
         var provider = registration.CreateProvider(new ModelProviderActivationContext
         {
-            HttpClient = new HttpClient(handler),
+            TimeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow),
+            HttpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             Profile = profile,
             ProviderConfiguration = configuration,
             ModelConfiguration = Assert.Single(configuration.Models),
@@ -1324,17 +1335,21 @@ public sealed class Plan50OpenAiCodexTests
         var token = TestContext.Current.CancellationToken;
         var bytes = await File.ReadAllBytesAsync(path, token);
         Assert.InRange(bytes.Length, 1, ImageArtifactLimits.MaximumBytes);
-        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+        using var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         using var oauth = new OpenAiCodexOAuthManager(client);
         var accessToken = await oauth.GetAccessTokenAsync(token);
         Assert.False(string.IsNullOrWhiteSpace(accessToken));
         var configuration = await new OpenAiCodexCatalogCache().LoadAsync(token);
         Assert.NotNull(configuration);
         var registration = new OpenAiCodexProviderRegistration();
-        var profile = Assert.Single(registration.CreateProfiles(configuration), item => item.ModelId == "gpt-6.1-sol");
+        var profile = Assert.Single(registration.CreateProfiles(configuration), item => item.ModelId == "gpt-6.1-sol") with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1 },
+        };
         Assert.True(profile.SupportedInputContentTypes.HasFlag(ModelContentTypes.Image));
         var provider = registration.CreateProvider(new ModelProviderActivationContext
         {
+            TimeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow),
             HttpClient = client,
             Profile = profile,
             ProviderConfiguration = configuration,
@@ -1470,17 +1485,20 @@ public sealed class Plan50OpenAiCodexTests
             },
         });
         var configuration = await new OpenAiCodexCatalogClient(
-            new HttpClient(new RecordingHandler(_ => JsonResponse(catalogJson))))
+            new HttpClient(new RecordingHandler(_ => JsonResponse(catalogJson))) { Timeout = Timeout.InfiniteTimeSpan },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
         var registration = new OpenAiCodexProviderRegistration();
         var profile = Assert.Single(registration.CreateProfiles(configuration)) with
         {
+            Timeout = TimeSpan.Zero,
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero },
         };
         profile = configureProfile?.Invoke(profile) ?? profile;
         return registration.CreateProvider(new ModelProviderActivationContext
         {
-            HttpClient = new HttpClient(handler),
+            TimeProvider = new AdvancingTimeProvider(),
+            HttpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             Profile = profile,
             ProviderConfiguration = configuration,
             ModelConfiguration = Assert.Single(configuration.Models),

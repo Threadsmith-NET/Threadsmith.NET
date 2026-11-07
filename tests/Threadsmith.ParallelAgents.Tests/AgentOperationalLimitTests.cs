@@ -187,11 +187,11 @@ public sealed partial class AgentOperationalLimitTests
     {
         var plan = CreatePlan(1);
         var runner = new DeadlineRunner(false);
-        await using var scheduler = new AgentRunScheduler();
+        await using var scheduler = new AgentRunScheduler(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var running = scheduler.RunAsync(plan, runner);
-        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.True(await scheduler.CancelAssignmentAsync(plan.DelegationId, plan.Assignments[0].AssignmentId));
-        var outcome = Assert.Single(await running.WaitAsync(TimeSpan.FromSeconds(5)));
+        var outcome = Assert.Single(await running.WaitAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(AgentRunStatus.Cancelled, outcome.Status);
         Assert.Equal("child cancellation observed", outcome.Reason);

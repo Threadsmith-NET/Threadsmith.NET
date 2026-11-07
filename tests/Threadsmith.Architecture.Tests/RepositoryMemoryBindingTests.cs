@@ -37,7 +37,7 @@ public static partial class RepositoryMemoryBindingTests
             toolState,
             null,
             new MutationApprovalPolicyService(configuration, configPath),
-            new RepositorySecretProvider(fixture.InitialRoot),
+            new RepositorySecretProvider(fixture.InitialRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             mcp,
             router,
             options,

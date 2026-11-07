@@ -617,7 +617,7 @@ public sealed partial class SkillSubsystemTests
             "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
 
         var firstTask = tool.ExecuteAsync(stringifiedInput, context);
-        await workflows.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await workflows.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         var duplicate = await tool.ExecuteAsync(nativeInput, context);
         workflows.Release.TrySetResult();
         var first = await firstTask;

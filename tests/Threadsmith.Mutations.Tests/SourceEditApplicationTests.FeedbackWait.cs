@@ -94,12 +94,14 @@ public sealed partial class SourceEditApplicationTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
         var analyzer = new AdvisoryAnalyzer([]);
+        var clock = new FakeTimeProvider();
         var edits = fixture.CreateApplication(
             analyzer: analyzer,
-            editOptions: new EditAnalysisOptions { FinalFeedbackWaitMilliseconds = timeout ? 1 : 30000 });
+            editOptions: new EditAnalysisOptions { FinalFeedbackWaitMilliseconds = timeout ? 1 : 30000 },
+            timeProvider: clock);
         var sanitizer = new SecretOutputSanitizer();
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
         long feedbackReady = 0;
@@ -189,6 +191,11 @@ public sealed partial class SourceEditApplicationTests
             Assert.Null(analyzer.Latest);
             Assert.Null(edits.TakeFeedback(fixture.SessionId, run));
             return;
+        }
+
+        if (timeout)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(1));
         }
 
         if (!timeout)

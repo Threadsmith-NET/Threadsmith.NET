@@ -88,7 +88,7 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task ChildHeaderUsesItsEffectiveProviderAndContext()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var session = SessionId.New();
         var target = Target(session);
         var profile = new ModelProfile
@@ -206,8 +206,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task ChildSelectionBlocksEveryComposerIngressAndPreservesDraft()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -233,8 +233,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task StartupDiscardsTypeaheadAndClosesBeforeOneComposerRead()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -258,8 +258,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task ImmediateTogglesReconcileHostDenialAndDoNotTouchLockedItems()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -299,8 +299,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task AuthenticationActionCanBeCancelledAndListRemainsUsable()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var backend = new HeadlessBackend(100, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(100, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -333,8 +333,7 @@ public static class AgentWorkspaceTests
             var output = string.Empty;
             while (!output.Contains("Sign in / Authenticate", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
             backend.FeedInput("\r");
@@ -344,8 +343,7 @@ public static class AgentWorkspaceTests
             output = string.Empty;
             while (!output.Contains("Authentication cancelled.", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
             Assert.False(toggles.IsCompleted);
@@ -365,7 +363,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var target = Target(session);
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, true, new TuiResourceLimits { MaximumAgentProgressCharacters = limit }, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
@@ -410,7 +408,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var target = Target(session);
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
@@ -456,7 +454,7 @@ public static class AgentWorkspaceTests
         var sink = new RecordingSurface();
         var stream = new AgentDisplayStream();
         var usage = new SessionUsageProjection();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, stream, usage, null, new AgentNameCatalog(["Avery"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         stream.Publish(new AgentDisplayText(session, target.RunId, "child text", false, true));
@@ -486,7 +484,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var target = Target(session);
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, new SessionUsageProjection(), null, new AgentNameCatalog(["Avery"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         var checkpoint = new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run");
@@ -511,7 +509,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var targets = new[] { Target(session), Target(session) };
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, new SessionUsageProjection(), null, new AgentNameCatalog(), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         var invocations = new[] { ToolInvocationId.New(), ToolInvocationId.New() };
@@ -696,7 +694,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var target = Target(session);
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, new SessionUsageProjection(), null, new AgentNameCatalog(["Avery"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
@@ -718,8 +716,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task DelayedPasteCannotCrossAnAgentSelectionEpoch()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         var clipboard = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var surface = new TuiKitSurface(
@@ -755,8 +753,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task ResizeAndModalMouseInputKeepTheComposerDestination()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -790,7 +788,7 @@ public static class AgentWorkspaceTests
         var session = SessionId.New();
         var targets = Enumerable.Range(0, 65).Select(_ => Target(session)).ToArray();
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, new SessionUsageProjection(), null, new AgentNameCatalog(["Avery"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         foreach (var target in targets.Take(64))
@@ -821,8 +819,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task MainHeaderUsesCurrentReasoningInsteadOfPreviousRequest()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(200, 35);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(200, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -835,7 +833,7 @@ public static class AgentWorkspaceTests
                     },
                     token);
                 await surface.PresentAsync(Text(string.Empty), token);
-                var output = backend.TakeOutput();
+                var output = await backend.WaitForOutputAsync("(Current provider) Current model (high)", token);
                 Assert.Contains("(Current provider) Current model (high)", output, StringComparison.Ordinal);
                 Assert.Contains("25% of 10K", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Current model (low)", output, StringComparison.Ordinal);
@@ -847,8 +845,8 @@ public static class AgentWorkspaceTests
     [Fact]
     public static async Task ComposedNarrowFooterKeepsTheLastCounter()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(40, 12);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(40, 12);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -861,7 +859,7 @@ public static class AgentWorkspaceTests
                     },
                     token);
                 await surface.PresentAsync(Text(string.Empty), token);
-                Assert.Contains("S1 M2 U3 !4", backend.TakeOutput(), StringComparison.Ordinal);
+                Assert.Contains("S1 M2 U3 !4", await backend.WaitForOutputAsync("S1 M2 U3 !4", token), StringComparison.Ordinal);
             },
             timeout.Token);
     }
@@ -877,7 +875,7 @@ public static class AgentWorkspaceTests
         var firstTool = ToolInvocationId.New();
         var secondTool = ToolInvocationId.New();
         var sink = new RecordingSurface();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery", "Robin"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
         var checkpoint = new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, first.DelegationId, parent, DelegationCheckpointPhase.Accepted, 1, "run") { ToolInvocationId = firstTool };

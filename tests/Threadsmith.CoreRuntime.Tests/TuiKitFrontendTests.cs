@@ -46,16 +46,16 @@ public static class TuiKitFrontendTests
     [InlineData(true)]
     public static async Task FramesFollowSynchronizedOutputCapability(bool synchronizedOutput)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var capabilities = new TerminalCapabilities(
             TerminalColorDepth.TrueColor, false, true, false, false, true, false, false, synchronizedOutput);
-        using var backend = new HeadlessBackend(40, 12, capabilities);
+        using var backend = new ObservedBackend(40, 12, capabilities);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
             {
                 await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new("sync frame", PresentationTextRole.Default)])]), token);
-                var output = backend.TakeOutput();
+                var output = await backend.WaitForOutputAsync("sync frame", token);
                 var begins = output.Split(Ansi.BeginSynchronizedUpdate, StringSplitOptions.None).Length - 1;
                 var ends = output.Split(Ansi.EndSynchronizedUpdate, StringSplitOptions.None).Length - 1;
                 Assert.Equal(synchronizedOutput, begins > 0);
@@ -423,8 +423,8 @@ public static class TuiKitFrontendTests
     public static async Task OffscreenAnswerNoticeSurvivesReadyPrompt(int width)
     {
         // Arrange a submitted request while the transcript is scrolled away from its tail.
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(width + 1, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(width + 1, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -445,7 +445,7 @@ public static class TuiKitFrontendTests
                 backend.Resize(width, 24);
                 await surface.PresentAsync(new PresentationBatch([]), token);
                 await surface.PresentAsync(new PresentationBatch([]), token);
-                var offscreenFrame = backend.TakeOutput();
+                var offscreenFrame = await backend.WaitForOutputAsync("new output", token);
 
                 // Assert: unseen output remains visible on the border without reserving a hint row.
                 Assert.Contains("new output", offscreenFrame, StringComparison.Ordinal);
@@ -455,7 +455,7 @@ public static class TuiKitFrontendTests
                 backend.FeedInput("\u001b[18~\u001b[F\u001b[18~\r");
                 Assert.Equal(string.Empty, (await nextRead).Text);
                 await surface.PresentAsync(new PresentationBatch([]), token);
-                Assert.Contains(answer, backend.TakeOutput(), StringComparison.Ordinal);
+                Assert.Contains(answer, await backend.WaitForOutputAsync(answer, token), StringComparison.Ordinal);
             },
             timeout.Token);
     }
@@ -464,8 +464,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task InputOwnershipAndModalCancellation()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -506,7 +506,7 @@ public static class TuiKitFrontendTests
     [InlineData("\u001b[27u", null, true)]
     public static async Task GroupedSelectionPreservesIdentityAndCancellation(string input, string? expectedId, bool cancelled)
     {
-        using var backend = new HeadlessBackend(80, 24);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
         await surface.RunAsync(
             async token =>
@@ -533,8 +533,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task InputBeforeFirstReadIsDiscarded()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -554,8 +554,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task SubmittedConversationRemainsInRetainedTranscript()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -563,14 +563,12 @@ public static class TuiKitFrontendTests
             var read = surface.ReadComposerAsync(new ComposerRequest("repo > "), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
             backend.FeedInput("submitted text retained");
-            await Task.Delay(TimeSpan.FromMilliseconds(100), token);
-            _ = backend.TakeOutput();
+            _ = await backend.WaitForOutputAsync("submitted text retained", token);
 
             backend.FeedInput("\r");
             Assert.Equal("submitted text retained", (await read).Text);
-            await Task.Delay(TimeSpan.FromMilliseconds(100), token);
-
-            Assert.Contains("submitted text retained", backend.TakeOutput(), StringComparison.Ordinal);
+            backend.Resize(81, 24);
+            Assert.Contains("submitted text retained", await backend.WaitForOutputAsync("submitted text retained", token), StringComparison.Ordinal);
         },
             timeout.Token);
         Assert.True(backend.IsStopped);
@@ -580,8 +578,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task ActiveRunHintsAreTransientAndFollowThinking()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var backend = new HeadlessBackend(120, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(120, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -595,16 +593,14 @@ public static class TuiKitFrontendTests
             var output = string.Empty;
             while (!output.Contains("THINKING", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
-            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider())))
             {
                 while (!output.Contains("ENTER to steer; ESC-ESC to cancel", StringComparison.Ordinal))
                 {
-                    await Task.Delay(10, token);
-                    output += backend.TakeOutput();
+                    output += await backend.ReadOutputAsync(token);
                 }
 
                 Assert.Contains("THINKING", output, StringComparison.Ordinal);
@@ -619,8 +615,7 @@ public static class TuiKitFrontendTests
             var repaint = string.Empty;
             while (!repaint.Contains("Response arrived", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                repaint += backend.TakeOutput();
+                repaint += await backend.ReadOutputAsync(token);
             }
 
             Assert.DoesNotContain("ENTER to steer", repaint, StringComparison.Ordinal);
@@ -633,13 +628,13 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task ActiveRunInputAndShutdown()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
         {
-            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider())))
             {
                 backend.FeedInput("draft\r\u001b[27ux\u001b[27u");
                 Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
@@ -649,7 +644,7 @@ public static class TuiKitFrontendTests
                 Assert.Equal(ActiveRunInputSignal.CancellationRequested, await lease.ReadAsync(token));
             }
 
-            var pendingLease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System));
+            var pendingLease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider()));
             var pendingRead = pendingLease.ReadAsync(token);
             await pendingLease.DisposeAsync();
 #pragma warning disable VSTHRD003 // The lease started and owns this pending read; disposal must cancel it.
@@ -669,8 +664,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task ControlCCopiesSelection()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         var interruptions = 0;
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => interruptions++, backend);
         await surface.RunAsync(
@@ -706,8 +701,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task ControlCWithoutSelectionCancels()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => interrupted.TrySetResult(), backend);
         await surface.RunAsync(
@@ -725,8 +720,8 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task RenderingFailureStopsBackend()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var backend = new HeadlessBackend(80, 24);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await Assert.ThrowsAsync<InvalidOperationException>(() => surface.RunAsync(
             token => surface.PresentAsync(new PresentationBatch([new PresentationRawSourceItem("not admitted")]), token),

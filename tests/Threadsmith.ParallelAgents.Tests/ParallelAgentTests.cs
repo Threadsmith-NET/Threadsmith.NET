@@ -20,19 +20,25 @@ public sealed class ParallelAgentTests
             CreateAssignment(AgentRole.Explorer, "src/A.cs"),
             CreateAssignment(AgentRole.Explorer, "src/B.cs"),
             CreateAssignment(AgentRole.Explorer, "src/C.cs"));
-        var runner = new TrackingRunner(TimeSpan.FromMilliseconds(75));
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            QueueCapacity = 8,
-            MaximumActiveChildren = 2,
-            MaximumActiveChildrenPerParent = 2,
-            MaximumActiveImplementers = 1,
-            ShutdownTimeout = TimeSpan.FromSeconds(2),
-        });
+        var runner = new TrackingRunner(2);
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                QueueCapacity = 8,
+                MaximumActiveChildren = 2,
+                MaximumActiveChildrenPerParent = 2,
+                MaximumActiveImplementers = 1,
+                ShutdownTimeout = TimeSpan.FromSeconds(2),
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var processId = Environment.ProcessId;
 
         // Act
-        var outcomes = await scheduler.RunAsync(plan, runner);
+        var running = scheduler.RunAsync(plan, runner, TestContext.Current.CancellationToken);
+        await runner.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, runner.Active);
+        runner.Release.TrySetResult();
+        var outcomes = await running;
 
         // Assert
         Assert.Equal(processId, Environment.ProcessId);
@@ -55,20 +61,25 @@ public sealed class ParallelAgentTests
                 ParentRunId = first.Provenance.ParentRunId,
             },
         };
-        var runner = new TrackingRunner(TimeSpan.FromMilliseconds(100));
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            QueueCapacity = 8,
-            MaximumActiveChildren = 2,
-            MaximumActiveChildrenPerParent = 1,
-            MaximumActiveImplementers = 1,
-            ShutdownTimeout = TimeSpan.FromSeconds(2),
-        });
+        var runner = new TrackingRunner(1);
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                QueueCapacity = 8,
+                MaximumActiveChildren = 2,
+                MaximumActiveChildrenPerParent = 1,
+                MaximumActiveImplementers = 1,
+                ShutdownTimeout = TimeSpan.FromSeconds(2),
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act
-        await Task.WhenAll(
-            scheduler.RunAsync(first, runner),
-            scheduler.RunAsync(second, runner));
+        var firstRun = scheduler.RunAsync(first, runner, TestContext.Current.CancellationToken);
+        await runner.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var secondRun = scheduler.RunAsync(second, runner, TestContext.Current.CancellationToken);
+        Assert.Equal(1, runner.Active);
+        runner.Release.TrySetResult();
+        await Task.WhenAll(firstRun, secondRun);
 
         // Assert
         Assert.Equal(1, runner.MaximumActive);
@@ -82,15 +93,15 @@ public sealed class ParallelAgentTests
         var plan = CreatePlan(
             CreateAssignment(AgentRole.Explorer, "src/A.cs"),
             CreateAssignment(AgentRole.Explorer, "src/B.cs"));
-        var runner = new TrackingRunner(TimeSpan.FromMinutes(1));
-        await using var scheduler = new AgentRunScheduler();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var runner = new TrackingRunner(2);
+        await using var scheduler = new AgentRunScheduler(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         // Act
-        var outcomes = await scheduler.RunAsync(
-            plan,
-            runner,
-            cancellation.Token);
+        var running = scheduler.RunAsync(plan, runner, cancellation.Token);
+        await runner.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        var outcomes = await running;
 
         // Assert
         Assert.All(outcomes, item => Assert.Equal(AgentRunStatus.Cancelled, item.Status));
@@ -105,7 +116,7 @@ public sealed class ParallelAgentTests
         // Arrange
         var assignment = CreateAssignment(AgentRole.Explorer, "src/A.cs");
         var plan = CreatePlan(assignment);
-        await using var scheduler = new AgentRunScheduler();
+        await using var scheduler = new AgentRunScheduler(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new FixedRunner(CreateFindingOutcome(assignment, generation: 99));
 
         // Act
@@ -128,7 +139,7 @@ public sealed class ParallelAgentTests
         var sibling = CreateAssignment(AgentRole.Explorer, "src/B.cs");
         var plan = CreatePlan(failed, sibling);
         var runner = new ReturningFailureRunner(failed.AssignmentId);
-        await using var scheduler = new AgentRunScheduler();
+        await using var scheduler = new AgentRunScheduler(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act
         var outcomes = await scheduler.RunAsync(plan, runner);
@@ -578,7 +589,7 @@ public sealed class ParallelAgentTests
                 _ => "review-findings/1",
             },
             StoppingCondition = "Stop after the assigned scope is covered.",
-            Deadline = DateTimeOffset.UtcNow.AddMinutes(5),
+            Deadline = DateTimeOffset.MaxValue,
             Scope = new AgentAssignmentScope
             {
                 Files = [path],
@@ -735,14 +746,18 @@ public sealed class ParallelAgentTests
 
     private sealed class TrackingRunner : IAgentAssignmentRunner
     {
-        private readonly TimeSpan _delay;
+        private readonly int _expectedEntries;
         private int _active;
         private int _maximumActive;
 
-        public TrackingRunner(TimeSpan delay)
+        public TrackingRunner(int expectedEntries)
         {
-            _delay = delay;
+            _expectedEntries = expectedEntries;
         }
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int Active => Volatile.Read(ref _active);
 
@@ -764,7 +779,12 @@ public sealed class ParallelAgentTests
 
             try
             {
-                await Task.Delay(_delay, cancellationToken);
+                if (active == _expectedEntries)
+                {
+                    Entered.TrySetResult();
+                }
+
+                await Release.Task.WaitAsync(cancellationToken);
                 return CreateFindingOutcome(assignment, plan.Provenance.Generation);
             }
             finally

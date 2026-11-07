@@ -19,7 +19,7 @@ public sealed partial class Plan41InventoryToolTests
     {
         // Arrange
         await using var repository = await TestRepository.CreateAsync();
-        var service = new GitQueryService();
+        var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await repository.RunGitAsync("checkout", "-b", "feature");
         await File.AppendAllTextAsync(Path.Combine(repository.Path, "tracked.txt"), "feature\n");
         await repository.RunGitAsync("add", "tracked.txt");
@@ -88,7 +88,7 @@ public sealed partial class Plan41InventoryToolTests
         File.Delete(markerPath);
 
         // Act: the same service used by automatic footer refresh must remain read-only.
-        var service = new GitQueryService();
+        var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var before = await service.GetWorkingTreeStatusAsync(repository.Path, cancellationToken);
         Assert.False(File.Exists(markerPath));
         await File.AppendAllTextAsync(Path.Combine(repository.Path, "tracked.txt"), "changed\n", cancellationToken);
@@ -117,7 +117,7 @@ public sealed partial class Plan41InventoryToolTests
         var subdirectory = Path.Combine(repository.Path, "src");
         Directory.CreateDirectory(subdirectory);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new GitQueryService().DiffAsync(
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).DiffAsync(
             subdirectory,
             new GitDiffRequest()));
     }
@@ -127,7 +127,7 @@ public sealed partial class Plan41InventoryToolTests
     public async Task GitQueries_UnsafeInputs_AreRejected()
     {
         await using var repository = await TestRepository.CreateAsync();
-        var service = new GitQueryService();
+        var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.ShowAsync(
             repository.Path,
@@ -156,7 +156,7 @@ public sealed partial class Plan41InventoryToolTests
     public async Task GitQueries_NullDefaultableFields_UseDocumentedDefaults()
     {
         await using var repository = await TestRepository.CreateAsync();
-        var service = new GitQueryService();
+        var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var log = await service.LogAsync(
             repository.Path,
@@ -177,7 +177,7 @@ public sealed partial class Plan41InventoryToolTests
     public async Task GitBlameTool_NullRevision_ReportsHeadProvenance()
     {
         await using var repository = await TestRepository.CreateAsync();
-        var tool = new GitBlameTool(new GitQueryService(), TestPromptLoader.Instance);
+        var tool = new GitBlameTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
             new GitBlameRequest { Path = "tracked.txt", Revision = null },
@@ -241,7 +241,7 @@ public sealed partial class Plan41InventoryToolTests
         await File.AppendAllTextAsync(matchedByMagic, "magic\n");
 
         // Act
-        var result = await new GitQueryService().DiffAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).DiffAsync(
             repository.Path,
             new GitDiffRequest { Path = "literal[1].txt" });
 
@@ -257,7 +257,7 @@ public sealed partial class Plan41InventoryToolTests
     {
         await using var repository = await TestRepository.CreateAsync();
 
-        var result = await new GitQueryService().DiffAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).DiffAsync(
             repository.Path,
             new GitDiffRequest { Mode = GitComparisonMode.Commit, BaseRevision = "HEAD" });
 
@@ -281,7 +281,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("commit", "-m", "main");
         await repository.RunGitAsync("merge", "--no-ff", "feature", "-m", "merge feature");
 
-        var result = await new GitQueryService().DiffAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).DiffAsync(
             repository.Path,
             new GitDiffRequest { Mode = GitComparisonMode.Commit, BaseRevision = "HEAD" });
 
@@ -303,7 +303,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("add", "unicode.txt");
         await repository.RunGitAsync("commit", "-m", "add unicode");
 
-        var result = await new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = 512 }).ShowAsync(
+        var result = await new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = 512 }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).ShowAsync(
             repository.Path,
             new GitShowRequest { Revision = "HEAD", Path = "unicode.txt" });
 
@@ -321,7 +321,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("add", "binary.dat");
         await repository.RunGitAsync("commit", "-m", "add binary");
 
-        var result = await new GitQueryService().ShowAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).ShowAsync(
             repository.Path,
             new GitShowRequest { Revision = "HEAD", Path = "binary.dat" });
 
@@ -338,7 +338,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("add", "large.txt");
         await repository.RunGitAsync("commit", "-m", "add large text");
 
-        var result = await new GitQueryService().ShowAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).ShowAsync(
             repository.Path,
             new GitShowRequest
             {
@@ -362,7 +362,7 @@ public sealed partial class Plan41InventoryToolTests
         await repository.RunGitAsync("commit", "-m", "add unusual path");
         await repository.RunGitAsync("mv", previous, current);
 
-        var result = await new GitQueryService().DiffAsync(
+        var result = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).DiffAsync(
             repository.Path,
             new GitDiffRequest { Mode = GitComparisonMode.Staged });
 
@@ -387,7 +387,7 @@ public sealed partial class Plan41InventoryToolTests
         var context = CreateExecutionContext(
             repository.Path,
             prohibitedPaths: ["secret/**"]);
-        var tool = new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance);
+        var tool = new GitDiffTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
             new GitDiffInput { IncludePatch = includePatch },
@@ -414,10 +414,10 @@ public sealed partial class Plan41InventoryToolTests
         await File.WriteAllTextAsync(Path.Combine(repository.Path, "other.txt"), "other\n");
         var context = CreateExecutionContext(repository.Path);
 
-        var diff = await new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
+        var diff = await new GitDiffTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance).ExecuteAsync(
             new GitDiffInput { Paths = ["tracked.txt"] },
             context);
-        var show = await new GitShowTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
+        var show = await new GitShowTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance).ExecuteAsync(
             new GitShowInput { Revision = "HEAD", Paths = ["tracked.txt"] },
             context);
 
@@ -446,11 +446,11 @@ public sealed partial class Plan41InventoryToolTests
             repository.Path,
             prohibitedPaths: ["secret/**"]);
 
-        var show = await new GitShowTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
+        var show = await new GitShowTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance).ExecuteAsync(
             new GitShowInput { Revision = "feature" },
             context);
         var comparison = await new GitBranchComparisonTool(
-            new GitQueryService(),
+            new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             TestPromptLoader.Instance).ExecuteAsync(
                 new GitBranchComparisonRequest { BaseRevision = "main", TargetRevision = "feature" },
                 context);
@@ -470,7 +470,7 @@ public sealed partial class Plan41InventoryToolTests
         // Arrange
         await using var repository = await TestRepository.CreateDotNetAsync();
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var workspaceId = WorkspaceId.New();
         var load = await registry.LoadAsync(new SemanticLoadRequest(
             SessionId.New(),
@@ -478,7 +478,7 @@ public sealed partial class Plan41InventoryToolTests
             repository.Path,
             Path.Combine(repository.Path, "Inventory.Tests.csproj"),
             RepositoryTrustLevel.TrustedRead));
-        var service = new DotNetInventoryService(registry, new GitQueryService());
+        var service = new DotNetInventoryService(registry, new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
 
         // Act
         var result = await service.GetInventoryAsync(new DotNetInventoryRequest
@@ -593,7 +593,7 @@ public sealed partial class Plan41InventoryToolTests
     [Fact]
     public void ToolDefinitions_AreDistinctBoundedReadOnlyContracts()
     {
-        var git = new GitQueryService();
+        var git = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         ITool[] tools =
         [
             new GitDiffTool(git, TestPromptLoader.Instance),

@@ -1107,18 +1107,19 @@ public static class WebReadableTextExtractor
 /// <summary>Fetches, decodes, extracts, digests, and sanitizes one authorized document.</summary>
 public sealed class WebContentFetcher : IWebContentFetcher
 {
+    private readonly TimeProvider _timeProvider;
     private readonly WebFetchOptionsState _options;
     private readonly IPromptLoader _prompts;
     private readonly IWebContentTransport _transport;
 
     /// <summary>Initializes a new instance of the <see cref="WebContentFetcher"/> class with fixed effective limits.</summary>
-    public WebContentFetcher(IWebContentTransport transport, WebFetchOptions options, IPromptLoader prompts)
-        : this(transport, new WebFetchOptionsState(options), prompts)
+    public WebContentFetcher(IWebContentTransport transport, WebFetchOptions options, IPromptLoader prompts, TimeProvider? timeProvider = null)
+        : this(transport, new WebFetchOptionsState(options), prompts, timeProvider)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="WebContentFetcher"/> class with rebindable effective limits.</summary>
-    public WebContentFetcher(IWebContentTransport transport, WebFetchOptionsState options, IPromptLoader prompts)
+    public WebContentFetcher(IWebContentTransport transport, WebFetchOptionsState options, IPromptLoader prompts, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(transport);
         ArgumentNullException.ThrowIfNull(options);
@@ -1126,6 +1127,7 @@ public sealed class WebContentFetcher : IWebContentFetcher
         _transport = transport;
         _options = options;
         _prompts = prompts;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -1138,8 +1140,8 @@ public sealed class WebContentFetcher : IWebContentFetcher
         CancellationToken cancellationToken = default)
     {
         var options = (invocation?.SecurityPolicy is { } policy ? WebFetchOptions.FromPolicy(policy) : _options.Current) with { Invocation = invocation };
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(executionTimeout ?? options.Timeout);
+        using var executionDeadline = new CancellationTokenSource(executionTimeout ?? options.Timeout, _timeProvider);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, executionDeadline.Token);
         WebFetchTransportResponse transport;
         try
         {

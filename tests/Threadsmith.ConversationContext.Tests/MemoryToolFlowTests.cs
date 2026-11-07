@@ -36,12 +36,12 @@ public static class MemoryToolFlowTests
         var options = new FlowOptions();
         var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance);
         var registry = new ToolRegistry([tool]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var model = new CollisionModel(distinct, type, original.Id!.Value);
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.FromMinutes(2))),
+            new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             pipeline,

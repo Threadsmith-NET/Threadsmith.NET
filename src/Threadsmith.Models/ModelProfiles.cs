@@ -453,6 +453,7 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
     private readonly ConfiguredModelCatalog _catalog;
     private readonly EffectiveModelProviderCatalog _effectiveCatalog;
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _timeProvider;
     private readonly ModelProfileId? _preferredProfileId;
     private readonly Func<ModelProfileId?>? _preferredProfileResolver;
     private readonly Func<string, string, CancellationToken, Task<string?>>? _refreshSecretAsync;
@@ -466,12 +467,14 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         Func<string, CancellationToken, Task<string?>> resolveSecretAsync,
         ModelProfileId? preferredProfileId = null,
         Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
-        IImageArtifactStore? images = null)
+        IImageArtifactStore? images = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(resolveSecretAsync);
         _httpClient = httpClient;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _images = images;
         _effectiveCatalog = catalog;
         _catalog = catalog.ModelCatalog;
@@ -488,8 +491,9 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         Func<string, CancellationToken, Task<string?>> resolveSecretAsync,
         Func<ModelProfileId?> preferredProfileResolver,
         Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
-        IImageArtifactStore? images = null)
-        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync, images: images)
+        IImageArtifactStore? images = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync, images: images, timeProvider: timeProvider)
     {
         ArgumentNullException.ThrowIfNull(preferredProfileResolver);
         _preferredProfileResolver = preferredProfileResolver;
@@ -566,6 +570,7 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         var provider = definition.Registration.CreateProvider(new ModelProviderActivationContext
         {
             HttpClient = _httpClient,
+            TimeProvider = _timeProvider,
             Profile = profile,
             ProviderConfiguration = definition.ProviderConfiguration,
             ModelConfiguration = definition.ModelConfiguration,

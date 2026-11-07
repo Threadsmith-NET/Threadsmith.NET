@@ -178,18 +178,20 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var roles = new AgentRoleRunnerRegistry(
             Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, runner)),
             runner);
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            MaximumActiveChildren = 3,
-            MaximumActiveChildrenPerParent = 3,
-        });
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                MaximumActiveChildren = 3,
+                MaximumActiveChildrenPerParent = 3,
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var checkpoints = new RoleCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var running = coordinator.StartAsync(plan, roles);
-        await provider.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await provider.AllStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         provider.Release.TrySetResult();
-        var checkpoint = await running.WaitAsync(TimeSpan.FromSeconds(2));
+        var checkpoint = await running.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(providerFails ? 2 : 3, checkpoint.ChildOutcomes.Count(item => item.Status == AgentRunStatus.Completed));
         Assert.Equal(providerFails ? 1 : 0, checkpoint.ChildOutcomes.Count(item => item.Status == AgentRunStatus.Failed));

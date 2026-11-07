@@ -110,8 +110,8 @@ public static class SkillsTreeTests
     [Fact]
     public static async Task GroupVerificationCancelsAndKeepsParentModalUsable()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        using var backend = new HeadlessBackend(100, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(100, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -170,8 +170,7 @@ public static class SkillsTreeTests
                 var output = string.Empty;
                 while (!output.Contains(text, StringComparison.Ordinal))
                 {
-                    await Task.Delay(10, token);
-                    output += backend.TakeOutput();
+                    output += await backend.ReadOutputAsync(token);
                 }
             }
         },
@@ -182,8 +181,8 @@ public static class SkillsTreeTests
     [Fact]
     public static async Task DismissedParentDoesNotStartGroupVerification()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var backend = new HeadlessBackend(100, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(100, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -204,8 +203,7 @@ public static class SkillsTreeTests
             var output = string.Empty;
             while (!output.Contains("Verify", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
             backend.FeedInput("\r\u001b[27u");
@@ -219,8 +217,8 @@ public static class SkillsTreeTests
     [Fact]
     public static async Task LargeClaudeGroupReportsPartialEnablementAndNextSpaceDisablesAll()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        using var backend = new HeadlessBackend(100, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(100, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -267,8 +265,7 @@ public static class SkillsTreeTests
                 var output = string.Empty;
                 while (!output.Contains(expected, StringComparison.Ordinal))
                 {
-                    await Task.Delay(10, token);
-                    output += backend.TakeOutput();
+                    output += await backend.ReadOutputAsync(token);
                 }
             }
         },
@@ -279,8 +276,8 @@ public static class SkillsTreeTests
     [Fact]
     public static async Task GroupToggleCancellationPreservesCompletedChangesAndAllowsRetry()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        using var backend = new HeadlessBackend(100, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(100, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -326,8 +323,7 @@ public static class SkillsTreeTests
                 var output = string.Empty;
                 while (!output.Contains(expected, StringComparison.Ordinal))
                 {
-                    await Task.Delay(10, token);
-                    output += backend.TakeOutput();
+                    output += await backend.ReadOutputAsync(token);
                 }
             }
         },
@@ -340,8 +336,8 @@ public static class SkillsTreeTests
     [InlineData(true)]
     public static async Task SkillInvocationProgress_UsesSharedToolBlocksAndPreservesOtherActivities(bool fail)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var backend = new HeadlessBackend(120, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(120, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -352,8 +348,7 @@ public static class SkillsTreeTests
             var output = string.Empty;
             while (!output.Contains("Invocation: fixture", StringComparison.Ordinal) || !output.Contains("README.md", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
             Assert.Contains("SKILLS: review - running", output, StringComparison.Ordinal);
@@ -371,8 +366,7 @@ public static class SkillsTreeTests
             output = string.Empty;
             while (!output.Contains("TOOLS: read_file - running", StringComparison.Ordinal))
             {
-                await Task.Delay(10, token);
-                output += backend.TakeOutput();
+                output += await backend.ReadOutputAsync(token);
             }
 
             Assert.DoesNotContain("SKILLS: review - running", output, StringComparison.Ordinal);

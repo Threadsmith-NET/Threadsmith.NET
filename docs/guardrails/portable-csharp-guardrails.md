@@ -282,7 +282,9 @@ public MyService(IEnumerable<IPipelineDefinition> pipelineDefinitions) { /* ... 
 ### G-24: Arrange-Act-Assert
 Always use AAA structure; mark sections with comments when non-obvious.
 
-Functional tests must not require successful work to finish within an arbitrary wall-clock duration on an unknown runner. Synchronize on observable completion or explicit barriers and propagate the test runner's cancellation token. Do not fix timing flakes by increasing per-test deadlines. Keep production timeout defaults unchanged; test their configuration separately from real-process functional coverage. Tests specifically verifying deadline behavior should use a controllable clock or explicit cancellation where possible, without an additional runner-speed assertion. Whole-run infrastructure watchdogs are safety limits, not product performance assertions.
+Functional tests must not require successful work to finish within an arbitrary wall-clock duration on an unknown runner. Synchronize on observable completion or explicit barriers and propagate the test runner's cancellation token. Do not fix timing flakes by increasing per-test deadlines. Keep production timeout defaults unchanged; test their configuration separately from real-process functional coverage. Tests specifically verifying deadline behavior should use a controllable clock or explicit cancellation, without an additional runner-speed assertion. Whole-run infrastructure watchdogs are safety limits, not product performance assertions.
+
+The architecture test gate rejects explicit wall-clock waits, deadline cancellation, stopwatch assertions, and test-level timeouts. Review fixture construction and nested production/SDK defaults as well: a test can inherit a real deadline without containing a timed wait. Passing this source guard does not replace that review.
 
 ```csharp
 [Fact]

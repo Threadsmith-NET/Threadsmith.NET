@@ -23,12 +23,14 @@ public sealed class OpenAiCodexCatalogClient
     private static readonly Regex ReleaseTagPattern = new(@"^rust-v(?<version>\d{1,4}\.\d{1,4}\.\d{1,4})$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCodexCatalogClient"/> class.</summary>
-    public OpenAiCodexCatalogClient(HttpClient httpClient)
+    public OpenAiCodexCatalogClient(HttpClient httpClient, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         _httpClient = httpClient;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Fetches and projects the account's current Codex model catalog.</summary>
@@ -101,8 +103,8 @@ public sealed class OpenAiCodexCatalogClient
 
     private async Task<string> ResolveClientVersionAsync(CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(ReleaseLookupTimeout);
+        using var deadline = new CancellationTokenSource(ReleaseLookupTimeout, _timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         try
         {
             using HttpRequestMessage request = new(HttpMethod.Get, LatestCodexRelease);

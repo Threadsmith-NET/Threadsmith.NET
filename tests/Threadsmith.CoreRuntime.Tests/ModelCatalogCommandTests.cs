@@ -26,7 +26,7 @@ public static class ModelCatalogCommandTests
         var surface = new RecordingSurface([$"/models {action} {providerId}", "/help", "/quit"]);
         var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
 
-        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(3));
+        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(3, surface.ComposerRequests.Count);
         Assert.Equal((action, providerId), Assert.Single(maintenance.Calls));
@@ -49,7 +49,7 @@ public static class ModelCatalogCommandTests
         var surface = new RecordingSurface([$"/models {action} typo", "/help", "/quit"]);
         var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(3)));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken));
 
         Assert.Single(surface.ComposerRequests);
         Assert.Single(maintenance.Calls);

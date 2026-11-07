@@ -20,11 +20,18 @@ internal static partial class ClipboardReader
     }
 
     /// <summary>Reads clipboard data under configured platform-independent limits.</summary>
-    internal static async Task<string?> ReadAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
+    internal static Task<string?> ReadAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
     {
+        return ReadAsync(limits, TimeProvider.System, cancellationToken);
+    }
+
+    /// <summary>Uses the supplied clock for the clipboard deadline.</summary>
+    internal static async Task<string?> ReadAsync(TuiResourceLimits limits, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
         cancellationToken.ThrowIfCancellationRequested();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(limits.ClipboardTimeoutMilliseconds));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(limits.ClipboardTimeoutMilliseconds), timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         var commands = OperatingSystem.IsWindows()
             ? new[]
             {

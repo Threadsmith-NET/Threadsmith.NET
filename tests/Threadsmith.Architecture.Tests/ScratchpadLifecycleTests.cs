@@ -49,7 +49,8 @@ public sealed class ScratchpadLifecycleTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var invocation = new ToolInvocationContext
         {
             RepositoryPath = fixture.Repository,
@@ -451,7 +452,7 @@ public sealed class ScratchpadLifecycleTests
         public IReadOnlyList<ActiveProcessInfo> ActiveProcesses { get; set; } = [];
 
         public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default)
-            => new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance).RunAsync(request, cancellationToken);
+            => new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).RunAsync(request, cancellationToken);
     }
 
     private sealed class Fixture : IAsyncDisposable
@@ -530,7 +531,8 @@ public sealed class ScratchpadLifecycleTests
             var registry = new ToolRegistry([write], state);
             var processes = new ProcessManager(
                 new SecretOutputSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var git = await processes.RunAsync(
                 new ProcessExecutionRequest
                 {

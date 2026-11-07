@@ -28,7 +28,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     {
         const string canary = "Native skill Jira description canary";
         using var handler = new NativeJiraHandler(canary);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var options = new JiraOptions
         {
             Providers = new Dictionary<string, JiraProviderOptions>
@@ -115,7 +115,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             new SkillWorkflowStep { StepId = "read", Kind = SkillWorkflowStepKind.InvokeProcedure },
             iteration: 1,
             content: [],
-            inputJson: "{}").WaitAsync(TimeSpan.FromSeconds(10));
+            inputJson: "{}").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, result.ModelTurns);
         Assert.Equal(1, result.ToolCalls);
@@ -184,7 +184,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             await workspaces.RegisterBaselineAsync(baseline);
             await using var scheduler = CreateScheduler();
             var checkpoints = new RoleCheckpointStore();
-            var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+            var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var provider = new NativeDelegatingProvider(request.RunId, metadata.Definition.Id, request.SessionId, usage, role);
             var runners = new ModelExplorerAssignmentRunnerFactory(
                 new AgentContextAssembler(evidence),
@@ -248,7 +248,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 new SkillWorkflowStep { StepId = "coordinate", Kind = SkillWorkflowStepKind.InvokeProcedure },
                 iteration: 1,
                 content: [],
-                inputJson: "{}").WaitAsync(TimeSpan.FromSeconds(10));
+                inputJson: "{}").WaitAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal(20, usage.GetOwnerSnapshot(request.SessionId).InputTokens);
             Assert.Equal(6, usage.GetOwnerSnapshot(request.SessionId).OutputTokens);

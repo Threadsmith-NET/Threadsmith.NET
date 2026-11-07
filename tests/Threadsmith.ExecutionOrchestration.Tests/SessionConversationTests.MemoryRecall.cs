@@ -21,7 +21,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler { EmitSecondTool = true };
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches, intelligenceOnly);
         var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
@@ -84,7 +84,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler { EmitSecondTool = true };
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, intelligenceOnly: true);
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
@@ -122,7 +122,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler { EmitSecondTool = true };
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
@@ -156,7 +156,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler();
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
         scenario.Memory.FilterMode = mode;
@@ -187,7 +187,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler();
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
         scenario.Memory.FilterMode = SituationalConceptFilterMode.Shadow;
@@ -206,7 +206,7 @@ public sealed partial class SessionConversationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler { EmitSecondTool = true, RepeatConcept = true };
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
         scenario.Memory.FilterMode = SituationalConceptFilterMode.Enforce;
@@ -331,6 +331,7 @@ public sealed partial class SessionConversationTests
             };
             _inner = _definition.Registration.CreateProvider(new ModelProviderActivationContext
             {
+                TimeProvider = new FakeTimeProvider(DateTimeOffset.UtcNow),
                 HttpClient = client,
                 Profile = _profile,
                 ResolvedSecret = "test-key",

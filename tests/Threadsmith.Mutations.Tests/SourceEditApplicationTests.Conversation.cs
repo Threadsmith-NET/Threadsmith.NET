@@ -30,7 +30,7 @@ public sealed partial class SourceEditApplicationTests
         var publication = new TestPublicationGate();
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeDiagnostics ? ["CS0246", "CS8602"] : [] } });
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeDiagnostics ? ["CS0246", "CS8602"] : [] } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance, publication);
             return createdRefresh;
         });
@@ -47,7 +47,7 @@ public sealed partial class SourceEditApplicationTests
         var analyzer = new CompletingAnalyzer(engines, fixture.Events);
         var edits = fixture.CreateApplication(analyzer: analyzer, refresh: refresh);
         var registry = new ToolRegistry([new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new SourceEditTool(edits, TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var provider = new DirectEditProvider
         {
             BeforeFinalAnswer = feedbackDuringFinalAnswer ? analyzer.PublishLateFeedback : null,
@@ -64,7 +64,7 @@ public sealed partial class SourceEditApplicationTests
         var sessions = new SessionApplication(
             fixture.Events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(500_000, 50, TimeSpan.FromMinutes(2))),
+            new ExecutionBudget(new BudgetDimensions(500_000, 50, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             pipeline,
@@ -167,7 +167,7 @@ public sealed partial class SourceEditApplicationTests
         SemanticRefreshCoordinator? createdRefresh = null;
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance);
             return createdRefresh;
         });
@@ -241,7 +241,7 @@ public sealed partial class SourceEditApplicationTests
         SemanticRefreshCoordinator? createdRefresh = null;
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance);
             return createdRefresh;
         });
@@ -304,7 +304,7 @@ public sealed partial class SourceEditApplicationTests
         SemanticRefreshCoordinator? createdRefresh = null;
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance);
             return createdRefresh;
         });

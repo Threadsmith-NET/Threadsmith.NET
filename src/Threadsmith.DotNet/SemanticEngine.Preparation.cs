@@ -46,8 +46,9 @@ public sealed partial class SemanticEngine
         IPromptLoader prompts,
         SemanticPreparationLimits preparationLimits,
         TimeSpan? cancellationBackstop = null,
-        SemanticResourceLimits? resourceLimits = null)
-        : this(events, logger, prompts, cancellationBackstop, preparationLimits.ApplyTo(resourceLimits))
+        SemanticResourceLimits? resourceLimits = null,
+        TimeProvider? timeProvider = null)
+        : this(events, logger, prompts, cancellationBackstop, preparationLimits.ApplyTo(resourceLimits), timeProvider: timeProvider)
     {
     }
 

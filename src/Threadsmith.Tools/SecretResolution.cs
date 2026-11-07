@@ -345,12 +345,13 @@ public interface ISecretResolver
 /// <summary>Deterministic host-owned aggregate secret resolver.</summary>
 public sealed class SecretResolver : ISecretResolver
 {
+    private readonly TimeProvider _timeProvider;
     private static readonly AsyncLocal<HashSet<string>?> ActiveRequests = new();
     private readonly IReadOnlyList<ISecretProvider> _providers;
     private readonly SecretResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="SecretResolver"/> class.</summary>
-    public SecretResolver(IEnumerable<ISecretProvider> providers, SecretResourceLimits? limits = null)
+    public SecretResolver(IEnumerable<ISecretProvider> providers, SecretResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(providers);
         ISecretProvider[] ordered = [.. providers.OrderByDescending(provider => provider.Priority).ThenBy(provider => provider.Id, StringComparer.Ordinal)];
@@ -362,6 +363,7 @@ public sealed class SecretResolver : ISecretResolver
             throw new ArgumentException("Secret providers require unique stable IDs and priorities.", nameof(providers));
         }
 
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _providers = ordered;
         _limits = limits ?? new();
         _limits.Validate();
@@ -418,8 +420,8 @@ public sealed class SecretResolver : ISecretResolver
 
                 eligible = true;
                 SecretProviderResult result;
-                using var attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                attemptCancellation.CancelAfter(request.ProviderTimeout);
+                using var attemptCancellationDeadline = new CancellationTokenSource(request.ProviderTimeout, _timeProvider);
+                using var attemptCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, attemptCancellationDeadline.Token);
                 try
                 {
                     result = await provider.TryResolveAsync(request, attemptCancellation.Token)
@@ -580,16 +582,18 @@ public sealed class UserFileSecretProvider : JsonFileSecretProvider
 /// <summary>Rebinds repository secret lookup atomically when the active repository changes.</summary>
 public sealed class RepositorySecretProvider : ISecretProvider
 {
+    private readonly TimeProvider _timeProvider;
     private readonly Lock _gate = new();
     private readonly SecretResourceLimits _limits;
     private RepositoryFileSecretProvider _current;
 
     /// <summary>Initializes a new instance of the <see cref="RepositorySecretProvider"/> class.</summary>
-    public RepositorySecretProvider(string repositoryRoot, SecretResourceLimits? limits = null)
+    public RepositorySecretProvider(string repositoryRoot, SecretResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         _limits = limits ?? new();
         _limits.Validate();
-        _current = new RepositoryFileSecretProvider(repositoryRoot, _limits);
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _current = new RepositoryFileSecretProvider(repositoryRoot, _limits, _timeProvider);
     }
 
     /// <inheritdoc />
@@ -611,7 +615,7 @@ public sealed class RepositorySecretProvider : ISecretProvider
     public void BindRepository(string repositoryRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        var next = new RepositoryFileSecretProvider(repositoryRoot, _limits);
+        var next = new RepositoryFileSecretProvider(repositoryRoot, _limits, _timeProvider);
         lock (_gate)
         {
             _current = next;
@@ -638,11 +642,14 @@ public sealed class RepositorySecretProvider : ISecretProvider
 /// <summary>Reads a repository store only after confinement and Git index/ignore proof.</summary>
 public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 {
+    private readonly TimeProvider _timeProvider;
+
     /// <summary>Initializes a new instance of the <see cref="RepositoryFileSecretProvider"/> class.</summary>
-    public RepositoryFileSecretProvider(string repositoryRoot, SecretResourceLimits? limits = null)
+    public RepositoryFileSecretProvider(string repositoryRoot, SecretResourceLimits? limits = null, TimeProvider? timeProvider = null)
         : base(Path.Combine(Path.GetFullPath(repositoryRoot), ".threadsmith", "secrets", "config.json"), limits)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         RepositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
     }
 
@@ -680,8 +687,8 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
             return Failure(SecretResolutionFailure.UnsafeStore, "repository-path-rejected");
         }
 
-        using var validationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        validationCancellation.CancelAfter(request.ProviderTimeout);
+        using var validationCancellationDeadline = new CancellationTokenSource(request.ProviderTimeout, _timeProvider);
+        using var validationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, validationCancellationDeadline.Token);
         var relative = Path.GetRelativePath(RepositoryRoot, StorePath).Replace('\\', '/');
         foreach (var indexPath in GetApplicableIndexPaths(relative))
         {

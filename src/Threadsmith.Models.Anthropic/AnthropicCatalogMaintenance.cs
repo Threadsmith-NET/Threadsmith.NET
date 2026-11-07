@@ -8,6 +8,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
     private readonly IReadOnlyDictionary<string, AnthropicProviderConfiguration> _providers;
     private readonly Func<string, CancellationToken, Task<string?>> _resolveSecret;
     private readonly HttpClient _httpClient;
+    private readonly TimeProvider _timeProvider;
     private readonly string _cacheDirectory;
     private readonly ConcurrentDictionary<string, AnthropicCatalogSnapshot> _latest = new(StringComparer.OrdinalIgnoreCase);
 
@@ -16,7 +17,8 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
         IEnumerable<AnthropicProviderConfiguration> providers,
         Func<string, CancellationToken, Task<string?>> resolveSecret,
         HttpClient httpClient,
-        string cacheDirectory)
+        string cacheDirectory,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(providers);
         ArgumentNullException.ThrowIfNull(resolveSecret);
@@ -25,6 +27,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
         _providers = providers.ToDictionary(provider => provider.Id, StringComparer.OrdinalIgnoreCase);
         _resolveSecret = resolveSecret;
         _httpClient = httpClient;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _cacheDirectory = Path.GetFullPath(cacheDirectory);
         foreach (var provider in _providers.Values)
         {
@@ -41,8 +44,10 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
         Func<string, CancellationToken, Task<string?>> resolveSecret,
         HttpClient httpClient,
         string cacheDirectory,
-        CancellationToken cancellationToken)
+        TimeProvider? timeProvider = null,
+        CancellationToken cancellationToken = default)
     {
+        timeProvider ??= TimeProvider.System;
         AnthropicCatalogHydrator.ValidateDescriptor(provider);
         if (provider.Models.Count != 0)
         {
@@ -67,7 +72,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
         AnthropicModelCatalogCacheEntry? cached = null;
         try
         {
-            cache = AnthropicModelCatalogCache.ForProvider(cacheDirectory, provider.Id, provider.ResourceLimits);
+            cache = AnthropicModelCatalogCache.ForProvider(cacheDirectory, provider.Id, provider.ResourceLimits, timeProvider);
             cached = await cache.LoadAsync(provider.Id, reference, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -75,7 +80,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
             // Cache failures are a defined cache miss; authenticated acquisition may still succeed.
         }
 
-        var fresh = cached is not null && DateTimeOffset.UtcNow - cached.FetchedAt < TimeSpan.FromSeconds(provider.ResourceLimits.MetadataCacheLifetimeSeconds);
+        var fresh = cached is not null && timeProvider.GetUtcNow() - cached.FetchedAt < TimeSpan.FromSeconds(provider.ResourceLimits.MetadataCacheLifetimeSeconds);
         if (fresh && cached is not null)
         {
             return Hydrate(provider, cached.Models, new AnthropicCatalogSnapshot { FetchedAt = cached.FetchedAt, Status = "fresh cached metadata; account access not yet verified in this process" });
@@ -83,8 +88,8 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
 
         try
         {
-            var models = await DiscoverAsync(httpClient, key, provider.ResourceLimits, cancellationToken).ConfigureAwait(false);
-            var fetchedAt = DateTimeOffset.UtcNow;
+            var models = await DiscoverAsync(httpClient, key, provider.ResourceLimits, timeProvider, cancellationToken).ConfigureAwait(false);
+            var fetchedAt = timeProvider.GetUtcNow();
             var saved = cache is not null && await TryStoreAsync(cache, provider.Id, reference, models, fetchedAt, cancellationToken).ConfigureAwait(false);
             return Hydrate(provider, models, new AnthropicCatalogSnapshot
             {
@@ -130,7 +135,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
             HasCredential = hasCredential,
             IsAuthenticated = hasCredential && snapshot.Authenticated && !snapshot.CredentialRejected,
             IsAvailable = available,
-            CacheAge = snapshot.FetchedAt is { } fetchedAt ? DateTimeOffset.UtcNow - fetchedAt : null,
+            CacheAge = snapshot.FetchedAt is { } fetchedAt ? _timeProvider.GetUtcNow() - fetchedAt : null,
             Status = Describe(snapshot, hasCredential, available),
         };
     }
@@ -150,9 +155,9 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
 
         try
         {
-            var cache = AnthropicModelCatalogCache.ForProvider(_cacheDirectory, provider.Id, provider.ResourceLimits);
-            var models = await DiscoverAsync(_httpClient, secret, provider.ResourceLimits, cancellationToken).ConfigureAwait(false);
-            var fetchedAt = DateTimeOffset.UtcNow;
+            var cache = AnthropicModelCatalogCache.ForProvider(_cacheDirectory, provider.Id, provider.ResourceLimits, _timeProvider);
+            var models = await DiscoverAsync(_httpClient, secret, provider.ResourceLimits, _timeProvider, cancellationToken).ConfigureAwait(false);
+            var fetchedAt = _timeProvider.GetUtcNow();
             var hydrated = Hydrate(provider with { Enabled = true }, models, new AnthropicCatalogSnapshot
             {
                 Authenticated = true,
@@ -181,7 +186,7 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
                 : new AnthropicCatalogSnapshot { Status = "metadata unavailable" };
             if (exception.CredentialRejected)
             {
-                await TryInvalidateAsync(AnthropicModelCatalogCache.ForProvider(_cacheDirectory, provider.Id, provider.ResourceLimits), cancellationToken).ConfigureAwait(false);
+                await TryInvalidateAsync(AnthropicModelCatalogCache.ForProvider(_cacheDirectory, provider.Id, provider.ResourceLimits, _timeProvider), cancellationToken).ConfigureAwait(false);
             }
 
             _latest[provider.Id] = old with { Authenticated = false, CredentialRejected = old.CredentialRejected || exception.CredentialRejected, Status = exception.Message };
@@ -204,11 +209,12 @@ public sealed class AnthropicCatalogMaintenance : IModelCatalogMaintenance
         return provider with { Enabled = false, Models = [], CatalogSnapshot = new AnthropicCatalogSnapshot { Status = status, CredentialRejected = rejected } };
     }
 
-    private static Task<IReadOnlyList<AnthropicDiscoveredModel>> DiscoverAsync(HttpClient httpClient, string key, AnthropicResourceLimits limits, CancellationToken cancellationToken)
+    private static Task<IReadOnlyList<AnthropicDiscoveredModel>> DiscoverAsync(HttpClient httpClient, string key, AnthropicResourceLimits limits, TimeProvider timeProvider, CancellationToken cancellationToken)
     {
         return new AnthropicModelDiscoveryService(
-            AnthropicModelDiscoveryClient.Create(httpClient, key, TimeSpan.FromMilliseconds(limits.DiscoveryTimeoutMilliseconds), limits),
-            limits: limits)
+            AnthropicModelDiscoveryClient.Create(httpClient, key, TimeSpan.FromMilliseconds(limits.DiscoveryTimeoutMilliseconds), limits, timeProvider),
+            limits: limits,
+            timeProvider: timeProvider)
             .DiscoverAsync(cancellationToken);
     }
 

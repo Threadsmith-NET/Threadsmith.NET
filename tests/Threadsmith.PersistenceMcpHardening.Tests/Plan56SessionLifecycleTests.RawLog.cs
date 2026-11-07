@@ -67,7 +67,7 @@ public static partial class Plan56SessionLifecycleTests
             new SubmitRequestCommand(initial.ActiveSession.SessionId, "wait at the model boundary"), cancellationToken);
         try
         {
-            await model.Entered.WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+            await model.Entered.WaitAsync(cancellationToken);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 harness.Lifecycle.HandleAsync(new CreateNewSessionCommand(), cancellationToken));
             Assert.Equal(contents, await File.ReadAllTextAsync(path, cancellationToken));
@@ -80,7 +80,7 @@ public static partial class Plan56SessionLifecycleTests
         {
             model.Release();
             await harness.Sessions.HandleAsync(new WaitForRunCommand(run), cancellationToken)
-                .WaitAsync(TimeSpan.FromSeconds(3), cancellationToken);
+                .WaitAsync(cancellationToken);
         }
     }
 

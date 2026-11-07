@@ -95,7 +95,8 @@ public sealed class SdkStdioTransportTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateInvocationContext()),
+                CreateInvocationContext())
+            { TimeProvider = new FakeTimeProvider() },
             TestContext.Current.CancellationToken);
         var result = Assert.IsType<JsonElement>(envelope.Value);
         Assert.Equal("hello-mcp", result[0].GetString());
@@ -110,7 +111,8 @@ public sealed class SdkStdioTransportTests
     {
         var serverAssembly = GetServerAssemblyPath();
         var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
-        await using var adapter = CreateAdapter();
+        var clock = new ObservedTimeProvider();
+        await using var adapter = CreateAdapter(clock);
         var profile = CreateProfile(
             [serverAssembly, "--hang-on-shutdown", "--pid-file", pidFile],
             TimeSpan.FromMilliseconds(250));
@@ -119,7 +121,10 @@ public sealed class SdkStdioTransportTests
             var connection = await adapter.ConnectAsync(profile, TestContext.Current.CancellationToken);
             Assert.True(connection.Succeeded, connection.Status.Error);
             var processId = int.Parse(await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken));
-            await adapter.DisconnectAsync(profile.Id, TestContext.Current.CancellationToken);
+            var disconnect = adapter.DisconnectAsync(profile.Id, TestContext.Current.CancellationToken);
+            await clock.WaitForTimerAsync(profile.DrainKillTimeout, TestContext.Current.CancellationToken);
+            clock.Advance(profile.DrainKillTimeout);
+            await disconnect;
 
             await WaitForExitAsync(processId, TestContext.Current.CancellationToken);
         }
@@ -137,7 +142,8 @@ public sealed class SdkStdioTransportTests
         var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
         var transport = new SdkStdioTransport(
             new SecretOutputSanitizer(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile(
             [serverAssembly, "--hang-on-shutdown", "--pid-file", pidFile],
             TimeSpan.FromSeconds(5));
@@ -166,7 +172,8 @@ public sealed class SdkStdioTransportTests
         var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
         var transport = new SdkStdioTransport(
             new SecretOutputSanitizer(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile(
             [serverAssembly, "--invalid-handshake", "--pid-file", pidFile],
             TimeSpan.FromMilliseconds(250));
@@ -185,15 +192,17 @@ public sealed class SdkStdioTransportTests
         }
     }
 
-    private static McpAdapter CreateAdapter()
+    private static McpAdapter CreateAdapter(TimeProvider? timeProvider = null)
     {
+        timeProvider ??= new FakeTimeProvider();
         var sanitizer = new SecretOutputSanitizer();
         return new McpAdapter(
-            _ => new SdkStdioTransport(sanitizer, NullLoggerFactory.Instance),
+            _ => new SdkStdioTransport(sanitizer, NullLoggerFactory.Instance, timeProvider: timeProvider),
             new EmptySecretStore(),
             sanitizer,
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: timeProvider);
     }
 
     private static ToolInvocationContext CreateInvocationContext()

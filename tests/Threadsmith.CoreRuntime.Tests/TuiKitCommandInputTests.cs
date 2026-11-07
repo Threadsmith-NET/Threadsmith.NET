@@ -35,7 +35,7 @@ public static class TuiKitCommandInputTests
     [InlineData(F3 + "discard" + F3 + "ordinary\r", "ordinary")]
     public static async Task BufferedInputPreservesCompletionAndEditorSemantics(string keys, string expected)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new HeadlessBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
@@ -56,7 +56,7 @@ public static class TuiKitCommandInputTests
     [InlineData(F3 + "reasoning effort\r")]
     public static async Task AcceptanceDoesNotSubmit(string keys)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new ObservedBackend();
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
@@ -64,7 +64,7 @@ public static class TuiKitCommandInputTests
         {
             var read = surface.ReadComposerAsync(new ComposerRequest("repo > "), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
-            var copied = backend.ExpectOutput(ClipboardWriter.BuildSequence("/reasoning"));
+            var copied = backend.ExpectOutputAsync(ClipboardWriter.BuildSequence("/reasoning"));
             backend.Input.FeedInput(keys + CopyDraft);
             await copied.WaitAsync(token);
             Assert.False(read.IsCompleted);
@@ -80,7 +80,7 @@ public static class TuiKitCommandInputTests
     [InlineData(ComposerPurpose.Steering)]
     public static async Task OtherPurposesDoNotComplete(ComposerPurpose purpose)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new HeadlessBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
@@ -110,13 +110,13 @@ public static class TuiKitCommandInputTests
     [InlineData(F3 + Escape)]
     public static async Task DiscoveryDismissalDoesNotArmActiveCancellation(string keys)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new HeadlessBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
         {
-            await using var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System));
+            await using var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider()));
             backend.FeedInput(keys + "\r" + Escape + Escape);
             Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
             Assert.Equal(ActiveRunInputSignal.CancellationArmed, await lease.ReadAsync(token));
@@ -129,7 +129,7 @@ public static class TuiKitCommandInputTests
     [Fact]
     public static async Task CancelledReadClosesPaletteAndPreservesDraft()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new ObservedBackend();
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
@@ -138,7 +138,7 @@ public static class TuiKitCommandInputTests
             using var readLifetime = CancellationTokenSource.CreateLinkedTokenSource(token);
             var read = surface.ReadComposerAsync(new ComposerRequest("ordinary"), readLifetime.Token);
             await surface.PresentAsync(new PresentationBatch([]), token);
-            var opened = backend.ExpectOutput("Commands");
+            var opened = backend.ExpectOutputAsync("Commands");
             backend.Input.FeedInput("/rea" + F3);
             await opened.WaitAsync(token);
             await readLifetime.CancelAsync();
@@ -175,7 +175,7 @@ public static class TuiKitCommandInputTests
         await surface.RunAsync(
             async token =>
         {
-            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider())))
             {
                 backend.FeedInput("  guide main\nonly  \r");
                 Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
@@ -202,7 +202,7 @@ public static class TuiKitCommandInputTests
         await surface.RunAsync(
             async token =>
         {
-            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
+            await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(new FakeTimeProvider())))
             {
                 backend.FeedInput("keep this\r");
                 Assert.Equal(ActiveRunInputSignal.SteeringRequested, await lease.ReadAsync(token));
@@ -214,64 +214,5 @@ public static class TuiKitCommandInputTests
             Assert.Equal("keep this", (await ordinary).Text);
         },
             cancellationToken);
-    }
-
-    private sealed class ObservedBackend : ITerminalBackend
-    {
-        private Expectation? _expectation;
-
-        public TerminalCapabilities Capabilities => Input.Capabilities;
-
-        public Size Size => Input.Size;
-
-        public bool IsInteractive => true;
-
-        internal HeadlessBackend Input { get; } = new(80, 24);
-
-        public void Start()
-        {
-            Input.Start();
-        }
-
-        public void Stop()
-        {
-            Input.Stop();
-        }
-
-        public void Dispose()
-        {
-            Input.Dispose();
-        }
-
-        public void Flush()
-        {
-            Input.Flush();
-        }
-
-        public int ReadInput(byte[] buffer, int offset, int count)
-        {
-            return Input.ReadInput(buffer, offset, count);
-        }
-
-        public void Write(string data)
-        {
-            Input.Write(data);
-            if (Volatile.Read(ref _expectation) is { } expectation
-                && Input.PeekOutput().Contains(expectation.Text, StringComparison.Ordinal))
-            {
-                expectation.Completion.TrySetResult();
-            }
-        }
-
-        internal Task ExpectOutput(string text)
-        {
-            _ = Input.TakeOutput();
-            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var expectation = new Expectation(text, completion);
-            Volatile.Write(ref _expectation, expectation);
-            return completion.Task;
-        }
-
-        private sealed record Expectation(string Text, TaskCompletionSource Completion);
     }
 }

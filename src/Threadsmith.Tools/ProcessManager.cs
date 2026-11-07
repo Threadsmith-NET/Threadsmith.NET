@@ -274,9 +274,9 @@ public sealed class ProcessManager : IProcessManager
             process.StandardError,
             request.MaximumOutputCharacters,
             cancellationToken);
+        using var executionDeadline = new CancellationTokenSource(request.Timeout, _timeProvider);
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        timeoutCancellation.CancelAfter(request.Timeout);
+            cancellationToken, executionDeadline.Token);
         var timedOut = false;
         try
         {
@@ -364,7 +364,7 @@ public sealed class ProcessManager : IProcessManager
         try
         {
             await process.WaitForExitAsync(CancellationToken.None)
-                .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
+                .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds), _timeProvider);
         }
         catch (TimeoutException)
         {

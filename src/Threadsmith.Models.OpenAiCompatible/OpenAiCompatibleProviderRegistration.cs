@@ -204,7 +204,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             context.ResolvedSecret,
             provider.Headers,
             model.ReasoningCompatibility,
-            promptCacheKeyEnabled: promptCacheKeyEnabled);
+            promptCacheKeyEnabled: promptCacheKeyEnabled,
+            timeProvider: context.TimeProvider);
     }
 
     /// <summary>Rejects simultaneous dedicated and legacy model configuration.</summary>

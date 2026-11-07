@@ -59,7 +59,7 @@ public static partial class RepositoryMemoryBindingTests
         using var search = new HybridRepositoryMemoryRetriever(intelligence.Store, new ArcheologyEmbeddings());
         var query = new RepositoryIntelligenceQuery(search, options, intelligence.Monitor);
         var queryTool = new RepositoryIntelligenceTool(query, options, TestPromptLoader.Instance);
-        var git = new GitQueryService();
+        var git = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         ITool[] readers = [queryTool, new GitLogTool(git, TestPromptLoader.Instance), new GitShowTool(git, TestPromptLoader.Instance), new GitDiffTool(git, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())];
         var states = new ToolStateManager(readers.Select(tool => tool.Definition), configuration, Path.Combine(fixture.InitialRoot, ".threadsmith", "config.json"));
         await states.EnableAsync("git_log", ct);
@@ -72,14 +72,22 @@ public static partial class RepositoryMemoryBindingTests
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(intelligence.Events, sanitizer);
         var snapshots = new ConversationToolSnapshotStore();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), intelligence.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), intelligence.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var provider = new ArcheologyProvider(disableDuringChild || attack == "deadline", attack);
         var profile = new ModelProfile
         {
-            Id = ModelProfileId.New(), Name = "archeology-fixture", Provider = "fixture", ModelId = "fixture",
-            Endpoint = new Uri("https://example.invalid"), ContextWindow = 32768, MaximumOutputTokens = 2048, RequestOutputTokenReserve = 1024,
+            Id = ModelProfileId.New(),
+            Name = "archeology-fixture",
+            Provider = "fixture",
+            ModelId = "fixture",
+            Endpoint = new Uri("https://example.invalid"),
+            ContextWindow = 32768,
+            MaximumOutputTokens = 2048,
+            RequestOutputTokenReserve = 1024,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed, IntendedWorkloadClasses = [WorkloadClass.General], SupportedReasoningLevels = [ReasoningLevel.None],
+            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
+            IntendedWorkloadClasses = [WorkloadClass.General],
+            SupportedReasoningLevels = [ReasoningLevel.None],
         };
         var catalog = new ConfiguredModelCatalog([profile]);
         var selection = new AgentModelSelector(catalog, new DefaultModelSelectionPolicy(catalog));
@@ -97,9 +105,10 @@ public static partial class RepositoryMemoryBindingTests
             sanitizer,
             delegationOptions,
             TestPromptLoader.Instance);
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions { MaximumActiveChildren = 1, MaximumActiveChildrenPerParent = 1 });
+        var schedulerClock = new FakeTimeProvider(DateTimeOffset.UtcNow);
+        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions { MaximumActiveChildren = 1, MaximumActiveChildrenPerParent = 1 }, timeProvider: schedulerClock);
         var checkpoints = new DelegationCheckpointStore(fixture.InitialConnection);
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, intelligence.Events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, intelligence.Events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var plans = new DelegateAgentsPlanFactory(new MissingArcheologyWorkspace(), new SessionModelPreferences(profile.Id, ReasoningLevel.None), snapshots, TestPromptLoader.Instance, delegationOptions, selection);
         var tool = new RepositoryArcheologyTool(evidence, query, operations, plans, runners, coordinator, snapshots, registry, delegationOptions, TestPromptLoader.Instance);
         registry.RegisterOrReplace(tool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-archeology"));
@@ -107,9 +116,15 @@ public static partial class RepositoryMemoryBindingTests
         states.RegisterFeature(queryTool.Definition.Id, queryTool);
         var invocation = new ToolInvocationContext
         {
-            RepositoryPath = fixture.InitialRoot, WorkspaceId = WorkspaceId.New(), RequestedBy = "model",
-            TrustLevel = RepositoryTrustLevel.TrustedRead, ApprovedRoots = ["."], AllowedExecutables = ["git"],
-            DeniedToolIds = ["git_diff"], ProhibitedPaths = ["denied.txt"], ModelProfileId = profile.Id,
+            RepositoryPath = fixture.InitialRoot,
+            WorkspaceId = WorkspaceId.New(),
+            RequestedBy = "model",
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            ApprovedRoots = ["."],
+            AllowedExecutables = ["git"],
+            DeniedToolIds = ["git_diff"],
+            ProhibitedPaths = ["denied.txt"],
+            ModelProfileId = profile.Id,
         };
         foreach (var invalid in new[] { "{}", "{\"question\":\" \"}", "{\"question\":\"focused\",\"tools\":[\"run_process\"]}", "{", JsonSerializer.Serialize(new { question = new string('x', 2049) }) })
         {
@@ -177,6 +192,12 @@ public static partial class RepositoryMemoryBindingTests
 
             Assert.False(operations.IsBusy);
             Assert.True(provider.Stopped);
+        }
+
+        if (attack == "deadline")
+        {
+            await provider.Waiting.Task.WaitAsync(ct);
+            schedulerClock.Advance(wallTime);
         }
 
         Assert.True(await pending);

@@ -37,7 +37,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(
             coordinator,
             new FixedRunnerFactory(new CompletedResponseRunner()),
@@ -65,7 +65,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         var response = new string('r', 60_000);
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(
             coordinator,
             new FixedRunnerFactory(new ResponseRunner(response)),
@@ -87,7 +87,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var options = new DelegateAgentsOptions
         {
             MaximumAgents = 5,
@@ -126,13 +126,16 @@ public sealed partial class DelegateAgentsToolExecutionTests
         });
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new ConcurrentResponseRunner(TimeSpan.FromMilliseconds(100));
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var runner = new ConcurrentResponseRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var input = CreateInput(2);
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(input, fixture.Context);
+        var running = fixture.Tool.ExecuteAsync(input, fixture.Context, TestContext.Current.CancellationToken);
+        await runner.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        runner.Release.TrySetResult();
+        var execution = await running;
         var result = execution.Value;
         var inspected = await coordinator.GetAsync(new DelegationId(Guid.Parse(result.DelegationId)));
 
@@ -200,7 +203,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new UncertainFindingRunner(uncertainty);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
@@ -233,14 +236,14 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new ReleasableResponseRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
 
         // Act
         var executionTask = fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
-        await runner.Entered.WaitAsync(TimeSpan.FromSeconds(5));
-        var running = await checkpoints.ChildrenRunning.WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.Entered.WaitAsync(TestContext.Current.CancellationToken);
+        var running = await checkpoints.ChildrenRunning.WaitAsync(TestContext.Current.CancellationToken);
         var inspected = await coordinator.GetAsync(running.DelegationId);
         runner.Release();
         var execution = await executionTask;
@@ -260,7 +263,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new BlockingRunner(expectedActive: 2);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         using var cancellation = new CancellationTokenSource();
@@ -270,7 +273,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
             CreateInput(2),
             fixture.Context,
             cancellation.Token);
-        await runner.AllEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.AllEntered.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
         var execution = await executionTask;
 
@@ -293,7 +296,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var steering = new RunSteeringCoordinator();
         var runner = new NonCooperativeJoinRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner), steering: steering);
@@ -333,7 +336,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new NonCooperativeJoinRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         using var cancellation = new CancellationTokenSource();
@@ -343,7 +346,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
             CreateInput(1),
             fixture.Context,
             cancellation.Token);
-        await runner.JoinEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.JoinEntered.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
         runner.ReleaseJoin();
         var execution = await executionTask;
@@ -363,7 +366,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new ThrowingAfterCancellationJoinRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         using var cancellation = new CancellationTokenSource();
@@ -373,7 +376,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
             CreateInput(1),
             fixture.Context,
             cancellation.Token);
-        await runner.JoinEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await runner.JoinEntered.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
         runner.ReleaseJoin();
         var execution = await executionTask;
@@ -391,28 +394,28 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         using var scheduler = new CancellationDisposalRaceScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new CompletedResponseRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var plan = fixture.Plans.Create(CreateInput(1), fixture.Context);
         var executionTask = coordinator.StartAsync(plan, runner);
-        await scheduler.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        await scheduler.Entered.WaitAsync(TestContext.Current.CancellationToken);
 
         // Act
         var cancellationTask = Task.Run(() => coordinator.CancelAsync(plan.DelegationId));
-        await scheduler.CancellationEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await scheduler.CancellationEntered.WaitAsync(TestContext.Current.CancellationToken);
         DelegationCheckpoint checkpoint;
         try
         {
             scheduler.Complete();
-            checkpoint = await executionTask.WaitAsync(TimeSpan.FromSeconds(5));
+            checkpoint = await executionTask.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
             scheduler.ReleaseCancellation();
         }
 
-        var cancelled = await cancellationTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var cancelled = await cancellationTask.WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.True(cancelled);
@@ -428,7 +431,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = fixture.Plans.Create(CreateInput(2), fixture.Context);
         using var cancellation = new CancellationTokenSource();
@@ -458,7 +461,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new FailingJoinRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
 
@@ -493,7 +496,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new EvidenceJoiningRunner(evidence);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
 
@@ -520,7 +523,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new MixedOutcomeRunner()));
 
         // Act
@@ -546,7 +549,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new ResponseRunner(response)));
 
         // Act
@@ -573,7 +576,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new UncertainFindingRunner("legacy fixture")));
 
         var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context);
@@ -598,7 +601,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var context = fixture.Context with
         {
@@ -619,7 +622,8 @@ public sealed partial class DelegateAgentsToolExecutionTests
         var coordinator = new DelegationCoordinator(
             scheduler,
             new RecordingCheckpointStore(),
-            events);
+            events,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = fixture.Plans.Create(CreateInput(1), fixture.Context);
 
@@ -640,7 +644,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
     {
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(2), fixture.Context));
         var first = CreateLegacyCompletedOutcome(plan, plan.Assignments[0]);
@@ -674,7 +678,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
     {
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
         var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(2), fixture.Context));
         var outcomes = plan.Assignments.Select((assignment, index) =>
@@ -715,7 +719,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new OpposingResponseRunner()));
 
         // Act
@@ -747,7 +751,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new NegatedResponseRunner()));
 
         // Act
@@ -770,7 +774,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var options = new DelegateAgentsOptions
         {
             MaximumAgents = 2,
@@ -812,7 +816,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
     {
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events);
+        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var options = new DelegateAgentsOptions
         {
             EnforceOperationalLimits = enforce,
@@ -857,7 +861,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var options = new DelegateAgentsOptions
         {
             MaximumAgents = 8,
@@ -892,7 +896,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new OversizedFindingFieldRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
@@ -922,7 +926,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new MultiLocationFindingRunner();
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
         var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(1), fixture.Context));
@@ -952,7 +956,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var prompts = TestPromptLoader.Instance
             .WithPrompt(
                 PromptFileNames.ToolDelegateAgentsResultHeader,
@@ -983,7 +987,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var response = new string('r', 15_000);
         var fixture = CreateTool(
             coordinator,
@@ -1011,17 +1015,26 @@ public sealed partial class DelegateAgentsToolExecutionTests
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
+        var clock = new ObservedTimeProvider();
         var checkpoints = new BlockingProgressCheckpointStore();
         var coordinator = new DelegationCoordinator(
             scheduler,
             checkpoints,
             events,
-            TimeSpan.FromMilliseconds(50));
+            TimeSpan.FromMilliseconds(50),
+            timeProvider: clock);
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context)
-            .WaitAsync(TimeSpan.FromSeconds(2));
+        var running = fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context, TestContext.Current.CancellationToken);
+        for (var progress = 0; progress < 2; progress++)
+        {
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromMilliseconds(50));
+        }
+
+        var execution = await running;
 
         // Assert
         Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
@@ -1044,20 +1057,33 @@ public sealed partial class DelegateAgentsToolExecutionTests
         });
         await using var scheduler = CreateScheduler();
         var checkpoints = new DelayedProgressCheckpointStore();
+        var clock = new ObservedTimeProvider();
+        var abandoned = new List<Task>();
         var coordinator = new DelegationCoordinator(
             scheduler,
             checkpoints,
             events,
-            TimeSpan.FromMilliseconds(50));
+            TimeSpan.FromMilliseconds(50),
+            timeProvider: clock)
+        {
+            AbandonedProgressSaveObserver = abandoned.Add,
+        };
         var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
 
         // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context)
-            .WaitAsync(TimeSpan.FromSeconds(2));
+        var running = fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context, TestContext.Current.CancellationToken);
+        for (var progress = 0; progress < 2; progress++)
+        {
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromMilliseconds(50));
+        }
+
+        var execution = await running;
         var eventCountAtTerminal = observed.Count;
         checkpoints.ReleaseProgress();
-        await checkpoints.LateSaveCompleted.WaitAsync(TimeSpan.FromSeconds(2));
-        await Task.Delay(TimeSpan.FromMilliseconds(100));
+        Assert.Equal(2, abandoned.Count);
+        await Task.WhenAll(abandoned).WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
@@ -1069,14 +1095,16 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
     private static AgentRunScheduler CreateScheduler()
     {
-        return new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            QueueCapacity = 8,
-            MaximumActiveChildren = 2,
-            MaximumActiveChildrenPerParent = 2,
-            MaximumActiveImplementers = 1,
-            ShutdownTimeout = TimeSpan.FromSeconds(2),
-        });
+        return new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                QueueCapacity = 8,
+                MaximumActiveChildren = 2,
+                MaximumActiveChildrenPerParent = 2,
+                MaximumActiveImplementers = 1,
+                ShutdownTimeout = TimeSpan.FromSeconds(2),
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
     }
 
     private static ToolFixture CreateTool(
@@ -1738,10 +1766,14 @@ public sealed partial class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class ConcurrentResponseRunner(TimeSpan delay) : IAgentAssignmentRunner
+    private sealed class ConcurrentResponseRunner : IAgentAssignmentRunner
     {
         private int _active;
         private int _maximumActive;
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int MaximumActive => Volatile.Read(ref _maximumActive);
 
@@ -1754,7 +1786,12 @@ public sealed partial class DelegateAgentsToolExecutionTests
             UpdateMaximum(active);
             try
             {
-                await Task.Delay(delay, cancellationToken);
+                if (active == 2)
+                {
+                    Entered.TrySetResult();
+                }
+
+                await Release.Task.WaitAsync(cancellationToken);
                 return CreateCompletedOutcome(plan, assignment);
             }
             finally

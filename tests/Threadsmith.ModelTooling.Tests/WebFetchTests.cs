@@ -18,8 +18,7 @@ public sealed class WebFetchTests
     {
         var maximum = TimeSpan.FromMilliseconds(uint.MaxValue - 1L);
         new WebFetchOptions { Timeout = maximum }.Validate();
-        using var deadline = new CancellationTokenSource();
-        deadline.CancelAfter(maximum);
+        using var deadline = new CancellationTokenSource(maximum, new FakeTimeProvider());
         Assert.Throws<InvalidOperationException>(() =>
             new WebFetchOptions { Timeout = maximum + TimeSpan.FromMilliseconds(1) }.Validate());
         Assert.Equal(TimeSpan.FromSeconds(15), new WebFetchOptions().Timeout);
@@ -363,11 +362,13 @@ public sealed class WebFetchTests
     {
         // Arrange
         var options = new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) };
+        var clock = new FakeTimeProvider();
         var transport = new DeadlineExpiringTransport();
         var fetcher = new WebContentFetcher(
             transport,
             options,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: clock);
 
         // Act
         var fetch = fetcher.FetchAsync(
@@ -375,6 +376,7 @@ public sealed class WebFetchTests
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal));
         await transport.Started.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(options.Timeout);
         var exception = await Assert.ThrowsAsync<WebFetchException>(() =>
             fetch.WaitAsync(TestContext.Current.CancellationToken));
 
@@ -388,13 +390,17 @@ public sealed class WebFetchTests
     [Fact]
     public async Task FetchAsync_DeadlineExpiresDuringTransport_ReturnsTimeoutAsync()
     {
+        var clock = new FakeTimeProvider();
         var transport = new DeadlineExpiringTransport { ReturnAfterDeadline = false };
-        var fetcher = new WebContentFetcher(transport, new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) }, TestPromptLoader.Instance);
-        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
+        var fetcher = new WebContentFetcher(transport, new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) }, TestPromptLoader.Instance, timeProvider: clock);
+        var fetch = fetcher.FetchAsync(
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal),
-            cancellationToken: TestContext.Current.CancellationToken));
+            cancellationToken: TestContext.Current.CancellationToken);
+        await transport.Started.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromMilliseconds(5));
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetch.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Equal(WebFetchFailureKind.Timeout, exception.Kind);
         Assert.True(transport.CancellationObserved.IsCompletedSuccessfully);
         Assert.False(transport.ReturnedResponse);
@@ -414,7 +420,8 @@ public sealed class WebFetchTests
         var fetcher = new WebContentFetcher(
             new StaticContentTransport(mediaType, Encoding.UTF8.GetBytes(body)),
             new WebFetchOptions(),
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act
         var response = await fetcher.FetchAsync(
@@ -439,7 +446,8 @@ public sealed class WebFetchTests
         var fetcher = new WebContentFetcher(
             new StaticContentTransport(mediaType, Encoding.UTF8.GetBytes(body)),
             new WebFetchOptions(),
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act
         var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
@@ -479,7 +487,7 @@ public sealed class WebFetchTests
             initialConfigurationPath,
             fetchAuthorization: authority);
         var transport = new CapturingOptionsTransport();
-        var fetcher = new WebContentFetcher(transport, options, TestPromptLoader.Instance);
+        var fetcher = new WebContentFetcher(transport, options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var sessionId = SessionId.New();
         authority.GrantDirectUrlChain(
             fixture.Path,
@@ -1059,12 +1067,12 @@ public sealed class WebFetchTests
 
         // Act
         var first = router.RequestApprovalAsync(firstRequest);
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await firstStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         var second = router.RequestApprovalAsync(secondRequest);
         Assert.False(second.IsCompleted);
         var callsBeforeRelease = order.Count;
         releaseFirst.TrySetResult();
-        var outcomes = await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+        var outcomes = await Task.WhenAll(first, second).WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.Equal(1, callsBeforeRelease);

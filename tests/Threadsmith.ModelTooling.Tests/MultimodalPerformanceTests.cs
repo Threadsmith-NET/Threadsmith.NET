@@ -85,10 +85,12 @@ public sealed partial class MultimodalTests
 
         var originals = bytes.ToArray();
         using var handler = new RetryImageHandler(bytes, originals, imageCount);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var config = new OpenAiCompatibleProviderConfiguration
         {
-            Id = "fixture", Name = "fixture", BaseUri = new Uri("https://example.test/v1/"),
+            Id = "fixture",
+            Name = "fixture",
+            BaseUri = new Uri("https://example.test/v1/"),
             Models =
             [
                 new OpenAiCompatibleModelConfiguration
@@ -102,15 +104,22 @@ public sealed partial class MultimodalTests
             ],
         };
         var catalog = new EffectiveModelProviderCatalog(new ModelProviderCatalogConfiguration { Providers = [config] }, new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), images: new TransportImageStore(bytes));
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), images: new TransportImageStore(bytes), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var images = Enumerable.Range(0, imageCount).Select(index => new ImageArtifact
         {
-            Id = $"image-{index}", ContentHash = new string('a', 64), MediaType = "image/png",
-            ByteLength = byteLength, Width = 2, Height = 2, Source = "transport-fixture",
+            Id = $"image-{index}",
+            ContentHash = new string('a', 64),
+            MediaType = "image/png",
+            ByteLength = byteLength,
+            Width = 2,
+            Height = 2,
+            Source = "transport-fixture",
         }).ToArray();
         var request = new ModelStreamRequest
         {
-            RunId = RunId.New(), ImageSessionId = SessionId.New(), Input = "pixels",
+            RunId = RunId.New(),
+            ImageSessionId = SessionId.New(),
+            Input = "pixels",
             Messages = [new ModelMessage { Role = ModelMessageRole.User, SectionId = "image", Content = ModelImages.Append([new ModelContentPart { Content = "<tag> \"quoted\" \u263a" }], images) }],
         };
         var allocated = GC.GetTotalAllocatedBytes(true);

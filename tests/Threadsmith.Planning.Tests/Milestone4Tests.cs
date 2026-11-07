@@ -81,7 +81,7 @@ public static class Milestone4Tests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence),
@@ -230,7 +230,7 @@ public static class Milestone4Tests
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
         var model = new ConversationalModelProvider("ok", new ModelUsage(6, 4));
-        var prototype = new ExecutionBudget(new BudgetDimensions(10, 1, TimeSpan.FromMinutes(1)));
+        var prototype = new ExecutionBudget(new BudgetDimensions(10, 1, TimeSpan.MaxValue));
         var application = new SessionApplication(
             events,
             model,
@@ -260,7 +260,7 @@ public static class Milestone4Tests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(1, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(1, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -303,7 +303,7 @@ public static class Milestone4Tests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(20_000, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(20_000, 10, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: CreateAssembler(events, evidence, modelResolver: resolver),
@@ -554,7 +554,7 @@ public static class Milestone4Tests
             sessionId,
             DateTimeOffset.UtcNow,
             SemanticConfidenceLevel.TextOnly.ToString()));
-        await observedSemantic.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await observedSemantic.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.All(evidence.Snapshot(sessionId), item => Assert.False(item.IsStale));
 
         var assembler = CreateAssembler(events, evidence);
@@ -566,7 +566,7 @@ public static class Milestone4Tests
             sessionId,
             DateTimeOffset.UtcNow,
             Environment.CurrentDirectory));
-        await observedRepository.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await observedRepository.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.False(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == listing.EvidenceId).IsStale);
         _ = await assembler.AssembleAsync(CreateAssemblyRequest(sessionId, runId));
         Assert.True(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == listing.EvidenceId).IsStale);
@@ -599,7 +599,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new ListFilesThenTextModelProvider("tool response");
             var application = new SessionApplication(
                 events,
@@ -655,7 +656,7 @@ public static class Milestone4Tests
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -664,7 +665,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new ParallelToolsThenTextModelProvider();
             var application = new SessionApplication(
                 events,
@@ -722,7 +724,7 @@ public static class Milestone4Tests
             });
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var tool = new CountingReadTool();
             var registry = new ToolRegistry([tool]);
             var pipeline = new ToolInvocationPipeline(
@@ -732,7 +734,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new InvalidBatchThenTextModelProvider();
             var application = new SessionApplication(
                 events,
@@ -814,7 +817,7 @@ public static class Milestone4Tests
             });
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var tool = new CountingReadTool();
             var registry = new ToolRegistry([tool]);
             var pipeline = new ToolInvocationPipeline(
@@ -824,7 +827,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new ResetAfterToolBatchModelProvider();
             var application = new SessionApplication(
                 events,
@@ -886,7 +890,7 @@ public static class Milestone4Tests
             });
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var tool = new CountingReadTool();
             var registry = new ToolRegistry([tool]);
             var pipeline = new ToolInvocationPipeline(
@@ -896,7 +900,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new EmptyAfterToolThenTextModelProvider();
             var application = new SessionApplication(
                 events,
@@ -958,7 +963,7 @@ public static class Milestone4Tests
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             // Admit current fixed framing while keeping the first tool result larger than capacity.
             const int inputBudget = 3500;
             var registry = new ToolRegistry(
@@ -970,7 +975,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new ToolThenTextModelProvider("{\"sequence\":1}");
             var assembler = CreateAssembler(events, evidence, maximumTokens: inputBudget);
             var application = new SessionApplication(
@@ -1029,7 +1035,7 @@ public static class Milestone4Tests
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new DuplicatePolicyListTool(allowDuplicates)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -1038,7 +1044,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new DuplicateToolThenTextModelProvider("dedup response", duplicateWithinResponse);
             var application = new SessionApplication(
                 events,
@@ -1092,7 +1099,7 @@ public static class Milestone4Tests
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var service = new UnexpectedCodeExploreService();
             var registry = new ToolRegistry([new CodeExploreTool(service, TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
@@ -1102,7 +1109,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new CodeExploreNoWorkspaceThenTextModelProvider();
             var application = new SessionApplication(
                 events,
@@ -1164,7 +1172,7 @@ public static class Milestone4Tests
             });
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var service = new UnexpectedCodeExploreService();
             var registry = new ToolRegistry([new CodeExploreTool(service, TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
@@ -1174,7 +1182,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new CodeExploreInternalControlThenTextModelProvider();
             var application = new SessionApplication(
                 events,
@@ -1239,7 +1248,7 @@ public static class Milestone4Tests
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var workspaceId = WorkspaceId.New();
             var semanticResolver = new FixedSemanticResolver(workspaceId);
             var codeExplore = new UnexpectedCodeExploreService();
@@ -1256,7 +1265,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new SearchThenSemanticThenTextModelProvider("semantic-first response", filePath == "absolute-root" ? root : filePath, fileScoped);
             var application = new SessionApplication(
                 events,
@@ -1328,7 +1338,7 @@ public static class Milestone4Tests
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry(
             [
                 new ListFilesTool(TestPromptLoader.Instance),
@@ -1346,7 +1356,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new CaptureToolsModelProvider("response without denied tool");
             var application = new SessionApplication(
                 events,
@@ -1402,7 +1413,7 @@ public static class Milestone4Tests
             await using var subscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -1411,7 +1422,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new ToolForManyRoundsThenTextModelProvider(
                 "after extended exploration",
                 toolRounds: 17);
@@ -1475,7 +1487,7 @@ public static class Milestone4Tests
             await using var subscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -1484,7 +1496,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var application = new SessionApplication(
                 events,
                 new LoopingToolModelProvider(),
@@ -1510,21 +1523,13 @@ public static class Milestone4Tests
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("cumulative output"));
-            _ = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Keep calling tools"));
+            var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Keep calling tools"));
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            SessionProjection? projection;
-            do
-            {
-                projection = await projections.GetAsync<SessionProjection>(
-                    new ProjectionKey("session", sessionId.Value.ToString("D")),
-                    timeout.Token);
-                if (projection?.Error is null)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-                }
-            }
-            while (projection?.Error is null);
+            await Assert.ThrowsAsync<MalformedModelOutputException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
+            var projection = await projections.GetAsync<SessionProjection>(
+                new ProjectionKey("session", sessionId.Value.ToString("D")),
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(projection);
 
             Assert.Contains("maximum retained output size", projection.Error, StringComparison.Ordinal);
         }
@@ -1548,7 +1553,7 @@ public static class Milestone4Tests
             await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -1557,7 +1562,8 @@ public static class Milestone4Tests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new LoopingToolModelProvider();
             var application = new SessionApplication(
                 events,
@@ -1583,19 +1589,11 @@ public static class Milestone4Tests
             var runId = await dispatcher.DispatchAsync(
                 new SubmitRequestCommand(sessionId, "Keep calling tools"));
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            SessionProjection? projection;
-            do
-            {
-                projection = await projections.GetAsync<SessionProjection>(
-                    new ProjectionKey("session", sessionId.Value.ToString("D")),
-                    timeout.Token);
-                if (projection?.Error is null)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-                }
-            }
-            while (projection?.Error is null);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
+            var projection = await projections.GetAsync<SessionProjection>(
+                new ProjectionKey("session", sessionId.Value.ToString("D")),
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(projection);
 
             Assert.Contains("exceeded the configured limit of 2", projection.Error, StringComparison.Ordinal);
         }
@@ -1830,7 +1828,7 @@ public static class Milestone4Tests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: assembler,
@@ -1840,19 +1838,13 @@ public static class Milestone4Tests
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("resolution"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (model.Requests.Count == 0)
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-        }
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
         var dispatched = Assert.Single(model.Requests);
         Assert.Equal(cheap.Id, dispatched.ResolvedProfileId);
         Assert.Contains(
             assembler.GetInspection(runId)?.ModelRationale ?? [],
             item => item.Contains("Applied hint extension:conversation", StringComparison.Ordinal));
-
-        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
     /// <summary>A policy fallback becomes the shared active selection before provider dispatch.</summary>
@@ -1900,7 +1892,7 @@ public static class Milestone4Tests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             contextAssembler: assembler,
@@ -1933,11 +1925,7 @@ public static class Milestone4Tests
         var dispatcher = new CommandDispatcher([application]);
         var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("fallback selection"));
         var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "Plan"));
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (model.Requests.Count == 0 && !observed.OfType<RunCompleted>().Any())
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-        }
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
         Assert.True(
             model.Requests.Count > 0,
@@ -1950,7 +1938,6 @@ public static class Milestone4Tests
         Assert.Equal(fallback.Id, preferences.CurrentProfileId);
         Assert.Equal(fallback.Id, dispatched.ResolvedProfileId);
         Assert.Equal(fallback.Id, assembler.GetInspection(runId)?.ModelProfileId);
-        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
     /// <summary>Assembly sanitizes task free text and freezes inspection token categories.</summary>
@@ -2022,7 +2009,7 @@ public static class Milestone4Tests
         var runId = await harness.Dispatcher.DispatchAsync(
             new SubmitRequestCommand(harness.SessionId, "Render conversation"));
         Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
-        _ = await harness.WaitForPhaseAsync(RunPhase.Completion);
+        Assert.Equal(RunPhase.Completion, (await harness.GetProjectionAsync()).Phase);
         var presenter = new InteractionPresenter(harness.Dispatcher, harness.Projections);
         var snapshot = await presenter.RenderAsync(harness.SessionId);
 
@@ -2331,20 +2318,12 @@ public static class Milestone4Tests
 
     private sealed class QueueModelProvider : IModelProvider
     {
-        private readonly TimeSpan _delay;
         private readonly Queue<string> _responses;
 
         public QueueModelProvider(
-            IEnumerable<string> responses,
-            TimeSpan delay = default)
+            IEnumerable<string> responses)
         {
-            if (delay < TimeSpan.Zero)
-            {
-                throw new ArgumentOutOfRangeException(nameof(delay));
-            }
-
             _responses = new Queue<string>(responses);
-            _delay = delay;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -2356,11 +2335,6 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (_delay > TimeSpan.Zero)
-            {
-                await Task.Delay(_delay, cancellationToken);
-            }
-
             if (!_responses.TryDequeue(out var response))
             {
                 throw new InvalidOperationException("No scripted response remains.");
@@ -3114,22 +3088,6 @@ public static class Milestone4Tests
             return await Projections.GetAsync<SessionProjection>(
                         new ProjectionKey("session", SessionId.Value.ToString("D")))
                         ?? throw new InvalidOperationException("Projection is unavailable.");
-        }
-
-        public async Task<SessionProjection> WaitForPhaseAsync(RunPhase phase)
-        {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (true)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                var projection = await GetProjectionAsync();
-                if (projection.Phase == phase)
-                {
-                    return projection;
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-            }
         }
 
         public Task<bool> WaitTask(RunId runId)

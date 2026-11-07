@@ -33,7 +33,7 @@ public static partial class AppBootstrapTests
         await File.WriteAllTextAsync(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><TreatWarningsAsErrors>false</TreatWarningsAsErrors></PropertyGroup></Project>", ct);
         await File.WriteAllTextAsync(Path.Combine(temporary.Root, "Example.cs"), original, ct);
         await using var events = new DomainEventStream();
-        await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: options.Semantic);
+        await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: options.Semantic, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = new ApplySourceEditCommand(SessionId.New(), RunId.New(), WorkspaceId.New(), Guid.NewGuid(), new() { Rationale = "Check configured compiler output", Mutations = [] });
         await engines.LoadAsync(new(command.SessionId, command.WorkspaceId, temporary.Root, project, RepositoryTrustLevel.TrustedBuild), ct);
         var completed = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);

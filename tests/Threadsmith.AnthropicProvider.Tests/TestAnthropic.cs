@@ -20,6 +20,7 @@ internal static class TestAnthropic
             Provider = "anthropic",
             ModelId = "claude-test",
             Endpoint = AnthropicProviderRegistration.MessagesEndpoint,
+            Timeout = TimeSpan.Zero,
             ContextWindow = 200000,
             MaximumOutputTokens = 8192,
             RequestOutputTokenReserve = 4096,

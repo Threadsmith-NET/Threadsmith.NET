@@ -21,7 +21,7 @@ public static partial class Milestone1Tests
     [InlineData("resume", true)]
     public static async Task SkillInvocationProgress_ShowsOneLiveBlockUntilOutcome(string operation, bool fail)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var id = SkillInvocationId.New();
         var command = operation switch
         {
@@ -70,7 +70,7 @@ public static partial class Milestone1Tests
     [InlineData("resume", false)]
     public static async Task SkillInvocationProgress_ProviderFailureReturnsToPrompt(string operation, bool malformed)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var id = SkillInvocationId.New();
         var command = operation switch
         {
@@ -115,7 +115,7 @@ public static partial class Milestone1Tests
     [InlineData("resume")]
     public static async Task SkillInvocationProgress_EscapeChordCancelsAndReturnsToPrompt(string operation)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var id = SkillInvocationId.New();
         var command = operation switch
         {
@@ -147,7 +147,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task SkillInvocationProgress_LegacyFrontendDoesNotHoldActivityAcrossHostInput()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var surface = new LegacySkillProgressSurface(["/skills use Maintained:review@1.0.0 {}", "/quit"]);
         var handler = new PendingSkillHandler
         {
@@ -173,7 +173,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task SkillInvocationProgress_CancellationJoinsWorkflowCleanup()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var cancelled = new CancellationTokenSource();
         var surface = new SkillProgressSurface(["/skills use Maintained:review@1.0.0 {}", "/quit"]);
         var handler = new PendingSkillHandler { HoldCancellationCleanup = true };
@@ -369,7 +369,7 @@ public static partial class Milestone1Tests
                 if (HoldCancellationCleanup)
                 {
                     CleanupStarted.SetResult();
-                    await CleanupRelease.Task.WaitAsync(TimeSpan.FromSeconds(8), CancellationToken.None);
+                    await CleanupRelease.Task.WaitAsync(TestContext.Current.CancellationToken);
                     CleanupFinished = true;
                 }
 

@@ -37,9 +37,9 @@ public sealed partial class SkillSubsystemTests
         await using var fixture = new GitToolRepositoryFixture();
         await fixture.InitializeAsync();
         var tools = new ToolRegistry([new GitShowTool(
-            new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = captureLimit }),
+            new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = captureLimit }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var suffix = new string('x', 75);
         for (var index = 0; index < fileCount; index++)
         {
@@ -134,7 +134,8 @@ public sealed partial class SkillSubsystemTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
             SessionId = SessionId.New(),
@@ -181,9 +182,9 @@ public sealed partial class SkillSubsystemTests
             Cache = Path.Combine(_container, "cache");
             State = Path.Combine(_container, "state");
             Directory.CreateDirectory(Root);
-            Processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
-            Tools = new ToolRegistry([new GitShowTool(new GitQueryService(), TestPromptLoader.Instance), new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance), new GitBranchComparisonTool(new GitQueryService(), TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())]);
-            Pipeline = new ToolInvocationPipeline(Tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            Processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            Tools = new ToolRegistry([new GitShowTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance), new GitDiffTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance), new GitBranchComparisonTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())]);
+            Pipeline = new ToolInvocationPipeline(Tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             _toolSubscription = Events.Subscribe((item, _) =>
             {
                 ToolEvents.Add(item);

@@ -20,7 +20,7 @@ public static partial class Milestone1Tests
     [InlineData(true)]
     public static async Task SkillUseCommand_UsesActiveSessionWorkspaceThroughProductionWorkflow(bool repositoryOpen)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var root = Path.Combine(Path.GetTempPath(), "threadsmith-skill-workspace-" + Guid.NewGuid().ToString("N"));
         var packageRoot = Path.Combine(root, "catalog", "review");
         Directory.CreateDirectory(packageRoot);

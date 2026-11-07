@@ -38,9 +38,10 @@ public sealed class AnthropicModelCatalogCache
 
     private readonly AnthropicResourceLimits _limits;
     private readonly string _path;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelCatalogCache"/> class with an absolute user-owned path.</summary>
-    public AnthropicModelCatalogCache(string path, AnthropicResourceLimits? limits = null)
+    public AnthropicModelCatalogCache(string path, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!Path.IsPathFullyQualified(path))
@@ -48,6 +49,7 @@ public sealed class AnthropicModelCatalogCache
             throw new ArgumentException("Anthropic metadata cache paths must be absolute.", nameof(path));
         }
 
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _limits = limits ?? new();
         _limits.Validate();
         _path = Path.GetFullPath(path);
@@ -55,7 +57,7 @@ public sealed class AnthropicModelCatalogCache
     }
 
     /// <summary>Creates a confined filename independent of provider-ID path syntax.</summary>
-    public static AnthropicModelCatalogCache ForProvider(string directory, string providerId, AnthropicResourceLimits? limits = null)
+    public static AnthropicModelCatalogCache ForProvider(string directory, string providerId, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
@@ -73,7 +75,7 @@ public sealed class AnthropicModelCatalogCache
             throw new InvalidOperationException("Anthropic cache path escapes its user-owned directory.");
         }
 
-        return new AnthropicModelCatalogCache(path, limits);
+        return new AnthropicModelCatalogCache(path, limits, timeProvider);
     }
 
     /// <summary>Loads one validated provider/reference snapshot, returning null for corrupt or unavailable data.</summary>
@@ -153,7 +155,7 @@ public sealed class AnthropicModelCatalogCache
     private bool IsValid(AnthropicModelCatalogCacheEntry? entry, string providerId, string identity)
     {
         return entry is { SchemaVersion: 2 } && entry.Models.Count <= _limits.MaximumDiscoveredModels
-            && entry.FetchedAt >= DateTimeOffset.UnixEpoch && entry.FetchedAt <= DateTimeOffset.UtcNow
+            && entry.FetchedAt >= DateTimeOffset.UnixEpoch && entry.FetchedAt <= _timeProvider.GetUtcNow()
             && string.Equals(entry.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
             && AnthropicCatalogHydrator.IsSafeIdentity(entry.ProviderId)
             && entry.SecretReferenceIdentity is { Length: 64 }

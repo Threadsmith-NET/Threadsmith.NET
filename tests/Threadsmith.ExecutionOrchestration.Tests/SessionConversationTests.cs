@@ -64,11 +64,17 @@ public sealed partial class SessionConversationTests
                 repositoryMemoryRetriever: memory);
             var registry = new ToolRegistry([new MemoriesTool(memory, memory, TestPromptLoader.Instance), new ListFilesTool(TestPromptLoader.Instance)]);
             var pipeline = new ToolInvocationPipeline(
-                registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var application = new SessionApplication(
                 events,
                 provider,
-                new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1))),
+                new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.MaxValue)),
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 pipeline,

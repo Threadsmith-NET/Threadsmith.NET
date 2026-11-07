@@ -8,6 +8,7 @@ using Threadsmith.Models;
 /// <summary>Owns one native request per host round, with a single deadline and classified retry loop.</summary>
 internal sealed class AnthropicModelProvider : IModelProvider
 {
+    private readonly TimeProvider _timeProvider;
     private readonly AnthropicResourceLimits _limits;
     private readonly string _apiKey;
     private readonly AnthropicModelCompatibility _compatibility;
@@ -16,12 +17,13 @@ internal sealed class AnthropicModelProvider : IModelProvider
     private readonly string _providerId;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelProvider"/> class.</summary>
-    internal AnthropicModelProvider(HttpClient httpClient, ModelProfile profile, string apiKey, AnthropicModelCompatibility compatibility, string? providerId = null, AnthropicResourceLimits? limits = null)
+    internal AnthropicModelProvider(HttpClient httpClient, ModelProfile profile, string apiKey, AnthropicModelCompatibility compatibility, string? providerId = null, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         ArgumentNullException.ThrowIfNull(compatibility);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _limits = limits ?? new();
         _limits.Validate();
         _httpClient = httpClient;
@@ -48,11 +50,8 @@ internal sealed class AnthropicModelProvider : IModelProvider
         var offeredEnvelopes = new List<ModelResponseReplayEnvelope>();
         try
         {
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            if (_profile.Timeout > TimeSpan.Zero)
-            {
-                deadline.CancelAfter(_profile.Timeout);
-            }
+            using var totalDeadline = new CancellationTokenSource(_profile.Timeout > TimeSpan.Zero ? _profile.Timeout : Timeout.InfiniteTimeSpan, _timeProvider);
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, totalDeadline.Token);
 
             request = Prepare(request);
             if (deadline.IsCancellationRequested)
@@ -64,7 +63,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
             var parameters = AnthropicRequestMapper.Create(request, _profile, _compatibility);
             ModelUsage? interruptedUsage = null;
             await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
-                (_, token) => SendAttemptAsync(token), _profile.RetryPolicy, TimeProvider.System, _profile.Timeout, deadline.Token, cancellationToken))
+                (_, token) => SendAttemptAsync(token), _profile.RetryPolicy, _timeProvider, _profile.Timeout, deadline.Token, cancellationToken))
             {
                 yield return chunk;
             }
@@ -73,7 +72,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
             {
                 var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey, _limits);
                 Exception? failure = null;
-                using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes))
+                using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, Timeout.InfiniteTimeSpan, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes))
                 await using (var events = client.Messages.CreateStreaming(parameters, token).GetAsyncEnumerator(token))
                 {
                     while (true)

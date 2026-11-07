@@ -1001,7 +1001,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public SemanticEngineRegistry Registry { get; }
@@ -1060,7 +1060,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                 """);
             Write(repositoryPath, "tests/Higher.Tests/Tests.cs", "namespace Example.HigherTests; public sealed class HigherTest;");
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

@@ -2404,7 +2404,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || queryDeadline.IsCancellationRequested)
         {
             var backstop = retainedCandidateLifetime is { IsCancellationRequested: false }
-                ? Task.CompletedTask : Task.Delay(_cancellationBackstop, CancellationToken.None);
+                ? Task.CompletedTask : Task.Delay(_cancellationBackstop, _analyzerTimeProvider, CancellationToken.None);
             var completed = await Task.WhenAny(
                 task,
                 backstop);

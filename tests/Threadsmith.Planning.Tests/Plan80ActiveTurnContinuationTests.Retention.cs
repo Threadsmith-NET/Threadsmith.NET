@@ -43,7 +43,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             }
 
             var registry = new ToolRegistry(tools);
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile() with { ContextWindow = 32_768 };
             var resolver = new ModelResolver(new ConfiguredModelCatalog([profile]), new InMemoryModelPreferenceSnapshotProvider());
             var assembler = CreateAssembler(events, evidence, resolver, sanitizer);

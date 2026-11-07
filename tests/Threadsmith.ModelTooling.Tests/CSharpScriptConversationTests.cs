@@ -61,7 +61,7 @@ public static class CSharpScriptConversationTests
                 events,
                 prompts);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.MaxValue));
-            var processManager = new ProcessManager(sanitizer, NullLogger<ProcessManager>.Instance);
+            var processManager = new ProcessManager(sanitizer, NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var configuration = new ConfigurationBuilder().Build();
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
@@ -77,7 +77,7 @@ public static class CSharpScriptConversationTests
                 await state.EnableAsync("csharp_script");
             }
 
-            var registry = new ToolRegistry([tool], state);
+            var registry = new ToolRegistry([tool], state, runtimeOptions: new ToolRuntimeOptions { Defaults = new() { TimeoutMilliseconds = -1 } });
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -85,7 +85,8 @@ public static class CSharpScriptConversationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var scratchpad = Path.Combine(repository, ".threadsmith", ".scratchpad");
             Directory.CreateDirectory(scratchpad);
             var model = new ScriptProbeModelProvider();

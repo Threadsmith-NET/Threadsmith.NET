@@ -35,14 +35,26 @@ public sealed partial class MultimodalTests
         var currentRun = RunId.New();
         ImageArtifact Image(int index) => new()
         {
-            Id = $"image-{index}", ContentHash = new string('a', 64), MediaType = "image/png",
-            ByteLength = byteLength, Width = 2, Height = 2, Source = "clipboard",
+            Id = $"image-{index}",
+            ContentHash = new string('a', 64),
+            MediaType = "image/png",
+            ByteLength = byteLength,
+            Width = 2,
+            Height = 2,
+            Source = "clipboard",
         };
         ConversationMessage Message(int sequence, RunId run, ConversationRole role, IReadOnlyList<ImageArtifact> images) => new()
         {
-            Id = ConversationMessageId.New(), SessionId = session, RunId = run, Sequence = sequence,
-            Role = role, Content = $"Message {sequence}", ContentHash = string.Empty,
-            EstimatedTokens = 5, OccurredAt = DateTimeOffset.UtcNow, Images = images,
+            Id = ConversationMessageId.New(),
+            SessionId = session,
+            RunId = run,
+            Sequence = sequence,
+            Role = role,
+            Content = $"Message {sequence}",
+            ContentHash = string.Empty,
+            EstimatedTokens = 5,
+            OccurredAt = DateTimeOffset.UtcNow,
+            Images = images,
         };
         var historical = Enumerable.Range(0, historyCount).Select(Image).ToArray();
         var current = Enumerable.Range(100, currentCount).Select(Image).ToArray();
@@ -57,7 +69,9 @@ public sealed partial class MultimodalTests
         };
         var configuration = new OpenAiCompatibleProviderConfiguration
         {
-            Id = "fixture", Name = "fixture", BaseUri = new Uri("https://example.test/v1/"),
+            Id = "fixture",
+            Name = "fixture",
+            BaseUri = new Uri("https://example.test/v1/"),
             Models =
             [
                 new OpenAiCompatibleModelConfiguration
@@ -73,8 +87,8 @@ public sealed partial class MultimodalTests
         var catalog = new EffectiveModelProviderCatalog(
             new ModelProviderCatalogConfiguration { Providers = [configuration] },
             new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        using var client = new HttpClient(new CaptureHandler());
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null));
+        using var client = new HttpClient(new CaptureHandler()) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var sanitizer = new SecretOutputSanitizer();
         var assembler = new ContextAssembler(
             new EvidenceStore(fixture.Events, sanitizer),
@@ -90,8 +104,11 @@ public sealed partial class MultimodalTests
             requestPreparationResolver: provider);
         var request = new ContextAssemblyRequest
         {
-            SessionId = session, RunId = currentRun, RepositoryPath = fixture.Root,
-            CurrentMessageId = currentMessage.Id, Task = new TaskSpecification("Describe current images", []),
+            SessionId = session,
+            RunId = currentRun,
+            RepositoryPath = fixture.Root,
+            CurrentMessageId = currentMessage.Id,
+            Task = new TaskSpecification("Describe current images", []),
             AdditionalMessages = toolCount == 0 ? [] :
             [
                 new ModelMessage
@@ -119,7 +136,11 @@ public sealed partial class MultimodalTests
             ? JsonSerializer.Serialize(message.Content.Where(part => part.IsModelVisible)) : message.GetModelVisibleContent();
         var legacyMessages = result.Messages.Take(result.Layout.StablePrefixMessageCount).Select(message => new
         {
-            message.Role, message.SectionId, message.ToolCallId, message.ToolName, Content = CanonicalContent(message),
+            message.Role,
+            message.SectionId,
+            message.ToolCallId,
+            message.ToolName,
+            Content = CanonicalContent(message),
         });
         var legacyEncoding = result.ProviderInstructions is { } instructions
             ? JsonSerializer.Serialize(new { ProviderInstructions = new { instructions.SectionId, instructions.Content }, Messages = legacyMessages })
@@ -188,9 +209,15 @@ public sealed partial class MultimodalTests
         {
             var archived = new ConversationMessage
             {
-                Id = ConversationMessageId.New(), SessionId = session, RunId = priorRun,
-                Role = role, Content = "Prior image turn", ContentHash = string.Empty, EstimatedTokens = 5,
-                Sequence = 0, OccurredAt = DateTimeOffset.UtcNow,
+                Id = ConversationMessageId.New(),
+                SessionId = session,
+                RunId = priorRun,
+                Role = role,
+                Content = "Prior image turn",
+                ContentHash = string.Empty,
+                EstimatedTokens = 5,
+                Sequence = 0,
+                OccurredAt = DateTimeOffset.UtcNow,
                 Images = role == ConversationRole.User ? Enumerable.Repeat(image, currentAttachment ? 7 : 8).ToArray() : [],
             };
             await fixture.Conversations.ArchiveMessageAsync(archived, token);
@@ -256,8 +283,13 @@ public sealed partial class MultimodalTests
     {
         public ModelProfile Profile { get; } = new()
         {
-            Id = new ModelProfileId(Guid.NewGuid()), Name = "fixture", Provider = "fixture", ModelId = "fixture",
-            Endpoint = new Uri("https://example.test/v1/"), ContextWindow = 200000, MaximumOutputTokens = 4096,
+            Id = new ModelProfileId(Guid.NewGuid()),
+            Name = "fixture",
+            Provider = "fixture",
+            ModelId = "fixture",
+            Endpoint = new Uri("https://example.test/v1/"),
+            ContextWindow = 200000,
+            MaximumOutputTokens = 4096,
             SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image,
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, StructuredOutput = true },
@@ -309,11 +341,16 @@ public sealed partial class MultimodalTests
                         ResponseEnvelope = new ModelResponseReplayEnvelope(
                             new ModelReplayBinding
                             {
-                                ProviderId = "fixture", ModelId = "fixture", ProfileId = Profile.Id,
-                                RunId = request.RunId, ModelRound = request.ToolContinuationRound,
+                                ProviderId = "fixture",
+                                ModelId = "fixture",
+                                ProfileId = Profile.Id,
+                                RunId = request.RunId,
+                                ModelRound = request.ToolContinuationRound,
                                 HistoryRewriteGeneration = request.HistoryRewriteGeneration,
-                                CredentialGeneration = "fixture", ToolInventoryDigest = "fixture-tools",
-                                InstructionDigest = "fixture-instructions", NormalizedRoundDigest = "fixture-round",
+                                CredentialGeneration = "fixture",
+                                ToolInventoryDigest = "fixture-tools",
+                                InstructionDigest = "fixture-instructions",
+                                NormalizedRoundDigest = "fixture-round",
                             },
                             [1],
                             ["wire-1"],

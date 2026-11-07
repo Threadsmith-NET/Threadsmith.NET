@@ -22,7 +22,7 @@ public static partial class SourceEditAnalysisTests
         var ct = TestContext.Current.CancellationToken;
         var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var coordinator = new SemanticRefreshCoordinator(
             new RegistrySemanticRefreshBackend(registry), events, NullLogger<SemanticRefreshCoordinator>.Instance);
         await registry.LoadAsync(request, ct);

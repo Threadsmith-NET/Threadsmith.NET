@@ -72,7 +72,8 @@ public sealed partial class SkillSubsystemTests
             new DenyApprovalPolicy(),
             events,
             sanitizer,
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var sessionContextCalls = 0;
         var runner = new ModelSkillProcedureRunner(
             effective,

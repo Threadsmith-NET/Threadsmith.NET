@@ -25,7 +25,7 @@ public static class ContextCompactCommandTests
             surface);
 
         // Act
-        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(3));
+        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.Equal(3, surface.ComposerRequests.Count);

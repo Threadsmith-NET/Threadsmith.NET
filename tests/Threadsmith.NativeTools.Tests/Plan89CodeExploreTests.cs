@@ -20,7 +20,7 @@ public sealed partial class Plan89CodeExploreTests
             Root = root;
             _events = events;
             _registry = registry;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, options);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, options, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             Tool = new CodeExploreTool(Service, TestPromptLoader.Instance, options: options);
             Context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
             {
@@ -65,7 +65,7 @@ public sealed partial class Plan89CodeExploreTests
             }
 
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var workspace = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(SessionId.New(), workspace, root, Path.Combine(root, "Fixture.csproj"), RepositoryTrustLevel.TrustedBuild),

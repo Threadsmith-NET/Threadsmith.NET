@@ -119,7 +119,7 @@ public static class NativeConceptTransportTests
         var tool = new ListFilesTool(TestPromptLoader.Instance);
         var preflight = new ToolCallHistory(new ToolCallHistory());
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         Assert.True(preflight.TryAdd(tool.Definition, argumentsJson));
         var result = await pipeline.InvokeAsync(
@@ -151,7 +151,7 @@ public static class NativeConceptTransportTests
         {
             await using var events = new DomainEventStream();
             var tool = new ListFilesTool(TestPromptLoader.Instance);
-            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var result = await pipeline.InvokeAsync(
                 new ToolInvocationRequest
                 {

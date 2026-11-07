@@ -31,6 +31,7 @@ public sealed class GitProcessTests
             Assert.Equal(64, result.Error.Text.Length);
             Assert.True(result.Output.IsTruncated);
             Assert.True(result.Error.IsTruncated);
+            await process.WaitForExitAsync(TestContext.Current.CancellationToken);
             Assert.True(process.HasExited);
         }
         finally
@@ -65,8 +66,10 @@ public sealed class GitProcessTests
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TestContext.Current.CancellationToken));
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         Assert.True(process.HasExited);
         Assert.NotNull(drain);
+        await drain.WaitAsync(TestContext.Current.CancellationToken);
         Assert.True(drain.IsCompletedSuccessfully);
     }
 
@@ -88,6 +91,7 @@ public sealed class GitProcessTests
             cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Same(failure, actual);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         Assert.True(process.HasExited);
     }
 
@@ -126,15 +130,12 @@ public sealed class GitProcessTests
     public async Task QueryCancellation_DistinguishesCallerFromDeadline(bool callerCancelled)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var service = new GitQueryService(new GitResourceLimits { TimeoutMilliseconds = 100 });
-        // This test exercises deadline expiry, not a speed requirement: there is no
-        // elapsed-time assertion and the reader waits on the actual linked deadline token.
+        var clock = new FakeTimeProvider();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new GitQueryService(new GitResourceLimits { TimeoutMilliseconds = 100 }, timeProvider: clock);
         Func<StreamReader, CancellationToken, Task<GitProcess.BoundedText>> reader = async (_, token) =>
         {
-            if (callerCancelled)
-            {
-                await cancellation.CancelAsync();
-            }
+            started.TrySetResult();
 
             await Task.Delay(Timeout.Infinite, token);
             return new GitProcess.BoundedText(string.Empty, false);
@@ -143,12 +144,15 @@ public sealed class GitProcessTests
         string[] arguments = ["--version"];
         var execution = (Task)method.Invoke(service, [Path.GetTempPath(), arguments, cancellation.Token, reader])!;
 
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
         if (callerCancelled)
         {
+            await cancellation.CancelAsync();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution.WaitAsync(TestContext.Current.CancellationToken));
         }
         else
         {
+            clock.Advance(TimeSpan.FromMilliseconds(100));
             await Assert.ThrowsAsync<TimeoutException>(() => execution.WaitAsync(TestContext.Current.CancellationToken));
         }
     }

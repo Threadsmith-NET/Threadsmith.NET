@@ -31,7 +31,7 @@ public sealed class AnthropicFailureAccountingTests
             + (openBlock ? TestAnthropic.Block(0, new { type = "text", text = string.Empty }) : string.Empty)
             + TestAnthropic.Event(eventType, body.RootElement);
         var handler = new TestAnthropicHandler(fixture);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         var error = await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
         {
@@ -59,7 +59,7 @@ public sealed class AnthropicFailureAccountingTests
     {
         using var body = JsonDocument.Parse(json);
         var handler = new TestAnthropicHandler(TestAnthropic.Event("message_start", body.RootElement));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var error = await Assert.ThrowsAsync<MalformedModelOutputException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
         Assert.Null(error.InnerException);
         Assert.Single(handler.Requests);
@@ -82,7 +82,7 @@ public sealed class AnthropicFailureAccountingTests
                 _ => string.Empty,
             };
         var handler = new TestAnthropicHandler(fixture);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         var error = await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
@@ -112,7 +112,7 @@ public sealed class AnthropicFailureAccountingTests
         var fixture = TestAnthropic.Start(new { input_tokens = 100, output_tokens = 0, cache_creation_input_tokens = 0, cache_read_input_tokens = 0 })
             + TestAnthropic.Block(0, new { type = "text", text = new string('x', 2000) }) + TestAnthropic.Close(0)
             + TestAnthropic.End(usage: new { output_tokens = 25 }, stop: false);
-        using var client = new HttpClient(new TestAnthropicHandler(fixture));
+        using var client = new HttpClient(new TestAnthropicHandler(fixture)) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
@@ -161,7 +161,7 @@ public sealed class AnthropicFailureAccountingTests
                 Content = new StringContent(body, Encoding.UTF8, "text/event-stream"),
             });
         });
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var reports = new List<ModelUsage>();
         async Task CollectAsync()

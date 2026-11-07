@@ -22,6 +22,7 @@ public sealed class AnthropicConfiguredDispatchTests
             [
                 new AnthropicModelConfiguration
                 {
+                    TimeoutSeconds = 0,
                     Id = profile.Id,
                     Name = profile.Name,
                     ModelId = "claude-test",
@@ -39,14 +40,18 @@ public sealed class AnthropicConfiguredDispatchTests
             new ModelProviderCatalogConfiguration { Providers = [configuration], DefaultProviderId = configuration.Id, DefaultModelId = profile.Id },
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secretResolutions = 0;
         var submissions = 0;
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) =>
+        var provider = new ConfiguredModelProvider(
+            client,
+            catalog,
+            (_, _) =>
         {
             secretResolutions++;
             return Task.FromResult<string?>("resolved-fixture-key");
-        });
+        },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var admitted = provider.Prepare(TestAnthropic.Request() with { SubmissionObserver = () => submissions++ });
         Assert.NotNull(admitted.Preparation);
         Assert.True(admitted.Preparation.RequiresInitialInstructionPrefix);

@@ -14,6 +14,7 @@ using Threadsmith.Interaction.Themes;
 using Threadsmith.Models;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
+using TUIKit.Hosting;
 using TUIKit.Input;
 using TUIKit.Terminal;
 using Xunit;
@@ -174,7 +175,7 @@ public static class ContextUsageTests
         var surface = new RecordingSurface(gesture);
         await using var events = new DomainEventStream();
         var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new InMemoryProjectionStore()), events, surface, sessionUsage: usage);
-        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken).WaitAsync(TestContext.Current.CancellationToken);
         Assert.Same(submitted, Assert.Single(surface.Snapshots));
         Assert.Equal(1, dispatcher.Queries);
         Assert.Equal(run, Assert.Single(assembler.Reads));
@@ -250,14 +251,14 @@ public static class ContextUsageTests
         Assert.True(allocated < 10_000_000, $"Unexpected full-inventory rendering allocation: {allocated:N0}");
     }
 
-    /// <summary>Native click synthesis reaches host input actions without consuming drafts or requesting steering.</summary>
+    /// <summary>A deterministically synthesized double click reaches host input actions without consuming drafts or requesting steering.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task RealMouseRouteRequestsMapAndPreservesDraft(bool active)
+    public static async Task SynthesizedMouseRouteRequestsMapAndPreservesDraft(bool active)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var backend = new HeadlessBackend(120, 35);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(120, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
             async token =>
@@ -265,17 +266,21 @@ public static class ContextUsageTests
             var read = surface.ReadComposerAsync(new ComposerRequest("MAIN > "), token);
             await surface.PresentAsync(new PresentationBatch([]), token);
             backend.FeedInput("draft");
-            await surface.PresentAsync(new PresentationBatch([]), token);
+            _ = await backend.WaitForOutputAsync("draft", token);
             IActiveRunInputLease? lease = null;
             if (active)
             {
                 backend.FeedInput("\r");
                 Assert.Equal("draft", (await read).Text);
-                lease = surface.BeginActiveRunInput(TimeProvider.System);
+                lease = surface.BeginActiveRunInput(new FakeTimeProvider());
             }
 
-            // SGR left presses and releases at the actual output header's right edge (screen row 4).
-            backend.FeedInput("\u001b[<0;118;4M\u001b[<0;118;4m\u001b[<0;118;4M\u001b[<0;118;4m");
+            var clicks = new ClickSynthesizer();
+            _ = clicks.RegisterPress(MouseButton.Left, 117, 3, 0);
+            var clickCount = clicks.RegisterPress(MouseButton.Left, 117, 3, 1);
+            var application = (TuiApplication)typeof(TuiKitSurface).GetField("_app", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(surface)!;
+            var route = typeof(TuiKitSurface).GetMethod("RouteMouse", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.CreateDelegate<Action<MouseEvent>>(surface);
+            application.Post(() => route(new(MouseEventKind.Press, MouseButton.Left, 117, 3, KeyModifiers.None, clickCount)));
             if (lease is not null)
             {
                 Assert.Equal(ActiveRunInputSignal.ContextMap, await lease.ReadAsync(token));
@@ -334,7 +339,7 @@ public static class ContextUsageTests
     [InlineData("\u001b[24~\u001b[<0;118;4M\u001b[<0;118;4m\u001b[<0;118;4M\u001b[<0;118;4m", false)]
     public static async Task NonActivatingMouseInputPreservesComposer(string mouseInput, bool outputFocused)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var backend = new HeadlessBackend(120, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(

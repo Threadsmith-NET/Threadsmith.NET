@@ -18,9 +18,9 @@ public sealed class AnthropicRequestMapperTests
         var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==");
         var image = new ImageArtifact { Id = Guid.NewGuid().ToString("N"), ContentHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), MediaType = "image/png", Width = 2, Height = 2, ByteLength = bytes.Length, Source = "fixture" };
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image, SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed };
-        var provider = new AnthropicModelProvider(client, profile, "secret", TestAnthropic.Compatibility(), "provider");
+        var provider = new AnthropicModelProvider(client, profile, "secret", TestAnthropic.Compatibility(), "provider", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var message = TestAnthropic.Message(tool ? ModelMessageRole.Tool : ModelMessageRole.User, "image", "pixels", tool ? "call-image" : null, tool ? "lookup" : null) with
         {
             Content = ModelImages.Append([new ModelContentPart { Content = "pixels" }, new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(new { attachments = new[] { new { artifactId = image.Id } } }) }], [image]),
@@ -57,9 +57,9 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_RequestContext_LeavesReusableNativePrefixUnchanged()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream(), TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var compatibility = TestAnthropic.Compatibility() with { PromptCachingEnabled = true, MinimumCacheableTokens = 1 };
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", compatibility);
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", compatibility, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestAnthropic.Request() with
         {
             Messages =
@@ -100,7 +100,7 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_StructuredMessages_PreservesNativeRolesAndExactContent()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var request = TestAnthropic.Request() with
         {
             ProviderInstructions = new ModelProviderInstructions { SectionId = "host-policy", Content = "host\npolicy" },
@@ -115,7 +115,7 @@ public sealed class AnthropicRequestMapperTests
                 TestAnthropic.Message(ModelMessageRole.User, "steering", "more"),
             ],
         };
-        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility()), request);
+        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
         var body = Assert.Single(handler.Requests);
         Assert.Equal(2, body.GetProperty("system").GetArrayLength());
         Assert.Equal("host\npolicy", body.GetProperty("system")[0].GetProperty("text").GetString());
@@ -137,7 +137,7 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_InvalidLocalRequest_NoSubmission(string kind)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var observed = 0;
         var request = TestAnthropic.Request() with { SubmissionObserver = () => observed++ };
         var profile = TestAnthropic.Profile();
@@ -155,7 +155,7 @@ public sealed class AnthropicRequestMapperTests
             profile = profile with { ContextWindow = 1 };
         }
 
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()), request));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request));
         Assert.Empty(handler.Requests);
         Assert.Equal(0, observed);
     }
@@ -168,9 +168,9 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_ThinkingPreference_ProjectsExactDisplay(bool? include, string expected)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var request = TestAnthropic.Request(true) with { IncludeReasoningText = include, Tools = [TestAnthropic.Tool()] };
-        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true)), request);
+        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
         Assert.Equal(expected, handler.Requests[0].GetProperty("thinking").GetProperty("display").GetString());
         Assert.Equal("low", handler.Requests[0].GetProperty("output_config").GetProperty("effort").GetString());
         Assert.Equal(include == true, chunks.Any(chunk => chunk.Reasoning is not null));
@@ -346,7 +346,7 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_TwoToolContinuation_ReplaysSignedContentExactlyOnce(bool withRequestContext)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true), TestAnthropic.TextStream("done"));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var state = new ModelRequestTransientState();
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], IncludeReasoningText = true, TransientState = state };
         if (withRequestContext)
@@ -364,7 +364,7 @@ public sealed class AnthropicRequestMapperTests
             };
         }
 
-        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), request);
+        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
         var continuation = BindContinuation(request, chunks);
         var prepared = AnthropicRequestPreparer.Prepare(continuation, TestAnthropic.Profile(true), TestAnthropic.Compatibility(true), "instance");
         var repeated = AnthropicRequestPreparer.Prepare(continuation with { WireEstimate = prepared.WireEstimate }, TestAnthropic.Profile(true), TestAnthropic.Compatibility(true), "instance");
@@ -372,7 +372,7 @@ public sealed class AnthropicRequestMapperTests
         Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
         Assert.Equal(prepared.WireEstimate.WireInputTokens, repeated.WireEstimate.WireInputTokens);
 
-        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), continuation with { IncludeReasoningText = false });
+        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), continuation with { IncludeReasoningText = false });
         var second = handler.Requests[1];
         var messages = second.GetProperty("messages");
         var offset = withRequestContext ? 2 : 0;
@@ -406,7 +406,7 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_ReplayIdentityChange_FailsLocally(string change)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var state = new ModelRequestTransientState();
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], TransientState = state };
         if (change == "host-context")
@@ -416,7 +416,7 @@ public sealed class AnthropicRequestMapperTests
 
         var profile = TestAnthropic.Profile(true);
         var compatibility = TestAnthropic.Compatibility(true);
-        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", compatibility, "instance"), request);
+        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", compatibility, "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
         var next = BindContinuation(request, chunks);
         next = change switch
         {
@@ -434,7 +434,7 @@ public sealed class AnthropicRequestMapperTests
             compatibility = compatibility with { ModelId = "claude-changed" };
         }
 
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, change == "key" ? "rotated" : "key", compatibility, change == "provider" ? "other" : "instance"), next));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, change == "key" ? "rotated" : "key", compatibility, change == "provider" ? "other" : "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), next));
         Assert.Single(handler.Requests);
     }
 
@@ -443,11 +443,11 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_ChangedPreparedRequest_RejectsBeforeHttp()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var request = TestAnthropic.Request();
         var prepared = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
         var changed = request with { Preparation = prepared, Messages = [TestAnthropic.Message(ModelMessageRole.User, "current-user", "changed after admission")] };
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility()), changed));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), changed));
         Assert.Empty(handler.Requests);
     }
 
@@ -491,8 +491,8 @@ public sealed class AnthropicRequestMapperTests
     {
         var tool = TestAnthropic.Tool("mcp.fixture.lookup");
         var alias = ModelToolWireNameMap.Create([tool]).ToWireName(tool.Name);
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream().Replace("lookup", alias, StringComparison.Ordinal)));
-        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility()), TestAnthropic.Request() with { Tools = [tool] });
+        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream().Replace("lookup", alias, StringComparison.Ordinal))) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request() with { Tools = [tool] });
         Assert.Equal(tool.Name, Assert.IsType<ToolRequestModelOutput>(Assert.Single(chunks, chunk => chunk.Output is not null).Output).ToolName);
         Assert.Single(chunks, chunk => chunk.ResponseEnvelope is not null).ResponseEnvelope?.Dispose();
     }
@@ -506,16 +506,16 @@ public sealed class AnthropicRequestMapperTests
             .Replace("signed-canary-A", "signed-second-A", StringComparison.Ordinal)
             .Replace("redacted-canary", "redacted-second", StringComparison.Ordinal);
         var handler = new TestAnthropicHandler(first, second, TestAnthropic.TextStream("done"));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var state = new ModelRequestTransientState();
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], TransientState = state };
         for (var round = 0; round < 2; round++)
         {
-            var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), request);
+            var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
             request = BindContinuation(request, chunks);
         }
 
-        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance"), request);
+        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
         var messages = handler.Requests[2].GetProperty("messages");
         Assert.Equal(5, messages.GetArrayLength());
         Assert.Equal("wire_one", messages[2].GetProperty("content")[0].GetProperty("tool_use_id").GetString());
@@ -536,11 +536,11 @@ public sealed class AnthropicRequestMapperTests
     public async Task StreamAsync_MissingActiveReplay_RejectsBeforeAnotherSubmission(bool clearState)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var state = new ModelRequestTransientState();
         var submissions = 0;
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], TransientState = state, SubmissionObserver = () => submissions++ };
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance");
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var chunks = await TestAnthropic.CollectAsync(provider, request);
         var continuation = BindContinuation(request, chunks);
         if (clearState)
@@ -571,9 +571,9 @@ public sealed class AnthropicRequestMapperTests
         }
 
         var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true, secondTool: true), interrupted, TestAnthropic.TextStream("corrected"));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var state = new ModelRequestTransientState();
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance");
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), "instance", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestAnthropic.Request(true) with { Tools = [TestAnthropic.Tool()], TransientState = state };
         var first = await TestAnthropic.CollectAsync(provider, request);
         var continuation = BindContinuation(request, first);

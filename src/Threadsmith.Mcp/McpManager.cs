@@ -795,8 +795,8 @@ public sealed class McpManager :
         }
         else
         {
-            using var identityCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            identityCancellation.CancelAfter(state.Profile.RequestTimeout);
+            using var deadline = new CancellationTokenSource(state.Profile.RequestTimeout, _timeProvider);
+            using var identityCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
             identityMutation = await _identityManager.LogoutAsync(
                 state.Profile,
                 identityCancellation.Token);

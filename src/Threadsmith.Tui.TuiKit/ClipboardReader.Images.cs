@@ -10,10 +10,18 @@ internal sealed record ClipboardCapture(string? Text, byte[]? Image);
 internal static partial class ClipboardReader
 {
     /// <summary>Prefers an available image representation and otherwise retains ordinary text paste.</summary>
-    internal static async Task<ClipboardCapture> CaptureAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
+    internal static Task<ClipboardCapture> CaptureAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(limits.ClipboardTimeoutMilliseconds));
+        return CaptureAsync(limits, TimeProvider.System, cancellationToken);
+    }
+
+    /// <summary>Uses the supplied clock for the clipboard deadline.</summary>
+    internal static async Task<ClipboardCapture> CaptureAsync(TuiResourceLimits limits, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        cancellationToken.ThrowIfCancellationRequested();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(limits.ClipboardTimeoutMilliseconds), timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         if (OperatingSystem.IsWindows())
         {
             const string script = """
@@ -85,7 +93,7 @@ internal static partial class ClipboardReader
             }
         }
 
-        return new ClipboardCapture(await ReadAsync(limits, timeout.Token), null);
+        return new ClipboardCapture(await ReadAsync(limits, timeProvider, timeout.Token), null);
     }
 
     private static ClipboardCapture DecodeCapture(byte[]? bytes, TuiResourceLimits limits)

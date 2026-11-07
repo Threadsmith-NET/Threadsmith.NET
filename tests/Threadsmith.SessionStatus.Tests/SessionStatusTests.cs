@@ -136,14 +136,14 @@ public static class SessionStatusTests
         })).ToArray();
         try
         {
-            await allObserversEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await allObserversEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
             releaseObservers.TrySetResult();
         }
 
-        await Task.WhenAll(observers).WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.WhenAll(observers).WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(new SessionUsageSnapshot(6, 12, false), projection.GetSnapshot(sessionId));
     }

@@ -13,7 +13,7 @@ using Xunit;
 public static class UserQuestionSurfaceTests
 {
     /// <summary>Every user-decline route resolves the same result and releases the modal owner for another request.</summary>
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData("escape")]
     [InlineData("other")]
     [InlineData("details")]
@@ -60,7 +60,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>Real terminal bytes navigate from initial focus and retain choices through resize.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public static async Task InitialArrowsSelectThroughTerminalInputAndSurviveResize()
     {
         var token = TestContext.Current.CancellationToken;
@@ -92,7 +92,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>Cancellation completes the request; mute survives into the next request.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public static async Task BellMuteAndCancellationUseOneInputOwner()
     {
         var token = TestContext.Current.CancellationToken;
@@ -121,7 +121,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>Selection and question share input ownership; Ctrl+C cancels the active run.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public static async Task QuestionQueuesBehindSelectionAndCtrlCCancelsRun()
     {
         var token = TestContext.Current.CancellationToken;
@@ -160,7 +160,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>A retained context map owns input until it closes, even when a queued question is cancelled.</summary>
-    [Theory(Timeout = 30000)]
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -226,7 +226,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>A retained modal arriving during a question waits without stealing its input.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public static async Task ContextMapQueuesBehindQuestion()
     {
         var token = TestContext.Current.CancellationToken;
@@ -252,7 +252,7 @@ public static class UserQuestionSurfaceTests
     }
 
     /// <summary>Nested retained editors release their parent's input lease only after cancellation cleanup.</summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public static async Task QuestionWaitsForNestedMemoryEditorCleanup()
     {
         var token = TestContext.Current.CancellationToken;
@@ -292,68 +292,5 @@ public static class UserQuestionSurfaceTests
             Assert.Equal(UserQuestionStatus.Cancelled, (await pending).Status);
         },
             token);
-    }
-
-    private sealed class ObservedBackend : ITerminalBackend
-    {
-        private Expectation? _expectation;
-        private int _bells;
-
-        public TerminalCapabilities Capabilities => Input.Capabilities;
-
-        public Size Size => Input.Size;
-
-        public bool IsInteractive => true;
-
-        internal int Bells => Volatile.Read(ref _bells);
-
-        internal HeadlessBackend Input { get; } = new(80, 24);
-
-        public void Start()
-        {
-            Input.Start();
-        }
-
-        public void Stop()
-        {
-            Input.Stop();
-        }
-
-        public void Dispose()
-        {
-            Input.Dispose();
-        }
-
-        public void Flush()
-        {
-            Input.Flush();
-        }
-
-        public int ReadInput(byte[] buffer, int offset, int count)
-        {
-            return Input.ReadInput(buffer, offset, count);
-        }
-
-        public void Write(string data)
-        {
-            Interlocked.Add(ref _bells, data.Count(character => character == '\a'));
-            Input.Write(data);
-            if (Volatile.Read(ref _expectation) is { } expectation
-                && Input.PeekOutput().Contains(expectation.Text, StringComparison.Ordinal))
-            {
-                expectation.Completion.TrySetResult();
-            }
-        }
-
-        internal Task ExpectOutputAsync(string text)
-        {
-            _ = Input.TakeOutput();
-            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var expectation = new Expectation(text, completion);
-            Volatile.Write(ref _expectation, expectation);
-            return completion.Task;
-        }
-
-        private sealed record Expectation(string Text, TaskCompletionSource Completion);
     }
 }

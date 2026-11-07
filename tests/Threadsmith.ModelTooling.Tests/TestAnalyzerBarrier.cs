@@ -1,6 +1,7 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.IO.Pipes;
+using Xunit;
 
 /// <summary>Observes fixture readiness together with its owning operation and bounds cleanup.</summary>
 internal static class TestAnalyzerBarrier
@@ -33,8 +34,7 @@ internal static class TestAnalyzerBarrier
             return;
         }
 
-        // This is a cleanup backstop, independent of runner cancellation, not a functional timing assertion.
-        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         try
         {
             await pipe.WriteAsync(new byte[] { 1 }, cleanup.Token);

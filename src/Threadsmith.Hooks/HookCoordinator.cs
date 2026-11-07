@@ -388,7 +388,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         return audit;
     }
 
-    private static async Task<HookHandlerResult> InvokeWithRetriesAsync(
+    private async Task<HookHandlerResult> InvokeWithRetriesAsync(
         IHookHandlerAdapter adapter,
         HookHandlerDescriptor descriptor,
         HookInvocationEnvelope envelope,
@@ -396,8 +396,8 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
     {
         for (var attempt = 1; ; attempt++)
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(descriptor.Limits.Timeout);
+            using var deadline = new CancellationTokenSource(descriptor.Limits.Timeout, _timeProvider);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
             var invocation = adapter.InvokeAsync(
                 descriptor,
                 envelope with { Attempt = attempt },
@@ -405,7 +405,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
             HookHandlerResult result;
             try
             {
-                result = await invocation.WaitAsync(descriptor.Limits.Timeout, cancellationToken);
+                result = await invocation.WaitAsync(descriptor.Limits.Timeout, _timeProvider, cancellationToken);
             }
             catch (TimeoutException)
             {

@@ -11,6 +11,7 @@ using Threadsmith.Tools;
 internal sealed class SdkHttpTransport : IMcpTransport
 {
     private readonly McpResourceLimits _limits;
+    private readonly TimeProvider _timeProvider;
     private readonly McpTransportMapping _mapping;
     private readonly ISecretResolver _secretResolver;
     private readonly HttpClient _httpClient;
@@ -30,10 +31,12 @@ internal sealed class SdkHttpTransport : IMcpTransport
         ILoggerFactory loggerFactory,
         McpOAuthFlow? oauthFlow = null,
         HttpClient? httpClient = null,
-        McpResourceLimits? limits = null)
+        McpResourceLimits? limits = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _limits = limits ?? new();
         _limits.Validate();
         _mapping = new(_limits);
@@ -60,8 +63,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
         ILoggerFactory loggerFactory,
         McpOAuthFlow? oauthFlow = null,
         HttpClient? httpClient = null,
-        McpResourceLimits? limits = null)
-        : this(new LegacySecretStoreResolver(secretStore), loggerFactory, oauthFlow, httpClient, limits)
+        McpResourceLimits? limits = null,
+        TimeProvider? timeProvider = null)
+        : this(new LegacySecretStoreResolver(secretStore), loggerFactory, oauthFlow, httpClient, limits, timeProvider)
     {
     }
 
@@ -76,6 +80,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(environment);
+        using var startupDeadline = new CancellationTokenSource(profile.StartupTimeout, _timeProvider);
+        using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, startupDeadline.Token);
+        cancellationToken = startup.Token;
         if (_client is not null)
         {
             throw new InvalidOperationException("The MCP HTTP transport is already connected.");
@@ -83,6 +90,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
 
         var headers = await ResolveHeadersAsync(profile, cancellationToken);
         var transportOptions = CreateOptions(profile, headers);
+
+        // The host-owned startup deadline also covers SDK connection and initialization.
+        transportOptions.ConnectionTimeout = Timeout.InfiniteTimeSpan;
         ClientOAuthOptions? oauthOptions = null;
         if (profile.OAuth?.Enabled is true)
         {
@@ -97,7 +107,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             _httpClient,
             NullLoggerFactory.Instance,
             ownsHttpClient: false);
-        var clientOptions = McpProtocolCompatibility.CreateClientOptions(profile.StartupTimeout);
+        var clientOptions = McpProtocolCompatibility.CreateClientOptions(Timeout.InfiniteTimeSpan);
         try
         {
             var client = await McpClient.CreateAsync(

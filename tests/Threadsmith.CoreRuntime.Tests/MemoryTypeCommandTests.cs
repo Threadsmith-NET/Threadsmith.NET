@@ -32,7 +32,7 @@ public static class MemoryTypeCommandTests
         await coordinator.RunAsync(
             "memory-command-fixture",
             requestedTrust: RepositoryTrustLevel.UntrustedInspection,
-            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TimeSpan.FromSeconds(3));
+            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TestContext.Current.CancellationToken);
 
         var adds = dispatcher.Commands.OfType<RememberRepositoryMemoryCommand>().ToArray();
         Assert.True(adds.Length == 3, surface.Output);
@@ -70,7 +70,7 @@ public static class MemoryTypeCommandTests
         await coordinator.RunAsync(
             "memory-command-fixture",
             requestedTrust: RepositoryTrustLevel.UntrustedInspection,
-            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TimeSpan.FromSeconds(3));
+            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TestContext.Current.CancellationToken);
 
         var output = surface.Output.ReplaceLineEndings("\n");
         Assert.Equal(expected, output.Contains("You now have", StringComparison.Ordinal));
@@ -101,7 +101,7 @@ public static class MemoryTypeCommandTests
         await coordinator.RunAsync(
             "memory-command-fixture",
             requestedTrust: RepositoryTrustLevel.UntrustedInspection,
-            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TimeSpan.FromSeconds(3));
+            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, thresholdsRead);
         Assert.Contains("You now have 4 preference memories.", surface.Output, StringComparison.Ordinal);
@@ -124,7 +124,7 @@ public static class MemoryTypeCommandTests
         await coordinator.RunAsync(
             "memory-command-fixture",
             requestedTrust: RepositoryTrustLevel.UntrustedInspection,
-            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TimeSpan.FromSeconds(3));
+            repositoryConfigurationDirectoryExistedAtStartup: true).WaitAsync(TestContext.Current.CancellationToken);
 
         var visibleBeforeInput = Assert.IsType<string>(surface.OutputAtFirstComposer).ReplaceLineEndings("\n");
         Assert.Contains($"\n\nWarning: {warning}\n\n", visibleBeforeInput, StringComparison.Ordinal);

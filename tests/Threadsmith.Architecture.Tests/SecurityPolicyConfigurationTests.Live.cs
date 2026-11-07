@@ -28,7 +28,8 @@ public sealed partial class SecurityPolicyConfigurationTests
         using var ownedTrusted = trusted as IDisposable;
         var userDirectory = Path.GetDirectoryName(providerPaths.UserConfiguration)!;
         var secrets = new SecretResolver(
-            [new EnvironmentSecretProvider(), new UserFileSecretProvider(Path.Combine(userDirectory, "secrets", "config.json"))]);
+            [new EnvironmentSecretProvider(), new UserFileSecretProvider(Path.Combine(userDirectory, "secrets", "config.json"))],
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         using var models = await ModelComposition.CreateAsync(trusted, providerPaths, secrets, NullLoggerFactory.Instance, trustedConfiguration: trusted, cancellationToken: TestContext.Current.CancellationToken);
         var profile = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_POLICY_PROFILE") is { Length: > 0 } selected
             ? models.TrustedCatalog.Get(new ModelProfileId(Guid.Parse(selected)))
@@ -64,6 +65,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             new SecretOutputSanitizer(),
             NullLogger<ToolInvocationPipeline>.Instance,
             UnboundedBudget.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
             policyBinding: binding);
         var context = new ToolInvocationContext
         {

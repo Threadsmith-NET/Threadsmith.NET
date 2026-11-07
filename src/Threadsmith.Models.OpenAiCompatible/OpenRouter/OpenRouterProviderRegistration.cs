@@ -171,7 +171,7 @@ public sealed class OpenRouterProviderRegistration : IModelProviderRegistration,
             throw new ModelProviderException("OpenRouter activation requires its fixed endpoint, typed configuration, and resolved secret.");
         }
 
-        return new OpenRouterModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, provider.Id, model);
+        return new OpenRouterModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, provider.Id, model, context.TimeProvider);
     }
 
     /// <inheritdoc />

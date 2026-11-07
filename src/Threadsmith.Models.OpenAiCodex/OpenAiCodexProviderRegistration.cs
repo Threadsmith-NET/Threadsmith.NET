@@ -152,6 +152,7 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
             context.HttpClient,
             context.Profile,
             accessToken,
-            context.RefreshResolvedSecretAsync);
+            context.RefreshResolvedSecretAsync,
+            context.TimeProvider);
     }
 }

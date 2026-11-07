@@ -959,6 +959,7 @@ public sealed class DelegationCoordinator :
     private readonly ConcurrentDictionary<DelegationId, ActiveDelegation> _active = new();
     private readonly IDelegationCheckpointStore _checkpoints;
     private readonly IDomainEventStream _events;
+    private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _progressCheckpointTimeout;
     private readonly IAgentRunScheduler _scheduler;
 
@@ -967,7 +968,8 @@ public sealed class DelegationCoordinator :
         IAgentRunScheduler scheduler,
         IDelegationCheckpointStore checkpoints,
         IDomainEventStream events,
-        TimeSpan? progressCheckpointTimeout = null)
+        TimeSpan? progressCheckpointTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(checkpoints);
@@ -982,6 +984,7 @@ public sealed class DelegationCoordinator :
         _checkpoints = checkpoints;
         _events = events;
         _progressCheckpointTimeout = effectiveProgressTimeout;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -1243,6 +1246,9 @@ public sealed class DelegationCoordinator :
             command.AssignmentId,
             cancellationToken);
     }
+
+    /// <summary>Observes completion of abandoned persistence through its existing failure-observation task.</summary>
+    internal Action<Task>? AbandonedProgressSaveObserver { get; init; }
 
     private async Task<bool> SaveAsync(
         DelegationCheckpoint checkpoint,
@@ -1572,7 +1578,7 @@ public sealed class DelegationCoordinator :
                         Usage = failure.Usage,
                         ModelProfileId = failure.ModelProfileId,
                         ModelSelection = failure.ModelSelection,
-                    DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
+                        DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
                     }
                     : CreateProgressOutcome(
                         plan,
@@ -1586,7 +1592,7 @@ public sealed class DelegationCoordinator :
 
         private async Task RecordAsync(AgentRunOutcome outcome, CancellationToken cancellationToken)
         {
-            await using var gateTimeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, cancellationToken);
+            await using var gateTimeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, _owner._timeProvider, cancellationToken);
             try
             {
                 await _gate.WaitAsync(gateTimeout.Token);
@@ -1600,7 +1606,7 @@ public sealed class DelegationCoordinator :
             {
                 outcome = DelegationOutcomeClassifier.Normalize(_plan, outcome);
                 _progress[outcome.AssignmentId] = outcome;
-                await using var timeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, cancellationToken);
+                await using var timeout = new AgentTimeoutScope(_owner._progressCheckpointTimeout, _owner._timeProvider, cancellationToken);
                 var saveTask = _owner.SaveAsync(
                     CreateCheckpoint(
                         _plan,
@@ -1616,7 +1622,8 @@ public sealed class DelegationCoordinator :
                 }
                 catch (OperationCanceledException) when (timeout.Token.IsCancellationRequested)
                 {
-                    _ = ObserveLateAsync(saveTask);
+                    var observation = ObserveLateAsync(saveTask);
+                    _owner.AbandonedProgressSaveObserver?.Invoke(observation);
                 }
             }
             finally

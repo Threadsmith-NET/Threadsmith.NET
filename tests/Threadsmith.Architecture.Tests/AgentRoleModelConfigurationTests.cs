@@ -167,7 +167,7 @@ public static class AgentRoleModelConfigurationTests
         var ordinary = new FakeModelProvider(new ScriptedSession());
         var trusted = new FakeModelProvider(new ScriptedSession());
         using var services = new ModelServices(
-            new HttpClient(),
+            new HttpClient() { Timeout = Timeout.InfiniteTimeSpan },
             new ConfiguredModelCatalog([]),
             ordinary,
             startupProfile: null,

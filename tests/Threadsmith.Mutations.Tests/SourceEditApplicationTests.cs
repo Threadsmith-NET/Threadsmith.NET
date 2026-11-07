@@ -358,7 +358,7 @@ public sealed partial class SourceEditApplicationTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
         var tool = new SourceEditTool(fixture.Application, TestPromptLoader.Instance);
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var review = new TaskCompletionSource<MutationSetProposed>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = fixture.Events.Subscribe((item, _) =>
         {
@@ -627,7 +627,7 @@ public sealed partial class SourceEditApplicationTests
             return new(root, workspaceId, events, workspaces, store, artifacts, limits);
         }
 
-        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null, EditAnalysisOptions? editOptions = null)
+        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null, EditAnalysisOptions? editOptions = null, TimeProvider? timeProvider = null)
         {
             return new(
             _workspaces,
@@ -644,7 +644,8 @@ public sealed partial class SourceEditApplicationTests
             semanticRefresh: refresh,
             reviews: _workspaces,
             previews: _workspaces,
-            editAnalysisOptions: editOptions);
+            editAnalysisOptions: editOptions,
+            timeProvider: timeProvider ?? new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public ApplySourceEditCommand Replace(string expected, string replacement, bool requireReview)

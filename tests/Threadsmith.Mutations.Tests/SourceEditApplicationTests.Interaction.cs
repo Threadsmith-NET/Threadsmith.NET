@@ -163,13 +163,13 @@ public sealed partial class SourceEditApplicationTests
         var edits = fixture.Application;
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance)]);
         var sanitizer = new SecretOutputSanitizer();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
         return new SessionApplication(
             fixture.Events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100_000, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(100_000, 10, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
             pipeline,

@@ -11,6 +11,7 @@ using Threadsmith.Core;
 internal sealed class SdkStdioTransport : IMcpTransport
 {
     private readonly McpResourceLimits _limits;
+    private readonly TimeProvider _timeProvider;
     private readonly McpTransportMapping _mapping;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ILogger<SdkStdioTransport> _logger;
@@ -23,10 +24,11 @@ internal sealed class SdkStdioTransport : IMcpTransport
     private long _shutdownTimeoutTicks = TimeSpan.FromSeconds(10).Ticks;
 
     /// <summary>Initializes a new instance of the <see cref="SdkStdioTransport"/> class.</summary>
-    internal SdkStdioTransport(IOutputSanitizer sanitizer, ILoggerFactory loggerFactory, McpResourceLimits? limits = null)
+    internal SdkStdioTransport(IOutputSanitizer sanitizer, ILoggerFactory loggerFactory, McpResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _limits = limits ?? new();
         _limits.Validate();
         _mapping = new(_limits);
@@ -62,6 +64,9 @@ internal sealed class SdkStdioTransport : IMcpTransport
     {
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(environment);
+        using var startupDeadline = new CancellationTokenSource(profile.StartupTimeout, _timeProvider);
+        using var startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, startupDeadline.Token);
+        cancellationToken = startup.Token;
         if (_client is not null)
         {
             throw new InvalidOperationException("The MCP stdio transport is already connected.");
@@ -75,7 +80,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             process.StandardInput.BaseStream,
             new McpBoundedLineReadStream(process.StandardOutput.BaseStream, _limits.MaximumLineBytes),
             NullLoggerFactory.Instance);
-        var clientOptions = McpProtocolCompatibility.CreateClientOptions(profile.StartupTimeout);
+        var clientOptions = McpProtocolCompatibility.CreateClientOptions(Timeout.InfiniteTimeSpan);
         McpClient? client = null;
 
         try
@@ -231,7 +236,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             return true;
         }
 
-        var shutdown = Stopwatch.StartNew();
+        var shutdown = _timeProvider.GetTimestamp();
         var completedWithinDeadline = true;
         if (capabilityChanges is not null)
         {
@@ -273,7 +278,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             process.StandardInput.Close();
             var remaining = drainKillTimeout == Timeout.InfiniteTimeSpan
                 ? Timeout.InfiniteTimeSpan
-                : drainKillTimeout - shutdown.Elapsed;
+                : drainKillTimeout - _timeProvider.GetElapsedTime(shutdown);
             completedWithinDeadline &= await StopProcessAsync(process, remaining, cancellationToken);
         }
 
@@ -304,7 +309,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
     public async ValueTask DisposeAsync()
     {
         var shutdownTimeout = TimeSpan.FromTicks(Interlocked.Read(ref _shutdownTimeoutTicks));
-        using var cancellation = new CancellationTokenSource(shutdownTimeout);
+        using var cancellation = new CancellationTokenSource(shutdownTimeout, _timeProvider);
         await StopAsync(shutdownTimeout, cancellation.Token);
     }
 
@@ -492,18 +497,14 @@ internal sealed class SdkStdioTransport : IMcpTransport
             _sanitizer.Sanitize(line) + (truncated ? " [truncated]" : string.Empty));
     }
 
-    private static async Task CleanupProcessAsync(
+    private async Task CleanupProcessAsync(
         McpClient? client,
         Process process,
         CancellationTokenSource stderrLifetime,
         Task stderrPump,
         TimeSpan timeout)
     {
-        using var cleanupCancellation = new CancellationTokenSource();
-        if (timeout != Timeout.InfiniteTimeSpan)
-        {
-            cleanupCancellation.CancelAfter(timeout);
-        }
+        using var cleanupCancellation = new CancellationTokenSource(timeout, _timeProvider);
 
         if (client is not null)
         {
@@ -536,7 +537,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
         }
     }
 
-    private static async Task<bool> StopProcessAsync(
+    private async Task<bool> StopProcessAsync(
         Process process,
         TimeSpan timeout,
         CancellationToken cancellationToken)
@@ -548,11 +549,14 @@ internal sealed class SdkStdioTransport : IMcpTransport
                 return true;
             }
 
-            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            if (timeout != Timeout.InfiniteTimeSpan)
+            if (timeout != Timeout.InfiniteTimeSpan && timeout <= TimeSpan.Zero)
             {
-                waitCancellation.CancelAfter(timeout <= TimeSpan.Zero ? TimeSpan.FromMilliseconds(1) : timeout);
+                process.Kill(entireProcessTree: true);
+                return false;
             }
+
+            using var deadline = new CancellationTokenSource(timeout, _timeProvider);
+            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
 
             try
             {

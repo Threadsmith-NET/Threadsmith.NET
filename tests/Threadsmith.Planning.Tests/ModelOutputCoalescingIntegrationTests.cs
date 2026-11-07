@@ -61,11 +61,12 @@ public static class ModelOutputCoalescingIntegrationTests
                 new DenyApprovalPolicy(),
                 events,
                 sanitizer,
-                NullLogger<ToolInvocationPipeline>.Instance);
+                NullLogger<ToolInvocationPipeline>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var application = new SessionApplication(
                 events,
                 provider,
-                new ExecutionBudget(new BudgetDimensions(long.MaxValue, int.MaxValue, TimeSpan.FromHours(1))),
+                new ExecutionBudget(new BudgetDimensions(long.MaxValue, int.MaxValue, TimeSpan.MaxValue)),
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 toolPipeline: pipeline,

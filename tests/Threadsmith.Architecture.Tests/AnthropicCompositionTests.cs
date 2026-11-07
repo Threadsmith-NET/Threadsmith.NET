@@ -156,7 +156,7 @@ public sealed class AnthropicCompositionTests
                 SessionConfiguration = Path.Combine(Directory, "session.json"),
                 SecretsConfiguration = Path.Combine(Directory, "secrets.json"),
             };
-            _http = new HttpClient(Handler);
+            _http = new HttpClient(Handler) { Timeout = Timeout.InfiniteTimeSpan };
         }
 
         internal string Directory { get; }

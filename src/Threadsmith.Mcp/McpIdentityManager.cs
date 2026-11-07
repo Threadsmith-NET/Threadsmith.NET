@@ -49,6 +49,7 @@ public sealed record McpIdentityMutationResult
 /// <summary>OAuth cache inspection, local logout, and advertised remote revocation implementation.</summary>
 public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
 {
+    private readonly TimeProvider _timeProvider;
     private readonly HttpClient _httpClient;
     private readonly McpResourceLimits _limits;
     private readonly bool _ownsHttpClient;
@@ -60,12 +61,14 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
         IMcpOAuthTokenStore tokenStore,
         ISecretResolver secretResolver,
         HttpClient? httpClient = null,
-        McpResourceLimits? limits = null)
+        McpResourceLimits? limits = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(tokenStore);
         ArgumentNullException.ThrowIfNull(secretResolver);
         _limits = limits ?? new();
         _limits.Validate();
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _tokenStore = tokenStore;
         _secretResolver = secretResolver;
         _httpClient = httpClient ?? new HttpClient(new McpBoundedHttpResponseHandler(
@@ -157,8 +160,8 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             ?? throw new InvalidOperationException("The authorization-server URI was not available after validation.");
         var metadataUri = BuildMetadataUri(validatedIssuer);
         Uri? revocationEndpoint;
-        using var metadataCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        metadataCancellation.CancelAfter(profile.RequestTimeout);
+        using var metadataCancellationDeadline = new CancellationTokenSource(profile.RequestTimeout, _timeProvider);
+        using var metadataCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, metadataCancellationDeadline.Token);
         try
         {
             using var metadata = await ReadRevocationMetadataAsync(
@@ -267,8 +270,8 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
                 }
         }
 
-        using var revokeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        revokeCancellation.CancelAfter(profile.RequestTimeout);
+        using var revokeCancellationDeadline = new CancellationTokenSource(profile.RequestTimeout, _timeProvider);
+        using var revokeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, revokeCancellationDeadline.Token);
         try
         {
             using var revokeRequest = new HttpRequestMessage(HttpMethod.Post, revocationEndpoint)

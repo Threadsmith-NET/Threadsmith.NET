@@ -80,14 +80,16 @@ public static class ModelStreamResilienceTests
         }
     }
 
-    private sealed class RecordingClock : TimeProvider
+    private sealed class RecordingClock : FakeTimeProvider
     {
         public ConcurrentQueue<TimeSpan> Delays { get; } = new();
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             Delays.Enqueue(dueTime);
-            return new Timer(callback, state, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            Advance(dueTime);
+            return timer;
         }
     }
 }

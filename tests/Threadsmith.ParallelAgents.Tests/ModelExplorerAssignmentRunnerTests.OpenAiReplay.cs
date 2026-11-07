@@ -47,8 +47,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var catalog = ReasoningReplayFixture.Catalog(codex, contextWindow: exceedCapacity ? 9000 : 200000, reasoningAlias: reasoningAlias, openRouter: openRouter);
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
         using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id) { ExceedCapacity = exceedCapacity, ReasoningAlias = reasoningAlias };
-        using var client = new HttpClient(handler);
-        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"))) { Summarize = compact };
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))) { Summarize = compact };
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = "low" } };
         var plan = CreatePlan(assignment);
@@ -148,8 +148,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             OrdinaryRound = ordinaryRound,
             OrdinaryOutcome = outcome,
         };
-        using var client = new HttpClient(handler);
-        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key")));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = "low" } };
         var plan = CreatePlan(assignment);

@@ -82,7 +82,8 @@ public static class McpAdapterTests
             secretStore,
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -107,8 +108,14 @@ public static class McpAdapterTests
             return Task.CompletedTask;
         });
         var registry = new ToolRegistry(result.Tools);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(),
-            events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(
+            registry,
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ToolInvocationRequest
         {
             SessionId = SessionId.New(),
@@ -128,9 +135,9 @@ public static class McpAdapterTests
         observed.Clear();
         var denied = await pipeline.InvokeAsync(
             request with
-        {
-            Context = request.Context with { DeniedToolIds = ["mcp_echo"] },
-        }, ct);
+            {
+                Context = request.Context with { DeniedToolIds = ["mcp_echo"] },
+            }, ct);
         Assert.False(denied.Succeeded);
         Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
         Assert.Equal(1, calls);
@@ -147,7 +154,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -169,7 +177,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -195,7 +204,8 @@ public static class McpAdapterTests
             secretStore,
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -223,7 +233,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = new McpConnectionProfile
         {
             Id = "malformed-scope",
@@ -248,10 +259,11 @@ public static class McpAdapterTests
         var transport = new InMemoryMcpTransport();
         var adapter = new McpAdapter(
             _ => transport,
-            new SecretResolver([new FixedSecretProvider()]),
+            new SecretResolver([new FixedSecretProvider()], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = new McpConnectionProfile
         {
             Id = "local server",
@@ -274,10 +286,11 @@ public static class McpAdapterTests
         var transport = new InMemoryMcpTransport();
         var adapter = new McpAdapter(
             _ => transport,
-            new SecretResolver([new MissingSecretProvider()]),
+            new SecretResolver([new MissingSecretProvider()], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = new McpConnectionProfile
         {
             Id = "missing-secret",
@@ -325,7 +338,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -346,6 +360,7 @@ public static class McpAdapterTests
     [Fact]
     public static async Task Unresponsive_server_is_killed_after_drain_timeout()
     {
+        var clock = new ObservedTimeProvider();
         var transport = new InMemoryMcpTransport
         {
             StopHangs = true,
@@ -363,7 +378,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: clock);
 
         var profile = new McpConnectionProfile
         {
@@ -376,8 +392,10 @@ public static class McpAdapterTests
         await adapter.ConnectAsync(profile, CancellationToken.None);
 
         // Disconnect must not hang even though the server is unresponsive (gap #6, §5.8).
-        CancellationTokenSource cts = new(TimeSpan.FromSeconds(2));
-        await adapter.DisconnectAsync("slow", cts.Token);
+        var disconnecting = adapter.DisconnectAsync("slow", TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(profile.DrainKillTimeout, TestContext.Current.CancellationToken);
+        clock.Advance(profile.DrainKillTimeout);
+        await disconnecting;
 
         Assert.True(transport.StopWasForced, "The adapter should force-stop an unresponsive server.");
         var statuses = adapter.GetConnections();
@@ -400,7 +418,8 @@ public static class McpAdapterTests
             new StaticSecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var profile = new McpConnectionProfile
         {
@@ -481,7 +500,7 @@ internal sealed class InMemoryMcpTransport : IMcpTransport
             // Simulate an unresponsive server that never acknowledges stop within the timeout.
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
             catch (OperationCanceledException)
             {

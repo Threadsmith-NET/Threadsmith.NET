@@ -30,7 +30,8 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = 2, InitialPreparationFrontier = 2, EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue } });
+        var clock = new ObservedTimeProvider();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = 2, InitialPreparationFrontier = 2, EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue } }, timeProvider: clock);
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -66,7 +67,10 @@ public static partial class EditAnalyzerTests
                 await File.WriteAllTextAsync(path, Repairs, ct);
                 var written = await File.ReadAllTextAsync(path, ct);
                 engine.ConfirmEditApplied(command.EffectId);
-                await engine.RefreshDocumentsAsync([new(path, written, AnalyzerHash(written))], ct);
+                var refresh = engine.RefreshDocumentsAsync([new(path, written, AnalyzerHash(written))], ct);
+                await clock.WaitForTimerAsync(TimeSpan.FromSeconds(2), ct);
+                clock.Advance(TimeSpan.FromSeconds(2));
+                await refresh;
                 Assert.True(engine.GetLatestEditAnalysis(session, command.RunId, command.EffectId)!.CandidateReused);
             }
             else
@@ -125,7 +129,7 @@ public static partial class EditAnalyzerTests
         var workspace = WorkspaceId.New();
         var run = RunId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var loadStarted = Stopwatch.GetTimestamp();
         var load = await engine.LoadAsync(new(session, workspace, root, selection, RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);

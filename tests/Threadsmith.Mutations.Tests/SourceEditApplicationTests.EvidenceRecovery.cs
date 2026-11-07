@@ -99,7 +99,7 @@ public sealed partial class SourceEditApplicationTests
             var archive = new SqliteConversationStore(connection, retained, sanitizer);
             var evidence = new EvidenceStore(fixture.Events, sanitizer);
             var registry = new ToolRegistry([new SourceEditTool(fixture.Application, TestPromptLoader.Instance), new DotNetBuildTool(new ReceiptValidationService(), TestPromptLoader.Instance), new ActiveTurnEvidenceTool(evidence, TestPromptLoader.Instance, retained)]);
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance, conversationStore: archive);
             var application = new SessionApplication(
                 fixture.Events,

@@ -55,7 +55,7 @@ public static class OpenAiCompatibleToolTextTests
     {
         string[] fragments = ["<parameter name", "=\"path", "\">src", "/Threadsmith.s", "ln\n", "</parameter>\n", "</function>\n</tool_call>"];
         var handler = new StreamHandler(Stream(fragments, toolsFirst: toolsFirst, siblings: true));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
 
         var exception = await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
@@ -90,7 +90,7 @@ public static class OpenAiCompatibleToolTextTests
     public static async Task OrphanDetectionSurvivesChunkBoundariesAndMissingFinish(int chunkSize, bool finish)
     {
         var fragments = Orphan.Chunk(chunkSize).Select(chars => new string(chars));
-        using var client = new HttpClient(new StreamHandler(Stream(fragments, finish: finish)));
+        using var client = new HttpClient(new StreamHandler(Stream(fragments, finish: finish))) { Timeout = Timeout.InfiniteTimeSpan };
 
         await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
             await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
@@ -104,7 +104,7 @@ public static class OpenAiCompatibleToolTextTests
     [InlineData("<parameter name='path'>file.cs</parameter><parameter name='query'>x</parameter></function></tool_call>")]
     public static async Task OrphanDetectionUsesXmlStructure(string text)
     {
-        using var client = new HttpClient(new StreamHandler(Stream(text.Select(character => character.ToString()))));
+        using var client = new HttpClient(new StreamHandler(Stream(text.Select(character => character.ToString())))) { Timeout = Timeout.InfiniteTimeSpan };
 
         await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
             await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
@@ -127,7 +127,7 @@ public static class OpenAiCompatibleToolTextTests
     [InlineData("`" + Orphan + "`")]
     public static async Task XmlExamplesAndUnconfirmedFragmentsRemainVerbatim(string content)
     {
-        using var client = new HttpClient(new StreamHandler(Stream(content.Select(character => character.ToString()))));
+        using var client = new HttpClient(new StreamHandler(Stream(content.Select(character => character.ToString())))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -141,7 +141,7 @@ public static class OpenAiCompatibleToolTextTests
     [InlineData(false, true)]
     public static async Task RequiresBothAdvertisedToolsAndANativeCall(bool advertiseTools, bool nativeCall)
     {
-        using var client = new HttpClient(new StreamHandler(Stream([Orphan], nativeCall: nativeCall)));
+        using var client = new HttpClient(new StreamHandler(Stream([Orphan], nativeCall: nativeCall))) { Timeout = Timeout.InfiniteTimeSpan };
         var request = Request();
         if (!advertiseTools)
         {
@@ -159,7 +159,7 @@ public static class OpenAiCompatibleToolTextTests
     public static async Task OrdinaryTextKeepsItsStreamingChunks()
     {
         string[] fragments = ["I will ", "inspect ", "the source."];
-        using var client = new HttpClient(new StreamHandler(Stream(fragments)));
+        using var client = new HttpClient(new StreamHandler(Stream(fragments))) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -229,10 +229,13 @@ public static class OpenAiCompatibleToolTextTests
 
     private static OpenAiCompatibleModelProvider Provider(HttpClient client)
     {
-        return new(client, new ModelProfile
+        return new(
+        client,
+        new ModelProfile
         {
             Id = ModelProfileId.New(),
             Name = "synthetic",
+            Timeout = TimeSpan.Zero,
             Provider = "openai-compatible",
             ModelId = "synthetic",
             Endpoint = new Uri("https://models.example/v1/chat/completions"),
@@ -240,7 +243,8 @@ public static class OpenAiCompatibleToolTextTests
             MaximumOutputTokens = 4000,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-        });
+        },
+        timeProvider: new AdvancingTimeProvider());
     }
 
     private sealed class StreamHandler : HttpMessageHandler

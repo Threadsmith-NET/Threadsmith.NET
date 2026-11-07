@@ -554,7 +554,8 @@ public static partial class Milestone5Tests
             events,
             NullLoggerFactory.Instance,
             TestPromptLoader.Instance,
-            TimeSpan.FromMilliseconds(250));
+            TimeSpan.FromMilliseconds(250),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var load = await engines.LoadAsync(new SemanticLoadRequest(
             repository.SessionId,
             repository.WorkspaceId,
@@ -626,7 +627,7 @@ public static partial class Milestone5Tests
             "SmallDotNetSolution");
         await using var repository = await TestRepository.CopyAsync(fixture);
         await using var events = new DomainEventStream();
-        await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var load = await engines.LoadAsync(new SemanticLoadRequest(
             repository.SessionId,
             repository.WorkspaceId,
@@ -913,7 +914,7 @@ public static partial class Milestone5Tests
         CancellationToken cancellationToken = default)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, cancellationToken);
-        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await processes.RunAsync(
             new ProcessExecutionRequest
             {
@@ -923,7 +924,7 @@ public static partial class Milestone5Tests
                 Arguments = arguments,
                 WorkingDirectory = workingDirectory,
                 Origin = ProcessRequestOrigin.Host,
-                Timeout = TimeSpan.FromMinutes(5),
+                Timeout = Timeout.InfiniteTimeSpan,
             },
             cancellation.Token);
         if (result.TimedOut)

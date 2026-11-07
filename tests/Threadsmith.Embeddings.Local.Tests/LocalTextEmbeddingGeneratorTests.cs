@@ -96,7 +96,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
             Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2"), () => entered.TrySetResult());
         using var source = new CancellationTokenSource();
         var cancelled = generator.GenerateAsync(string.Join(' ', Enumerable.Repeat("a", 252)), source.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
         var queued = generator.GenerateAsync("queue remains available after cancellation", TestContext.Current.CancellationToken);
         await source.CancelAsync();
         try
@@ -109,7 +109,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
             Assert.True(source.IsCancellationRequested);
         }
 
-        var result = await queued.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var result = await queued.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(384, result.Vector.Length);
         Assert.False(result.WasTruncated);
     }

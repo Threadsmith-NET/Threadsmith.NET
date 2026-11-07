@@ -537,7 +537,7 @@ internal static class ModelComposition
                 (reference, token) => ResolveModelSecretAsync(secrets, reference, SecretProviderTrust.UserOwned, token),
                 httpClient,
                 directory,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!anthropic.Enabled)
             {
                 providerProgress?.Skip();

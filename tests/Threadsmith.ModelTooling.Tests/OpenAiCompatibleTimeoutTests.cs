@@ -30,7 +30,7 @@ public static class OpenAiCompatibleTimeoutTests
             return Task.FromResult(Response(CompletedResponse));
         });
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = await provider.StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
@@ -54,7 +54,7 @@ public static class OpenAiCompatibleTimeoutTests
             throw original;
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
             await provider.StreamAsync(Request(), TestContext.Current.CancellationToken)
@@ -110,7 +110,7 @@ public static class OpenAiCompatibleTimeoutTests
         {
             await caller.CancelAsync();
             // Cleanup has an independent backstop even when the runner cancellation already fired.
-            await Record.ExceptionAsync(() => pending.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+            await Record.ExceptionAsync(() => pending.WaitAsync(TestContext.Current.CancellationToken));
         }
     }
 
@@ -129,7 +129,7 @@ public static class OpenAiCompatibleTimeoutTests
             return Response(CompletedResponse);
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
         await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
 
@@ -156,7 +156,7 @@ public static class OpenAiCompatibleTimeoutTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var chunks = provider.StreamAsync(Request(), TestContext.Current.CancellationToken).GetAsyncEnumerator();
         Assert.True(await chunks.MoveNextAsync());
         Assert.Equal("first", chunks.Current.Text);
@@ -198,7 +198,7 @@ public static class OpenAiCompatibleTimeoutTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var pending = provider.StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken).AsTask();
         try
@@ -260,8 +260,9 @@ public static class OpenAiCompatibleTimeoutTests
             }
 
             return Task.FromResult(Response(CompletedResponse));
-        }));
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = Request() with { SubmissionObserver = () => submissions++ };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
@@ -308,8 +309,9 @@ public static class OpenAiCompatibleTimeoutTests
                     throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail");
                 })),
             });
-        }));
-        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token));
         Assert.Equal(1, attempts);

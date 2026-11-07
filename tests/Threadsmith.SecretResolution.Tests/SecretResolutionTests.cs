@@ -72,7 +72,7 @@ public sealed class SecretResolutionTests
     {
         using var fixture = new SecretFixture();
         var request = fixture.CreateRequest() with { ProviderTimeout = TimeSpan.FromMilliseconds(uint.MaxValue) };
-        var resolver = new SecretResolver([new EnvironmentSecretProvider()]);
+        var resolver = new SecretResolver([new EnvironmentSecretProvider()], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await Assert.ThrowsAsync<ArgumentException>(() => resolver.ResolveAsync(request));
         var result = await resolver.ResolveAsync(request with { ProviderTimeout = TimeSpan.FromMilliseconds(uint.MaxValue - 1d) });
         Assert.NotEqual(SecretResolutionFailure.None, result.Failure);
@@ -154,7 +154,7 @@ public sealed class SecretResolutionTests
         fixture.WriteRepository("canary-secret", ignored: false);
         fixture.Git("add", "-f", ".threadsmith/secrets/config.json");
 
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -176,7 +176,7 @@ public sealed class SecretResolutionTests
         File.Delete(ancestor);
         fixture.WriteRepository("canary-secret", ignored: true);
 
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -202,7 +202,7 @@ public sealed class SecretResolutionTests
             new UTF8Encoding(false));
         fixture.Git("add", "-f", "opened-subdirectory/.threadsmith/secrets/config.json");
 
-        var result = await new RepositoryFileSecretProvider(openedRepository)
+        var result = await new RepositoryFileSecretProvider(openedRepository, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest() with { RepositoryRoot = openedRepository });
 
         Assert.Equal(SecretResolutionFailure.RepositoryGitProofFailed, result.Failure);
@@ -217,7 +217,7 @@ public sealed class SecretResolutionTests
         using var fixture = new SecretFixture();
         fixture.WriteRepository("repository-value", ignored: true);
 
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest());
 
         Assert.Equal("repository-value", result.Value?.Reveal());
@@ -270,9 +270,9 @@ public sealed class SecretResolutionTests
             ".threadsmith/secrets/config.json\n",
             new UTF8Encoding(false));
 
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest())
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
         Assert.Null(result.Value);
@@ -377,7 +377,7 @@ public sealed class SecretResolutionTests
         using var second = new SecretFixture();
         first.WriteRepository("first-value", ignored: true);
         second.WriteRepository("second-value", ignored: true);
-        var provider = new RepositorySecretProvider(first.RepositoryRoot);
+        var provider = new RepositorySecretProvider(first.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var before = await provider.TryResolveAsync(first.CreateRequest());
         provider.BindRepository(second.RepositoryRoot);
@@ -391,7 +391,7 @@ public sealed class SecretResolutionTests
     [Fact]
     public async Task Resolver_AcceptsFutureProviderContractAsync()
     {
-        var resolver = new SecretResolver([new FakeExternalProvider()]);
+        var resolver = new SecretResolver([new FakeExternalProvider()], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await resolver.ResolveAsync(new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:external:example"),
@@ -408,7 +408,7 @@ public sealed class SecretResolutionTests
     [Fact]
     public async Task Resolver_SanitizesProviderDiagnosticCodeAsync()
     {
-        var resolver = new SecretResolver([new FakeExternalProvider("value-leak with whitespace")]);
+        var resolver = new SecretResolver([new FakeExternalProvider("value-leak with whitespace")], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await resolver.ResolveAsync(new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:external:missing"),
@@ -426,15 +426,17 @@ public sealed class SecretResolutionTests
     public void Resolver_RejectsAmbiguousProviderRegistration()
     {
         Assert.Throws<ArgumentException>(() => new SecretResolver(
-                [new EnvironmentSecretProvider(), new EnvironmentSecretProvider()]));
+            [new EnvironmentSecretProvider(), new EnvironmentSecretProvider()],
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
     }
 
     /// <summary>A provider timeout cancels the token supplied to the active provider.</summary>
     [Fact]
     public async Task Resolver_ProviderTimeoutCancelsProviderWorkAsync()
     {
+        var clock = new FakeTimeProvider();
         var provider = new CancellationObservingProvider();
-        var resolver = new SecretResolver([provider]);
+        var resolver = new SecretResolver([provider], timeProvider: clock);
         var request = new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:external:timeout"),
@@ -444,8 +446,11 @@ public sealed class SecretResolutionTests
             ProviderTimeout = TimeSpan.FromMilliseconds(50),
         };
 
-        var result = await resolver.ResolveAsync(request);
-        await provider.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(1));
+        var resolving = resolver.ResolveAsync(request, TestContext.Current.CancellationToken);
+        await provider.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(request.ProviderTimeout);
+        var result = await resolving;
+        await provider.CancellationObserved.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SecretResolutionFailure.ProviderUnavailable, result.Failure);
         Assert.Contains("cancellation-observer:provider-timeout", result.Diagnostics);
@@ -460,7 +465,7 @@ public sealed class SecretResolutionTests
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
 
-        await Assert.ThrowsAsync<OperationCanceledException>(() => new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        await Assert.ThrowsAsync<OperationCanceledException>(() => new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest(), cancellation.Token));
     }
 
@@ -478,7 +483,7 @@ public sealed class SecretResolutionTests
         fixture.WriteRepository("repository-value", ignored: true);
         var caseDistinctRoot = Path.Combine(fixture.Root, "REPO");
 
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot)
+        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .TryResolveAsync(fixture.CreateRequest() with { RepositoryRoot = caseDistinctRoot });
 
         Assert.Equal(SecretResolutionFailure.UnsafeStore, result.Failure);
@@ -491,7 +496,7 @@ public sealed class SecretResolutionTests
     {
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
-        var resolver = new SecretResolver([new EnvironmentSecretProvider()]);
+        var resolver = new SecretResolver([new EnvironmentSecretProvider()], timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new SecretResolutionRequest
         {
             Reference = SecretReference.Parse("secrets:tests:cancel"),
@@ -559,6 +564,8 @@ public sealed class SecretResolutionTests
         private readonly TaskCompletionSource<bool> _cancellationObserved = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public string Id => "cancellation-observer";
 
         public int Priority => 400;
@@ -573,6 +580,7 @@ public sealed class SecretResolutionTests
             SecretResolutionRequest request,
             CancellationToken cancellationToken = default)
         {
+            Started.TrySetResult();
             try
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
@@ -698,9 +706,10 @@ public sealed class SecretResolutionTests
             return new(
             [
                 new EnvironmentSecretProvider(),
-                new RepositoryFileSecretProvider(RepositoryRoot),
+                new RepositoryFileSecretProvider(RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
                 new UserFileSecretProvider(UserStorePath),
-            ]);
+            ],
+            timeProvider: new FakeTimeProvider());
         }
 
         internal void Git(params string[] arguments)
@@ -772,7 +781,9 @@ public sealed class SecretResolutionTests
             }
 
             Assert.True(process.Start());
-            Assert.True(process.WaitForExit(5000));
+#pragma warning disable VSTHRD002 // Synchronous fixture construction joins the owned process with runner cancellation.
+            process.WaitForExitAsync(TestContext.Current.CancellationToken).GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
             Assert.Equal(0, process.ExitCode);
         }
 

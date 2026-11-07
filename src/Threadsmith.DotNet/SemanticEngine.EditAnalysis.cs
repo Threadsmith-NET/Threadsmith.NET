@@ -195,6 +195,7 @@ public sealed partial class SemanticEngine
                     Omissions = omissions.Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).ToArray(),
                 },
                 _editOptions.CandidateLifetimeMilliseconds,
+                _analyzerTimeProvider,
                 _engineLifetime.Token)
             {
                 AnalyzerInitialKnown = !_hasAppliedEdits,
@@ -216,7 +217,7 @@ public sealed partial class SemanticEngine
         try
         {
 #pragma warning disable VSTHRD003 // The candidate owns its single continuation; this caller observes only the immediate allowance.
-            await candidate.Work.WaitAsync(immediateAllowance, cancellationToken);
+            await candidate.Work.WaitAsync(immediateAllowance, _analyzerTimeProvider, cancellationToken);
 #pragma warning restore VSTHRD003
         }
         catch (TimeoutException)
@@ -333,6 +334,7 @@ public sealed partial class SemanticEngine
                     Omissions = GraphReplacementOmissions.Take(_editOptions.MaximumOmissions).ToArray(),
                 },
                 _editOptions.CandidateLifetimeMilliseconds,
+                _analyzerTimeProvider,
                 _engineLifetime.Token)
             {
                 Applied = true,
@@ -832,6 +834,7 @@ public sealed partial class SemanticEngine
     private sealed class EditCandidate
     {
         private readonly CancellationTokenSource _lifetime;
+        private readonly CancellationTokenSource _deadline;
         private int _cancelled;
 
         public EditCandidate(
@@ -845,6 +848,7 @@ public sealed partial class SemanticEngine
             bool promotable,
             SourceEditAnalysis result,
             int lifetimeMilliseconds,
+            TimeProvider timeProvider,
             CancellationToken engineLifetime)
         {
             Command = command;
@@ -856,8 +860,8 @@ public sealed partial class SemanticEngine
             Projects = projects;
             Promotable = promotable;
             Result = result;
-            _lifetime = CancellationTokenSource.CreateLinkedTokenSource(engineLifetime);
-            _lifetime.CancelAfter(TimeSpan.FromMilliseconds(lifetimeMilliseconds));
+            _deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(lifetimeMilliseconds), timeProvider);
+            _lifetime = CancellationTokenSource.CreateLinkedTokenSource(engineLifetime, _deadline.Token);
             Token = _lifetime.Token;
         }
 
@@ -912,6 +916,7 @@ public sealed partial class SemanticEngine
                     {
                         _ = completed.Exception;
                         _lifetime.Dispose();
+                        _deadline.Dispose();
                     },
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,

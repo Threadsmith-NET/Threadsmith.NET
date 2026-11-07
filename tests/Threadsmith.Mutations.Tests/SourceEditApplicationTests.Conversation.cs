@@ -99,10 +99,14 @@ public sealed partial class SourceEditApplicationTests
         }
 
         var continuedForFeedback = provider.Requests.Count == 7;
+        // Waiting notices and earlier committed revisions may precede the final feedback.
+        var feedbackDiagnostics = observed.OfType<DiagnosticObserved>()
+            .Where(item => item.Code == "AdvisorySemanticFeedback" && item.EditAnalysis is not null).ToArray();
         if (feedbackDuringFinalAnswer)
         {
-            var diagnostic = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback");
-            Assert.NotNull(diagnostic.EditAnalysis);
+            Assert.NotNull(analyzer.LateFeedback);
+            var diagnostic = Assert.Single(feedbackDiagnostics, item => item.EditAnalysis == analyzer.LateFeedback);
+            Assert.Same(diagnostic, feedbackDiagnostics[^1]);
             Assert.Contains("1 current errors", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("{", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("EffectId", diagnostic.Message, StringComparison.Ordinal);
@@ -113,7 +117,8 @@ public sealed partial class SourceEditApplicationTests
             var feedbackMessage = Assert.Single(provider.Requests[6].Messages, message => message.SectionId == "source-edit-feedback"
                 && !provider.Requests[5].Messages.Any(previous => previous.SectionId == "source-edit-feedback"
                     && previous.GetModelVisibleContent() == message.GetModelVisibleContent()));
-            var finalAnalysis = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback" && item.EditAnalysis is not null).EditAnalysis!;
+            Assert.NotEmpty(feedbackDiagnostics);
+            var finalAnalysis = feedbackDiagnostics[^1].EditAnalysis!;
             var finalCandidate = observed.OfType<SemanticCheckCompleted>().Last(item => item.Phase == SemanticCheckPhase.PreMutation && item.CheckName == "advisory edit analysis").Analysis!;
             Assert.Equal(finalCandidate.EffectId, finalAnalysis.EffectId);
             Assert.NotNull(finalAnalysis.CommittedGeneration);
@@ -348,13 +353,14 @@ public sealed partial class SourceEditApplicationTests
         private readonly IDomainEventStream _events;
         private ApplySourceEditCommand? _latestCommand;
         private SourceEditAnalysis? _latestAnalysis;
-        private SourceEditAnalysis? _lateFeedback;
 
         public CompletingAnalyzer(ISourceEditAnalyzer inner, IDomainEventStream events)
         {
             _inner = inner;
             _events = events;
         }
+
+        public SourceEditAnalysis? LateFeedback { get; private set; }
 
         public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
         {
@@ -365,7 +371,7 @@ public sealed partial class SourceEditApplicationTests
         {
             _latestCommand = command;
             _latestAnalysis = null;
-            _lateFeedback = null;
+            LateFeedback = null;
             var completed = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
             await using var subscription = _events.Subscribe((item, _) =>
             {
@@ -395,7 +401,7 @@ public sealed partial class SourceEditApplicationTests
 
             // This fixture owns the injected result's readiness and publication generation.
             // Real committed compiler coverage is exercised by GraphChangingSourceContinuesDiagnosticsAfterGraphRefresh.
-            _lateFeedback = preview with
+            LateFeedback = preview with
             {
                 Revision = Math.Max(preview.Revision, latest?.Revision ?? 0) + 100,
                 CommittedGeneration = latest?.CommittedGeneration ?? preview.SourceGeneration,
@@ -410,7 +416,7 @@ public sealed partial class SourceEditApplicationTests
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
         {
             return _latestCommand is { } command && command.SessionId == sessionId && command.RunId == runId
-                && command.WorkspaceId == workspaceId && _lateFeedback is { } feedback && feedback.EffectId == effectId
+                && command.WorkspaceId == workspaceId && LateFeedback is { } feedback && feedback.EffectId == effectId
                 ? feedback
                 : _inner.GetLatestAnalysis(sessionId, runId, workspaceId, effectId);
         }

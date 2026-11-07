@@ -44,19 +44,7 @@ internal static class ConfigurationBootstrap
     /// <summary>Formats a concise actionable startup configuration error without exposing a stack trace.</summary>
     internal static string FormatLoadError(Exception exception)
     {
-        ArgumentNullException.ThrowIfNull(exception);
-        var messages = new List<string>();
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            var message = current.Message.Trim();
-            if (!string.IsNullOrWhiteSpace(message)
-                && !messages.Contains(message, StringComparer.Ordinal))
-            {
-                messages.Add(message);
-            }
-        }
-
-        return $"Configuration error: {string.Join(" ", messages)} Check the indicated JSON file near the reported line and column.";
+        return Program.FormatErrorDetails(exception, "Configuration error: ");
     }
 
     /// <summary>Builds effective configuration after bounding all repository-owned configuration inputs.</summary>

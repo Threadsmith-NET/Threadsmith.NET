@@ -148,7 +148,8 @@ internal sealed class StartupModal : Modal
             }
         }
 
-        var currentRows = (_label is null ? 0 : 1) + (TotalElapsed is null ? 0 : 1) + (Acknowledge is null ? 0 : 1);
+        // Fatal confirmation owns its final row and a blank separator outside the history viewport.
+        var currentRows = (_label is null ? 0 : 1) + (TotalElapsed is null ? 0 : 1) + (Acknowledge is null ? 0 : 2);
         var details = Details;
         if (Acknowledge is not null)
         {
@@ -164,7 +165,8 @@ internal sealed class StartupModal : Modal
             details = _fatalLines;
         }
 
-        var requiredRows = currentRows + Math.Max(activeCount, Math.Min(1, _rows.Count)) + (Acknowledge is null ? 0 : details.Count);
+        var historyMinimum = Acknowledge is null ? Math.Max(activeCount, Math.Min(1, _rows.Count)) : 0;
+        var requiredRows = currentRows + historyMinimum + (Acknowledge is null ? 0 : details.Count);
         var lines = _logoLines;
         if (_logoWidth > view.Size.Width
             || lines.Length + 1 + requiredRows + (_tipLines.Length > 0 ? 2 : 0) > view.Size.Height)
@@ -190,15 +192,18 @@ internal sealed class StartupModal : Modal
         }
 
         var y = logoHeight + logoGap;
-        var detailCapacity = Math.Max(0, progressHeight - y - currentRows - Math.Max(activeCount, Math.Min(1, _rows.Count)));
-        var detailStart = Acknowledge is null ? Math.Max(0, details.Count - detailCapacity) : 0;
-        var detailEnd = Math.Min(details.Count, detailStart + detailCapacity);
-        for (var index = detailStart; index < detailEnd; index++)
+        var detailCapacity = Math.Max(0, progressHeight - y - currentRows - historyMinimum);
+        var fatalDetailRows = Acknowledge is null ? 0 : Math.Min(details.Count, detailCapacity);
+        if (Acknowledge is null)
         {
-            Draw(view, y++, details[index], PresentationTextRole.Status);
+            var detailStart = Math.Max(0, details.Count - detailCapacity);
+            for (var index = detailStart; index < details.Count; index++)
+            {
+                Draw(view, y++, details[index], PresentationTextRole.Status);
+            }
         }
 
-        var capacity = Math.Max(0, progressHeight - y - currentRows);
+        var capacity = Math.Max(0, progressHeight - y - currentRows - fatalDetailRows);
         var skipActive = Math.Max(0, activeCount - capacity);
         var skipHistory = Math.Max(0, _rows.Count - activeCount - Math.Max(0, capacity - activeCount));
         foreach (var phase in _rows)
@@ -248,14 +253,22 @@ internal sealed class StartupModal : Modal
             Draw(view, y++, FormatRow(operation?.Elapsed ?? Elapsed, _label, state, string.Empty, view.Size.Width), Role(state));
         }
 
-        if (Acknowledge is not null && y < progressHeight)
-        {
-            Draw(view, y++, "press Enter to exit; Esc cancels", PresentationTextRole.Warning);
-        }
-
         if (TotalElapsed is { } total && y < progressHeight)
         {
-            Draw(view, y, $"{total().TotalSeconds:0.0}s Total startup", PresentationTextRole.Status);
+            Draw(view, y++, $"{total().TotalSeconds:0.0}s Total startup", PresentationTextRole.Status);
+        }
+
+        for (var index = 0; index < fatalDetailRows; index++)
+        {
+            var text = index == fatalDetailRows - 1 && fatalDetailRows < details.Count
+                ? "… Full error shown on exit."
+                : details[index];
+            Draw(view, y++, text, PresentationTextRole.Error);
+        }
+
+        if (Acknowledge is not null && y + 1 < progressHeight)
+        {
+            Draw(view, y + 1, "press Enter to exit; Esc cancels", PresentationTextRole.Warning);
         }
 
         for (var index = 0; index < tipHeight; index++)

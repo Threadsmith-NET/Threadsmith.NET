@@ -12,7 +12,7 @@ public static class ConfigurationDocument
     public static ImmutableDictionary<string, JsonElement> Read(string path, long maximumBytes = 1024 * 1024)
     {
         var content = ReadContent(path, maximumBytes);
-        return content is null ? ImmutableDictionary.Create<string, JsonElement>(StringComparer.OrdinalIgnoreCase) : Parse(content);
+        return content is null ? ImmutableDictionary.Create<string, JsonElement>(StringComparer.OrdinalIgnoreCase) : ParseFile(content, path);
     }
 
     /// <summary>Reads editable JSON through the same bounded parser and alias validation.</summary>
@@ -24,7 +24,7 @@ public static class ConfigurationDocument
             return new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
         }
 
-        _ = Parse(content, validatePermissionParents: false);
+        _ = ParseFile(content, path, validatePermissionParents: false);
         return JsonNode.Parse(
             content.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? content.AsSpan(3) : content.AsSpan(),
             new JsonNodeOptions { PropertyNameCaseInsensitive = true },
@@ -215,6 +215,22 @@ public static class ConfigurationDocument
                     Remove(child, path);
                 }
             }
+        }
+    }
+
+    private static ImmutableDictionary<string, JsonElement> ParseFile(byte[] content, string path, bool validatePermissionParents = true)
+    {
+        try
+        {
+            return Parse(content, validatePermissionParents);
+        }
+        catch (JsonException exception)
+        {
+            throw new JsonException($"Invalid configuration in '{path}': {exception.Message}", exception.Path, exception.LineNumber, exception.BytePositionInLine, exception);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidDataException($"Invalid configuration in '{path}': {exception.Message}", exception);
         }
     }
 }

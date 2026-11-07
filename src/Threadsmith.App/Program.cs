@@ -131,20 +131,35 @@ public static class Program
     /// <summary>Formats a bounded single-line fatal error without exposing a stack trace.</summary>
     internal static string FormatFatalError(Exception exception)
     {
+        return FormatErrorDetails(exception, "Threadsmith could not start or continue: ");
+    }
+
+    /// <summary>Preserves nested error causes in a sanitized, bounded diagnostic shared by startup surfaces.</summary>
+    internal static string FormatErrorDetails(Exception exception, string prefix = "")
+    {
         ArgumentNullException.ThrowIfNull(exception);
+        var messages = new List<string>();
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            var detail = current.Message.Trim();
+            if (detail.Length > 0 && !messages.Exists(message => message.Contains(detail, StringComparison.Ordinal)))
+            {
+                messages.Add(detail);
+            }
+        }
+
         var message = string.Join(
             ' ',
-            new SecretOutputSanitizer().Sanitize(exception.Message).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            new SecretOutputSanitizer().Sanitize(string.Join(" ", messages)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (message.Length == 0)
         {
             message = "An unexpected error occurred.";
         }
-        else if (message.Length > 512)
-        {
-            message = message[..512] + "…";
-        }
 
-        return $"Threadsmith could not start or continue: {message}";
+        message = prefix + message;
+
+        // Keep both the outer setting/file context and the underlying cause when a diagnostic is long.
+        return message.Length > 512 ? message[..255] + "…" + message[^256..] : message;
     }
 
     /// <summary>Runs the standalone host-owned Codex authentication surface.</summary>

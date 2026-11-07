@@ -419,9 +419,12 @@ internal sealed class HostFoundation : IAsyncDisposable
         executionLimits.Validate();
         var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
         var codeExploreOptions = CodeExploreConfiguration.FromConfiguration(configuration);
-        var events = new DomainEventStream(TimeSpan.FromMilliseconds(trustedConfiguration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000)));
-        var projections = new InMemoryProjectionStore(executionLimits);
+        var committedDeliveryTimeout = trustedConfiguration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(committedDeliveryTimeout, "events:committedDeliveryTimeoutMilliseconds");
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(subscriberCapacity, "events:subscriberCapacity");
+        var events = new DomainEventStream(TimeSpan.FromMilliseconds(committedDeliveryTimeout));
+        var projections = new InMemoryProjectionStore(executionLimits);
         var projectionSubscription = events.Subscribe(
             (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                 ? Task.CompletedTask

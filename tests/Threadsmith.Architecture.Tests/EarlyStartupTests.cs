@@ -152,29 +152,46 @@ public static class EarlyStartupTests
             (_, progress, token) =>
         {
             using var operation = progress.Begin("database", "Database initialization", cancellationToken: token);
-            throw new InvalidDataException("Cannot initialize database");
+            throw new InvalidDataException("Host services failed", new ArgumentException("Configuration error: SemanticMinimum (65) must be between -1 and 1."));
         },
             cancellation,
             backend);
-        var output = string.Empty;
-        while (!output.Contains("press Enter to exit", StringComparison.Ordinal))
+        try
         {
-            output += backend.TakeOutput();
-            Assert.False(run.IsCompleted);
-            await Task.Yield();
-            TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        }
+            var output = string.Empty;
+            while (!output.Contains("press Enter to exit", StringComparison.Ordinal))
+            {
+                output += backend.TakeOutput();
+                Assert.False(run.IsCompleted);
+                await Task.Yield();
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+            }
 
-        Assert.Contains("Database initialization Failed", output, StringComparison.Ordinal);
-        if (cancel)
+            Assert.Contains("Database initialization Failed", output, StringComparison.Ordinal);
+            Assert.Contains("Host services failed", output, StringComparison.Ordinal);
+            Assert.Contains("Configuration error: SemanticMinimum (65)", output, StringComparison.Ordinal);
+            Assert.Contains("between", output, StringComparison.Ordinal);
+            if (cancel)
+            {
+                await cancellation.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await run.WaitAsync(TestContext.Current.CancellationToken));
+            }
+            else
+            {
+                backend.FeedInput("\r");
+                Assert.Equal(1, await run);
+            }
+        }
+        finally
         {
             await cancellation.CancelAsync();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await run.WaitAsync(TestContext.Current.CancellationToken));
-        }
-        else
-        {
-            backend.FeedInput("\r");
-            Assert.Equal(1, await run);
+            try
+            {
+                await run;
+            }
+            catch (OperationCanceledException)
+            {
+            }
         }
     }
 }

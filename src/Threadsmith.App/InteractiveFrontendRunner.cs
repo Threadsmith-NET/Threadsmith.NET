@@ -21,32 +21,42 @@ internal static class InteractiveFrontendRunner
     {
         try
         {
-            await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], processCancellation.Cancel, backend, deferWorkspace: true);
-            progress ??= new SemanticStartupProgress();
-            using var observation = progress.ObserveProcess();
             var result = 1;
-            await surface.RunAsync(
-                async token =>
+            string? failureDetail = null;
+            await using (var surface = new TuiKitSurface(BuiltInThemes.Create()[0], processCancellation.Cancel, backend, deferWorkspace: true))
             {
-                await using var terminalCancellation = token.Register(processCancellation.Cancel);
-                await surface.BeginProcessStartupAsync(progress, () => observation.Snapshot, token);
-                progress.MarkFirstFrame();
-                try
+                progress ??= new SemanticStartupProgress();
+                using var observation = progress.ObserveProcess();
+                await surface.RunAsync(
+                    async token =>
                 {
-                    result = await initialize(surface, progress, token);
-                    if (result is not 0 and not 130)
+                    await using var terminalCancellation = token.Register(processCancellation.Cancel);
+                    await surface.BeginProcessStartupAsync(progress, () => observation.Snapshot, token);
+                    progress.MarkFirstFrame();
+                    try
                     {
-                        await surface.AcknowledgeStartupFailureAsync(string.Empty, token);
+                        result = await initialize(surface, progress, token);
+                        if (result is not 0 and not 130)
+                        {
+                            failureDetail = await surface.AcknowledgeStartupFailureAsync(string.Empty, token);
+                        }
                     }
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException && progress.ReadyTimestamp is null)
-                {
-                    await surface.AcknowledgeStartupFailureAsync(exception.Message, token);
-                    result = 1;
-                }
-            },
-                processCancellation.Token);
-            processCancellation.Token.ThrowIfCancellationRequested();
+                    catch (Exception exception) when (exception is not OperationCanceledException && progress.ReadyTimestamp is null)
+                    {
+                        failureDetail = await surface.AcknowledgeStartupFailureAsync(Program.FormatErrorDetails(exception), token);
+                        result = 1;
+                    }
+                },
+                    processCancellation.Token);
+                processCancellation.Token.ThrowIfCancellationRequested();
+            }
+
+            if (failureDetail is not null)
+            {
+                // Preserve the complete bounded diagnostic after the alternate screen is restored.
+                await Console.Error.WriteLineAsync(failureDetail);
+            }
+
             return result;
         }
         catch (UnsupportedTerminalException exception)

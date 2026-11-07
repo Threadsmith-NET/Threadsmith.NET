@@ -310,7 +310,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     }
 
     /// <summary>Keeps a fatal outcome visible until Enter, cancellation, or terminal loss.</summary>
-    internal async Task AcknowledgeStartupFailureAsync(string message, CancellationToken cancellationToken)
+    internal async Task<string> AcknowledgeStartupFailureAsync(string message, CancellationToken cancellationToken)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
         if (!string.IsNullOrWhiteSpace(message))
@@ -318,11 +318,13 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             await ReportStartupDiagnosticAsync(message, lifetime.Token);
         }
 
+        var failureDetail = string.Empty;
         var acknowledged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var failedElapsed = Stopwatch.GetElapsedTime(_startupDwellStart);
         await EnqueueAsync(
             () =>
         {
+            failureDetail = _startupDetails.Count == 0 ? "Startup failed." : _startupDetails[^1];
             DismissStartupModal();
             _startupModal = new StartupModal(StartupBanner.Text, "Startup", _startupPhases.ToArray(), _interrupt, ResolveStyle, _startupDetails)
             {
@@ -336,6 +338,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         },
             lifetime.Token);
         await acknowledged.Task.WaitAsync(lifetime.Token);
+        return failureDetail;
     }
 
     private void DismissStartupModal()

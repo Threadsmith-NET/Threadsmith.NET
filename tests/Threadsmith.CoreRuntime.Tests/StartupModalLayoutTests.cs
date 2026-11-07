@@ -181,9 +181,33 @@ public static class StartupModalLayoutTests
         Assert.InRange(allocated, 0, 100 * 8192);
     }
 
-    /// <summary>Fatal acknowledgment remains readable without color at the smallest supported size.</summary>
+    /// <summary>Small terminals explicitly disclose clipped diagnostics and keep acknowledgment separate.</summary>
     [Fact]
-    public static void SmallFailureFrameKeepsAcknowledgmentAndErrorState()
+    public static void LongFailureAtMinimumSizeDisclosesFullErrorOnExit()
+    {
+        var modal = new StartupModal(StartupBanner.Text, "Startup", [], () => { }, _ => CellStyle.Default)
+        {
+            Acknowledge = () => { },
+            TotalElapsed = () => TimeSpan.FromSeconds(8),
+            Details = ["Invalid configuration in C:/Users/developer/.threadsmith/config.json: Failed to convert configuration value at tools:config:memories:Recall:MaximumResults to type System.Int32. many is not a valid value for Int32."],
+        };
+        modal.Finish(SemanticStartupPhaseState.Failed);
+        var cells = new CellBuffer(40, 12);
+        modal.Render(new BufferSurface(cells));
+        var lines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
+        var overflow = Array.FindIndex(lines, line => line.Contains("Full error shown on exit.", StringComparison.Ordinal));
+        var confirmation = Array.FindIndex(lines, line => line.Contains("press Enter to exit", StringComparison.Ordinal));
+        Assert.True(overflow >= 0);
+        Assert.Equal(overflow + 2, confirmation);
+        Assert.All(lines[confirmation - 1], character => Assert.True(char.IsWhiteSpace(character) || character == '│'));
+    }
+
+    /// <summary>Fatal acknowledgment remains readable without color at the smallest supported size.</summary>
+    [Theory]
+    [InlineData(40, 12, 0)]
+    [InlineData(40, 12, 60)]
+    [InlineData(100, 30, 60)]
+    public static void FailureConfirmationFollowsStatusesWithBlankSeparator(int width, int height, int historyCount)
     {
         var roles = new List<PresentationTextRole>();
         var modal = new StartupModal(StartupBanner.Text, "Startup", [], () => { }, role =>
@@ -191,9 +215,15 @@ public static class StartupModalLayoutTests
             roles.Add(role);
             return CellStyle.Default;
         })
-        { Acknowledge = () => { }, TotalElapsed = () => TimeSpan.FromSeconds(8), Details = ["Cannot initialize database: access denied to the configured location."] };
+        {
+            Acknowledge = () => { },
+            TotalElapsed = () => TimeSpan.FromSeconds(8),
+            Details = ["Cannot initialize database: access denied to the configured location."],
+            Progress = () => Enumerable.Range(0, historyCount)
+                .Select(index => new SemanticStartupPhaseSnapshot(default, SemanticStartupPhaseState.Completed, TimeSpan.FromSeconds(1)) { Label = $"History {index}" }).ToArray(),
+        };
         modal.Finish(SemanticStartupPhaseState.Failed);
-        var cells = new CellBuffer(40, 12);
+        var cells = new CellBuffer(width, height);
         modal.Render(new BufferSurface(cells));
         var text = TUIKit.Testing.Snapshot.ToText(cells);
         Assert.Contains("Cannot initialize database:", text, StringComparison.Ordinal);
@@ -202,5 +232,14 @@ public static class StartupModalLayoutTests
         Assert.Contains("press Enter to exit", text, StringComparison.Ordinal);
         Assert.Contains("Total startup", text, StringComparison.Ordinal);
         Assert.Contains(PresentationTextRole.Error, roles);
+        var lines = text.Split('\n');
+        var confirmationRow = Array.FindIndex(lines, line => line.Contains("press Enter to exit", StringComparison.Ordinal));
+        var totalRow = Array.FindIndex(lines, line => line.Contains("Total startup", StringComparison.Ordinal));
+        var errorRow = Array.FindIndex(lines, line => line.Contains("Cannot initialize database:", StringComparison.Ordinal));
+        Assert.Equal(totalRow + 1, errorRow);
+        Assert.True(confirmationRow > errorRow + 1);
+        Assert.All(lines[confirmationRow - 1], character => Assert.True(char.IsWhiteSpace(character) || character == '│'));
+        Assert.DoesNotContain(lines.Skip(confirmationRow + 1), line => line.Contains("History", StringComparison.Ordinal)
+            || line.Contains("Startup Failed", StringComparison.Ordinal) || line.Contains("Total startup", StringComparison.Ordinal));
     }
 }

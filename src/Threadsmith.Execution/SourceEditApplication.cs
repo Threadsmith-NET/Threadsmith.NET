@@ -307,7 +307,7 @@ public sealed class SourceEditApplication :
         var checks = pending is { Pending: true, Analyzers.Status: "pending" } ? "compiler analysis and analyzers"
             : pending?.Analyzers.Status == "pending" ? "analyzers" : "compiler analysis";
         await _events.PublishAsync(
-            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checks} to finish. You can cancel the run.") { PendingSemanticEffectId = delivery.EffectId },
+            new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checks} to finish.") { PendingSemanticEffectId = delivery.EffectId },
             cancellationToken);
         try
         {

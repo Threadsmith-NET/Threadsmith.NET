@@ -74,7 +74,8 @@ public sealed partial class SubagentRoleLiveTests
                 paths,
                 secrets,
                 NullLoggerFactory.Instance,
-                trustedConfiguration: configured);
+                trustedConfiguration: configured,
+                cancellationToken: TestContext.Current.CancellationToken);
             var profile = models.TrustedCatalog.Get(profileId);
             var reportDirectory = Path.GetFullPath(
                 Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_REPORT_DIRECTORY")

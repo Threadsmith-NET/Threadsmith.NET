@@ -1,14 +1,61 @@
 namespace Threadsmith.App;
 
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
 using Threadsmith.Workspaces;
+using TUIKit.Terminal;
 
 /// <summary>Composes one selected frontend over the same interactive coordinator.</summary>
 internal static class InteractiveFrontendRunner
 {
+    /// <summary>Owns the single terminal from its first emitted frame through host cleanup.</summary>
+    internal static async Task<int> RunStartupAsync(
+        Func<TuiKitSurface, SemanticStartupProgress, CancellationToken, Task<int>> initialize,
+        CancellationTokenSource processCancellation,
+        ITerminalBackend? backend = null,
+        SemanticStartupProgress? progress = null)
+    {
+        try
+        {
+            await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], processCancellation.Cancel, backend, deferWorkspace: true);
+            progress ??= new SemanticStartupProgress();
+            using var observation = progress.ObserveProcess();
+            var result = 1;
+            await surface.RunAsync(
+                async token =>
+            {
+                await using var terminalCancellation = token.Register(processCancellation.Cancel);
+                await surface.BeginProcessStartupAsync(progress, () => observation.Snapshot, token);
+                progress.MarkFirstFrame();
+                try
+                {
+                    result = await initialize(surface, progress, token);
+                    if (result is not 0 and not 130)
+                    {
+                        await surface.AcknowledgeStartupFailureAsync(string.Empty, token);
+                    }
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException && progress.ReadyTimestamp is null)
+                {
+                    await surface.AcknowledgeStartupFailureAsync(exception.Message, token);
+                    result = 1;
+                }
+            },
+                processCancellation.Token);
+            processCancellation.Token.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (UnsupportedTerminalException exception)
+        {
+            await Console.Error.WriteLineAsync(exception.Message);
+            return 2;
+        }
+    }
+
     /// <summary>Starts the selected frontend over identical shared interaction services.</summary>
     internal static Task RunAsync(ShellRunContext context, CancellationTokenSource processCancellation)
     {
@@ -25,7 +72,8 @@ internal static class InteractiveFrontendRunner
 
     private static async Task RunTuiKitAsync(ShellRunContext context, SessionThemePreferences themes, TuiDisplayOptions display, CancellationTokenSource processCancellation)
     {
-        await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits, images: context.ImageArtifacts);
+        var surface = context.EarlySurface ?? throw new InvalidOperationException("Interactive startup requires the early terminal surface.");
+        await surface.AttachStartupServicesAsync(context.ImageArtifacts, processCancellation.Token);
         var coordinator = CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync);
         var trusted = ConfigurationBootstrap.BuildTrusted(context.Paths);
         using var trustedLifetime = trusted as IDisposable;
@@ -33,7 +81,7 @@ internal static class InteractiveFrontendRunner
         context.Applications.UserQuestions.Attach(coordinator.PresentUserQuestionAsync);
         try
         {
-            await surface.RunAsync(token => RunCoordinatorAsync(coordinator, context, token), processCancellation.Token);
+            await RunCoordinatorAsync(coordinator, context, processCancellation.Token);
         }
         finally
         {

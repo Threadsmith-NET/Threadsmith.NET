@@ -8,9 +8,9 @@ using TUIKit.Modals;
 /// <summary>Composer attachments share input ownership, session identity and epoch checks with text.</summary>
 internal sealed partial class TuiKitSurface
 {
-    private readonly IImageArtifactStore? _imageArtifacts;
     private readonly Func<CancellationToken, Task<ClipboardCapture>> _captureClipboard;
     private readonly List<ImageArtifact> _draftImages = [];
+    private IImageArtifactStore? _imageArtifacts;
     private SessionId? _attachmentSession;
     private IDisposable? _imageSessionLease;
     private InteractionInput? _failedImageSubmission;
@@ -21,9 +21,9 @@ internal sealed partial class TuiKitSurface
         return EnqueueAsync(
             () =>
         {
-            if (input.Images.Count > 0 && _ordinary.Text.Length == 0 && _draftImages.Count == 0)
+            if (input.Images.Count > 0 && OrdinaryComposer.Text.Length == 0 && _draftImages.Count == 0)
             {
-                _ordinary.Text = input.Text;
+                OrdinaryComposer.Text = input.Text;
                 _draftImages.AddRange(input.Images);
                 _inputEpoch++;
                 _notice = "Submission failed; text and image draft restored";
@@ -39,7 +39,7 @@ internal sealed partial class TuiKitSurface
 
     private async Task AdmitClipboardImageAsync(byte[] bytes, Modal? modal, TuiKitComposer composer, long epoch, SessionId? session, CancellationToken cancellationToken)
     {
-        if (_imageArtifacts is null || session is null || modal is not null || !ReferenceEquals(composer, _ordinary))
+        if (_imageArtifacts is null || session is null || modal is not null || !ReferenceEquals(composer, OrdinaryComposer))
         {
             await EnqueueAsync(() => _notice = "Image paste is available only in the ordinary conversation composer; steering and secondary prompts accept text", cancellationToken);
             return;
@@ -60,7 +60,7 @@ internal sealed partial class TuiKitSurface
             await EnqueueAsync(
             () =>
             {
-                if (CanEdit && !_app.Modals.IsActive && ReferenceEquals(_composer, composer)
+                if (CanEdit && !_app.Modals.IsActive && ReferenceEquals(Composer, composer)
                     && epoch == _inputEpoch && _attachmentSession == session
                     && _draftImages.Count < ImageArtifactLimits.MaximumCount
                     && _draftImages.Sum(image => (long)image.ByteLength) + artifact.ByteLength <= ImageArtifactLimits.MaximumRequestBytes)
@@ -68,7 +68,7 @@ internal sealed partial class TuiKitSurface
                     _draftImages.Add(artifact);
                     retained = true;
                     _notice = $"Image attached: {artifact.MediaType}, {artifact.Width}×{artifact.Height}, {artifact.ByteLength:N0} bytes — F9 inspect/remove";
-                    _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+                    Agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
                         new($"Image attached to next message: {artifact.MediaType}, {artifact.Width}×{artifact.Height}, {artifact.ByteLength:N0} bytes\n", PresentationTextRole.Status),
                     ])]));
                 }
@@ -104,9 +104,9 @@ internal sealed partial class TuiKitSurface
                 await EnqueueAsync(
                     () =>
                 {
-                    if (_ordinary.Text.Length == 0 && _draftImages.Count == 0)
+                    if (OrdinaryComposer.Text.Length == 0 && _draftImages.Count == 0)
                     {
-                        _ordinary.Text = failed.Text;
+                        OrdinaryComposer.Text = failed.Text;
                         _draftImages.AddRange(failed.Images);
                         _failedImageSubmission = null;
                         _inputEpoch++;
@@ -154,7 +154,7 @@ internal sealed partial class TuiKitSurface
         if (!selection.IsCancelled && selection.SelectedOptionId == "paste"
             && _attachmentSession == session && CurrentPurpose == ComposerPurpose.Conversation)
         {
-            await PasteClipboardAsync(null, null, _ordinary, _inputEpoch, true, cancellationToken);
+            await PasteClipboardAsync(null, null, OrdinaryComposer, _inputEpoch, true, cancellationToken);
         }
         else if (!selection.IsCancelled && selection.SelectedOptionId is not null)
         {

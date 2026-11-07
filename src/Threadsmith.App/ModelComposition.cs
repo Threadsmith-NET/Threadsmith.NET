@@ -38,12 +38,16 @@ internal static class ModelComposition
         ILoggerFactory loggerFactory,
         string? rawModelLogPath = null,
         IConfiguration? trustedConfiguration = null,
-        IImageArtifactStore? images = null)
+        IImageArtifactStore? images = null,
+        SemanticStartupProgress? startupProgress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        var progress = startupProgress ?? new SemanticStartupProgress();
+        using var composition = progress.Begin("models", "Model services", cancellationToken: cancellationToken);
         var effectiveTrustedConfiguration = trustedConfiguration ?? ConfigurationBootstrap.BuildTrusted(paths);
         using var ownedTrustedConfiguration = trustedConfiguration is null
             ? effectiveTrustedConfiguration as IDisposable
@@ -53,14 +57,14 @@ internal static class ModelComposition
         var validatedRawModelLogPath = await ValidateRawModelLogPathAsync(
             paths.RepositoryRoot,
             rawModelLogPath,
-            CancellationToken.None).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
         var modelExchangeLog = string.IsNullOrWhiteSpace(validatedRawModelLogPath)
             ? null
             : new JsonlModelExchangeLog(validatedRawModelLogPath, async (archivePath, token) =>
                 _ = await ValidateRawModelLogPathAsync(paths.RepositoryRoot, archivePath, token).ConfigureAwait(false));
         if (modelExchangeLog is not null)
         {
-            await modelExchangeLog.RotateAsync(CancellationToken.None).ConfigureAwait(false);
+            await modelExchangeLog.RotateAsync(cancellationToken).ConfigureAwait(false);
         }
 
         // One application-lifetime pool follows Microsoft's HttpClient guidance. Profile cancellation owns
@@ -87,8 +91,7 @@ internal static class ModelComposition
             var codexRegistration = new OpenAiCodexProviderRegistration();
             var anthropicRegistration = new AnthropicProviderRegistration();
             var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration, anthropicRegistration, new OpenRouterProviderRegistration()]);
-            var (effectiveCatalog, trustedCatalog) = await LoadCatalogsAsync(
-                configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory, secretResolver, httpClient, CancellationToken.None).ConfigureAwait(false);
+            var (effectiveCatalog, trustedCatalog) = await progress.RunAsync("models.catalogs", "Model configuration and catalogs", token => LoadCatalogsAsync(configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory, secretResolver, httpClient, progress, token), cancellationToken).ConfigureAwait(false);
             if (effectiveCatalog?.Configuration.Providers.Any(
                 provider => provider is OpenAiCodexProviderConfiguration) == true)
             {
@@ -103,14 +106,21 @@ internal static class ModelComposition
                 Path.Combine(userDirectory, "credentials", "openai-codex.json"));
             var codexCache = new OpenAiCodexCatalogCache(
                 Path.Combine(userDirectory, "openai-codex-models.json"));
-            using CancellationTokenSource codexStartupToken = new(CodexStartupTokenTimeout);
+            using var codexStartupToken = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            codexStartupToken.CancelAfter(CodexStartupTokenTimeout);
+            using var credentials = progress.Begin("models.credentials", "Model credentials", cancellationToken: cancellationToken);
             var codexAccessToken = await GetOptionalCodexAccessTokenAsync(
                 codexOAuth.GetAccessTokenAsync,
                 loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup"),
-                codexStartupToken.Token).ConfigureAwait(false);
+                credentials,
+                codexStartupToken.Token,
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            credentials?.Complete();
             var codexConfiguration = codexAccessToken is null
                 ? null
                 : await codexCache.LoadAsync(codexStartupToken.Token).ConfigureAwait(false);
+            using var refresh = progress.Begin("models.codex.refresh", "Codex catalog refresh", cancellationToken: cancellationToken);
             if (codexConfiguration is { RequiresCapabilityRefresh: true } && codexAccessToken is not null)
             {
                 try
@@ -118,11 +128,18 @@ internal static class ModelComposition
                     var refreshed = await new OpenAiCodexCatalogClient(httpClient).DiscoverAsync(codexAccessToken, cancellationToken: codexStartupToken.Token).ConfigureAwait(false);
                     await codexCache.SaveAsync(refreshed, codexStartupToken.Token).ConfigureAwait(false);
                     codexConfiguration = refreshed;
+                    refresh?.Complete();
                 }
                 catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    refresh?.Fail("Refresh unavailable; cached models remain text-only.");
                     loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup").LogWarning("Codex modality refresh unavailable; legacy cached models remain text-only.");
                 }
+            }
+            else
+            {
+                refresh?.Skip();
             }
 
             if (codexConfiguration is not null)
@@ -223,26 +240,27 @@ internal static class ModelComposition
                             static () => null,
                             SecretProviderTrust.UserOwned),
                         modelExchangeLog);
+                composition?.Complete();
                 return new ModelServices(
-                    httpClient,
-                    catalog,
-                    provider,
-                    activeModels.Current.Profile,
-                    effectiveCatalog?.DefaultModelId,
-                    activeModels.Current.Profile.Name,
-                    preferences,
-                    activeModels,
-                    codexOAuth,
-                    trustedModelCatalog,
-                    trustedProvider,
-                    roleModels)
+                        httpClient,
+                        catalog,
+                        provider,
+                        activeModels.Current.Profile,
+                        effectiveCatalog?.DefaultModelId,
+                        activeModels.Current.Profile.Name,
+                        preferences,
+                        activeModels,
+                        codexOAuth,
+                        trustedModelCatalog,
+                        trustedProvider,
+                        roleModels)
                 {
                     RawModelLog = modelExchangeLog,
                     CatalogMaintenance = effectiveCatalog is null ? null : new AnthropicCatalogMaintenance(
-                        trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
-                        (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
-                        httpClient,
-                        userDirectory),
+                            trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
+                            (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
+                            httpClient,
+                            userDirectory),
                 };
             }
 
@@ -263,6 +281,7 @@ internal static class ModelComposition
                     },
                 ],
             };
+            composition?.Complete();
             return new ModelServices(
                 httpClient,
                 catalog,
@@ -426,6 +445,8 @@ internal static class ModelComposition
     internal static async Task<string?> GetOptionalCodexAccessTokenAsync(
         Func<CancellationToken, Task<string?>> getAccessTokenAsync,
         ILogger logger,
+        SemanticStartupProgress.Operation? startupOperation,
+        CancellationToken attemptCancellationToken,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(getAccessTokenAsync);
@@ -433,13 +454,15 @@ internal static class ModelComposition
 
         try
         {
-            return await getAccessTokenAsync(cancellationToken).ConfigureAwait(false);
+            return await getAccessTokenAsync(attemptCancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is HttpRequestException
             or InvalidDataException
             or JsonException
             or OperationCanceledException)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            startupOperation?.Fail("Authentication unavailable; continuing without Codex models.");
             logger.LogWarning(
                 "Optional Codex authentication is unavailable during startup ({FailureType}); "
                 + "continuing without Codex models.",
@@ -476,6 +499,7 @@ internal static class ModelComposition
         ILoggerFactory loggerFactory,
         ISecretResolver secrets,
         HttpClient httpClient,
+        SemanticStartupProgress? startupProgress,
         CancellationToken cancellationToken)
     {
         var catalogLimits = trustedConfiguration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
@@ -507,12 +531,26 @@ internal static class ModelComposition
                 continue;
             }
 
+            using var providerProgress = startupProgress?.Begin($"models.anthropic.{anthropic.Id}", "Anthropic credentials and catalog", parentId: "models.catalogs", cancellationToken: cancellationToken);
             var hydrated = await AnthropicCatalogMaintenance.HydrateStartupAsync(
                 anthropic,
                 (reference, token) => ResolveModelSecretAsync(secrets, reference, SecretProviderTrust.UserOwned, token),
                 httpClient,
                 directory,
                 cancellationToken).ConfigureAwait(false);
+            if (!anthropic.Enabled)
+            {
+                providerProgress?.Skip();
+            }
+            else if (!hydrated.Enabled || hydrated.CatalogSnapshot is { Stale: true })
+            {
+                providerProgress?.Fail("Discovery unavailable; using cached metadata or continuing without this provider.");
+            }
+            else
+            {
+                providerProgress?.Complete();
+            }
+
             providers.Add(hydrated);
             if (catalogLogger.IsEnabled(LogLevel.Information))
             {

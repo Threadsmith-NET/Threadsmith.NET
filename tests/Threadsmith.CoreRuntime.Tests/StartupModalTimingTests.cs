@@ -7,6 +7,17 @@ using Xunit;
 /// <summary>Verifies decorative startup timing independently of real operation completion.</summary>
 public static class StartupModalTimingTests
 {
+    /// <summary>Fatal acknowledgment freezes the elapsed failed startup duration.</summary>
+    [Fact]
+    public static void FailureAcknowledgmentDoesNotExtendFailedOperationTime()
+    {
+        var clock = new StartupClock();
+        var modal = new StartupModal("Logo", "Startup", [], () => { }, _ => CellStyle.Default, timeProvider: clock);
+        modal.Finish(Threadsmith.Core.SemanticStartupPhaseState.Failed, TimeSpan.FromSeconds(8));
+        clock.Advance(TimeSpan.FromMinutes(5));
+        Assert.Equal(TimeSpan.FromSeconds(8), modal.Elapsed);
+    }
+
     /// <summary>The random interval completes within its requested range and stays frozen during longer loading.</summary>
     [Fact]
     public static void SplinesCompleteBetweenHalfAndOneSecondWithoutInheritingLoadingTime()

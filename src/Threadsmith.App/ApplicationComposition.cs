@@ -105,7 +105,7 @@ internal static class ApplicationComposition
     }
 
     /// <summary>Creates the shared context assembler, session state, governed mutation path, and dispatcher.</summary>
-    internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs)
+    internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs, SemanticStartupProgress? startupProgress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         var embeddings = new LocalTextEmbeddingGenerator(inputs.Host.Configuration.GetValue("embeddings:disposalTimeoutMilliseconds", 10000));
@@ -115,7 +115,7 @@ internal static class ApplicationComposition
         {
             reranker = new LocalTextCrossEncoder(GetRerankerCpuThreads(inputs.Host.Configuration), inputs.Host.Configuration.GetValue("reranking:disposalTimeoutMilliseconds", 10000));
             memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings, reranker);
-            return await CreateCoreAsync(inputs, embeddings, reranker, memoryRetriever);
+            return await CreateCoreAsync(inputs, embeddings, reranker, memoryRetriever, startupProgress ?? new SemanticStartupProgress(), cancellationToken);
         }
         catch
         {
@@ -214,12 +214,15 @@ internal static class ApplicationComposition
         ApplicationCompositionInputs inputs,
         LocalTextEmbeddingGenerator embeddings,
         LocalTextCrossEncoder reranker,
-        HybridRepositoryMemoryRetriever memoryRetriever)
+        HybridRepositoryMemoryRetriever memoryRetriever,
+        SemanticStartupProgress progress,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(inputs);
 
         // Cohesive non-owning composition inputs grouped by responsibility. Each bundle references
         // already-initialized instances constructed by the owning composition phase; none are disposed here.
+        using var composition = progress.Begin("applications", "Application services", cancellationToken: cancellationToken);
         var host = inputs.Host;
         var persistence = inputs.Persistence;
         var tools = inputs.Tools;
@@ -266,8 +269,8 @@ internal static class ApplicationComposition
         var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>(), memoryRetriever);
         var initialRepositoryIdentity = RepositoryIdentity.Create(host.Paths.RepositoryRoot);
         var initialMemoryOptions = memoryOptions.Capture(initialRepositoryIdentity);
-        await memoryService.EnforceCapacityAsync(initialRepositoryIdentity, initialMemoryOptions);
-        var initialMemorySnapshot = await memoryService.GetSnapshotAsync(initialRepositoryIdentity);
+        await progress.RunAsync("memory.capacity", "Memory capacity", token => memoryService.EnforceCapacityAsync(initialRepositoryIdentity, initialMemoryOptions, token), cancellationToken);
+        var initialMemorySnapshot = await progress.RunAsync("memory.snapshot", "Memory initialization", token => memoryService.GetSnapshotAsync(initialRepositoryIdentity, token), cancellationToken);
         var initialStandingPreferenceCount = initialMemorySnapshot.Entries.Count(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
         var startupDisplayWarnings = CreateStandingPreferenceWarnings(
             initialStandingPreferenceCount,
@@ -292,8 +295,16 @@ internal static class ApplicationComposition
             tools.ToolRegistry,
             host.LoggerFactory.CreateLogger<ScratchpadLifecycle>(),
             host.PolicyBinding);
-        startupDisplayWarnings = startupDisplayWarnings.Concat(
-            await scratchpad.StartAsync()).ToArray();
+        try
+        {
+            startupDisplayWarnings = startupDisplayWarnings.Concat(
+                await progress.RunAsync("scratchpad", "Scratchpad initialization", scratchpad.StartAsync, cancellationToken)).ToArray();
+        }
+        catch
+        {
+            await ((IAsyncDisposable)scratchpad).DisposeAsync();
+            throw;
+        }
 
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
@@ -679,7 +690,6 @@ internal static class ApplicationComposition
             var skillCatalogOptions = LoadSkillCatalogLimits(host.Configuration, host.TrustedConfiguration);
             var skillSchemaOptions = LoadSkillSchemaLimits(host.Configuration, host.TrustedConfiguration);
             var skillCatalog = new SkillCatalog(skillSources, skillCatalogOptions);
-            await skillCatalog.RefreshAsync();
             var claudeSkillCatalog = new ClaudeSkillCompatibilityCatalog(
             [
                 new ClaudeSkillRoot(
@@ -693,7 +703,6 @@ internal static class ApplicationComposition
                     IsRepositoryControlled: true),
             ],
             LoadClaudeSkillLimits(host.Configuration, host.TrustedConfiguration));
-            await claudeSkillCatalog.RefreshAsync();
             var baseSkillPolicy = new SkillTrustPolicySnapshot
             {
                 TrustedSignerPublicKeys = host.TrustedConfiguration
@@ -725,8 +734,8 @@ internal static class ApplicationComposition
                 baseSkillPolicy,
                 host.OperationalLimits.PolicyStores);
             var nativeSkillVerifier = new SkillPackageVerifier(skillPolicy, skillCatalogOptions);
-            var compatibleSkillCatalog = new CompatibleSkillCatalog(skillCatalog, claudeSkillCatalog);
-            await compatibleSkillCatalog.RefreshAsync();
+            var compatibleSkillCatalog = new CompatibleSkillCatalog(skillCatalog, claudeSkillCatalog, progress);
+            await compatibleSkillCatalog.RefreshAsync(cancellationToken);
             repositoryBindings.AttachSkillCatalogs(
                 skillCatalog,
                 claudeSkillCatalog,
@@ -893,6 +902,7 @@ internal static class ApplicationComposition
             var dispatcher = new CommandDispatcher(
                 handlers,
                 CreateProductionMiddleware(host.LoggerFactory));
+            composition?.Complete();
             return new ApplicationServices(
                 dispatcher,
                 mutationCoordinator,
@@ -1199,6 +1209,7 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly RepositoryIntelligenceMonitor? _intelligence;
     private readonly RepositoryIntelligenceOperations? _intelligenceOperations;
     private readonly string? _startupAuthorityFingerprint;
+    private bool _initialSkillBindingPending = true;
     private long _policyGeneration = 1;
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
@@ -1335,19 +1346,23 @@ internal sealed class RepositoryScopedBindingCoordinator
                     await _scratchpad.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 }
 
-                if (_nativeSkills is not null)
+                // Composition already published these exact roots for the first repository open.
+                if (!_initialSkillBindingPending || !sameRepository)
                 {
-                    await _nativeSkills.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
-                }
+                    if (_nativeSkills is not null)
+                    {
+                        await _nativeSkills.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
+                    }
 
-                if (_claudeSkills is not null)
-                {
-                    await _claudeSkills.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
-                }
+                    if (_claudeSkills is not null)
+                    {
+                        await _claudeSkills.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
+                    }
 
-                if (_compatibleSkills is not null)
-                {
-                    _ = await _compatibleSkills.RefreshAsync(cancellationToken);
+                    if (_compatibleSkills is not null)
+                    {
+                        _ = await _compatibleSkills.RefreshAsync(cancellationToken);
+                    }
                 }
 
                 if (_sessionLifecycle is not null)
@@ -1379,6 +1394,7 @@ internal sealed class RepositoryScopedBindingCoordinator
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
                     .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
                 ];
+                _initialSkillBindingPending = false;
             }
             catch (Exception exception)
             {

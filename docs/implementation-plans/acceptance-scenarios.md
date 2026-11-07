@@ -752,6 +752,8 @@ With the same scripted model and repository, exercise TUIKit and headless execut
 
 TUIKit keeps a fixed bottom footer through runs, selectors, output, and resize; moves each committed ordinary entry into retained output exactly once while preserving its exact `current-user` context content; preserves exact drafts across prompt purposes; exposes complete option labels and safe links; bounds retained text/queues; and restores terminal state on all exits. Bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` is rejected. MCP/authentication bypass the terminal backend. Package notices and SPDX include the exact TUIKit payload and supplemental font terms for every supported RID.
 
+Interactive startup emits its first modal frame before configuration or service initialization. Configuration, persistence, providers, integrations, skill catalogs, repository opening, and semantic loading report monotonic elapsed durations and explicit outcomes on the same terminal. Concurrent skill refreshes publish only after both children finish. The original startup logo and tagline appear from the first frame; compact product branding remains visible when the full banner cannot fit. The logo, tips, active rows, and total startup time remain visible as completed history moves out of view. Required prompts work above the retained startup surface without leaking input. Fatal startup failures remain readable until Enter; Escape or Ctrl+C cancels without another acknowledgment, and terminal loss cannot strand a wait.
+
 Record automated and physical-terminal evidence separately; unexecuted operator cases remain pending.
 
 ## Scenario AS - TUIKit Command Discovery Without Execution

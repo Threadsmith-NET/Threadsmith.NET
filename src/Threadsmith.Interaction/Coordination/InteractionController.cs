@@ -8,7 +8,6 @@ public class InteractionController
     private readonly Lock _gate = new();
     private readonly InteractionPresenter _presenter;
     private readonly Func<string, Func<CancellationToken, Task>, CancellationToken, Task>? _presentProgressAsync;
-    private readonly Func<string, CancellationToken, Task>? _presentRememberedSolutionAsync;
     private RunId? _activeRunId;
     private WorkspaceBaseline? _baseline;
     private RunId? _latestRunId;
@@ -24,13 +23,11 @@ public class InteractionController
     /// <summary>Initializes a new instance of the <see cref="InteractionController"/> class with repository progress presentation.</summary>
     public InteractionController(
         InteractionPresenter presenter,
-        Func<string, Func<CancellationToken, Task>, CancellationToken, Task>? presentProgressAsync,
-        Func<string, CancellationToken, Task>? presentRememberedSolutionAsync = null)
+        Func<string, Func<CancellationToken, Task>, CancellationToken, Task>? presentProgressAsync)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         _presenter = presenter;
         _presentProgressAsync = presentProgressAsync;
-        _presentRememberedSolutionAsync = presentRememberedSolutionAsync;
     }
 
     /// <summary>Gets the current session when the shell is open.</summary>
@@ -515,14 +512,9 @@ public class InteractionController
             return new InteractionRepositoryOpenWorkflowResult(opened, null);
         }
 
-        if (useRememberedSolution && _presentRememberedSolutionAsync is not null)
-        {
-            await _presentRememberedSolutionAsync(solutionPath, cancellationToken);
-        }
-
         var isProject = Path.GetExtension(solutionPath).EndsWith("proj", StringComparison.OrdinalIgnoreCase);
         var solution = await RunWithProgressAsync(
-            isProject ? "Loading project ..." : "Loading solution ...",
+            $"Loading {(isProject ? "project" : "solution")} {Path.GetFileName(solutionPath)}",
             token => SelectSolutionAsync(opened.WorkspaceId, solutionPath, token),
             cancellationToken);
         return new InteractionRepositoryOpenWorkflowResult(opened, solution, useRememberedSolution);

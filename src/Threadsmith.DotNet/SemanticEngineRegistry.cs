@@ -8,7 +8,7 @@ using Threadsmith.Core;
 public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEditAnalyzer, IAsyncDisposable
 {
     /// <summary>Gets optional, transient startup phase observations shared by the existing semantic owners.</summary>
-    public SemanticStartupProgress StartupProgress { get; } = new();
+    public SemanticStartupProgress StartupProgress { get; }
 
     private readonly TimeSpan? _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
@@ -25,7 +25,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         ILoggerFactory loggerFactory,
         IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
-        SemanticResourceLimits? resourceLimits = null)
+        SemanticResourceLimits? resourceLimits = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
@@ -35,6 +36,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             throw new ArgumentOutOfRangeException(nameof(cancellationBackstop));
         }
 
+        StartupProgress = startupProgress ?? new SemanticStartupProgress();
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
         _prompts = prompts;

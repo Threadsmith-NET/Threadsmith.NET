@@ -4,12 +4,36 @@ using Threadsmith.App;
 using Threadsmith.Core;
 using Threadsmith.Mcp;
 using Threadsmith.Persistence;
+using Threadsmith.Skills;
 using Threadsmith.Tools;
 using Threadsmith.Workspaces;
 using Xunit;
 
 public sealed partial class SecurityPolicyConfigurationTests
 {
+    /// <summary>The initial open reuses composed skill metadata; later explicit opens still refresh it.</summary>
+    [Fact]
+    public async Task StartupBinding_ReusesInitialSkillCatalogPublication()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var facts = new SqliteRepositoryFactsStore($"Data Source={Path.Combine(_root, "skills.db")};Pooling=False", _paths.UserConfiguration);
+        await facts.InitializeAsync(token);
+        var (coordinator, _, _) = CreateStartupBinding(facts, new StartupMcpManager());
+        var native = new SkillCatalog([new SkillCatalogSource(SkillScope.Repository, Path.Combine(_paths.RepositoryRoot, ".threadsmith", "skills"), "repository:fixture", IsRepositoryControlled: true)]);
+        var claude = new ClaudeSkillCompatibilityCatalog([new ClaudeSkillRoot(SkillScope.Repository, Path.Combine(_paths.RepositoryRoot, ".claude", "skills"), "repository:fixture", IsRepositoryControlled: true)]);
+        var compatible = new CompatibleSkillCatalog(native, claude);
+        await compatible.RefreshAsync(token);
+        coordinator.AttachSkillCatalogs(native, claude, compatible);
+
+        await coordinator.BindRepositoryAsync(_paths.RepositoryRoot, token);
+
+        Assert.Equal(1, native.Snapshot.Generation);
+        Assert.Equal(1, compatible.Snapshot.Generation);
+        await coordinator.BindRepositoryAsync(_paths.RepositoryRoot, token);
+        Assert.True(native.Snapshot.Generation > 1);
+        Assert.Equal(2, compatible.Snapshot.Generation);
+    }
+
     /// <summary>Startup silently ignores repository permission keys and retains only trusted local choices.</summary>
     [Theory]
     [InlineData("alwaysTrustRepo", false)]

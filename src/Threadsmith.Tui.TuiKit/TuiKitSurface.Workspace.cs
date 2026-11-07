@@ -21,7 +21,7 @@ internal sealed partial class TuiKitSurface
         return EnqueueAsync(
             () =>
         {
-            _agents.Attach(sessionId);
+            Agents.Attach(sessionId);
             _toolActivities = [];
             _inputEpoch++;
             RefreshDiscovery();
@@ -35,7 +35,7 @@ internal sealed partial class TuiKitSurface
         return EnqueueAsync(
             () =>
         {
-            if (_agents.Update(snapshot))
+            if (Agents.Update(snapshot))
             {
                 AgentSelectionChanged();
             }
@@ -62,7 +62,7 @@ internal sealed partial class TuiKitSurface
             return;
         }
 
-        if (_agents.Select(view))
+        if (Agents.Select(view))
         {
             AgentSelectionChanged();
         }
@@ -73,7 +73,7 @@ internal sealed partial class TuiKitSurface
         _inputEpoch++;
         _mouseOwner = null;
         ClosePalette();
-        _composer.OnFocusChanged(false);
+        Composer.OnFocusChanged(false);
         _app.Focus("transcript");
         RefreshDiscovery();
     }
@@ -132,7 +132,7 @@ internal sealed partial class TuiKitSurface
             switch (id)
             {
                 case "tabs":
-                    _tabs.HandleMouse(local);
+                    _agentTabs.Value.HandleMouse(local);
                     break;
                 case "composer":
                     _composerPane.HandleMouse(local);
@@ -148,7 +148,7 @@ internal sealed partial class TuiKitSurface
 
     private AgentHeaderState GetAgentHeaderState()
     {
-        var child = _agents.Selected.Snapshot;
+        var child = Agents.Selected.Snapshot;
         var usage = (child is null ? _status?.AgentUsage : child.Usage) ?? new SessionUsageSnapshot(0, 0, false, HasObservation: false);
         var model = (child is null ? _status?.Model : child.Model) ?? "Model unknown";
         var provider = child is null ? _status?.ProviderName : child.ProviderName;
@@ -183,11 +183,11 @@ internal sealed partial class TuiKitSurface
         {
             var region = _owner._app.Layout?.FindById("transcript")?.ContentRect(_owner._backend.Size) ?? default;
             var header = WorkspaceLayout.OutputHeader(new Size(region.Width, region.Height));
-            if (ReferenceEquals(_owner._agents.Selected, _owner._agents.Main)
+            if (ReferenceEquals(_owner.Agents.Selected, _owner.Agents.Main)
                 && mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left && mouse.ClickCount == 2
                 && AgentHeader.HitContext(header.Width, _owner.GetAgentHeaderState(), mouse.X - header.Left, mouse.Y - header.Top))
             {
-                if (_owner._read is not null && ReferenceEquals(_owner._composer, _owner._ordinary))
+                if (_owner._read is not null && ReferenceEquals(_owner.Composer, _owner.OrdinaryComposer))
                 {
                     _owner._read.TrySetResult(new InteractionInput(true, string.Empty, _owner._stop.Token, InteractionInputKind.ContextMap));
                 }
@@ -210,6 +210,11 @@ internal sealed partial class TuiKitSurface
 
         public void Render(ISurface surface)
         {
+            if (!_owner._workspaceInitialized)
+            {
+                return;
+            }
+
             WorkspaceLayout.DrawFrame(surface, _owner.ResolveStyle(PresentationTextRole.OutputStreamPaneRole));
             if (surface is not BufferSurface buffer || surface.Size.Height < 5 || !ModalFrame.Fits(_owner._backend.Size))
             {
@@ -221,7 +226,7 @@ internal sealed partial class TuiKitSurface
             header.Fill(new Rect(0, 0, header.Size.Width, header.Size.Height), Cell.Blank(headerStyle));
             _header.Render(header, _owner.GetAgentHeaderState(), headerStyle);
             var content = buffer.CreateView(WorkspaceLayout.OutputContent(surface.Size));
-            _owner.SelectedTranscript.ToolActivities = _owner._agents.Selected.Snapshot?.ToolActivities
+            _owner.SelectedTranscript.ToolActivities = _owner.Agents.Selected.Snapshot?.ToolActivities
                 ?? _owner._toolActivities;
             _owner.SelectedTranscript.Render(content);
             NotificationOverlay.Render(content, _owner._app.Notifications, _owner._app.NowMilliseconds, _owner.ResolveOutputStyle);

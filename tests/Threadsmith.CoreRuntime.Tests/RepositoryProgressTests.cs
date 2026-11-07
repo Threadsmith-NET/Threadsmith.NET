@@ -10,17 +10,19 @@ public static class RepositoryProgressTests
 {
     /// <summary>Blocked opening and restore show progress; every terminal outcome releases the indicator.</summary>
     [Theory]
-    [InlineData("complete", "sample.sln", "Loading solution ...")]
-    [InlineData("fail", "sample.sln", "Loading solution ...")]
-    [InlineData("cancel", "sample.sln", "Loading solution ...")]
-    [InlineData("complete", "sample.csproj", "Loading project ...")]
+    [InlineData("complete", "sample.sln", "Loading solution sample.sln")]
+    [InlineData("fail", "sample.sln", "Loading solution sample.sln")]
+    [InlineData("cancel", "sample.sln", "Loading solution sample.sln")]
+    [InlineData("complete", "sample.csproj", "Loading project sample.csproj")]
+    [InlineData("complete", "sample.slnx", "Loading solution sample.slnx")]
+    [InlineData("complete", "nested/sample.sln", "Loading solution sample.sln")]
     public static async Task RepositoryWorkflow_ReportsProgressWhileOperationsArePending(
         string outcome,
         string candidate,
         string expectedLoadingLabel)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var handler = new GatedRepositoryHandler(candidate);
         var openVisible = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var solutionVisible = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -51,7 +53,7 @@ public static class RepositoryProgressTests
                     activeIndicators--;
                 }
             });
-        await controller.OpenAsync("Progress test", timeout.Token);
+        await controller.OpenAsync("Progress test", cancellationToken);
         var workflow = controller.OpenRepositoryWorkflowAsync(
             "repo",
             _ => throw new InvalidOperationException("Trust is already explicitly supplied."),
@@ -60,11 +62,11 @@ public static class RepositoryProgressTests
             cancellationToken: operationCancellation.Token);
         try
         {
-            await openVisible.Task.WaitAsync(timeout.Token);
+            await openVisible.Task.WaitAsync(cancellationToken);
             Assert.False(workflow.IsCompleted);
             Assert.Equal(1, activeIndicators);
             handler.OpenGate.SetResult();
-            await solutionVisible.Task.WaitAsync(timeout.Token);
+            await solutionVisible.Task.WaitAsync(cancellationToken);
             Assert.False(workflow.IsCompleted);
             Assert.Equal(1, activeIndicators);
             Assert.Equal(["Opening repository...", expectedLoadingLabel], labels);

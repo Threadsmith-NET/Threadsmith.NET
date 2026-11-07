@@ -37,7 +37,8 @@ public static partial class AppBootstrapTests
             new CapturingSecretResolver(),
             loggerFactory,
             options.RawModelLogPath,
-            trustedConfiguration: configuration);
+            trustedConfiguration: configuration,
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var archive = temporary.GetPath("review-run_0.jsonl");
         if (enabled)

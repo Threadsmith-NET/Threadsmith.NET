@@ -1,9 +1,13 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using System.Reflection;
 using System.Text;
+using Microsoft.Extensions.Configuration;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
+using TUIKit;
 using TUIKit.Terminal;
 using Xunit;
 
@@ -11,6 +15,28 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class StartupModalLifecycleTests
 {
+    /// <summary>Cancellation releases an event-based readiness wait without requiring that event.</summary>
+    [Fact]
+    public static async Task CancellationReleasesUncompletedReadinessObservation()
+    {
+        using var backend = new HeadlessBackend(100, 30);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var pendingReadiness = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], cancellation.Cancel, backend);
+        var run = surface.RunAsync(
+            async token =>
+        {
+            var startup = surface.ShowStartupAsync("Startup logo", "Semantic Loading ...", pendingReadiness.Task, token);
+            await surface.SetStartupDetailsAsync([], token);
+            await cancellation.CancelAsync();
+            await startup;
+        },
+            cancellation.Token);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await run.WaitAsync(TestContext.Current.CancellationToken));
+        Assert.False(pendingReadiness.Task.IsCompleted);
+        Assert.True(backend.IsStopped);
+    }
+
     /// <summary>No workspace frame appears between successful stages or before input readiness.</summary>
     [Fact]
     public static async Task CompletedStagesStayVisibleUntilComposerTakesOver()
@@ -20,17 +46,18 @@ public static class StartupModalLifecycleTests
         await surface.RunAsync(
             async token =>
             {
-                await surface.ShowStartupAsync("Startup logo", "Loading solution", Task.CompletedTask, token);
+                await surface.ShowStartupAsync("Startup logo", "Loading solution Sample.sln", Task.CompletedTask, token);
 
                 // Force a complete frame while the host is between startup operations.
                 var betweenStages = await RepaintAsync(backend, 101, token);
                 Assert.Contains("Startup logo", betweenStages, StringComparison.Ordinal);
-                Assert.Contains("Loading solution Completed", betweenStages, StringComparison.Ordinal);
+                Assert.Contains("Loading solution Sample.sln Completed", betweenStages, StringComparison.Ordinal);
 
                 await surface.ShowStartupAsync("Startup logo", "Semantic Loading ...", Task.CompletedTask, token);
                 var beforeComposer = await RepaintAsync(backend, 102, token);
                 Assert.Contains("Startup logo", beforeComposer, StringComparison.Ordinal);
                 Assert.Contains("Semantic Loading ... Completed", beforeComposer, StringComparison.Ordinal);
+                Assert.Contains("Loading solution Sample.sln Completed", beforeComposer, StringComparison.Ordinal);
 
                 var read = surface.ReadComposerAsync(new ComposerRequest("Ready prompt > "), token);
                 await surface.PresentAsync(new PresentationBatch([]), token);
@@ -54,7 +81,7 @@ public static class StartupModalLifecycleTests
         await surface.RunAsync(
             async token =>
             {
-                await surface.ShowStartupAsync("Startup logo", "Loading solution", Task.CompletedTask, token);
+                await surface.ShowStartupAsync("Startup logo", "Loading solution Sample.sln", Task.CompletedTask, token);
                 await Assert.ThrowsAnyAsync<Exception>(() => surface.ShowStartupAsync(
                     "Startup logo",
                     "Semantic Loading ...",
@@ -67,6 +94,40 @@ public static class StartupModalLifecycleTests
                 Assert.DoesNotContain("Startup logo", frame, StringComparison.Ordinal);
                 Assert.Contains(cancel ? "Cancelled" : "Failed", frame, StringComparison.Ordinal);
             },
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Initial theme application leaves warning publication to the coordinator; runtime changes still warn.</summary>
+    [Fact]
+    public static async Task InitialThemeDoesNotDuplicateStartupWarnings()
+    {
+        var capabilities = new TerminalCapabilities(TerminalColorDepth.None, false, false, false, false, false, false, false, false);
+        using var backend = new HeadlessBackend(100, 30, capabilities);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend, deferWorkspace: true);
+        await surface.RunAsync(
+            async token =>
+        {
+            var progress = new SemanticStartupProgress();
+            using var observation = progress.ObserveProcess();
+            await surface.BeginProcessStartupAsync(progress, () => observation.Snapshot, token);
+            await surface.ConfigureStartupAsync(new ConfigurationBuilder().Build(), token);
+            var warning = Assert.Single(surface.ThemeDiagnostics);
+            var agents = Assert.IsType<Lazy<AgentViews>>(typeof(TuiKitSurface).GetField("_agentWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(surface)).Value;
+            var cells = new CellBuffer(300, 10);
+            agents.Main.Transcript.Render(new BufferSurface(cells));
+            Assert.DoesNotContain(warning, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+
+            // The existing coordinator publishes each startup warning once.
+            await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]), token);
+            cells = new CellBuffer(300, 10);
+            agents.Main.Transcript.Render(new BufferSurface(cells));
+            Assert.Equal(1, TUIKit.Testing.Snapshot.ToText(cells).Split(warning, StringSplitOptions.None).Length - 1);
+
+            await surface.SetThemeAsync(BuiltInThemes.Create()[0], token);
+            cells = new CellBuffer(300, 10);
+            agents.Main.Transcript.Render(new BufferSurface(cells));
+            Assert.Equal(2, TUIKit.Testing.Snapshot.ToText(cells).Split(warning, StringSplitOptions.None).Length - 1);
+        },
             TestContext.Current.CancellationToken);
     }
 

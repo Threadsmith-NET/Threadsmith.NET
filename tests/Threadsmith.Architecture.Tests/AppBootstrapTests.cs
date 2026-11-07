@@ -64,7 +64,7 @@ public static partial class AppBootstrapTests
         }).Build();
         using var loggerFactory = LoggerFactory.Create(_ => { });
         await Assert.ThrowsAnyAsync<ArgumentException>(() => HostFoundation.CreateAsync(
-            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance));
+            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance, cancellationToken: TestContext.Current.CancellationToken));
         Assert.False(File.Exists(database));
     }
 
@@ -1147,6 +1147,8 @@ public static partial class AppBootstrapTests
         var accessToken = await ModelComposition.GetOptionalCodexAccessTokenAsync(
             _ => Task.FromException<string?>(new HttpRequestException("offline")),
             loggerFactory.CreateLogger("test"),
+            null,
+            TestContext.Current.CancellationToken,
             TestContext.Current.CancellationToken);
 
         Assert.Null(accessToken);

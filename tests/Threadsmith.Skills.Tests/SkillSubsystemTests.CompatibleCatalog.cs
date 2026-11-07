@@ -260,28 +260,39 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task CompatibleCatalog_RefreshOverlapsVerification_PreservesNewNativeState()
     {
+        var token = TestContext.Current.CancellationToken;
         using var package = TemporaryPackage.CopyMaintained("review");
         var claude = new DelayedClaudeCatalog();
         var native = package.CreateCatalog(SkillScope.Maintained);
-        var catalog = new CompatibleSkillCatalog(native, claude);
-        await catalog.RefreshAsync();
+        var progress = new SemanticStartupProgress();
+        var catalog = new CompatibleSkillCatalog(native, claude, progress);
+        await catalog.RefreshAsync(token);
         var policy = new FileSkillTrustPolicyProvider(Path.Combine(package.Root, "policy.json"), new SkillTrustPolicySnapshot());
         var application = CreateCatalogApplication(catalog, policy, package.Root);
         claude.DelayRefresh = true;
 
-        var refresh = catalog.RefreshAsync();
-        await claude.RefreshStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var observation = progress.ObserveProcess();
+        var nativeRefreshCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        progress.AttachReporter(snapshot =>
+        {
+            if (snapshot.Id == "skills.native" && snapshot.State == SemanticStartupPhaseState.Completed)
+            {
+                nativeRefreshCompleted.TrySetResult();
+            }
+        });
+        var refresh = catalog.RefreshAsync(token);
+        await Task.WhenAll(claude.RefreshStarted.Task, nativeRefreshCompleted.Task).WaitAsync(token);
         SkillCatalogCandidate verified;
         try
         {
-            verified = await application.HandleAsync(new VerifySkillCommand("Maintained:review@1.0.0"));
+            verified = await application.HandleAsync(new VerifySkillCommand("Maintained:review@1.0.0"), token);
         }
         finally
         {
             claude.CompleteRefresh.SetResult();
         }
 
-        var refreshed = await refresh.WaitAsync(TimeSpan.FromSeconds(10));
+        var refreshed = await refresh.WaitAsync(token);
         Assert.True(verified.Enabled);
         Assert.Equal(verified, Assert.Single(refreshed.Candidates));
         Assert.Equal(verified, Assert.Single(catalog.Snapshot.Candidates));

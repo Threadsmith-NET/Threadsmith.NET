@@ -45,16 +45,6 @@ public sealed partial class InteractionCoordinator
         "Automatic conversation fact promotion has been retired. Model-generated active-turn compaction still runs when needed; "
         + "use /memory remember <text> for explicit repository recall.\n";
 
-    private const string StartupBanner = """
-         _____ _                        _               _ _   _
-        |_   _| |__  _ __ ___  __ _  __| |___ _ __ ___ (_) |_| |__
-          | | | '_ \| '__/ _ \/ _` |/ _` / __| '_ ` _ \| | __| '_ \
-          | | | | | | | |  __/ (_| | (_| \__ \ | | | | | | |_| | | |
-          |_| |_| |_|_|  \___|\__,_|\__,_|___/_| |_| |_|_|\__|_| |_|
-                                                              .NET
-        Forge better code, not slop.
-        """;
-
     private readonly AgentDisplayStream? _agentDisplay;
     private readonly AgentNameCatalog _agentNames;
     private readonly IDomainEventStream _events;
@@ -195,14 +185,9 @@ public sealed partial class InteractionCoordinator
         var controller = new InteractionController(
             _presenter,
             (label, operation, token) =>
-                starting && (label.StartsWith("Loading solution", StringComparison.Ordinal)
-                    || label.StartsWith("Loading project", StringComparison.Ordinal)) && _surface.Surface is IStartupProgressSurface startup
-                    ? startup.ShowStartupAsync(StartupBanner, label, operation, token)
-                    : _surface.ShowStatusUntilAsync(label, operation(token), token),
-            (solutionPath, token) =>
                 starting && _surface.Surface is IStartupProgressSurface startup
-                    ? startup.SetStartupDetailsAsync([$"Remembered: {Path.GetFileName(solutionPath)}"], token)
-                    : Task.CompletedTask);
+                    ? startup.ShowStartupAsync(StartupBanner.Text, label, operation, token)
+                    : _surface.ShowStatusUntilAsync(label, operation(token), token));
         var sessionId = _sessionLifecycleAvailable
             ? (await controller.CreateNewSessionAsync(cancellationToken)).ActiveSession.SessionId
             : await controller.OpenAsync("Interactive", cancellationToken);
@@ -269,7 +254,7 @@ public sealed partial class InteractionCoordinator
         if (_surface.Surface is not IStartupProgressSurface)
         {
             await _surface.WriteAsync(
-                StartupBanner + Environment.NewLine + Environment.NewLine,
+                StartupBanner.Text + Environment.NewLine + Environment.NewLine,
                 PresentationTextRole.Brand,
                 lifetime.Token);
         }
@@ -318,7 +303,7 @@ public sealed partial class InteractionCoordinator
             {
                 if (_surface.Surface is IStartupProgressSurface startup)
                 {
-                    await startup.ShowStartupAsync(StartupBanner, "Semantic Loading ...", semanticCompletion.Task, lifetime.Token);
+                    await startup.ShowStartupAsync(StartupBanner.Text, "Semantic Loading ...", semanticCompletion.Task, lifetime.Token);
                 }
                 else
                 {
@@ -406,6 +391,7 @@ public sealed partial class InteractionCoordinator
         }
 
         starting = false;
+        _semanticStartupProgress?.MarkReady();
         startupProgress?.Dispose();
         if (_surface.Surface is IStartupProgressSurface completedStartup)
         {

@@ -32,7 +32,7 @@ public static partial class Milestone1Tests
             await harness.EventStream.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "TestBoundary", "flush answer"), cancellationToken);
             await ObserveAsync(() => surface.Output.Contains("answer before feedback", StringComparison.Ordinal) && !surface.IsStatusActive, cancellationToken);
 
-            var wait = new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checkName} to finish. You can cancel the run.") { PendingSemanticEffectId = started.EffectId };
+            var wait = new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checkName} to finish.") { PendingSemanticEffectId = started.EffectId };
             await harness.EventStream.PublishAsync(wait, cancellationToken);
             await ObserveAsync(() => surface.ActiveStatuses.Any(status => status.Contains(checkName, StringComparison.Ordinal) && status.Contains("5.0s", StringComparison.Ordinal)), cancellationToken);
             await harness.EventStream.PublishAsync(new SemanticCheckCompleted(sessionId, DateTimeOffset.UtcNow, started.RunId, started.SemanticCheckId, started.Phase, started.CheckName, SemanticCheckOutcome.Completed), cancellationToken);

@@ -12,6 +12,7 @@ using Threadsmith.Extensions.Runtime;
 using Threadsmith.Hooks;
 using Threadsmith.Mcp;
 using Threadsmith.Models.OpenAiCodex;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 
 /// <summary>Process entry point and composition root for Threadsmith.NET.</summary>
@@ -42,6 +43,7 @@ public static class Program
     internal static async Task<int> RunAsync(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
+        var startupProgress = new SemanticStartupProgress();
 
         // Parse host-owned switches before configuration so invalid command lines fail without side effects.
         var parsedCommandLine = CommandLineParser.Parse(args);
@@ -93,225 +95,37 @@ public static class Program
                 CancellationToken.None);
         }
 
-        // Resolve every configuration path once so all later phases share one normalized repository identity.
-        var paths = ConfigurationBootstrap.ResolvePaths(commandLine.RequestedRepository);
-        await ScaffoldUserConfigurationIfMissingAsync(paths.UserConfiguration, CancellationToken.None);
-
-        // Build the effective configuration only after bounding untrusted repository-owned files.
-        IConfigurationRoot configuration;
-        IConfigurationRoot trustedConfiguration;
-        var policyBinding = new SessionPolicyBinding();
-        try
-        {
-            configuration = ConfigurationBootstrap.Build(args, paths);
-            await RetiredPlanningConfiguration.MigrateAsync(paths, CancellationToken.None);
-            configuration.Reload();
-            if (RetiredPlanningConfiguration.GetWarning(configuration) is { } retiredSettingsWarning)
-            {
-                await Console.Error.WriteLineAsync(retiredSettingsWarning);
-            }
-
-            trustedConfiguration = ConfigurationBootstrap.BuildTrusted(paths);
-            policyBinding.Publish(SecurityPolicyConfigurationLoader.Load(paths, Guid.NewGuid(), 1));
-            foreach (var diagnostic in policyBinding.Current.Diagnostics)
-            {
-                await Console.Error.WriteLineAsync(diagnostic);
-            }
-        }
-        catch (Exception exception) when (exception is InvalidDataException or FormatException)
-        {
-            await Console.Error.WriteLineAsync(ConfigurationBootstrap.FormatLoadError(exception));
-            return 2;
-        }
-
-        // Use concise phase-local aliases while retaining normalized values from the immutable startup records.
-        var repositoryRoot = paths.RepositoryRoot;
-        var useInteractiveTerminal = commandLine.UseInteractiveTerminal
-            && commandLine.McpAction is null;
-
-        using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
-        var promptLoader = await DeployedPromptLoader.LoadAsync(
-            AppContext.BaseDirectory,
-            trustedConfiguration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
-            CancellationToken.None);
-        promptLoader.PublishRepository(await promptLoader.LoadRepositoryAsync(
-            paths.RepositoryRoot,
-            paths.UserConfiguration,
-            CancellationToken.None));
-        var promptLogger = loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts");
-        if (promptLogger.IsEnabled(LogLevel.Information))
-        {
-            promptLogger.LogInformation(
-                "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
-                promptLoader.Assets.Count,
-                promptLoader.TotalBytes,
-                promptLoader.CatalogDigest);
-        }
-
-        // Initialize durable state and shared host services before composing applications that consume them.
-        await using var foundation = await HostFoundation.CreateAsync(
-            configuration,
-            trustedConfiguration,
-            paths,
-            loggerFactory,
-            promptLoader,
-            policyBinding);
-
-        // Compose model transport, catalogs, migration, selection, and offline fallback as one owned phase.
-        ModelServices composedModels;
-        try
-        {
-            composedModels = await ModelComposition.CreateAsync(
-                configuration,
-                paths,
-                foundation.SecretResolver,
-                loggerFactory,
-                commandLine.RawModelLogPath,
-                trustedConfiguration,
-                foundation.ArtifactStore);
-        }
-        catch (InvalidOperationException exception) when (!string.IsNullOrWhiteSpace(commandLine.RawModelLogPath))
-        {
-            await Console.Error.WriteLineAsync(exception.Message);
-            return 2;
-        }
-
-        using var models = composedModels;
-        models.SessionPreferences.SetIncludeReasoningText(commandLine.IncludeReasoningText);
         using var processCancellation = new CancellationTokenSource();
-
-        // Capability-backed hook transports must exist before optional integrations publish
-        // their connected lifecycle boundaries.
-        foundation.HookCoordinator.RegisterAdapter(new Threadsmith.Hooks.McpHookAdapter(
-            (descriptor, envelope, cancellationToken) => InvokeCapabilityHookAsync(
-                foundation.ToolPipeline,
-                descriptor,
-                envelope,
-                cancellationToken)));
-        foundation.HookCoordinator.RegisterAdapter(new ExtensionHookAdapter(
-            (descriptor, envelope, cancellationToken) => InvokeCapabilityHookAsync(
-                foundation.ToolPipeline,
-                descriptor,
-                envelope,
-                cancellationToken)));
-
-        // Compose MCP before the dispatcher so startup, commands, headless use, and shutdown share one authority.
-        await using var mcp = await IntegrationComposition.CreateMcpManagerAsync(
-            trustedConfiguration,
-            useInteractiveTerminal,
-            foundation.SecretResolver,
-            foundation.Sanitizer,
-            foundation.ToolRegistry,
-            foundation.ToolStateManager,
-            foundation.ToolPipeline,
-            paths.RepositoryRoot,
-            loggerFactory,
-            foundation.PromptLoader,
-            foundation.HookCoordinator,
-            policyBinding,
-            processCancellation.Token);
-
-        // Compose all command applications around one shared context, policy, and mutation coordinator.
-        await using var applications = await ApplicationComposition.CreateAsync(
-            new ApplicationCompositionInputs
-            {
-                Host = new HostCompositionInputs
-                {
-                    Configuration = configuration,
-                    PolicyBinding = policyBinding,
-                    ConfigurationArguments = [.. args.Where(argument => argument.StartsWith("--set:", StringComparison.Ordinal))],
-                    TrustedConfiguration = trustedConfiguration,
-                    Paths = paths,
-                    LoggerFactory = loggerFactory,
-                    Events = foundation.Events,
-                    Projections = foundation.Projections,
-                    ExecutionLimits = foundation.ExecutionLimits,
-                    OperationalLimits = foundation.OperationalLimits,
-                    Sanitizer = foundation.Sanitizer,
-                    PromptAppendLoader = foundation.PromptAppendLoader,
-                    PromptLoader = foundation.PromptLoader,
-                    Budget = foundation.Budget,
-                },
-                Persistence = new PersistenceCompositionInputs
-                {
-                    ConversationStore = foundation.ConversationStore,
-                    RepositoryMemoryStore = foundation.RepositoryMemoryStore,
-                    SessionLifecycleStore = foundation.SessionLifecycleStore,
-                    SessionRestorer = foundation.SessionRestorer,
-                    ArtifactStore = foundation.ArtifactStore,
-                    ExecutionCheckpoints = foundation.ExecutionCheckpoints,
-                    DelegationCheckpoints = foundation.DelegationCheckpoints,
-                    SkillStateStore = foundation.SkillStateStore,
-                    HookStore = foundation.HookStore,
-                    EvidenceStore = foundation.EvidenceStore,
-                    RepositoryFacts = foundation.RepositoryFacts,
-                },
-                Tools = new ToolPolicyCompositionInputs
-                {
-                    ToolPipeline = foundation.ToolPipeline,
-                    ToolRegistry = foundation.ToolRegistry,
-                    ToolStateManager = foundation.ToolStateManager,
-                    CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
-                    WebFetchAuthorization = foundation.WebFetchAuthorization,
-                    RepositorySecretProvider = foundation.RepositorySecretProvider,
-                    ProcessManager = foundation.ProcessManager,
-                    HookCoordinator = foundation.HookCoordinator,
-                },
-                Semantic = new SemanticCompositionInputs
-                {
-                    SemanticEngines = foundation.SemanticEngines,
-                    SemanticMutations = foundation.SemanticMutations,
-                    SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
-                    RepositoryFileObserver = foundation.RepositoryFileObserver,
-                    SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
-                },
-                Integration = new IntegrationCompositionInputs
-                {
-                    McpManager = mcp,
-                    Models = models,
-                },
-            });
-        var dispatcher = applications.Dispatcher;
-
-        // MCP management is machine-oriented and must reach its single JSON projection before optional
-        // extension startup can write diagnostics. Ordinary terminal modes retain extension composition.
-        ExtensionHost? extensionHost = null;
-        if (IntegrationComposition.ShouldComposeExtensionHost(commandLine))
+        void Cancel(object? sender, ConsoleCancelEventArgs eventArgs)
         {
-            extensionHost = await IntegrationComposition.CreateExtensionHostAsync(
-                repositoryRoot,
-                useInteractiveTerminal,
-                foundation.Events,
-                foundation.ExtensionCapabilityRegistry,
-                foundation.ExtensionLeaseAuthority,
-                loggerFactory,
-                configuration,
-                policyBinding,
-                processCancellation.Token);
+            eventArgs.Cancel = true;
+            try
+            {
+                processCancellation.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // A process-global callback can race with shutdown after it is unregistered.
+            }
         }
 
-        // Run the chosen terminal mode only after its required host services are ready.
-        return await ShellRunner.RunAsync(
-            new ShellRunContext
+        Console.CancelKeyPress += Cancel;
+        try
+        {
+            if (commandLine.UseInteractiveTerminal && commandLine.McpAction is null)
             {
-                ImageArtifacts = foundation.ArtifactStore,
-                SemanticStartupProgress = foundation.SemanticEngines.StartupProgress,
-                CommandLine = commandLine,
-                Paths = paths,
-                Configuration = configuration,
-                MaximumUserConfigurationBytes = trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
-                Dispatcher = dispatcher,
-                Projections = foundation.Projections,
-                Events = foundation.Events,
-                Models = models,
-                Applications = applications,
-                ExtensionHost = extensionHost,
-                ToolStateManager = foundation.ToolStateManager,
-                CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
-                WebFetchAuthorization = foundation.WebFetchAuthorization,
-                DirectFetchApprovalPrompt = foundation.DirectFetchApprovalPrompt,
-            },
-            processCancellation);
+                return await InteractiveFrontendRunner.RunStartupAsync(
+                    (surface, progress, token) => ComposeAsync(args, commandLine, processCancellation, progress, surface, token),
+                    processCancellation,
+                    progress: startupProgress);
+            }
+
+            return await ComposeAsync(args, commandLine, processCancellation, startupProgress, null, processCancellation.Token);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= Cancel;
+        }
     }
 
     /// <summary>Formats a bounded single-line fatal error without exposing a stack trace.</summary>
@@ -320,7 +134,7 @@ public static class Program
         ArgumentNullException.ThrowIfNull(exception);
         var message = string.Join(
             ' ',
-            exception.Message.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            new SecretOutputSanitizer().Sanitize(exception.Message).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (message.Length == 0)
         {
             message = "An unexpected error occurred.";
@@ -401,6 +215,295 @@ public static class Program
     internal static Task ScaffoldUserConfigurationIfMissingAsync(string userConfigPath, CancellationToken cancellationToken = default)
     {
         return ConfigurationBootstrap.ScaffoldUserConfigurationIfMissingAsync(userConfigPath, cancellationToken);
+    }
+
+    private static async Task<int> ComposeAsync(
+        string[] args,
+        CommandLineOptions commandLine,
+        CancellationTokenSource processCancellation,
+        SemanticStartupProgress progress,
+        Threadsmith.Tui.TuiKit.TuiKitSurface? surface,
+        CancellationToken cancellationToken)
+    {
+        // Resolve every configuration path once so all later phases share one normalized repository identity.
+        var paths = progress.Run("configuration.paths", "Configuration paths", () => ConfigurationBootstrap.ResolvePaths(commandLine.RequestedRepository), cancellationToken);
+        await progress.RunAsync("configuration.scaffold", "User configuration", token => ScaffoldUserConfigurationIfMissingAsync(paths.UserConfiguration, token), cancellationToken);
+
+        // Build the effective configuration only after bounding untrusted repository-owned files.
+        IConfigurationRoot? configuration = null;
+        IConfigurationRoot? trustedConfiguration = null;
+        var policyBinding = new SessionPolicyBinding();
+        try
+        {
+            configuration = progress.Run("configuration.load", "Load configuration", () => ConfigurationBootstrap.Build(args, paths), cancellationToken);
+            await progress.RunAsync("configuration.migrate", "Migrate configuration", token => RetiredPlanningConfiguration.MigrateAsync(paths, token), cancellationToken);
+            configuration.Reload();
+            if (RetiredPlanningConfiguration.GetWarning(configuration) is { } retiredSettingsWarning)
+            {
+                await ReportAsync(retiredSettingsWarning);
+            }
+
+            trustedConfiguration = progress.Run("configuration.trusted", "Trusted configuration", () => ConfigurationBootstrap.BuildTrusted(paths), cancellationToken);
+            policyBinding.Publish(progress.Run("configuration.policy", "Security policy", () => SecurityPolicyConfigurationLoader.Load(paths, Guid.NewGuid(), 1), cancellationToken));
+            foreach (var diagnostic in policyBinding.Current.Diagnostics)
+            {
+                await ReportAsync(diagnostic);
+            }
+        }
+        catch (Exception exception) when (exception is InvalidDataException or FormatException)
+        {
+            (configuration as IDisposable)?.Dispose();
+            (trustedConfiguration as IDisposable)?.Dispose();
+            await ReportAsync(ConfigurationBootstrap.FormatLoadError(exception));
+            return 2;
+        }
+        catch
+        {
+            (configuration as IDisposable)?.Dispose();
+            (trustedConfiguration as IDisposable)?.Dispose();
+            throw;
+        }
+
+        using var configurationLifetime = configuration as IDisposable;
+        using var trustedConfigurationLifetime = trustedConfiguration as IDisposable;
+        if (surface is not null)
+        {
+            await surface.ConfigureStartupAsync(configuration, cancellationToken);
+        }
+
+        // Use concise phase-local aliases while retaining normalized values from the immutable startup records.
+        var repositoryRoot = paths.RepositoryRoot;
+        var useInteractiveTerminal = commandLine.UseInteractiveTerminal
+            && commandLine.McpAction is null;
+
+        using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
+        var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup");
+        progress.AttachReporter(snapshot =>
+        {
+            if (startupLogger.IsEnabled(LogLevel.Information))
+            {
+                startupLogger.LogInformation(
+                    "Startup {OperationId} {State} in {ElapsedMilliseconds} ms; start={StartedTimestamp}, firstFrame={FirstFrameTimestamp}, ready={ReadyTimestamp}.",
+                    snapshot.Id,
+                    snapshot.State,
+                    snapshot.Elapsed.TotalMilliseconds,
+                    snapshot.Started,
+                    progress.FirstFrameTimestamp,
+                    progress.ReadyTimestamp);
+            }
+        });
+        var promptLoader = await progress.RunAsync(
+            "prompts.deployed",
+            "Deployed prompts",
+            token => DeployedPromptLoader.LoadAsync(
+            AppContext.BaseDirectory,
+            trustedConfiguration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
+            token),
+            cancellationToken);
+        promptLoader.PublishRepository(await progress.RunAsync(
+            "prompts.repository",
+            "Repository prompt overrides",
+            token => promptLoader.LoadRepositoryAsync(
+            paths.RepositoryRoot,
+            paths.UserConfiguration,
+            token),
+            cancellationToken));
+        var promptLogger = loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts");
+        if (promptLogger.IsEnabled(LogLevel.Information))
+        {
+            promptLogger.LogInformation(
+                "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
+                promptLoader.Assets.Count,
+                promptLoader.TotalBytes,
+                promptLoader.CatalogDigest);
+        }
+
+        // Initialize durable state and shared host services before composing applications that consume them.
+        await using var foundation = await HostFoundation.CreateAsync(
+            configuration,
+            trustedConfiguration,
+            paths,
+            loggerFactory,
+            promptLoader,
+            policyBinding,
+            progress,
+            cancellationToken);
+
+        // Compose model transport, catalogs, migration, selection, and offline fallback as one owned phase.
+        ModelServices composedModels;
+        try
+        {
+            composedModels = await ModelComposition.CreateAsync(
+                configuration,
+                paths,
+                foundation.SecretResolver,
+                loggerFactory,
+                commandLine.RawModelLogPath,
+                trustedConfiguration,
+                foundation.ArtifactStore,
+                progress,
+                cancellationToken);
+        }
+        catch (InvalidOperationException exception) when (!string.IsNullOrWhiteSpace(commandLine.RawModelLogPath))
+        {
+            await ReportAsync(exception.Message);
+            return 2;
+        }
+
+        using var models = composedModels;
+        models.SessionPreferences.SetIncludeReasoningText(commandLine.IncludeReasoningText);
+
+        // Capability-backed hook transports must exist before optional integrations publish
+        // their connected lifecycle boundaries.
+        foundation.HookCoordinator.RegisterAdapter(new Threadsmith.Hooks.McpHookAdapter(
+            (descriptor, envelope, cancellationToken) => InvokeCapabilityHookAsync(
+                foundation.ToolPipeline,
+                descriptor,
+                envelope,
+                cancellationToken)));
+        foundation.HookCoordinator.RegisterAdapter(new ExtensionHookAdapter(
+            (descriptor, envelope, cancellationToken) => InvokeCapabilityHookAsync(
+                foundation.ToolPipeline,
+                descriptor,
+                envelope,
+                cancellationToken)));
+
+        // Compose MCP before the dispatcher so startup, commands, headless use, and shutdown share one authority.
+        await using var mcp = await IntegrationComposition.CreateMcpManagerAsync(
+            trustedConfiguration,
+            useInteractiveTerminal,
+            foundation.SecretResolver,
+            foundation.Sanitizer,
+            foundation.ToolRegistry,
+            foundation.ToolStateManager,
+            foundation.ToolPipeline,
+            paths.RepositoryRoot,
+            loggerFactory,
+            foundation.PromptLoader,
+            foundation.HookCoordinator,
+            policyBinding,
+            progress,
+            cancellationToken);
+
+        // Compose all command applications around one shared context, policy, and mutation coordinator.
+        await using var applications = await ApplicationComposition.CreateAsync(
+            new ApplicationCompositionInputs
+            {
+                Host = new HostCompositionInputs
+                {
+                    Configuration = configuration,
+                    PolicyBinding = policyBinding,
+                    ConfigurationArguments = [.. args.Where(argument => argument.StartsWith("--set:", StringComparison.Ordinal))],
+                    TrustedConfiguration = trustedConfiguration,
+                    Paths = paths,
+                    LoggerFactory = loggerFactory,
+                    Events = foundation.Events,
+                    Projections = foundation.Projections,
+                    ExecutionLimits = foundation.ExecutionLimits,
+                    OperationalLimits = foundation.OperationalLimits,
+                    Sanitizer = foundation.Sanitizer,
+                    PromptAppendLoader = foundation.PromptAppendLoader,
+                    PromptLoader = foundation.PromptLoader,
+                    Budget = foundation.Budget,
+                },
+                Persistence = new PersistenceCompositionInputs
+                {
+                    ConversationStore = foundation.ConversationStore,
+                    RepositoryMemoryStore = foundation.RepositoryMemoryStore,
+                    SessionLifecycleStore = foundation.SessionLifecycleStore,
+                    SessionRestorer = foundation.SessionRestorer,
+                    ArtifactStore = foundation.ArtifactStore,
+                    ExecutionCheckpoints = foundation.ExecutionCheckpoints,
+                    DelegationCheckpoints = foundation.DelegationCheckpoints,
+                    SkillStateStore = foundation.SkillStateStore,
+                    HookStore = foundation.HookStore,
+                    EvidenceStore = foundation.EvidenceStore,
+                    RepositoryFacts = foundation.RepositoryFacts,
+                },
+                Tools = new ToolPolicyCompositionInputs
+                {
+                    ToolPipeline = foundation.ToolPipeline,
+                    ToolRegistry = foundation.ToolRegistry,
+                    ToolStateManager = foundation.ToolStateManager,
+                    CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
+                    WebFetchAuthorization = foundation.WebFetchAuthorization,
+                    RepositorySecretProvider = foundation.RepositorySecretProvider,
+                    ProcessManager = foundation.ProcessManager,
+                    HookCoordinator = foundation.HookCoordinator,
+                },
+                Semantic = new SemanticCompositionInputs
+                {
+                    SemanticEngines = foundation.SemanticEngines,
+                    SemanticMutations = foundation.SemanticMutations,
+                    SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
+                    RepositoryFileObserver = foundation.RepositoryFileObserver,
+                    SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
+                },
+                Integration = new IntegrationCompositionInputs
+                {
+                    McpManager = mcp,
+                    Models = models,
+                },
+            },
+            progress,
+            cancellationToken);
+        var dispatcher = applications.Dispatcher;
+
+        // MCP management is machine-oriented and must reach its single JSON projection before optional
+        // extension startup can write diagnostics. Ordinary terminal modes retain extension composition.
+        ExtensionHost? extensionHost = null;
+        if (IntegrationComposition.ShouldComposeExtensionHost(commandLine))
+        {
+            using var extensionStartup = progress.Begin("extensions", "Extension host configuration", cancellationToken: cancellationToken);
+            extensionHost = await IntegrationComposition.CreateExtensionHostAsync(
+                repositoryRoot,
+                useInteractiveTerminal,
+                foundation.Events,
+                foundation.ExtensionCapabilityRegistry,
+                foundation.ExtensionLeaseAuthority,
+                loggerFactory,
+                configuration,
+                policyBinding,
+                surface is null ? null : ReportAsync,
+                cancellationToken);
+            extensionStartup?.Complete();
+        }
+
+        // Run the chosen terminal mode only after its required host services are ready.
+        return await ShellRunner.RunAsync(
+            new ShellRunContext
+            {
+                EarlySurface = surface,
+                ImageArtifacts = foundation.ArtifactStore,
+                SemanticStartupProgress = foundation.SemanticEngines.StartupProgress,
+                CommandLine = commandLine,
+                Paths = paths,
+                Configuration = configuration,
+                MaximumUserConfigurationBytes = trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
+                Dispatcher = dispatcher,
+                Projections = foundation.Projections,
+                Events = foundation.Events,
+                Models = models,
+                Applications = applications,
+                ExtensionHost = extensionHost,
+                ToolStateManager = foundation.ToolStateManager,
+                CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
+                WebFetchAuthorization = foundation.WebFetchAuthorization,
+                DirectFetchApprovalPrompt = foundation.DirectFetchApprovalPrompt,
+            },
+            processCancellation);
+
+        async Task ReportAsync(string message)
+        {
+            if (surface is null)
+            {
+                await Console.Error.WriteLineAsync(message);
+            }
+            else
+            {
+                await surface.ReportStartupDiagnosticAsync(message, cancellationToken);
+            }
+        }
     }
 
     private static async Task<HookHandlerResult> InvokeCapabilityHookAsync(

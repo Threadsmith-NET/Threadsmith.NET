@@ -17,7 +17,7 @@ using Xunit;
 
 /// <summary>Regression checks for agent workspace tests.</summary>
 [Collection("TUIKit terminal")]
-public static class AgentWorkspaceTests
+public static partial class AgentWorkspaceTests
 {
     /// <summary>Verifies names are normalized unique and stable across roles and exhaustion.</summary>
     [Fact]
@@ -138,12 +138,16 @@ public static class AgentWorkspaceTests
         views.Update(second);
         var selectedStyle = CellStyle.Default.WithForeground(Color.FromPalette(15)).WithBackground(Color.FromPalette(8));
         var inactiveStyle = CellStyle.Default.WithBackground(Color.FromPalette(4));
-        var strip = new AgentTabStrip(views, view => views.Select(view), role => role switch
-        {
-            PresentationTextRole.AgentSelectedTabRole => selectedStyle,
-            PresentationTextRole.AgentNotSelectedTabRole => inactiveStyle,
-            _ => CellStyle.Default,
-        });
+        var strip = new AgentTabStrip(
+            views,
+            view => views.Select(view),
+            role => role switch
+            {
+                PresentationTextRole.AgentSelectedTabRole => selectedStyle,
+                PresentationTextRole.AgentNotSelectedTabRole => inactiveStyle,
+                _ => CellStyle.Default,
+            },
+            view => views.Close(view));
         var cells = new CellBuffer(80, 1);
         strip.Render(new BufferSurface(cells));
         Assert.StartsWith(" MAIN", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
@@ -154,7 +158,7 @@ public static class AgentWorkspaceTests
         Assert.Equal(inactiveStyle, cells.Get(gap + 1, 0).Style);
         strip.HandleMouse(new MouseEvent(MouseEventKind.Press, MouseButton.Left, gap, 0, KeyModifiers.None, 1));
         Assert.Same(views.Main, views.Selected);
-        var selected = views.Ordered[1];
+        var selected = views.Ordered.Single(view => view.Snapshot?.Target == first.Target);
         views.Select(selected);
         views.Present(Text("MAIN output"));
         views.Present(Text("Child one") with { Target = first.Target });
@@ -164,23 +168,25 @@ public static class AgentWorkspaceTests
         Assert.Equal(["MAIN output"], views.Main.Transcript.Lines);
         Assert.Equal(["Child one"], selected.Transcript.Lines);
         strip.Render(new BufferSurface(cells));
-        var mainWidth = UnicodeWidth.GetWidth(AgentTabStrip.Label(views.Main, 25)) + 3;
-        strip.HandleMouse(new MouseEvent(MouseEventKind.Press, MouseButton.Left, mainWidth + 1, 0, KeyModifiers.None, 1));
+        var childColumn = Enumerable.Range(0, cells.Width).First(column => cells.Get(column, 0).Grapheme == "界");
+        strip.HandleMouse(new MouseEvent(MouseEventKind.Press, MouseButton.Left, childColumn, 0, KeyModifiers.None, 1));
         Assert.Same(selected, views.Selected);
         views.Update(first with { State = AgentRunStatus.Cancelled, Revision = 3 });
         views.Present(Text("late") with { Target = first.Target });
-        Assert.Same(views.Main, views.Selected);
-        Assert.Single(views.Ordered);
+        Assert.Same(selected, views.Selected);
+        Assert.Equal(3, views.Ordered.Count);
+        Assert.Equal(["Child one"], selected.Transcript.Lines);
         Assert.Equal(["MAIN output"], views.Main.Transcript.Lines);
+        views.Select(views.Main);
         strip.Render(new BufferSurface(cells));
         Assert.StartsWith(" MAIN", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
         Assert.Equal(selectedStyle, cells.Get(1, 0).Style);
         Assert.Equal(CellStyle.Default, cells.Get(6, 0).Style);
     }
 
-    /// <summary>Verifies every overflowed tab remains reachable.</summary>
+    /// <summary>New children appear beside MAIN, pushing older tabs into reachable right-side overflow.</summary>
     [Fact]
-    public static void EveryOverflowedTabRemainsReachable()
+    public static void NewestChildrenAppearBesideMainAndOlderTabsRemainReachable()
     {
         var session = SessionId.New();
         var views = new AgentViews(_ => CellStyle.Default);
@@ -188,14 +194,25 @@ public static class AgentWorkspaceTests
         for (var index = 0; index < 20; index++)
         {
             views.Update(Snapshot(Target(session), "Shackleton_" + index));
+            Assert.Same(views.Main, views.Selected);
+            Assert.Equal("Shackleton_" + index, views.Ordered[1].Snapshot?.Name);
         }
 
-        var strip = new AgentTabStrip(views, view => views.Select(view), _ => CellStyle.Default);
+        var strip = new AgentTabStrip(views, view => views.Select(view), _ => CellStyle.Default, view => views.Close(view));
         var cells = new CellBuffer(40, 1);
+        strip.Render(new BufferSurface(cells));
+        Assert.Contains("Shackleton_19", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        Assert.DoesNotContain("Shackleton_0", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        Assert.Equal("›", cells.Get(39, 0).Grapheme);
+        var paintedNext = views.Ordered[2];
+        views.Update(Snapshot(Target(session), "Shackleton_20"));
+        strip.HandleMouse(new MouseEvent(MouseEventKind.Press, MouseButton.Left, 39, 0, KeyModifiers.None, 1));
+        Assert.Same(paintedNext, views.Selected);
+        views.Select(views.Main);
         for (var index = 0; index < views.Ordered.Count; index++)
         {
             strip.Render(new BufferSurface(cells));
-            Assert.Contains(index == 0 ? "MAIN" : "Shackleton_" + (index - 1), TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+            Assert.Contains(index == 0 ? "MAIN" : "Shackleton_" + (views.Ordered.Count - index - 1), TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
             views.Cycle(1);
         }
 
@@ -385,6 +402,8 @@ public static class AgentWorkspaceTests
         await projection.AttachAsync(session, ct);
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), ct);
         await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty), ct);
+        await projection.ObserveAsync(Instructions(target), ct);
+        sink.Output.Clear();
         var started = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "dotnet_build", target.RunId);
         var warning = new Diagnostic { Id = "1", Code = "CS8604", Severity = DiagnosticSeverity.Warning, Project = "Example", TargetFramework = "net10.0", Message = "Possible null", Confidence = SemanticConfidenceLevel.None };
         var result = new ValidationToolResult("build", ValidationInvocationKind.Build, ValidationAuthority.Exploratory, false, "Example.csproj", [], [warning, warning with { Id = "2", Code = "CS0246", Severity = DiagnosticSeverity.Error }], string.Empty, 1, TimeSpan.Zero, false, false);
@@ -414,6 +433,8 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
         var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty);
         await projection.ObserveAsync(lifecycle, timeout.Token);
+        await projection.ObserveAsync(Instructions(target), timeout.Token);
+        sink.Output.Clear();
         var first = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "first", target.RunId, Source: new ToolActivitySource(ToolActivitySourceKind.Mcp, "Server"));
         var second = first with { ToolInvocationId = ToolInvocationId.New(), ToolName = "second" };
         await projection.ObserveAsync(first, timeout.Token);
@@ -462,6 +483,7 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
         var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty, 1);
         await projection.ObserveAsync(lifecycle, timeout.Token);
+        await projection.ObserveAsync(Instructions(target), timeout.Token);
         await projection.RefreshAsync(timeout.Token);
         Assert.Contains(sink.Output, batch => batch.Target == target && batch.Items.OfType<PresentationSourceItem>().Any(item => item.SafeSource == "child text"));
         await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Failed, Reason = "bounded failure", Revision = 2 }, timeout.Token);
@@ -491,10 +513,15 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(checkpoint, timeout.Token);
         var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty);
         await projection.ObserveAsync(lifecycle, timeout.Token);
+        await projection.ObserveAsync(Instructions(target), timeout.Token);
         await projection.ObserveAsync(checkpoint with { Generation = 2 }, timeout.Token);
         Assert.Contains(sink.Agents, snapshot => snapshot.Target == target && snapshot.IsTerminal);
         var next = lifecycle with { ChildRunId = RunId.New(), Generation = 2 };
         await projection.ObserveAsync(next, timeout.Token);
+        var nextTarget = target with { RunId = next.ChildRunId, Generation = 2 };
+        await projection.ObserveAsync(Instructions(nextTarget), timeout.Token);
+        await projection.ObserveAsync(Instructions(target), timeout.Token);
+        Assert.Equal([target, nextTarget], sink.Output.Where(batch => batch.Target is not null).Select(batch => batch.Target));
         var count = sink.Agents.Count;
         await projection.ObserveAsync(lifecycle with { Revision = 100 }, timeout.Token);
         await projection.ObserveAsync(lifecycle with { Generation = 3, ChildRunId = RunId.New() }, timeout.Token);
@@ -518,9 +545,11 @@ public static class AgentWorkspaceTests
             var target = targets[index];
             await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
             await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty), timeout.Token);
+            await projection.ObserveAsync(Instructions(target), timeout.Token);
             Assert.True(await projection.ObserveAsync(new ToolInvocationStarted(session, DateTimeOffset.UtcNow, invocations[index], "tool-" + index, target.RunId), timeout.Token));
         }
 
+        sink.Output.Clear();
         for (var index = 1; index >= 0; index--)
         {
             Assert.True(await projection.ObserveAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, invocations[index], true, "{}") { RunId = targets[index].RunId }, timeout.Token));
@@ -551,7 +580,7 @@ public static class AgentWorkspaceTests
         Assert.False(modal.Members("group:Tools")[0].Enabled);
     }
 
-    /// <summary>Child text budgets rebalance across active panes and retire all associated retained state.</summary>
+    /// <summary>Active and stopped child text shares the same aggregate budget until session detach.</summary>
     [Fact]
     public static void ChildRetentionStaysWithinAggregateBudget()
     {
@@ -575,6 +604,9 @@ public static class AgentWorkspaceTests
             views.Update(snapshot with { State = AgentRunStatus.Completed, Revision = 2 });
         }
 
+        Assert.Equal(6, views.Ordered.Count);
+        Assert.InRange(views.Ordered.Skip(1).Sum(view => view.Transcript.RetainedBytes), 0, AgentViews.ChildTextBudget / 2);
+        views.Attach(SessionId.New());
         Assert.Single(views.Ordered);
         Assert.Empty(views.Main.Transcript.Lines);
     }
@@ -593,7 +625,7 @@ public static class AgentWorkspaceTests
         }
 
         var baseline = new TranscriptView();
-        var tabs = new AgentTabStrip(views, view => views.Select(view), _ => CellStyle.Default);
+        var tabs = new AgentTabStrip(views, view => views.Select(view), _ => CellStyle.Default, view => views.Close(view));
         var cells = new CellBuffer(120, 35);
         var surface = new BufferSurface(cells);
         var samples = new List<double>();
@@ -693,7 +725,8 @@ public static class AgentWorkspaceTests
     {
         var session = SessionId.New();
         var target = Target(session);
-        var sink = new RecordingSurface();
+        var views = new AgentViews(_ => CellStyle.Default);
+        var sink = new RecordingSurface { Views = views };
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var projection = new AgentWorkspaceProjection(sink, null, new SessionUsageProjection(), null, new AgentNameCatalog(["Avery"]), false, timeout.Token);
         await projection.AttachAsync(session, timeout.Token);
@@ -701,7 +734,8 @@ public static class AgentWorkspaceTests
         var terminal = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Completed, 1, string.Empty);
         await projection.ObserveAsync(terminal, timeout.Token);
         await projection.ObserveAsync(terminal with { Status = AgentRunStatus.Failed, Revision = 2, Reason = "Join failed" }, timeout.Token);
-        Assert.Empty(sink.Agents);
+        Assert.True(Assert.Single(sink.Agents).IsTerminal);
+        Assert.Single(views.Ordered);
         Assert.Equal(2, sink.Output.Count);
         Assert.All(sink.Output, batch => Assert.Null(batch.Target));
         Assert.Equal(
@@ -812,7 +846,7 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, last.DelegationId, last.AssignmentId, last.RunId, AgentRole.Explorer, AgentRunStatus.Completed, 1, string.Empty), timeout.Token);
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, last.DelegationId, RunId.New(), phase, 1, "joined"), timeout.Token);
         Assert.Equal(64, projection.RetainedDelegationCount);
-        Assert.Empty(sink.Agents);
+        Assert.All(sink.Agents, snapshot => Assert.True(snapshot.IsTerminal));
     }
 
     /// <summary>MAIN renders the current reasoning selection while context retains the previous request estimate.</summary>
@@ -926,6 +960,8 @@ public static class AgentWorkspaceTests
     {
         public InteractionSurfaceCapabilities Capabilities { get; } = new();
 
+        internal AgentViews? Views { get; init; }
+
         internal List<PresentationBatch> Output { get; } = [];
 
         internal List<AgentPresentationSnapshot> Agents { get; } = [];
@@ -934,11 +970,19 @@ public static class AgentWorkspaceTests
 
         public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
         {
+            Views?.Attach(sessionId);
+            return Task.CompletedTask;
+        }
+
+        public Task BeginUserTurnAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            Views?.BeginUserTurn(sessionId);
             return Task.CompletedTask;
         }
 
         public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
         {
+            Views?.Update(snapshot);
             Agents.Add(snapshot);
             Order.Add(snapshot.IsTerminal ? "retire" : "agent");
             return Task.CompletedTask;
@@ -946,6 +990,7 @@ public static class AgentWorkspaceTests
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
+            Views?.Present(batch);
             Output.Add(batch);
             Order.Add(batch.Target is null ? "main" : "child");
             return Task.CompletedTask;

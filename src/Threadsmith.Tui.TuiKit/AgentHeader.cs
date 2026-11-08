@@ -101,7 +101,7 @@ internal sealed class AgentHeader
             : $"?/{(state.ContextLimit is > 0 ? state.ContextLimit.Value.ToString("N0", CultureInfo.InvariantCulture) : "?")}";
         return TranscriptView.Safe($"{state.Label} | ({state.ProviderName ?? "Provider unknown"}) {state.Model} ({state.Reasoning.Value}) | {UsageText(state, false)} | Context {context}"
             + "\n" + RequestUsageText(state.Usage.LatestRequest)
-            + "\nChild views are read-only. Ctrl+Left/Right in output selects agents. F7 focuses MAIN's composer.");
+            + "\nChild views are read-only. Click x on stopped tabs to close them. Ctrl+Left/Right in output selects agents. F7 focuses MAIN's composer.");
     }
 
     private static string IdentityText(AgentHeaderState state, int width)

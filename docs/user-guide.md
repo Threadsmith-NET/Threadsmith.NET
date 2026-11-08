@@ -1774,7 +1774,7 @@ Redirected output avoids interactive styling and session-status control sequence
 
 ## Persistence, retention, and diagnostics
 
-Threadsmith creates a repository-local SQLite database at `.threadsmith/threadsmith.db` and stores large sanitized bodies by content hash under `.threadsmith/artifacts`. Migration 5 adds bounded skill verification provenance, immutable package pins, and workflow checkpoints; age-based retention removes expired workflow checkpoints while retaining small trust/pin provenance until explicitly replaced. On every startup the host applies ordered transactional migrations, runs the configured redaction audit, and then performs one retention pass. A failed schema migration rolls back; unsupported restored event versions are represented as partial legacy state instead of crashing the whole restore.
+Threadsmith creates a repository-local SQLite database at `.threadsmith/threadsmith.db` and stores large sanitized bodies by content hash under `.threadsmith/artifacts`. Migration 5 adds bounded skill verification provenance, immutable package pins, and workflow checkpoints; age-based retention removes expired workflow checkpoints while retaining small trust/pin provenance until explicitly replaced. On every startup the host applies ordered transactional migrations and then performs one retention pass. A failed schema migration rolls back; unsupported restored event versions are represented as partial legacy state instead of crashing the whole restore.
 
 The repository configuration may override the locations and cleanup policy:
 
@@ -1797,10 +1797,6 @@ The repository configuration may override the locations and cleanup policy:
       "retainSessionSummaries": true,
       "retainConversationBodies": false,
       "conversationMessageBodyAge": "30.00:00:00"
-    },
-    "redactionAudit": {
-      "enabled": true,
-      "repairArtifacts": true
     }
   }
 }
@@ -1808,7 +1804,7 @@ The repository configuration may override the locations and cleanup policy:
 
 `sessionAgeDays` and `conversationMessageBodyAge` must be positive. `metadataOnly` removes eligible aged artifact bodies regardless of their kind. Otherwise each `retain...` switch decides whether an eligible aged kind is deleted. `retainConversationBodies: false` detaches old visible message bodies after their independent age window while keeping archive metadata and explicit repository memories under their separate retention/capacity rules. Retention runs at startup rather than continuously, so a long-running process does not clean newly expired records until its next launch.
 
-The redaction audit is defense in depth, not a substitute for keeping secrets out of prompts and tool output. Event history is append-only and findings there are reported but not rewritten. With `repairArtifacts: true`, unsafe artifact bodies are stored as sanitized content under a new content hash, then the original unsafe artifact metadata and file are deleted. Existing references to the old hash become unavailable; immutable event history is not rewritten to point to the replacement. Disabling the audit or retention increases local-data exposure and should be a deliberate repository-owner decision.
+Output is sanitized before it is stored. Retention controls how long saved data remains available.
 
 The host also supplies a bounded `DiagnosticBundleGenerator` contract used by tests and future support surfaces. Bundle entries are sanitized and size-limited, and a canary-secret gate verifies generated ZIP content. There is not yet an interactive or headless command that generates a bundle; consequently the `diagnostics` example keys are reserved contract settings rather than an available user command.
 

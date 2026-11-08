@@ -10,19 +10,23 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
 {
     private readonly AgentViews _views;
     private readonly Action<AgentView> _select;
+    private readonly Action<AgentView> _close;
     private readonly Func<Threadsmith.Interaction.Presentation.PresentationTextRole, CellStyle> _style;
-    private readonly List<(AgentView View, int Left, int Width)> _hits = [];
+    private readonly List<(AgentView View, int Left, int Width, int CloseX)> _hits = [];
     private TabView _tabs = new();
     private long _revision = -1;
     private int _width = -1;
     private int _start;
     private int _end;
+    private AgentView? _previousOverflow;
+    private AgentView? _nextOverflow;
 
     /// <summary>Initializes a new instance of the <see cref="AgentTabStrip"/> class.</summary>
-    internal AgentTabStrip(AgentViews views, Action<AgentView> select, Func<Threadsmith.Interaction.Presentation.PresentationTextRole, CellStyle> style)
+    internal AgentTabStrip(AgentViews views, Action<AgentView> select, Func<Threadsmith.Interaction.Presentation.PresentationTextRole, CellStyle> style, Action<AgentView> close)
     {
         _views = views;
         _select = select;
+        _close = close;
         _style = style;
     }
 
@@ -53,12 +57,12 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
                     Cell.Blank(_style(Threadsmith.Interaction.Presentation.PresentationTextRole.AgentTabHeaderRole)));
             }
 
-            if (_start > 0)
+            if (_previousOverflow is not null)
             {
                 surface.DrawText(0, 0, "‹", _tabs.InactiveStyle);
             }
 
-            if (_end < _views.Ordered.Count)
+            if (_nextOverflow is not null)
             {
                 surface.DrawText(surface.Size.Width - 1, 0, "›", _tabs.InactiveStyle);
             }
@@ -73,15 +77,15 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
             return false;
         }
 
-        if (mouse.X == 0 && _start > 0)
+        if (mouse.X == 0 && _previousOverflow is { } previous)
         {
-            _select(_views.Ordered[_start - 1]);
+            _select(previous);
             return true;
         }
 
-        if (mouse.X == _width - 1 && _end < _views.Ordered.Count)
+        if (mouse.X == _width - 1 && _nextOverflow is { } next)
         {
-            _select(_views.Ordered[_end]);
+            _select(next);
             return true;
         }
 
@@ -89,7 +93,15 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
         {
             if (mouse.X >= hit.Left && mouse.X < hit.Left + hit.Width)
             {
-                _select(hit.View);
+                if (mouse.X == hit.CloseX)
+                {
+                    _close(hit.View);
+                }
+                else
+                {
+                    _select(hit.View);
+                }
+
                 return true;
             }
         }
@@ -115,6 +127,17 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
             Threadsmith.Core.AgentRole.Implementer => "Impl",
             _ => "Exp",
         };
+        if (snapshot.IsTerminal)
+        {
+            role += $"#{view.Ordinal} [stopped] x";
+            if (UnicodeWidth.GetWidth("…·" + role) > width)
+            {
+                var compact = $"stopped #{view.Ordinal} x";
+                return UnicodeWidth.GetWidth(compact) <= width ? compact
+                    : width >= 9 ? "stopped x" : "done x";
+            }
+        }
+
         var full = snapshot.Name + " · " + role;
         if (UnicodeWidth.GetWidth(full) <= width)
         {
@@ -168,7 +191,7 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
             }
 
             _tabs.Add(label, view.Transcript);
-            _hits.Add((view, x, cells - 1));
+            _hits.Add((view, x, cells - 1, view.Snapshot?.IsTerminal == true ? x + UnicodeWidth.GetWidth(label) : -1));
             if (index == selected)
             {
                 _tabs.Activate(_hits.Count - 1);
@@ -178,6 +201,8 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
             _end = index + 1;
         }
 
+        _previousOverflow = _start > 0 ? _views.Ordered[_start - 1] : null;
+        _nextOverflow = _end < _views.Ordered.Count ? _views.Ordered[_end] : null;
         if (selected >= _end && _start != selected)
         {
             _start = selected;

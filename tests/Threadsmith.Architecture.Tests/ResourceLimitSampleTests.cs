@@ -12,6 +12,7 @@ public sealed class ResourceLimitSampleTests
     /// <summary>Every documented typed section accepts its sample and retains exact compiled defaults.</summary>
     [Theory]
     [InlineData("limits", "Threadsmith.Core.OperationalLimits", "Threadsmith.Core")]
+    [InlineData("limits:semantic", "Threadsmith.Core.SemanticResourceLimits", "Threadsmith.Core")]
     [InlineData("limits:semantic:editAnalysis", "Threadsmith.Core.EditAnalysisOptions", "Threadsmith.Core")]
     [InlineData("limits:semantic:editAnalysis:analyzers", "Threadsmith.Core.EditAnalyzerOptions", "Threadsmith.Core")]
     [InlineData("tui:limits", "Threadsmith.Interaction.Contracts.TuiResourceLimits", "Threadsmith.Interaction")]

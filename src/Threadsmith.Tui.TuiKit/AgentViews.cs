@@ -16,6 +16,7 @@ internal sealed class AgentViews
     private readonly Func<PresentationTextRole, TUIKit.CellStyle> _resolveStyle;
     private readonly TuiResourceLimits _limits;
     private SessionId _session;
+    private long _childOrdinal;
 
     /// <summary>Initializes a new instance of the <see cref="AgentViews"/> class.</summary>
     internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null)
@@ -34,7 +35,7 @@ internal sealed class AgentViews
     /// <summary>Gets the local selected view.</summary>
     internal AgentView Selected { get; private set; }
 
-    /// <summary>Gets stable creation order.</summary>
+    /// <summary>Gets MAIN followed by children in newest-first order.</summary>
     internal IReadOnlyList<AgentView> Ordered => _ordered;
 
     /// <summary>Gets the structural/selection revision used to rebuild lightweight headers.</summary>
@@ -44,6 +45,7 @@ internal sealed class AgentViews
     internal void Attach(SessionId session)
     {
         _session = session;
+        _childOrdinal = 0;
         _children.Clear();
         _ordered.RemoveRange(1, _ordered.Count - 1);
         Selected = Main;
@@ -59,32 +61,28 @@ internal sealed class AgentViews
         }
 
         var previous = Selected;
-        if (snapshot.IsTerminal)
+        if (_children.TryGetValue(snapshot.Target, out var view))
         {
-            if (_children.Remove(snapshot.Target, out var removed))
+            if (snapshot.Revision >= view.Snapshot?.Revision
+                && (view.Snapshot?.IsTerminal != true || snapshot.IsTerminal))
             {
-                _ordered.Remove(removed);
-                if (ReferenceEquals(Selected, removed))
+                if (snapshot.IsTerminal && view.Snapshot?.IsTerminal != true)
                 {
-                    Selected = Main;
+                    Revision++;
                 }
 
-                Revision++;
-                Rebalance();
-            }
-        }
-        else if (_children.TryGetValue(snapshot.Target, out var view))
-        {
-            if (snapshot.Revision >= view.Snapshot?.Revision)
-            {
                 view.Snapshot = snapshot;
+                if (snapshot.IsTerminal)
+                {
+                    TrimStoppedViews();
+                }
             }
         }
-        else
+        else if (!snapshot.IsTerminal)
         {
-            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle });
+            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle }, ++_childOrdinal);
             _children.Add(snapshot.Target, view);
-            _ordered.Add(view);
+            _ordered.Insert(1, view);
             Revision++;
             Rebalance();
         }
@@ -96,7 +94,51 @@ internal sealed class AgentViews
     internal void Present(PresentationBatch batch)
     {
         var view = batch.Target is null ? Main : _children.GetValueOrDefault(batch.Target);
-        view?.Transcript.Present(batch);
+        if (view?.Snapshot?.IsTerminal != true)
+        {
+            view?.Transcript.Present(batch);
+        }
+    }
+
+    /// <summary>Closes only a retained stopped view, returning selection to MAIN when necessary.</summary>
+    internal bool Close(AgentView view)
+    {
+        if (view.Snapshot?.IsTerminal != true || !_ordered.Contains(view))
+        {
+            return false;
+        }
+
+        RemoveStoppedView(view);
+        Revision++;
+        Rebalance();
+        return true;
+    }
+
+    /// <summary>Closes stopped nonfailed children for the current session; returns whether selection changed.</summary>
+    internal bool BeginUserTurn(SessionId session)
+    {
+        if (session != _session)
+        {
+            return false;
+        }
+
+        var stopped = _ordered
+            .Where(view => view.Snapshot is { IsTerminal: true, State: not AgentRunStatus.Failed })
+            .ToArray();
+        if (stopped.Length == 0)
+        {
+            return false;
+        }
+
+        var previous = Selected;
+        foreach (var view in stopped)
+        {
+            RemoveStoppedView(view);
+        }
+
+        Revision++;
+        Rebalance();
+        return !ReferenceEquals(previous, Selected);
     }
 
     /// <summary>Selects a stable existing view.</summary>
@@ -119,6 +161,47 @@ internal sealed class AgentViews
         return Select(_ordered[(index + direction + _ordered.Count) % _ordered.Count]);
     }
 
+    private void RemoveStoppedView(AgentView view)
+    {
+        if (view.Snapshot is { } snapshot)
+        {
+            _children.Remove(snapshot.Target);
+        }
+
+        _ordered.Remove(view);
+        if (ReferenceEquals(Selected, view))
+        {
+            Selected = Main;
+        }
+    }
+
+    private void TrimStoppedViews()
+    {
+        var stoppedDelegations = _ordered
+            .Where(view => view.Snapshot?.IsTerminal == true)
+            .OrderBy(view => view.Ordinal)
+            .Select(view => (view.Snapshot?.Target.DelegationId, view.Snapshot?.Target.Generation))
+            .Distinct().ToArray();
+        var omitted = stoppedDelegations.Length - _limits.MaximumRetainedDelegations;
+        if (omitted <= 0)
+        {
+            return;
+        }
+
+        var expired = stoppedDelegations.Take(omitted).ToHashSet();
+        foreach (var view in _ordered.Where(view => view.Snapshot is { IsTerminal: true } snapshot
+            && expired.Contains((snapshot.Target.DelegationId, snapshot.Target.Generation))).ToArray())
+        {
+            RemoveStoppedView(view);
+        }
+
+        Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+            new("[Older stopped child views omitted; session history is authoritative]\n", PresentationTextRole.Warning),
+        ])]));
+        Revision++;
+        Rebalance();
+    }
+
     private void Rebalance()
     {
         if (_children.Count == 0)
@@ -139,10 +222,11 @@ internal sealed class AgentViews
 internal sealed class AgentView
 {
     /// <summary>Initializes a new instance of the <see cref="AgentView"/> class.</summary>
-    internal AgentView(AgentPresentationSnapshot? snapshot, TranscriptView transcript)
+    internal AgentView(AgentPresentationSnapshot? snapshot, TranscriptView transcript, long ordinal = 0)
     {
         Snapshot = snapshot;
         Transcript = transcript;
+        Ordinal = ordinal;
     }
 
     /// <summary>Gets or sets the latest immutable child status; null identifies MAIN.</summary>
@@ -151,6 +235,11 @@ internal sealed class AgentView
     /// <summary>Gets retained output and its independent navigation.</summary>
     internal TranscriptView Transcript { get; }
 
-    /// <summary>Gets its human-readable label.</summary>
-    internal string Label => Snapshot?.Label ?? "MAIN";
+    /// <summary>Gets the stable session-local sequence used to distinguish stopped views.</summary>
+    internal long Ordinal { get; }
+
+    /// <summary>Gets its human-readable label without renaming the underlying agent.</summary>
+    internal string Label => Snapshot is { } snapshot
+        ? snapshot.Label + (snapshot.IsTerminal ? $" [stopped #{Ordinal}]" : string.Empty)
+        : "MAIN";
 }

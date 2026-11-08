@@ -251,13 +251,6 @@ public static class Program
         try
         {
             configuration = progress.Run("configuration.load", "Load configuration", () => ConfigurationBootstrap.Build(args, paths), cancellationToken);
-            await progress.RunAsync("configuration.migrate", "Migrate configuration", token => RetiredPlanningConfiguration.MigrateAsync(paths, token), cancellationToken);
-            configuration.Reload();
-            if (RetiredPlanningConfiguration.GetWarning(configuration) is { } retiredSettingsWarning)
-            {
-                await ReportAsync(retiredSettingsWarning);
-            }
-
             trustedConfiguration = progress.Run("configuration.trusted", "Trusted configuration", () => ConfigurationBootstrap.BuildTrusted(paths), cancellationToken);
             policyBinding.Publish(progress.Run("configuration.policy", "Security policy", () => SecurityPolicyConfigurationLoader.Load(paths, Guid.NewGuid(), 1), cancellationToken));
             foreach (var diagnostic in policyBinding.Current.Diagnostics)

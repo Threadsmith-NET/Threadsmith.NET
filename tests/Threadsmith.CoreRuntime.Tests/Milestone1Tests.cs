@@ -3527,6 +3527,8 @@ public static partial class Milestone1Tests
             provider.ReleaseAnswer();
             await shellTask.WaitAsync(timeout.Token);
         }
+
+        Assert.Equal(harness.Events.OfType<SessionCreated>().Single().SessionId, Assert.Single(surface.UserTurns));
     }
 
     /// <summary>Overlapping semantic-check completion keeps the still-running semantic check live.</summary>
@@ -4956,8 +4958,16 @@ public static partial class Milestone1Tests
 
     private sealed class AgentToolConsoleSurface : ConcurrentToolConsoleSurface, IAgentWorkspaceSurface
     {
+        internal List<SessionId> UserTurns { get; } = [];
+
         public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
         {
+            return Task.CompletedTask;
+        }
+
+        public Task BeginUserTurnAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            UserTurns.Add(sessionId);
             return Task.CompletedTask;
         }
 
@@ -5942,6 +5952,15 @@ public static partial class Milestone1Tests
                 AgentRunStatus.Completed,
                 1,
                 "completed"),
+            new AgentRunInstructionsObserved(
+                sessionId,
+                occurredAt,
+                DelegationId.New(),
+                AgentAssignmentId.New(),
+                RunId.New(),
+                1,
+                AgentInstructionSource.PreparedRequest,
+                [new("Assignment", "Task\nContext 界")]),
             new SkillCatalogRefreshed(sessionId, occurredAt, 1, 3),
             new SkillVerificationDecided(
                 sessionId,

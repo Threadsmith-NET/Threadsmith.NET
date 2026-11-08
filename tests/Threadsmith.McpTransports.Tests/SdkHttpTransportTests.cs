@@ -1,6 +1,8 @@
 namespace Threadsmith.McpTransports.Tests;
 
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
@@ -60,6 +62,149 @@ public sealed class SdkHttpTransportTests
         Assert.False(profile.OAuth.Enabled);
         Assert.Equal(["tools.read"], profile.OAuth.Scopes);
         Assert.Equal(8400, profile.OAuth.RedirectPort);
+    }
+
+    /// <summary>The pinned SDK overlaps discovery families while preserving family and page order.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiscoveryOverlapsFamiliesAndPreservesOrder(bool stdio)
+    {
+        // Arrange: run the real SDK against controlled JSON-RPC responses, with no network or deadline.
+        var token = TestContext.Current.CancellationToken;
+        var entered = Enumerable.Range(0, 4)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var release = Enumerable.Range(0, 4)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        var responseReady = Enumerable.Range(0, 4)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).ToArray();
+        using var httpClient = new HttpClient(new DelegateHttpHandler(async (request, cancellationToken) =>
+        {
+            if (request.Method != HttpMethod.Post)
+            {
+                return new HttpResponseMessage(HttpStatusCode.MethodNotAllowed);
+            }
+
+            using var document = JsonDocument.Parse(await (request.Content
+                ?? throw new InvalidOperationException("Missing JSON-RPC body.")).ReadAsStringAsync(cancellationToken));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("id", out var id))
+            {
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            }
+
+            var method = root.GetProperty("method").GetString();
+            if (method == "initialize")
+            {
+                return Respond(id, JsonSerializer.Serialize(new
+                {
+                    protocolVersion = root.GetProperty("params").GetProperty("protocolVersion").GetString(),
+                    capabilities = new { tools = new { }, resources = new { }, prompts = new { } },
+                    serverInfo = new { name = "controlled-discovery", version = "1.0" },
+                }));
+            }
+
+            var index = method switch
+            {
+                "tools/list" => 0,
+                "resources/list" => 1,
+                "resources/templates/list" => 2,
+                "prompts/list" => 3,
+                _ => throw new InvalidOperationException($"Unexpected request '{method}'."),
+            };
+            if (index == 0 && root.TryGetProperty("params", out var parameters)
+                && parameters.TryGetProperty("cursor", out _))
+            {
+                return Respond(id, "{\"tools\":[{\"name\":\"second\",\"inputSchema\":{\"type\":\"object\"}}]}");
+            }
+
+            entered[index].TrySetResult();
+            await release[index].Task.WaitAsync(cancellationToken);
+            var response = Respond(id, index switch
+            {
+                0 => "{\"tools\":[{\"name\":\"first\",\"inputSchema\":{\"type\":\"object\"}}],\"nextCursor\":\"second-page\"}",
+                1 => "{\"resources\":[{\"name\":\"resource\",\"uri\":\"fixture://resource\"}]}",
+                2 => "{\"resourceTemplates\":[{\"name\":\"template\",\"uriTemplate\":\"fixture://resource/{name}\"}]}",
+                3 => "{\"prompts\":[{\"name\":\"prompt\"}]}",
+                _ => throw new InvalidOperationException("Unsupported fixture family."),
+            });
+            responseReady[index].TrySetResult();
+            return response;
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
+        {
+            AllowedCapabilities = [McpCapabilityKind.Tool, McpCapabilityKind.Resource, McpCapabilityKind.ResourceTemplate, McpCapabilityKind.Prompt],
+        };
+        var options = SdkHttpTransport.CreateOptions(profile);
+        options.ConnectionTimeout = Timeout.InfiniteTimeSpan;
+        await using var wire = new HttpClientTransport(options, httpClient, NullLoggerFactory.Instance, ownsHttpClient: false);
+        await using var client = await McpClient.CreateAsync(
+            wire,
+            McpProtocolCompatibility.CreateClientOptions(Timeout.InfiniteTimeSpan),
+            NullLoggerFactory.Instance,
+            token);
+        await using var http = new SdkHttpTransport(
+            new DictionarySecretStore(),
+            NullLoggerFactory.Instance,
+            httpClient: httpClient,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        await using var process = new SdkStdioTransport(
+            new SecretOutputSanitizer(),
+            NullLoggerFactory.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+
+        // Act: tools remain suspended while the other independent families can finish.
+        var discovery = stdio
+            ? process.DiscoverCapabilitiesAsync(client, profile, token)
+            : http.DiscoverCapabilitiesAsync(client, profile, token);
+        try
+        {
+            var allEntered = Task.WhenAll(entered.Select(signal => signal.Task));
+            await Task.WhenAny(allEntered, discovery).WaitAsync(token);
+            Assert.True(allEntered.IsCompletedSuccessfully);
+            for (var index = 3; index > 0; index--)
+            {
+                release[index].TrySetResult();
+                await Task.WhenAny(responseReady[index].Task, discovery).WaitAsync(token);
+                Assert.True(responseReady[index].Task.IsCompletedSuccessfully);
+            }
+
+            Assert.False(discovery.IsCompleted);
+        }
+        finally
+        {
+            foreach (var signal in release)
+            {
+                signal.TrySetResult();
+            }
+
+            await discovery;
+        }
+
+        // Assert: SDK pagination stays inside its family and merging preserves order after reversed response readiness.
+        var capabilities = await discovery;
+        Assert.Equal(["first", "second", "resource", "template", "prompt"], capabilities.Select(item => item.ServerName));
+        Assert.Equal(
+            [McpCapabilityKind.Tool, McpCapabilityKind.Tool, McpCapabilityKind.Resource, McpCapabilityKind.ResourceTemplate, McpCapabilityKind.Prompt],
+            capabilities.Select(item => item.Kind));
+
+        static HttpResponseMessage Respond(JsonElement id, string result)
+        {
+            using var value = JsonDocument.Parse(result);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    JsonSerializer.Serialize(new
+                    {
+                        jsonrpc = "2.0",
+                        id,
+                        result = value.RootElement,
+                    }),
+                    Encoding.UTF8,
+                    "application/json"),
+            };
+        }
     }
 
     /// <summary>Only explicitly scoped logical secrets are resolved into HTTP header values.</summary>

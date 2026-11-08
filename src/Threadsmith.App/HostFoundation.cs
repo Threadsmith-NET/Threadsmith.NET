@@ -266,6 +266,17 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Gets the governed tool invocation pipeline.</summary>
     internal ToolInvocationPipeline ToolPipeline { get; }
 
+    /// <summary>Creates per-run usage accounting with only explicitly configured positive quotas.</summary>
+    internal static ExecutionBudget CreateExecutionBudget(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return new ExecutionBudget(new BudgetDimensions(
+            configuration.GetValue<long>("budget:tokens"),
+            configuration.GetValue<int>("budget:calls"),
+            TimeSpan.FromSeconds(configuration.GetValue<int>("budget:wallClockSeconds")),
+            configuration.GetValue<decimal>("budget:cost")));
+    }
+
     /// <summary>Creates the search transport with request deadlines owned by the execution token.</summary>
     internal static HttpClient CreateWebSearchHttpClient()
     {
@@ -303,18 +314,15 @@ internal sealed class HostFoundation : IAsyncDisposable
     internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration, IConfiguration? trustedConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var supportedLimits = new ConfigurationBuilder().AddInMemoryCollection(
-            configuration.GetSection("limits").AsEnumerable(makePathsRelative: true)
-                .Where(pair => !pair.Key.Equals("plan", StringComparison.OrdinalIgnoreCase)
-                    && !RetiredPlanningConfiguration.IsRetired("limits:" + pair.Key))).Build();
-        var limits = supportedLimits.Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
+        var limitsSection = configuration.GetSection("limits");
+        var limits = limitsSection.Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
             ?? new OperationalLimits();
         limits = limits with
         {
             PolicyStores = (trustedConfiguration ?? configuration).GetSection("limits:policyStores")
                 .Get<PolicyStoreResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
         };
-        var editSection = supportedLimits.GetSection("semantic:editAnalysis");
+        var editSection = limitsSection.GetSection("semantic:editAnalysis");
         var editOptions = limits.Semantic.EditAnalysis;
         foreach (var child in editSection.GetChildren())
         {
@@ -448,7 +456,7 @@ internal sealed class HostFoundation : IAsyncDisposable
 
         try
         {
-            // Migrations and redaction complete before event persistence begins, preventing partial startup state.
+            // Migrations complete before event persistence begins, preventing partial startup state.
             var sanitizer = new SecretOutputSanitizer();
             var persistence = await InitializePersistenceAsync(
                 configuration,
@@ -489,11 +497,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     ? Task.CompletedTask
                     : contextLifecycle.ObserveAsync(domainEvent, cancellationToken),
                 subscriberCapacity);
-            var budget = new ExecutionBudget(new BudgetDimensions(
-                configuration.GetValue<long?>("budget:tokens") ?? long.MaxValue,
-                configuration.GetValue<int>("budget:calls", 1000),
-                TimeSpan.FromSeconds(configuration.GetValue("budget:wallClockSeconds", 3600)),
-                configuration.GetValue<decimal>("budget:cost", 0)));
+            var budget = CreateExecutionBudget(configuration);
             var secretLimits = trustedConfiguration.GetSection("secretResolution:limits").Get<SecretResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
             secretLimits.Validate();
             var repositorySecretProvider = new RepositorySecretProvider(paths.RepositoryRoot, secretLimits);
@@ -512,8 +516,9 @@ internal sealed class HostFoundation : IAsyncDisposable
                 events,
                 loggerFactory.CreateLogger<SemanticRefreshCoordinator>(),
                 semanticRefreshPublicationGate,
+                resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 fileObserver: repositoryFileObserver,
-                resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true));
+                semanticResourceLimits: operationalLimits.Semantic);
             var semanticMutations = new SemanticMutationEngine(
                 semanticEngines,
                 loggerFactory.CreateLogger<SemanticMutationEngine>());
@@ -825,7 +830,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         return limits;
     }
 
-    /// <summary>Initializes transactional schema, artifact storage, and startup redaction auditing.</summary>
+    /// <summary>Initializes transactional schema, artifact storage, and retention maintenance.</summary>
     private static async Task<PersistenceServices> InitializePersistenceAsync(
         IConfiguration configuration,
         ConfigurationPaths paths,
@@ -865,20 +870,6 @@ internal sealed class HostFoundation : IAsyncDisposable
             TimeProvider.System,
             maximumRetainedImageBytes: configuration.GetValue("persistence:maximumRetainedImageBytes", ArtifactStore.DefaultMaximumRetainedImageBytes));
         await progress.RunAsync("artifacts", "Artifact storage", artifactStore.InitializeAsync, cancellationToken);
-        await progress.RunAsync(
-            "redaction",
-            "Redaction audit",
-            token => new RedactionAudit(
-            eventStore,
-            artifactStore,
-            sanitizer,
-            new RedactionAuditOptions
-            {
-                Enabled = configuration.GetValue("persistence:redactionAudit:enabled", true),
-                RepairArtifacts = configuration.GetValue("persistence:redactionAudit:repairArtifacts", true),
-            },
-            loggerFactory.CreateLogger<RedactionAudit>()).RunAsync(token),
-            cancellationToken);
         var connectionString = $"Data Source={databasePath}";
         var skillStateStore = new SqliteSkillStateStore(connectionString);
         var conversationStore = new SqliteConversationStore(

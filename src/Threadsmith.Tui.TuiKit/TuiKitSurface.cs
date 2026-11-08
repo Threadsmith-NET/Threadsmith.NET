@@ -34,6 +34,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         "Completion - Enter again submits; Esc dismisses suggestions",
         "F7 — switch MAIN editor/output; child views keep output focus",
         "Ctrl+Left/Right — previous/next agent while output has focus",
+        "Stopped tabs — click x to close their retained output",
         "F2 — selected agent details while output has focus",
         "Output keys — arrows scroll; Shift+arrows select text",
         "F8 — show output links; Enter copies the selected address",
@@ -140,7 +141,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _secondaryWorkspace = new(CreateComposer);
         _steeringWorkspace = new(CreateComposer);
         _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits));
-        _agentTabs = new(() => new AgentTabStrip(Agents, SelectAgent, ResolveStyle));
+        _agentTabs = new(() => new AgentTabStrip(Agents, SelectAgent, ResolveStyle, CloseAgent));
         _commandDiscovery = new(() => new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits));
         _commandCompletion = new(() => new ComposerCommandCompletion(Discovery));
         _commandAutocomplete = new(() => new ComposerAutocomplete(Discovery, Completion, CompleteCommand));

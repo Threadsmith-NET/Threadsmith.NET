@@ -1,18 +1,13 @@
 // Threadsmith.NET Milestone 8 — Plan 20: Operational hardening tests.
 //
 // Covers: the canary-secret diagnostic bundle gate (M8 exit: "diagnostic bundles exclude secrets"),
-// redaction across persisted paths, and bundle size limits.
+// and bundle size limits.
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
-using System.Security.Cryptography;
-using System.Text;
-using Microsoft.Extensions.Logging.Abstractions;
-using Threadsmith.Core;
-using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Xunit;
 
-/// <summary>Diagnostic bundle and redaction hardening tests (§23.4, M8 exit).</summary>
+/// <summary>Diagnostic bundle sanitization and size-limit tests (§23.4, M8 exit).</summary>
 public static class DiagnosticBundleTests
 {
     /// <summary>Diagnostic bundle generation redacts and excludes a canary secret.</summary>
@@ -104,112 +99,6 @@ public static class DiagnosticBundleTests
             {
                 Directory.Delete(directory, recursive: true);
             }
-        }
-    }
-}
-
-/// <summary>Startup redaction audit tests (plan-20, §19.6).</summary>
-public static class RedactionAuditTests
-{
-    /// <summary>The redaction audit reports persisted artifact content containing a secret.</summary>
-    [Fact]
-    public static async Task Audit_reports_finding_for_unredacted_artifact()
-    {
-        var fixture = await DatabaseFixture.CreateAsync();
-        var dir = DirectoryFixture.Create();
-        try
-        {
-            // Bypass the sanitizing ArtifactStore to plant an unredacted artifact directly.
-            var store = new SqliteEventStore(fixture.ConnectionString);
-            await store.InitializeAsync();
-            var rawStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new PassThroughSanitizer());
-            await rawStore.InitializeAsync();
-            var session = SessionId.New();
-            const string planted = "Useful output\ntoken=sk-leaked-secret-1234567890";
-            var artifact = await rawStore.StoreAsync(planted, "processOutput", session, CancellationToken.None);
-            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
-            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
-
-            var audit = new RedactionAudit(
-                store,
-                rawStore,
-                new SecretOutputSanitizer(),
-                new RedactionAuditOptions { Enabled = true, RepairArtifacts = false },
-                NullLogger<RedactionAudit>.Instance);
-            var outcome = await audit.RunAsync();
-
-            Assert.True(outcome.Findings >= 1);
-            Assert.Equal(0, outcome.RepairedArtifacts);
-            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
-            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
-        }
-        finally
-        {
-            await fixture.DisposeAsync();
-            dir.Dispose();
-        }
-    }
-
-    /// <summary>The redaction audit repairs unsafe artifact content when repair is enabled.</summary>
-    [Fact]
-    public static async Task Audit_repairs_artifact_when_enabled()
-    {
-        var fixture = await DatabaseFixture.CreateAsync();
-        var dir = DirectoryFixture.Create();
-        try
-        {
-            var store = new SqliteEventStore(fixture.ConnectionString);
-            await store.InitializeAsync();
-            var rawStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new PassThroughSanitizer());
-            await rawStore.InitializeAsync();
-            var session = SessionId.New();
-            const string planted = "Useful output\ntoken=sk-leaked-secret-1234567890";
-            var artifact = await rawStore.StoreAsync(planted, "processOutput", session, CancellationToken.None);
-            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
-            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
-
-            var audit = new RedactionAudit(
-                store,
-                rawStore,
-                new SecretOutputSanitizer(),
-                new RedactionAuditOptions { Enabled = true, RepairArtifacts = true },
-                NullLogger<RedactionAudit>.Instance);
-            var outcome = await audit.RunAsync();
-
-            Assert.True(outcome.Findings >= 1);
-            Assert.Equal(1, outcome.RepairedArtifacts);
-            Assert.Null(await rawStore.ReadAsync(artifact.ContentHash));
-            var repairedMetadata = Assert.Single(await rawStore.ListAsync(session));
-            Assert.NotEqual(artifact.ContentHash, repairedMetadata.ContentHash);
-            Assert.Equal(artifact.Kind, repairedMetadata.Kind);
-            Assert.Equal(artifact.SessionId, repairedMetadata.SessionId);
-            Assert.False(File.Exists(Path.Combine(dir.Path, artifact.RelativePath)));
-            var repaired = await rawStore.ReadAsync(repairedMetadata.ContentHash);
-            Assert.Equal(new SecretOutputSanitizer().Sanitize(planted), repaired);
-            Assert.NotNull(repaired);
-            var repairedBytes = Encoding.UTF8.GetBytes(repaired);
-            Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(repairedBytes)), repairedMetadata.ContentHash);
-            Assert.Equal(repairedBytes.Length, repairedMetadata.Length);
-            Assert.Equal(repaired, await File.ReadAllTextAsync(Path.Combine(dir.Path, repairedMetadata.RelativePath), TestContext.Current.CancellationToken));
-            Assert.Contains("Useful output", repaired, StringComparison.Ordinal);
-            Assert.DoesNotContain("sk-leaked-secret-1234567890", repaired, StringComparison.Ordinal);
-            var repeated = await audit.RunAsync();
-            Assert.Equal(0, repeated.Findings);
-            Assert.Equal(0, repeated.RepairedArtifacts);
-        }
-        finally
-        {
-            await fixture.DisposeAsync();
-            dir.Dispose();
-        }
-    }
-
-    /// <summary>A pass-through sanitizer used only to plant unredacted content for the audit.</summary>
-    private sealed class PassThroughSanitizer : IOutputSanitizer
-    {
-        public string Sanitize(string output)
-        {
-            return output;
         }
     }
 }

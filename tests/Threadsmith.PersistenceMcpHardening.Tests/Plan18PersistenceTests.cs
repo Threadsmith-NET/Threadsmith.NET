@@ -417,8 +417,7 @@ public static class RetentionTests
             var outcome = await retention.RunAsync();
 
             Assert.True(outcome.RemovedSessions >= 1);
-            var remaining = await store.ListSessionsAsync();
-            Assert.DoesNotContain(oldSession, remaining);
+            Assert.Empty(await store.ReadAsync(oldSession, TestContext.Current.CancellationToken));
         }
         finally
         {

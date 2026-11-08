@@ -33,7 +33,10 @@ public sealed partial class AgentOperationalLimitTests
     [Fact]
     public void Options_GlobalDisablePreservesConfiguredDefaultsButClearsEffectiveLimits()
     {
-        var options = BindOptions(nameof(DelegateAgentsOptions.EnforceOperationalLimits), "false");
+        var options = BindOptions(nameof(DelegateAgentsOptions.EnforceOperationalLimits), "false") with
+        {
+            ChildBudget = AgentResourceBudget.CreateTelemetryOnly(TimeSpan.FromMinutes(5)),
+        };
         options.Validate();
 
         Assert.Equal(5, options.MaximumAgents);
@@ -146,6 +149,14 @@ public sealed partial class AgentOperationalLimitTests
     [Fact]
     public void Budget_ZeroAndVeryLongDurationsAggregateWithoutOverflow()
     {
+        var defaults = new DelegateAgentsOptions();
+        defaults.Validate();
+        Assert.Equal(TimeSpan.Zero, defaults.EffectiveChildBudget.WallTime);
+        Assert.Equal(DateTimeOffset.MaxValue, defaults.EffectiveChildBudget.CreateDeadline(DateTimeOffset.UtcNow));
+        var configured = BindOptions("ChildBudget:WallTime", "00:05:00");
+        configured.Validate();
+        Assert.Equal(TimeSpan.FromMinutes(5), configured.EffectiveChildBudget.WallTime);
+
         var unlimited = AgentResourceBudget.CreateTelemetryOnly(TimeSpan.Zero);
         var longBudget = AgentResourceBudget.CreateTelemetryOnly(TimeSpan.MaxValue);
         Assert.Equal(TimeSpan.Zero, AgentResourceBudget.Aggregate([unlimited, longBudget]).WallTime);

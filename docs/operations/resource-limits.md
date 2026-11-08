@@ -4,6 +4,21 @@ Threadsmith-owned operational limits can be changed in configuration. Omitted va
 
 Use the tables below as a **merge reference**. Copy only the settings you want into `~/.threadsmith/config.json` or another eligible layer. The `config.example` beside the installed application shows common settings; it is not another automatically loaded configuration file. Settings and units are identical on Windows, Linux, and macOS.
 
+## Optional cumulative execution budgets
+
+Run quotas are disabled by default. Set a positive value to enable only that quota. Omitted values and zero disable it; negative values are rejected. Usage is still recorded when quotas are disabled.
+
+| Setting | Unit | Default |
+|---|---|---|
+| `budget:tokens` | Cumulative tokens | Disabled |
+| `budget:calls` | Calls | `0` (disabled) |
+| `budget:wallClockSeconds` | Seconds | `0` (disabled) |
+| `budget:cost` | Provider cost units | `0` (disabled) |
+
+These quotas apply to one run, not the whole conversation. Wall-clock accounting includes model requests, tool execution, and waits for delegated work. For example, `--set:budget:wallClockSeconds=7200` explicitly enables a two-hour run limit. Remove that setting or set it to zero to disable the limit. Restart after changing configuration.
+
+Ordinary subagents also have no deadline by default. To opt in, set `agents:delegation:childBudget:wallTime` to a positive duration, such as `"00:10:00"`, in trusted user/machine configuration. Zero (`"00:00:00"`) disables that deadline. Caller cancellation, model context capacity, provider timeouts, and per-tool controls continue to apply independently.
+
 ## Scope and validation
 
 Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user/environment configuration; repository, session, and CLI values do not widen those policies. Web-fetch, prompt-append, and skill catalog, schema, discovery, and installer options may narrow their trusted ceilings. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
@@ -87,6 +102,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.
 
 | Field | Default | Purpose |
 |---|---:|---|
+| `maximumConcurrentFileReads` | `4` | Maximum concurrent reads per semantic file snapshot or loaded-document pass. Positive integer; `1` reads sequentially. Captured at startup; restart after changes. Separate from baseline hashes and compiler workers; not a process-wide I/O limit. |
 | `maximumFallbackEntries` | `50000` | Maximum fallback directory entries inspected. |
 | `maximumFallbackFiles` | `10000` | Maximum fallback files inspected. |
 | `maximumFallbackMatches` | `500` | Maximum fallback matches returned. |

@@ -313,9 +313,6 @@ public static class RepoConfigTests
         Assert.True(config.GetValue("persistence:retention:enabled", false));
         Assert.Equal(30, config.GetValue("persistence:retention:sessionAgeDays", 0));
         Assert.False(config.GetValue("persistence:retention:metadataOnly", true));
-        // Redaction audit (plan-20, §19.6).
-        Assert.True(config.GetValue("persistence:redactionAudit:enabled", false));
-        Assert.True(config.GetValue("persistence:redactionAudit:repairArtifacts", false));
         // MCP (plan-19, §20).
         Assert.Equal(10, config.GetValue("mcp:defaultDrainKillTimeoutSeconds", 0));
         Assert.NotEmpty(config.GetSection("mcp:profiles").GetChildren());

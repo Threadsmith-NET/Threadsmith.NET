@@ -37,11 +37,8 @@ public static class ArtifactDeletionTests
             Directory.Delete(missing == "root" ? directory.Path : Path.GetDirectoryName(bodyPath)!, recursive: true);
         }
 
-        // Exercise the same initialize/audit/retention sequence as host startup.
+        // Exercise the same initialize/retention sequence as host startup.
         await artifacts.InitializeAsync(cancellationToken);
-        var audit = new RedactionAudit(
-            events, artifacts, new SecretOutputSanitizer(), new RedactionAuditOptions(), NullLogger<RedactionAudit>.Instance);
-        await audit.RunAsync(cancellationToken);
         var retention = new RetentionService(
             events, artifacts, new RetentionOptions(), NullLogger<RetentionService>.Instance);
 

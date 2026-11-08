@@ -112,37 +112,59 @@ public sealed class McpManager :
     public async Task AutoConnectAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        foreach (var profile in _profiles.Values
-            .OrderBy(profile => profile.Id, StringComparer.Ordinal))
+        using var connections = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var tasks = _profiles.Values
+            .OrderBy(profile => profile.Id, StringComparer.Ordinal)
+            .Select(ConnectProfileAsync)
+            .ToArray();
+        var results = await Task.WhenAll(tasks);
+        foreach (var (profile, result) in results)
         {
-            using var operation = _startupProgress?.Begin($"mcp.{profile.Id}", _sanitizer.Sanitize($"MCP {profile.Id}"), parentId: "mcp", cancellationToken: cancellationToken);
-            if (!profile.AutoConnect || profile.Trust == McpTrustLevel.Untrusted)
+            if (result is { Succeeded: false })
             {
-                operation?.Skip();
-                continue;
-            }
-
-            var request = new McpManagementRequest
-            {
-                Action = McpManagementAction.Connect,
-                ProfileId = profile.Id,
-            };
-            var result = await ExecuteAsync(
-                request,
-                allowOAuthUserInteraction: false,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!result.Succeeded)
-            {
-                operation?.Fail($"{result.FailureKind}; continuing without this connection.");
                 _logger.LogWarning(
                     "MCP profile '{ProfileId}' failed to auto-connect: {FailureKind}.",
                     profile.Id,
                     result.FailureKind);
             }
-            else
+        }
+
+        async Task<(McpConnectionProfile Profile, McpManagementResult? Result)> ConnectProfileAsync(McpConnectionProfile profile)
+        {
+            using var operation = _startupProgress?.Begin($"mcp.{profile.Id}", _sanitizer.Sanitize($"MCP {profile.Id}"), parentId: "mcp", cancellationToken: connections.Token);
+            try
             {
-                operation?.Complete();
+                if (!profile.AutoConnect || profile.Trust == McpTrustLevel.Untrusted)
+                {
+                    operation?.Skip();
+                    return (profile, null);
+                }
+
+                var request = new McpManagementRequest
+                {
+                    Action = McpManagementAction.Connect,
+                    ProfileId = profile.Id,
+                };
+                var result = await ExecuteAsync(
+                    request,
+                    allowOAuthUserInteraction: false,
+                    connections.Token);
+                connections.Token.ThrowIfCancellationRequested();
+                if (!result.Succeeded)
+                {
+                    operation?.Fail($"{result.FailureKind}; continuing without this connection.");
+                }
+                else
+                {
+                    operation?.Complete();
+                }
+
+                return (profile, result);
+            }
+            catch
+            {
+                await connections.CancelAsync();
+                throw;
             }
         }
     }

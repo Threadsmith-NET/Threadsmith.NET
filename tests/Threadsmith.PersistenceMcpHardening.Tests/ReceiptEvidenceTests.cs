@@ -1,7 +1,6 @@
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
@@ -33,27 +32,6 @@ public static class ReceiptEvidenceTests
         Assert.Empty(await store.CaptureAsync(next, [original with { EvidenceId = EvidenceId.New(), Content = "over quota" }], ct));
         Assert.Single(await store.ListAsync(null, ct));
         Assert.Single(Directory.GetFiles(directory.Path, "*.bin", SearchOption.AllDirectories));
-    }
-
-    /// <summary>Startup repair revokes old receipt ownership and removes newly recognized secret bytes.</summary>
-    [Fact]
-    public static async Task RedactionRepairInvalidatesHistoricalCapture()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await DatabaseFixture.CreateAsync();
-        using var directory = DirectoryFixture.Create();
-        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
-        var originalStore = new ArtifactStore(database.ConnectionString, directory.Path, new IdentitySanitizer());
-        var grant = await CaptureAndArchiveAsync(database.ConnectionString, originalStore, "Password=ThreadsmithPrivatePassword42", ct);
-        var original = Assert.Single(await originalStore.ListAsync(null, ct));
-        var sanitizer = new SecretOutputSanitizer();
-        var store = new ArtifactStore(database.ConnectionString, directory.Path, sanitizer);
-        var eventStore = new SqliteEventStore(database.ConnectionString);
-        await eventStore.InitializeAsync(ct);
-        var audit = new RedactionAudit(eventStore, store, sanitizer, new RedactionAuditOptions { RepairArtifacts = true }, NullLogger<RedactionAudit>.Instance);
-        Assert.Equal(1, (await audit.RunAsync(ct)).RepairedArtifacts);
-        Assert.False(File.Exists(Path.Combine(directory.Path, original.RelativePath)));
-        Assert.Null(await store.ReadReceiptEvidenceAsync(grant.Receipt.OriginSessionId, grant, 1, null, 1, ct));
     }
 
     /// <summary>Historical artifact pages are bounded and fail closed on storage corruption.</summary>
@@ -183,10 +161,5 @@ public static class ReceiptEvidenceTests
         Assert.Equal(archived.Receipt, reopened.Receipt);
         Assert.Equal(receipt.GetHashCode(), reopened.Receipt!.GetHashCode());
         return new ReceiptEvidenceGrant(receipt, Assert.Single(references));
-    }
-
-    private sealed class IdentitySanitizer : IOutputSanitizer
-    {
-        public string Sanitize(string value) => value;
     }
 }

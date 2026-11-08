@@ -699,6 +699,8 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
 
+The review handoff and common child guidance reuse repository instruction content already supplied in context. Instruction files are read when content is missing, the scope newly applies, or a change needs verification; a path alone remains a reference to content that may still need reading. The architecture role follows the same guidance.
+
 For captured PR reviews, the shared handoff references the snapshot's complete inventory using the target identity, evidence ID, file count, and already-known project roots. It does not reproduce the full path list, even when directly delivered. Every specialist still reviews all changed files through bounded evidence reads; exact paths may direct a particular specialist's focus. Reviews without a captured inventory retain the explicit changed-file list. This changes handoff wording only, not evidence capture, access, or review scope.
 
 #### `Procedure` family

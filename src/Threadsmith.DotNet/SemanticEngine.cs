@@ -1252,8 +1252,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             solution,
             async token =>
             {
-                var documents = new List<SemanticDocumentRefresh>();
-                foreach (var document in solution.Projects
+                var documents = solution.Projects
                     .SelectMany(project => project.Documents
                         .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))
                         .Cast<TextDocument>()
@@ -1264,19 +1263,28 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     .GroupBy(
                         document => Path.GetFullPath(document.FilePath ?? string.Empty),
                         StringComparerForCurrentPlatform())
-                    .Select(group => group.First()))
-                {
-                    token.ThrowIfCancellationRequested();
-                    var text = await document.GetTextAsync(token);
-                    var content = retainText ? text.ToString() : string.Empty;
-                    var identity = SemanticTextIdentity.Compute(text, token);
-                    documents.Add(new SemanticDocumentRefresh(
-                        Path.GetFullPath(document.FilePath ?? string.Empty),
-                        content,
-                        identity));
-                }
-
-                return documents;
+                    .Select(group => group.First())
+                    .ToArray();
+                var captured = new SemanticDocumentRefresh[documents.Length];
+                await Parallel.ForEachAsync(
+                    Enumerable.Range(0, documents.Length),
+                    new ParallelOptions
+                    {
+                        MaxDegreeOfParallelism = _resourceLimits.MaximumConcurrentFileReads,
+                        CancellationToken = token,
+                    },
+                    async (index, readToken) =>
+                    {
+                        var document = documents[index];
+                        var text = await document.GetTextAsync(readToken);
+                        var content = retainText ? text.ToString() : string.Empty;
+                        var identity = SemanticTextIdentity.Compute(text, readToken);
+                        captured[index] = new SemanticDocumentRefresh(
+                            Path.GetFullPath(document.FilePath ?? string.Empty),
+                            content,
+                            identity);
+                    });
+                return captured;
             },
             cancellationToken);
     }

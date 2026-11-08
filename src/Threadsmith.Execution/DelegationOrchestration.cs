@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Threading.Channels;
 using Threadsmith.Core;
+using Threadsmith.Telemetry;
 
 /// <summary>Conservative configured limits for in-process child scheduling.</summary>
 public sealed record AgentSchedulerOptions
@@ -962,6 +963,7 @@ public sealed class DelegationCoordinator :
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _progressCheckpointTimeout;
     private readonly IAgentRunScheduler _scheduler;
+    private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="DelegationCoordinator"/> class.</summary>
     public DelegationCoordinator(
@@ -969,7 +971,8 @@ public sealed class DelegationCoordinator :
         IDelegationCheckpointStore checkpoints,
         IDomainEventStream events,
         TimeSpan? progressCheckpointTimeout = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOutputSanitizer? sanitizer = null)
     {
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(checkpoints);
@@ -981,6 +984,7 @@ public sealed class DelegationCoordinator :
         }
 
         _scheduler = scheduler;
+        _sanitizer = sanitizer ?? new SecretOutputSanitizer();
         _checkpoints = checkpoints;
         _events = events;
         _progressCheckpointTimeout = effectiveProgressTimeout;
@@ -995,7 +999,8 @@ public sealed class DelegationCoordinator :
     {
         DelegationPlanValidator.Validate(plan);
         ArgumentNullException.ThrowIfNull(runner);
-        using var active = new ActiveDelegation();
+        using var instructions = new ChildAgentInstructionObservation(plan, _events, _sanitizer);
+        using var active = new ActiveDelegation { Instructions = instructions };
         if (!_active.TryAdd(plan.DelegationId, active))
         {
             throw new InvalidOperationException("The delegation is already active.");
@@ -1276,6 +1281,12 @@ public sealed class DelegationCoordinator :
             cancellationToken);
         foreach (var outcome in lifecycleOutcomes ?? checkpoint.ChildOutcomes)
         {
+            if (outcome.Status is AgentRunStatus.Completed or AgentRunStatus.Failed or AgentRunStatus.Cancelled or AgentRunStatus.Discarded
+                && _active.TryGetValue(checkpoint.DelegationId, out var active))
+            {
+                await active.Instructions.ObserveAssignmentAsync(outcome.AssignmentId, cancellationToken);
+            }
+
             await _events.PublishAsync(
                 new AgentRunLifecycleObserved(
                     checkpoint.Provenance.SessionId,
@@ -1659,6 +1670,8 @@ public sealed class DelegationCoordinator :
 
     private sealed class ActiveDelegation : IDisposable
     {
+        public required ChildAgentInstructionObservation Instructions { get; init; }
+
         private readonly Lock _gate = new();
         private readonly CancellationTokenSource _source = new();
         private int _activeCancellations;

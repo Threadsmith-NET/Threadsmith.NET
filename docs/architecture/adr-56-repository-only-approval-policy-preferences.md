@@ -24,7 +24,7 @@ Repository configuration now fully expresses saved approval preferences without 
 
 ## Direct-editing amendment (2026-10-05)
 
-`/plan-policy`, planning approval settings and plan-specific trust writers are removed. `/policy` retains supported mutation policies. Legacy `TrustPlan` is read conservatively as exact review and cannot be newly selected; narrowly known retired planning keys are removed or ignored with a diagnostic. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
+`/plan-policy`, planning approval settings and plan-specific trust writers are removed. `/policy` retains supported mutation policies. Legacy `TrustPlan` is read conservatively as exact review and cannot be newly selected; retired planning configuration is unsupported and is not rewritten during startup or repository changes. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
 
 ## Authority amendment (2026-10-22)
 

@@ -19,6 +19,7 @@ Bare `--tui` and `--tui=tuikit` launch the retained TUIKit frontend.
 - Child views preserve MAIN’s draft and block every editing, paste, submit, steering, and command-discovery path.
 - `F8`: show validated links retained in the transcript; Enter copies the selected address.
 - In the output pane, click a semantic-check header to expand or collapse its bracketed details. `Ctrl+Up`/`Ctrl+Down` selects a semantic header (underlined); `Enter` or `Space` toggles it. Use `F2` to focus output first. Shift-click retains text-selection behavior.
+- Finished child tabs display `[stopped]` and a small `x`. Click `x` to close that view. Closing the selected child returns to MAIN and preserves its draft; MAIN and active children have no close control.
 - `F12`: hand mouse selection to the terminal; press it again to restore application mouse control.
 - Double-click MAIN's `Context` meter: open `/context map` with mouse capture enabled, without consuming the draft or steering. In the flat map, arrows/PageUp/PageDown/Home/End and the wheel navigate, Tab switches ordered sources/category ranking, and Esc closes. The right summary retains aggregate category totals.
 - Arrow keys scroll the focused transcript. `Shift` plus arrow keys selects text.

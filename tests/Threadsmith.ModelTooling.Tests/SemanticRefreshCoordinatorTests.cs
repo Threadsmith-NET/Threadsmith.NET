@@ -13,6 +13,119 @@ using Xunit;
 /// <summary>Verifies external semantic refresh coordination, fencing, and recovery.</summary>
 public static class SemanticRefreshCoordinatorTests
 {
+    /// <summary>Snapshot and reconciliation passes overlap only the configured number of reads and join before returning.</summary>
+    [Theory]
+    [InlineData(1, false, false)]
+    [InlineData(2, false, false)]
+    [InlineData(4, false, false)]
+    [InlineData(2, true, false)]
+    [InlineData(2, false, true)]
+    [InlineData(2, true, true)]
+    public static async Task FileReadPassHonorsLimitAndJoins(int limit, bool reconcile, bool cancel)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        for (var index = 0; index < limit; index++)
+        {
+            var path = Path.Combine(repository.Root, reconcile ? $"Extra{index}.cs" : $"Extra{index}.props");
+            await File.WriteAllTextAsync(path, reconcile ? $"class Extra{index} {{ }}" : "<Project />", ct);
+            if (reconcile)
+            {
+                backend.AddSourceDocument(repository.WorkspaceId, path);
+            }
+        }
+
+        var reader = new TestSemanticFileSnapshotReader();
+        await using var coordinator = CreateCoordinator(
+            backend,
+            events,
+            fileSnapshotReader: reader,
+            semanticResourceLimits: new SemanticResourceLimits { MaximumConcurrentFileReads = limit });
+        var request = repository.CreateRequest();
+        var generation = reconcile ? await coordinator.BeginBindingAsync(request, ct) : 0;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var active = 0;
+        var started = 0;
+        var cancelledReads = 0;
+        reader.BeforeRead = async (path, token) =>
+        {
+            if (reconcile && !Path.GetExtension(path).Equals(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            var concurrent = Interlocked.Increment(ref active);
+            try
+            {
+                Assert.InRange(concurrent, 1, limit);
+                if (Interlocked.Increment(ref started) == limit)
+                {
+                    entered.TrySetResult();
+                }
+
+                await release.Task.WaitAsync(token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                Interlocked.Increment(ref cancelledReads);
+                throw;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref active);
+            }
+        };
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var operation = reconcile
+            ? coordinator.CompleteBindingAsync(request, generation, cancellation.Token)
+            : coordinator.BeginBindingAsync(request, cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(ct);
+            Assert.Equal(limit, Volatile.Read(ref active));
+            Assert.False(operation.IsCompleted);
+            Assert.False(coordinator.IsCurrent(repository.SessionId));
+        }
+        finally
+        {
+            try
+            {
+                if (cancel)
+                {
+                    await cancellation.CancelAsync();
+                    await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await operation.WaitAsync(ct));
+                }
+                else
+                {
+                    release.TrySetResult();
+                    await operation;
+                }
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
+        }
+
+        Assert.Equal(0, Volatile.Read(ref active));
+        if (cancel)
+        {
+            Assert.Equal(limit, Volatile.Read(ref cancelledReads));
+        }
+        else
+        {
+            Assert.True(Volatile.Read(ref started) > limit);
+        }
+
+        if (reconcile && !cancel)
+        {
+            Assert.True(coordinator.IsCurrent(repository.SessionId));
+        }
+    }
+
     /// <summary>Each observation enumerates a directory once without removing installation-race checks.</summary>
     [Fact]
     public static async Task WatcherTopologyCombinesDiscoveryAndMembershipInEachRequiredObservation()
@@ -1013,7 +1126,7 @@ public static class SemanticRefreshCoordinatorTests
         await coordinator.ObserveChangeAsync(repository.CreateChange());
         var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        reader.BeforeRead = async token =>
+        reader.BeforeRead = async (_, token) =>
         {
             reading.TrySetResult();
             await release.Task.WaitAsync(token);
@@ -2865,7 +2978,8 @@ public static class SemanticRefreshCoordinatorTests
         Func<string, FileSystemWatcher>? watcherFactory = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
         TimeProvider? timeProvider = null,
-        SemanticStartupProgress? startupProgress = null)
+        SemanticStartupProgress? startupProgress = null,
+        SemanticResourceLimits? semanticResourceLimits = null)
     {
         return new SemanticRefreshCoordinator(
             backend,
@@ -2881,7 +2995,8 @@ public static class SemanticRefreshCoordinatorTests
             recentHostEchoLifetime: recentHostEchoLifetime,
             watcherFactory: watcherFactory,
             resourceLimits: resourceLimits,
-            startupProgress: startupProgress);
+            startupProgress: startupProgress,
+            semanticResourceLimits: semanticResourceLimits);
     }
 
     private static string Hash(string text)
@@ -3248,7 +3363,7 @@ public static class SemanticRefreshCoordinatorTests
 
         public bool ReturnUnstable { get; set; }
 
-        public Func<CancellationToken, Task>? BeforeRead { get; set; }
+        public Func<string, CancellationToken, Task>? BeforeRead { get; set; }
 
         public async Task<SemanticFileSnapshot> ReadAsync(
             string path,
@@ -3259,7 +3374,7 @@ public static class SemanticRefreshCoordinatorTests
             _readPaths.Enqueue(Path.GetFullPath(path));
             if (BeforeRead is { } beforeRead)
             {
-                await beforeRead(cancellationToken);
+                await beforeRead(path, cancellationToken);
             }
 
             if (ReturnUnstable)

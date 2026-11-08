@@ -1,5 +1,18 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-AGENT-TABS — Finished subagent tabs
+
+Keep completed, cancelled, discarded, and failed child tabs after a run. Submit a new conversation turn. Confirm that the completed, cancelled, and discarded tabs close, while failed tabs stay open. Confirm that queued or running children stay open if present. Repeat with a selected completed tab and confirm selection returns to MAIN. Use local commands, active-run steering, and an automatic intelligence refresh; confirm none clears stopped tabs. Confirm session history and child results remain available.
+
+Launch more children while older active and stopped tabs remain open. Confirm MAIN stays first, the newest child appears directly to its right, and older tabs move toward right-side overflow without changing selection. Navigate the overflow and confirm that old stopped tabs remain inspectable until closed or evicted in oldest-first order.
+
+1. Keep an unsent draft in MAIN and run two controlled child agents. Complete one child. Confirm its retained tab displays `[stopped]` and a small `x`; MAIN and the running child have no close control.
+2. Click `x` on the unselected finished tab. Confirm the selection and draft stay intact. Repeat with a selected finished tab; confirm selection returns to MAIN, its exact draft remains available, and the running child continues.
+3. Repeat with failed and cancelled children, long Unicode names, tab overflow, and terminal resizing down to 40×12. Confirm the visible `x` closes the matching tab, modal dialogs block background clicks, and closed tabs stay closed while MAIN continues. Record physical Windows and Unix checks separately from automated results.
+
+4. Complete a controlled child immediately after its final usage observation, without a workspace refresh. Inspect its stopped header and F2 details. Confirm final model, provider, reasoning, context, and usage remain available, including after an authoritative status correction.
+5. Supply non-sensitive instruction content above 65,536 UTF-16 characters. Confirm the first transcript block retains a sanitized prefix and shows an explicit instruction-retention notice before child output. Confirm the controlled provider receives the complete request. Repeat with failure before request preparation, concurrent children, and session restoration.
+
 ## Source-edit completion diagnostic separation
 
 In a disposable repository, complete a source-edit run with incomplete final advisory coverage (for example, omitted earlier-project coverage). Confirm `[SourceEditCompletionFailed]` starts on a new line with a blank line before it, even when the final model answer has no trailing newline. Confirm the diagnostic remains visible once and the run still reports incomplete validation. Record terminal/platform checks separately from automated projection tests.
@@ -1984,6 +1997,8 @@ Run this on Windows Terminal/PowerShell, a Linux terminal, and macOS Terminal; r
 10. Replay Markdown containing `<https://example.com/docs>`, a bare URL, adjacent labeled links to `https://example.com/docs#one` and `https://example.com/docs#two`, and table cells containing those links. Confirm autolinks preserve rendered Markdown and show their URL once. Confirm descriptive links display only their labels and support the terminal's native link-opening gesture when available; ordinary clicks/drags still select. Repeat after wrapping Unicode labels, scrolling, clearing the viewport, resizing, and opening a modal; blank or overlaid cells must not retain stale link targets. With unsupported native hyperlinks, F8 must still expose exact destinations. Repeat with `NO_COLOR` to confirm link support is independent of styling. Confirm both fragment targets appear separately in F8 and copy exactly, including after resizing tables between 120 and 40 columns. Email, relative, and unsafe-scheme links must remain inert.
 
 Expected: TUIKit is the sole interactive frontend. Committed ordinary input remains visible once and is assembled as the exact `current-user` content; input is never silently discarded; retained rendering has no composer/help/footer artifacts; copy and newline keys match their documentation; shared host outcomes remain frontend-neutral; and every exit restores terminal state. Record observed results. A successful headless check is not a physical-terminal sign-off.
+
+11. Delegate concurrent read-only tasks with shared context and different child context. Inspect selected and unselected child windows before completion. Confirm each transcript begins with its complete **Instructions** block, before response text, diagnostics, and tools; MAIN must contain no child instruction block. In a controlled pre-request failure/cancellation fixture, confirm **Assignment instructions** and the explicit model-not-prepared explanation occur before terminal details. Switch tabs, retry, replace a generation, and resize. Select and copy multiline Unicode instruction text; Markdown, URLs, and terminal controls must remain inert. Verify no duplicate block, no sibling/stale content, and explicit retention omissions. See [the workspace procedure](../operations/agent-workspace.md#verification-procedure).
 
 ### MTP-259 - TUIKit Command Palette and Autocomplete
 

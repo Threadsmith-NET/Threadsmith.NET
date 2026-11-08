@@ -33,6 +33,36 @@ Note: It's OK to not find any issues. Don't seek extreme hypotheticals just to p
 - Flag tests that appear to be better suited to be treated as functional or integration tests (e.g. tests that access external resources not under the tests immediate control) or involve other systems
 - Say when the coverage looks sufficient.
 
+## Determinism and runner-speed dependencies
+
+Inspect tests in scope, their helpers, fixture construction, and the production/SDK paths they invoke.
+Do not assume the CI runner's platform, CPU, memory, process-startup speed, or scheduling latency.
+
+- Flag functional tests whose success requires work to finish within an arbitrary wall-clock budget:
+  timed waits or cancellation, per-test timeouts, elapsed-time assertions, sleeps used for ordering,
+  finite polling loops, and short-lived child processes used as readiness signals. Increasing a timeout,
+  retrying until green, or assuming a fast machine does not fix the dependency.
+- Trace inherited deadlines even when the test contains no explicit timed wait. Check default request,
+  process, compiler/analyzer, retry/backoff, shutdown/drain, and checkpoint budgets in fixture-created
+  services, SDKs, HTTP clients, and nested calls. A source scan or passing local run is insufficient.
+  Identify the concrete path on which a slow runner can change the asserted outcome.
+- Prefer observable completion, explicit readiness/barriers, and propagated test-runner cancellation.
+  Deadline tests should use a controllable clock or explicit cancellation; keep production defaults intact.
+  Verify timer registration or operation entry before advancing time. Check cancellation/abandonment
+  handoffs, late completion, and cleanup ownership before releasing fixtures. Check that a frozen clock cannot strand retry,
+  debounce/settle, or cleanup loops; advancing one deadline must not accidentally expire unrelated timers.
+  Check both elapsed-time and UTC-based calculations when a path uses both.
+- Challenge scheduler-dependent assertions: inspecting an intermediate event instead of the final semantic
+  result, assuming a queue acknowledgement means rendering or background work finished, or reading/rendering
+  mutable state concurrently with its owner. Rendering can itself mutate layout state. Require a real
+  ownership/completion boundary, such as an owner-thread snapshot or a stopped and joined loop, rather than
+  sleeps, extra yields, or repeated assertions that happen to observe the desired state.
+- Distinguish whole-job infrastructure watchdogs and diagnostic-only timing measurements from assertions
+  about runner speed. Treat real-time expiry that determines a functional test's result as a dependency.
+  For each finding, state the affected path, trigger, consequence, and smallest sound synchronization or
+  clock fix. Preserve meaningful assertions and production timeout coverage; do not demand new wrappers,
+  custom clocks, serial execution, or blanket timeout removal when an existing facility suffices.
+
 ## Guidelines
 
 - Use one comment per distinct issue (or a multi-line range if necessary).

@@ -286,6 +286,12 @@ Functional tests must not require successful work to finish within an arbitrary 
 
 The architecture test gate rejects explicit wall-clock waits, deadline cancellation, stopwatch assertions, and test-level timeouts. Review fixture construction and nested production/SDK defaults as well: a test can inherit a real deadline without containing a timed wait. Passing this source guard does not replace that review.
 
+Apply these rules to unit, functional, and integration tests. Do not assume runner hardware, platform, or scheduling latency. Avoid sleeps for ordering, finite polling budgets, and child-process lifetimes used as readiness signals. Use existing completion signals or explicit barriers; retries until green are not a fix.
+
+When using a controllable clock, observe operation entry or timer registration before advancing it. Check nested retry, debounce/settle, and cleanup paths for frozen-clock hangs, and avoid expiring unrelated timers. Keep UTC and elapsed-time calculations consistent where both are used. Account for cancellation, abandonment, late completion, and fixture cleanup without introducing runner-speed deadlines.
+
+Assert the intended semantic result at a defined completion or ownership boundary. Queue admission or acknowledgement does not imply that rendering or background work finished. Do not read or render mutable state concurrently with its owner; rendering may itself mutate layout state. Use an owner-thread snapshot or stop and join the owner before inspecting retained state. Preserve meaningful assertions and production timeout coverage; reuse existing synchronization and clock facilities rather than adding machinery without a concrete need.
+
 ```csharp
 [Fact]
 public static void MethodReturnsExpectedValue()

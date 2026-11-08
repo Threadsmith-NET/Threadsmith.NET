@@ -30,6 +30,7 @@ This file defines repository-wide rules for AI coding agents.
 
 - **Use the active Git checkout.** Confirm that `git rev-parse --show-toplevel` matches the user's active checkout before edits, builds, tests, or publishing. Work directly there; do not substitute copied source trees, snapshots, or another checkout found by name.
 - **Read before writing.** Inspect existing code before proposing new abstractions.
+- **Write deterministic tests (G-24).** Test outcomes must not depend on runner speed, arbitrary wall-clock budgets, sleeps, polling limits, or inherited production/SDK deadlines. Use observable completion, explicit barriers, test-runner cancellation, and controllable clocks for deadline behavior. Respect mutable-state ownership when taking snapshots; a queue acknowledgement is not proof that rendering or background work finished. Never fix flakes by increasing timeouts or retrying until green.
 - **Different is difficult.** Reuse the established execution path and extend it when needed. An alternate path requires a concrete technical reason; special authorization or context alone does not justify separate lifecycle, tool, delegation, or presentation machinery.
 - **Propagate `CancellationToken`** through every async boundary. Roslyn/MSBuild APIs that are non-cooperatively cancellable use the abandon-and-discard pattern with a bounded-wait backstop.
 - **Return host-owned DTOs across subsystem boundaries.** No model-provider SDK, Roslyn, extension, or terminal-library types leak into domain events, persistent state, or public projections.

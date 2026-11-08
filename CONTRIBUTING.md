@@ -110,6 +110,8 @@ Use `--include` with the changed file paths to focus this check. Correct relevan
 
 ## Testing changes
 
+Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
+
 Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, inspect the current `.github/workflows/` checks and run the same product build and test commands used by CI:
 
 Run the packaged-documentation preflight before every PR or follow-up push, including documentation-only changes:

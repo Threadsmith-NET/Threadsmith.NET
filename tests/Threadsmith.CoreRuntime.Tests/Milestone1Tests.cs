@@ -332,10 +332,10 @@ public static partial class Milestone1Tests
         var firstPublish = stream.PublishAsync(expected[0]);
         try
         {
-            await secondEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await secondEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
             var secondPublish = stream.PublishAsync(expected[1]);
             var thirdPublish = stream.PublishAsync(expected[2]);
-            await firstReceivedAll.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await firstReceivedAll.Task.WaitAsync(TestContext.Current.CancellationToken);
 
             Assert.False(firstPublish.IsCompleted);
             Assert.False(secondPublish.IsCompleted);
@@ -344,7 +344,7 @@ public static partial class Milestone1Tests
 
             releaseSecond.TrySetResult();
             await Task.WhenAll(firstPublish, secondPublish, thirdPublish)
-                .WaitAsync(TimeSpan.FromSeconds(2));
+                .WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
@@ -405,7 +405,7 @@ public static partial class Milestone1Tests
         var runId = await harness.Dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "request"));
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.True(await harness.Dispatcher.DispatchAsync(new CancelRunCommand(sessionId, runId)));
         }
         finally
@@ -414,7 +414,7 @@ public static partial class Milestone1Tests
         }
 
         Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId))
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+            .WaitAsync(TestContext.Current.CancellationToken));
         Assert.Single(harness.Events.OfType<RunCompleted>());
         Assert.DoesNotContain(harness.Events, item => item is RunTransitionFailed);
     }
@@ -721,7 +721,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static void UnboundedBudget_RepeatedUsage_NeverExhausts()
     {
-        var usage = new BudgetDimensions(100_000, 100, TimeSpan.FromHours(1), 100);
+        var usage = new BudgetDimensions(100_000, 100, TimeSpan.MaxValue, 100);
 
         Assert.False(UnboundedBudget.Instance.Accrue(usage).IsExhausted);
         Assert.False(UnboundedBudget.Instance.Accrue(usage).IsExhausted);
@@ -909,7 +909,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task FakeModel_MissingUsage_DoesNotCrashBudgetLayer()
     {
-        var budget = new ExecutionBudget(new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
+        var budget = new ExecutionBudget(new BudgetDimensions(10_000, 1, TimeSpan.MaxValue));
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession { Turns = [new ScriptedTurn { Text = "no usage" }] },
             budget: budget);
@@ -929,7 +929,7 @@ public static partial class Milestone1Tests
     {
         await using var events = new DomainEventStream();
         var template = new ExecutionBudget(
-            new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
+            new BudgetDimensions(10_000, 1, TimeSpan.MaxValue));
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession
@@ -1118,7 +1118,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Single(surface.SessionStatuses);
         Assert.Equal(["status", "read"], surface.Operations);
@@ -1135,7 +1135,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, surface.ComposerRequests.Count);
         Assert.Equal(2, surface.SessionStatuses.Count);
@@ -1174,7 +1174,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task InteractionCoordinator_TuiKitHelpUsesModalWithoutTranscriptOutput()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         using var backend = new TUIKit.Terminal.HeadlessBackend(120, 35);
         await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
@@ -1200,7 +1200,7 @@ public static partial class Milestone1Tests
     [InlineData("\u001b[13~theme\r current\r")]
     public static async Task InteractionCoordinator_TuiKitCompletionRetainsSharedAuthority(string completionKeys)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
         await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
@@ -1351,7 +1351,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, surface.SessionStatuses.Count);
         Assert.Equal(["status", "read", "status", "read"], surface.Operations);
@@ -1415,7 +1415,8 @@ public static partial class Milestone1Tests
             new HookPolicyEvaluator(hookStore, []),
             hookStore,
             new SecretOutputSanitizer(),
-            NullLogger<HookCoordinator>.Instance);
+            NullLogger<HookCoordinator>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var hookApplication = new HookManagementApplication(coordinator, hookStore);
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
@@ -1426,7 +1427,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("[enabled] shell-hook", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
@@ -1443,7 +1444,7 @@ public static partial class Milestone1Tests
             Scope = HookHandlerScope.Machine, AdapterKind = HookAdapterKind.Mcp, Enabled = false,
             HookPoints = [HookPoint.BeforeToolInvocation], Target = "profile/tool",
         })]);
-        await using var hooks = new HookCoordinator(descriptors, [], new HookPolicyEvaluator(hookStore, []), hookStore, new SecretOutputSanitizer(), NullLogger<HookCoordinator>.Instance);
+        await using var hooks = new HookCoordinator(descriptors, [], new HookPolicyEvaluator(hookStore, []), hookStore, new SecretOutputSanitizer(), NullLogger<HookCoordinator>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [new HookManagementApplication(hooks, hookStore)]);
         var surface = new ToggleInteractionSurface(["/hooks", "/hooks list", "/quit"]);
         surface.Toggle = async (request, change, token) =>
@@ -1463,7 +1464,7 @@ public static partial class Milestone1Tests
             }
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, surface.ToggleCount);
         Assert.Empty(surface.SelectionRequests);
     }
@@ -1494,7 +1495,7 @@ public static partial class Milestone1Tests
             }
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, surface.ToggleCount);
         Assert.Equal([McpManagementAction.Connect, McpManagementAction.Connect, McpManagementAction.Disconnect, McpManagementAction.Connect], manager.Changes);
         Assert.Empty(surface.SelectionRequests);
@@ -1539,7 +1540,7 @@ public static partial class Milestone1Tests
         },
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(cancel ? 2 : 1, manager.Changes.Count);
         Assert.All(manager.Changes, action => Assert.Equal(McpManagementAction.Authenticate, action));
     }
@@ -1594,7 +1595,7 @@ public static partial class Milestone1Tests
             }
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface, extensionManager: manager);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(2, surface.ToggleCount);
         Assert.Empty(surface.SelectionRequests);
     }
@@ -1613,7 +1614,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         var request = Assert.Single(mcpHandler.Requests);
         Assert.Equal(McpManagementAction.ListCapabilities, request.Action);
@@ -1638,7 +1639,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         var request = Assert.Single(mcpHandler.Requests);
         Assert.Equal(McpManagementAction.GetPrompt, request.Action);
@@ -1658,7 +1659,7 @@ public static partial class Milestone1Tests
             surface,
             showSessionStatus: false);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(surface.SessionStatuses);
         Assert.Contains(
@@ -1678,7 +1679,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(surface.SessionStatuses);
         Assert.Contains("Current status", surface.Output, StringComparison.Ordinal);
@@ -1725,7 +1726,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         const string message = "Scripted transient provider failure.";
         Assert.Equal(2, surface.Output.Split(message, StringSplitOptions.None).Length - 1);
@@ -1755,7 +1756,7 @@ public static partial class Milestone1Tests
             new DomainEventStream(),
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, surface.Output.Split(message, StringSplitOptions.None).Length - 1);
     }
@@ -1775,7 +1776,7 @@ public static partial class Milestone1Tests
             surface,
             sessionUsage: harness.Usage);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain("You: hi", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Threadsmith: amber reply", surface.Output, StringComparison.Ordinal);
@@ -1815,7 +1816,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         var intent = Assert.Single(harness.Events.OfType<TaskIntentRecorded>());
         Assert.Equal(pastedText, intent.Intent);
@@ -1834,7 +1835,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("Unknown command", surface.Output, StringComparison.Ordinal);
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
@@ -1877,7 +1878,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("/trust [inspect|read|build|mutation|automation]", surface.Output, StringComparison.Ordinal);
         Assert.Contains("No repository is open", surface.Output, StringComparison.Ordinal);
@@ -1921,7 +1922,7 @@ public static partial class Milestone1Tests
             profileId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(
             $"Model: Qwen3\nReasoning control: {expectedControl}\nCurrent: none\n",
@@ -1951,7 +1952,7 @@ public static partial class Milestone1Tests
             activeProfileId: null,
             sessionPreferences: preferences);
 
-        await shell.RunAsync(modelStatus: "Policy fallback").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Policy fallback").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("Model: Policy fallback", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Current: medium", surface.Output, StringComparison.Ordinal);
@@ -1978,7 +1979,7 @@ public static partial class Milestone1Tests
             startupId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Startup").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Startup").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("Model: Runtime", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Reasoning control: selectable (none, low)", surface.Output, StringComparison.Ordinal);
@@ -2009,7 +2010,7 @@ public static partial class Milestone1Tests
             profileId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(3));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains($"Reasoning set to {reasoning} for Qwen3.", surface.Output, StringComparison.Ordinal);
         Assert.Equal(new ReasoningLevel(reasoning), preferences.Reasoning);
@@ -2037,7 +2038,7 @@ public static partial class Milestone1Tests
             profileId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("does not support reasoning level 'bogus'", surface.Output, StringComparison.Ordinal);
         Assert.Equal(ReasoningLevel.None, preferences.Reasoning);
@@ -2064,7 +2065,7 @@ public static partial class Milestone1Tests
             profileId,
             preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("does not support reasoning level 'high'", surface.Output, StringComparison.Ordinal);
         Assert.Equal(ReasoningLevel.Medium, preferences.Reasoning);
@@ -2081,7 +2082,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Scripted demo (offline)").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Scripted demo (offline)").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("No model is configured.", surface.Output, StringComparison.Ordinal);
     }
@@ -2105,7 +2106,7 @@ public static partial class Milestone1Tests
             surface,
             codeExploreOutputOptions: options);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         var sessionCreated = Assert.Single(harness.Events.OfType<SessionCreated>());
         var snapshot = options.GetSnapshot(sessionCreated.SessionId);
@@ -2134,7 +2135,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         string[] expectedCommands =
         [
@@ -2658,7 +2659,7 @@ public static partial class Milestone1Tests
             surface,
             themePreferences: preferences);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(
             "Warning: Configured theme 'unsafe' is invalid and was ignored. Unknown semantic theme role 'Branding'.",
@@ -2729,7 +2730,7 @@ public static partial class Milestone1Tests
                 themePreferences: preferences,
                 themePreferenceStore: new UserConfigurationThemePreferenceStore(configurationPath));
 
-            await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+            await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
             var persistedText = await File.ReadAllTextAsync(configurationPath);
             using var persisted = JsonDocument.Parse(persistedText, new JsonDocumentOptions
@@ -2858,7 +2859,7 @@ public static partial class Milestone1Tests
                 themePreferences: preferences,
                 themePreferenceStore: new UserConfigurationThemePreferenceStore(configurationPath));
 
-            await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+            await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
             Assert.Equal("system", preferences.ActiveTheme.Theme.Id);
             Assert.Contains("Theme could not be saved; selection unchanged.", surface.Output, StringComparison.Ordinal);
@@ -2883,7 +2884,7 @@ public static partial class Milestone1Tests
             surface,
             toolStateManager: toolStates);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(["optional"], toolStates.DisabledIds);
         Assert.Contains("[enabled] Essential Read (essential)", surface.Output, StringComparison.Ordinal);
@@ -2908,7 +2909,7 @@ public static partial class Milestone1Tests
             surface,
             mutationApprovalPolicy: policy);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.CurrentPolicy);
         Assert.Equal([MutationApprovalPolicy.AlwaysTrustRepo], policy.SelectedPolicies);
@@ -3366,7 +3367,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
         Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
@@ -3403,7 +3404,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(
             1,
@@ -3491,7 +3492,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
@@ -3508,7 +3509,7 @@ public static partial class Milestone1Tests
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Contains("Usage: /thinking [on|off]", surface.Output, StringComparison.Ordinal);
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
@@ -3519,7 +3520,6 @@ public static partial class Milestone1Tests
     public static async Task InteractionCoordinator_AnswerOnlyTurn_ShowsThinkingStatus()
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(10));
         var provider = new GatedAnswerModelProvider(leadingWhitespace: false);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
@@ -3550,7 +3550,7 @@ public static partial class Milestone1Tests
     [InlineData(ToolActivitySourceKind.BuiltIn, "TOOLS: search_sectors")]
     public static async Task InteractionCoordinator_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
@@ -3566,19 +3566,13 @@ public static partial class Milestone1Tests
                 "search_sectors",
                 Source: new ToolActivitySource(kind, "Green Street"));
             await harness.EventStream.PublishAsync(started, timeout.Token);
-            while (!surface.ActiveStatuses.Any(status => status.StartsWith(label + " - running", StringComparison.Ordinal)))
-            {
-                await Task.Delay(10, timeout.Token);
-            }
+            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith(label + " - running", StringComparison.Ordinal)), timeout.Token);
 
             Assert.DoesNotContain(" - completed", surface.Output, StringComparison.Ordinal);
             await harness.EventStream.PublishAsync(
                 new ToolInvocationCompleted(started.SessionId, DateTimeOffset.UtcNow, started.ToolInvocationId, true, ElapsedMilliseconds: 5200),
                 timeout.Token);
-            while (!surface.Output.Contains(label + " - completed", StringComparison.Ordinal))
-            {
-                await Task.Delay(10, timeout.Token);
-            }
+            await surface.WaitUntilAsync(() => surface.Output.Contains(label + " - completed", StringComparison.Ordinal), timeout.Token);
         }
         finally
         {
@@ -3595,7 +3589,7 @@ public static partial class Milestone1Tests
     [InlineData(false, OperationActivityOutcome.TimedOut)]
     public static async Task InteractionCoordinator_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new ConcurrentToolConsoleSurface();
@@ -3623,10 +3617,7 @@ public static partial class Milestone1Tests
             Assert.Contains(remaining.ToolName, survivor.Label, StringComparison.Ordinal);
             await harness.EventStream.PublishAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, remaining.ToolInvocationId, true, ElapsedMilliseconds: 6100), timeout.Token);
             Assert.Empty(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
-            while (!surface.Output.Contains($"MCP: Server/{remaining.ToolName} - completed", StringComparison.Ordinal))
-            {
-                await Task.Delay(10, timeout.Token);
-            }
+            await surface.WaitUntilAsync(() => surface.Output.Contains($"MCP: Server/{remaining.ToolName} - completed", StringComparison.Ordinal), timeout.Token);
 
             var expected = outcome switch
             {
@@ -3650,7 +3641,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task InteractionCoordinator_DelegationProgressUpdatesInsideItsTool()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new AgentToolConsoleSurface();
@@ -3687,10 +3678,7 @@ public static partial class Milestone1Tests
             var final = await WaitForAgentProgressAsync(surface, "test lookup failed", timeout.Token);
             Assert.Equal(2, final.ToolProgress.Count);
             await harness.EventStream.PublishAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, tool.ToolInvocationId, true, ElapsedMilliseconds: 5200) { RunId = parent }, timeout.Token);
-            while (!surface.Output.Contains("test lookup failed", StringComparison.Ordinal))
-            {
-                await Task.Delay(10, timeout.Token);
-            }
+            await surface.WaitUntilAsync(() => surface.Output.Contains("test lookup failed", StringComparison.Ordinal), timeout.Token);
 
             var text = surface.Output;
             Assert.True(text.IndexOf("TOOLS: delegate_agents - completed", StringComparison.Ordinal) < text.IndexOf("providers located", StringComparison.Ordinal));
@@ -3728,7 +3716,7 @@ public static partial class Milestone1Tests
         try
         {
             await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
-                .WaitAsync(TimeSpan.FromSeconds(5));
+                .WaitAsync(TestContext.Current.CancellationToken);
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var firstRunId = RunId.New();
             var firstCheckId = SemanticCheckId.New();
@@ -3763,38 +3751,22 @@ public static partial class Milestone1Tests
             await harness.EventStream.PublishAsync(secondStarted);
             await harness.EventStream.PublishAsync(firstCompleted);
 
-            var keptSecondActivity = await WaitForConditionAsync(() =>
+            await surface.WaitUntilAsync(
+                () =>
                 surface.Output.Contains(
                     "SEMANTIC CHECKS: first semantic check - completed",
                     StringComparison.Ordinal)
                 && surface.ActiveStatuses.Any(status => status.StartsWith(
                     "SEMANTIC CHECKS: second semantic check",
-                    StringComparison.Ordinal)));
-
-            Assert.True(keptSecondActivity, surface.Output);
+                    StringComparison.Ordinal)),
+                TestContext.Current.CancellationToken);
         }
         finally
         {
             provider.ReleaseAnswer();
         }
 
-        await shellTask.WaitAsync(TimeSpan.FromSeconds(5));
-
-        static async Task<bool> WaitForConditionAsync(Func<bool> condition)
-        {
-            var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
-            while (DateTimeOffset.UtcNow < deadline)
-            {
-                if (condition())
-                {
-                    return true;
-                }
-
-                await Task.Delay(TimeSpan.FromMilliseconds(20));
-            }
-
-            return condition();
-        }
+        await shellTask.WaitAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Leading whitespace-only model chunks leave thinking active until visible answer text arrives.</summary>
@@ -3815,7 +3787,7 @@ public static partial class Milestone1Tests
         try
         {
             await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
-                .WaitAsync(TimeSpan.FromSeconds(5));
+                .WaitAsync(TestContext.Current.CancellationToken);
 
             Assert.True(surface.IsStatusActive);
         }
@@ -3824,7 +3796,7 @@ public static partial class Milestone1Tests
             provider.ReleaseAnswer();
         }
 
-        await shellTask.WaitAsync(TimeSpan.FromSeconds(5));
+        await shellTask.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
     }
 
@@ -3845,11 +3817,11 @@ public static partial class Milestone1Tests
 
         var shellTask = shell.RunAsync(modelStatus: "Test model");
         await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(TestContext.Current.CancellationToken);
         provider.ReleaseAnswer();
 
         var exception = await Record.ExceptionAsync(
-            () => shellTask.WaitAsync(TimeSpan.FromSeconds(30)));
+            () => shellTask.WaitAsync(TestContext.Current.CancellationToken));
         var eventCounts = harness.Events.GroupBy(item => item.GetType().Name)
             .OrderBy(group => group.Key)
             .Select(group => $"{group.Key}={group.Count()}");
@@ -4542,10 +4514,10 @@ public static partial class Milestone1Tests
             batches.Add(batch);
             return Task.CompletedTask;
         });
-        await thirdQueue.WaitAsync(TimeSpan.FromSeconds(2));
+        await thirdQueue.WaitAsync(TestContext.Current.CancellationToken);
 
         dispatcher.Complete();
-        await drain.WaitAsync(TimeSpan.FromSeconds(2));
+        await drain.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.True(batches[0].Count >= 2);
         Assert.Equal(expected, batches.SelectMany(batch => batch));
@@ -5272,6 +5244,8 @@ public static partial class Milestone1Tests
         private readonly TaskCompletionSource _reasoningPresented = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private TaskCompletionSource _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         private int _activeStatusCount;
 
         public FakeConsoleSurface(
@@ -5308,6 +5282,32 @@ public static partial class Milestone1Tests
                     _selections.Enqueue(selection);
                 }
             }
+        }
+
+        public async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                Task changed;
+                lock (_gate)
+                {
+                    if (condition())
+                    {
+                        return;
+                    }
+
+                    changed = _changed.Task;
+                }
+
+                await changed.WaitAsync(cancellationToken);
+            }
+        }
+
+        private void NotifyChanged()
+        {
+            var changed = _changed;
+            _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            changed.TrySetResult();
         }
 
         public string? ActiveThemeId { get; private set; }
@@ -5499,6 +5499,7 @@ public static partial class Milestone1Tests
                 _sessionStatuses.Add(rendered);
                 _writes.Add(rendered + Environment.NewLine);
                 _output.AppendLine(rendered);
+                NotifyChanged();
             }
 
             return Task.CompletedTask;
@@ -5564,6 +5565,7 @@ public static partial class Milestone1Tests
                 _activeStatuses.Add(text);
                 _lifecycle.Add("activity-start:" + text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]);
                 _activeStatusCount++;
+                NotifyChanged();
             }
 
             _statusStarted.TrySetResult();
@@ -5582,6 +5584,7 @@ public static partial class Milestone1Tests
                     _activeStatusCount--;
                     _activeStatuses.Remove(text);
                     _lifecycle.Add("activity-end:" + text.Split(' ', StringSplitOptions.RemoveEmptyEntries)[0]);
+                    NotifyChanged();
                 }
             }
         }
@@ -5642,6 +5645,7 @@ public static partial class Milestone1Tests
                 _writes.Add(text);
                 _segments.Add(new PresentationTextSegment(text, role));
                 _output.Append(text);
+                NotifyChanged();
             }
 
             return Task.CompletedTask;
@@ -6735,7 +6739,7 @@ public static partial class Milestone1Tests
                 return Task.CompletedTask;
             });
             var executionBudget = budget ?? new ExecutionBudget(
-                new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1)));
+                new BudgetDimensions(100000, 1000, TimeSpan.MaxValue));
             var usage = new SessionUsageProjection();
             var application = new SessionApplication(
                 stream,

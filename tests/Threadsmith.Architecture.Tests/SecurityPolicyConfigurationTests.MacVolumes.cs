@@ -19,7 +19,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         var mount = Path.Combine(_paths.RepositoryRoot, "Mount");
         var rootAttached = false;
         var childAttached = false;
-        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         try
         {
             var rootImage = await CreateDiskImageAsync("root", rootSensitive, processes, token);

@@ -27,7 +27,7 @@ public sealed class JiraTests
     public async Task ReadsIssueThroughConfiguredEndpointMode(string endpointMode, string expectedPrefix)
     {
         using var handler = new JiraHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new RotatingSecrets("token-a");
         var tool = CreateTool(http, secrets, Options(endpointMode));
         var input = (JiraInput)tool.DeserializeInput(
@@ -54,7 +54,7 @@ public sealed class JiraTests
     public async Task BrowseAliasIsInputOnlyAndCanonicalizesToConfiguredSite()
     {
         using var handler = new JiraHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
         var input = (JiraInput)tool.DeserializeInput(
             "{\"kind\":\"read\",\"issue\":\"https://issues.example.org/browse/APP-123/\"}");
@@ -71,7 +71,7 @@ public sealed class JiraTests
     public void BrowseUrlIgnoresEncodedSeparatorsOutsideThePath()
     {
         using var handler = new JiraHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
 
         var input = (JiraInput)tool.DeserializeInput(
@@ -85,7 +85,7 @@ public sealed class JiraTests
     public void InvalidOrAmbiguousInputCannotReachPrivilegedBoundaries()
     {
         using var handler = new JiraHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new RotatingSecrets("token");
         var options = Options("site") with
         {
@@ -665,7 +665,7 @@ public sealed class JiraTests
     public async Task SeparateReadsObserveSecretRotation()
     {
         using var handler = new JiraHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secrets = new RotatingSecrets("first", "second");
         var tool = CreateTool(http, secrets, Options("site"));
         var input = new JiraInput { Kind = "read", Issue = "APP-123", Provider = "work-jira" };
@@ -685,7 +685,7 @@ public sealed class JiraTests
     public async Task PipelineUsesEffectiveOutputCapAndKeepsStructuredPartialBody()
     {
         using var handler = new JiraHandler { BodyText = new string('x', 6000) };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
         var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions
         {
@@ -704,7 +704,8 @@ public sealed class JiraTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var context = InvocationContext();
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -737,7 +738,7 @@ public sealed class JiraTests
     public async Task PipelineReboundsSanitizerExpansion()
     {
         using var handler = new JiraHandler { BodyText = string.Concat(Enumerable.Repeat("MASK", 1000)) };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
         var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions
         {
@@ -750,7 +751,8 @@ public sealed class JiraTests
             new DenyApprovalPolicy(),
             events,
             new ExpandingJiraSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
@@ -781,7 +783,7 @@ public sealed class JiraTests
         {
             const string canary = "CANARY ticket description from Jira";
             using var handler = new JiraHandler { BodyText = canary };
-            using var http = new HttpClient(handler);
+            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
             var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -794,7 +796,7 @@ public sealed class JiraTests
                 sanitizer,
                 events,
                 TestPromptLoader.Instance);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.MaxValue));
             var configuration = new ConfigurationBuilder().Build();
             var state = new ToolStateManager(
                 [tool.Definition],
@@ -810,7 +812,8 @@ public sealed class JiraTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var model = new JiraConversationProbe(canary);
             var application = new SessionApplication(
                 events,
@@ -832,7 +835,7 @@ public sealed class JiraTests
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
             var session = await dispatcher.DispatchAsync(
                 new CreateSessionCommand("Jira conversation probe"),
@@ -870,7 +873,7 @@ public sealed class JiraTests
             DescriptionIsNull = true,
             SummaryText = new string('s', 512),
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
 
         var result = await tool.ExecuteAsync(
@@ -893,7 +896,7 @@ public sealed class JiraTests
     public async Task HttpFailuresUseSafeMessages(HttpStatusCode status, string expected)
     {
         using var handler = new JiraHandler { StatusCode = status, FailureBody = "secret-provider-detail" };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
 
         var error = await Assert.ThrowsAsync<ToolExecutionException>(() =>
@@ -914,7 +917,7 @@ public sealed class JiraTests
             ? new IOException(privateDetail)
             : new HttpRequestException(privateDetail);
         using var handler = new JiraHandler { Failure = failure };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
@@ -929,7 +932,8 @@ public sealed class JiraTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
@@ -959,7 +963,7 @@ public sealed class JiraTests
             RetryAfter = DateTimeOffset.UtcNow.AddMinutes(5),
             FailureBody = "provider-rate-limit-detail",
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
 
         var error = await Assert.ThrowsAsync<ToolExecutionException>(() =>
@@ -978,7 +982,7 @@ public sealed class JiraTests
             StatusCode = HttpStatusCode.TooManyRequests,
             RetryAfter = DateTimeOffset.UtcNow.AddYears(100),
         };
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
 
         var error = await Assert.ThrowsAsync<ToolExecutionException>(() =>

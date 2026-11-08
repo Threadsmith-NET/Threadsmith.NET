@@ -3,16 +3,18 @@ namespace Threadsmith.Models.Anthropic;
 /// <summary>Complete-snapshot discovery bounded across pages by one deadline.</summary>
 public sealed class AnthropicModelDiscoveryService
 {
+    private readonly TimeProvider _timeProvider;
     private readonly AnthropicResourceLimits _limits;
     private readonly IAnthropicModelDiscoveryClient _client;
     private readonly TimeSpan _deadline;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelDiscoveryService"/> class with a bounded total deadline.</summary>
-    public AnthropicModelDiscoveryService(IAnthropicModelDiscoveryClient client, TimeSpan? deadline = null, AnthropicResourceLimits? limits = null)
+    public AnthropicModelDiscoveryService(IAnthropicModelDiscoveryClient client, TimeSpan? deadline = null, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         _limits = limits ?? new();
         _limits.Validate();
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _client = client;
         _deadline = deadline ?? TimeSpan.FromMilliseconds(_limits.DiscoveryTimeoutMilliseconds);
         if (_deadline <= TimeSpan.Zero)
@@ -24,8 +26,8 @@ public sealed class AnthropicModelDiscoveryService
     /// <summary>Returns every detached page or a safe failure; no partial result is published.</summary>
     public async Task<IReadOnlyList<AnthropicDiscoveredModel>> DiscoverAsync(CancellationToken cancellationToken)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(_deadline);
+        using var timeoutDeadline = new CancellationTokenSource(_deadline, _timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutDeadline.Token);
         try
         {
             var models = new List<AnthropicDiscoveredModel>();

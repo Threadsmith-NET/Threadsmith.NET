@@ -31,7 +31,7 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
                 """),
             _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
         });
-        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner));
+        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner)) { Timeout = Timeout.InfiniteTimeSpan };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Compatibility-Test/1.0");
 
         using var protectedResourceResponse = await client.GetAsync(
@@ -68,7 +68,7 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
                 """),
             _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
         });
-        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner));
+        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner)) { Timeout = Timeout.InfiniteTimeSpan };
 
         using var protectedResourceResponse = await client.GetAsync(
             "https://identity.example/.well-known/oauth-protected-resource",
@@ -106,7 +106,7 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
                 """),
             _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
         });
-        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner));
+        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner)) { Timeout = Timeout.InfiniteTimeSpan };
 
         using var protectedResourceResponse = await client.GetAsync(
             "https://mcp.example/.well-known/oauth-protected-resource",
@@ -135,7 +135,7 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
                 """),
             _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
         });
-        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner));
+        using var client = new HttpClient(new McpOAuthMetadataCompatibilityHandler(inner)) { Timeout = Timeout.InfiniteTimeSpan };
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => client.GetAsync(

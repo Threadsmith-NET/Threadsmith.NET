@@ -40,7 +40,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         var checkpoints = new ExecutionCheckpointStore(connection);
         var sanitizer = new SecretOutputSanitizer();
         var artifacts = new ExecutionArtifactPublisher(new ArtifactStore(connection, Path.Combine(_root, "artifacts"), sanitizer));
-        var app = new SourceEditApplication(workspaces, workspaces, workspaces, checkpoints, checkpoints, artifacts, events, TestPromptLoader.Instance, sanitizer, reviews: workspaces, previews: workspaces);
+        var app = new SourceEditApplication(workspaces, workspaces, workspaces, checkpoints, checkpoints, artifacts, events, TestPromptLoader.Instance, sanitizer, reviews: workspaces, previews: workspaces, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var proposed = new TaskCompletionSource<MutationSetProposed>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = events.Subscribe((item, _) =>
         {
@@ -62,7 +62,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             Assert.False(blocked.IsCompleted);
             Assert.False(File.Exists(Path.Combine(_paths.RepositoryRoot, "container/source/before.txt")));
             await app.HandleAsync(new RejectSourceEditCommand(session, pending.MutationSetId), ct);
-            Assert.Equal(SourceEditStatus.Denied, (await blocked.WaitAsync(TimeSpan.FromMinutes(1), ct)).Status);
+            Assert.Equal(SourceEditStatus.Denied, (await blocked.WaitAsync(ct)).Status);
         }
         finally
         {
@@ -76,7 +76,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             var applying = app.HandleAsync(Command(path), applyCancellation.Token);
             try
             {
-                Assert.Equal(SourceEditStatus.Applied, (await applying.WaitAsync(TimeSpan.FromMinutes(1), ct)).Status);
+                Assert.Equal(SourceEditStatus.Applied, (await applying.WaitAsync(ct)).Status);
                 Assert.Equal("safe fixture", await File.ReadAllTextAsync(Path.Combine(_paths.RepositoryRoot, path), ct));
             }
             finally
@@ -169,7 +169,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             await WaitForConsentSignalAsync(facts.Started.Task.WaitAsync(ct), bind, "consent store read", ct);
             Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
             facts.Release.TrySetResult();
-            await bind.WaitAsync(TimeSpan.FromMinutes(1), ct);
+            await bind.WaitAsync(ct);
             Assert.Equal(MutationApprovalPolicy.ReviewAll, service.CurrentPolicy);
         }
         finally
@@ -198,7 +198,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         Task completed;
         try
         {
-            completed = await Task.WhenAny(signal, operation).WaitAsync(TimeSpan.FromMinutes(1), cancellationToken);
+            completed = await Task.WhenAny(signal, operation).WaitAsync(cancellationToken);
         }
         catch (TimeoutException exception)
         {
@@ -219,7 +219,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         await cancellation.CancelAsync();
         try
         {
-            await operation.WaitAsync(TimeSpan.FromMinutes(1), CancellationToken.None);
+            await operation.WaitAsync(TestContext.Current.CancellationToken);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {

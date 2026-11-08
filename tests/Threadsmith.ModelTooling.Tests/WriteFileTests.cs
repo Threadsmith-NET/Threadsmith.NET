@@ -305,7 +305,8 @@ public static class WriteFileTests
         };
         var processManager = new ProcessManager(
             new SecretOutputSanitizer(),
-            NullLogger<ProcessManager>.Instance);
+            NullLogger<ProcessManager>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var search = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
 
         var result = await search.ExecuteAsync(
@@ -513,7 +514,7 @@ public static class WriteFileTests
         var application = new SessionApplication(
             events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             pipeline,
@@ -521,9 +522,7 @@ public static class WriteFileTests
             toolRegistry: pipeline.Registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
-        // Bound the conversation itself; fixture setup is not part of a latency assertion.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var session = await application.HandleAsync(new CreateSessionCommand("report"), timeout.Token);
 
         var run = await application.HandleAsync(new SubmitRequestCommand(session, "Save a report to .inbox"), timeout.Token);

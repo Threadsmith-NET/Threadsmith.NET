@@ -67,7 +67,7 @@ public sealed partial class SkillSubsystemTests
         var state = new InMemorySkillStateStore();
         var usage = new SessionUsageProjection();
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var workflow = new SkillWorkflowOrchestrator(
             catalog,
             verifier,
@@ -547,7 +547,7 @@ public sealed partial class SkillSubsystemTests
         var registry = new ToolRegistry([]);
         var sanitizer = new SecretOutputSanitizer();
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new ModelSkillProcedureRunner(model, registry, pipeline, sanitizer, (_, _) => Task.FromResult(PermissionContext()), TestPromptLoader.Instance, sessionUsage: usage);
 
         await Assert.ThrowsAsync<ModelProviderException>(() => runner.RunAsync(plan, PermissionStep(), 1, [], "{}"));

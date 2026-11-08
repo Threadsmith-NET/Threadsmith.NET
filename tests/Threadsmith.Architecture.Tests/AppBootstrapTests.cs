@@ -1097,7 +1097,7 @@ public static partial class AppBootstrapTests
         ];
         try
         {
-            await allReady.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            await allReady.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {

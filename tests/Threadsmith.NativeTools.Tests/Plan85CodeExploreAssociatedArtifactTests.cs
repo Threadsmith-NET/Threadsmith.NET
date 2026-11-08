@@ -835,7 +835,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateWideArtifactLimits() });
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateWideArtifactLimits() }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public string RepositoryPath { get; }
@@ -1016,7 +1016,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             }
 
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

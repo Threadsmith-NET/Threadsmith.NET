@@ -20,7 +20,7 @@ public static class OpenAiCompatibleStreamErrorTests
         var failure = prefix + "data: {\"error\":{\"code\":429},\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n";
         var success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failure, failure, success);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
         {
@@ -54,7 +54,7 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
     {
         var handler = new StreamHandler("data: {\"error\":{\"code\":429}}\n\n");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
@@ -78,7 +78,7 @@ public static class OpenAiCompatibleStreamErrorTests
         var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
         var success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failed, failed, exhaust ? failed : success);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
         {
@@ -109,7 +109,7 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task RateLimit_CancelAtBusyNotice_DoesNotResubmit()
     {
         var handler = new StreamHandler("data: {\"error\":{\"code\":429}}\n\n");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
@@ -127,7 +127,7 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task RateLimit_AfterText_IsTransientWithoutDuplicatingOutput()
     {
         var handler = new StreamHandler("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"error\":{\"code\":429}}\n\n");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
             await CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
         Assert.True(exception.IsRateLimit);
@@ -145,7 +145,7 @@ public static class OpenAiCompatibleStreamErrorTests
             : string.Empty;
         var handler = new StreamHandler(initial
             + "data: {\"error\":{\"message\":\"Invalid grammar specification: 'triggers'; private request content\",\"type\":\"BadRequestError\",\"code\":400}}\n\ndata: [DONE]\n\n");
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = CreateProvider(client);
         var chunks = new List<ModelChunk>();
 
@@ -177,7 +177,7 @@ public static class OpenAiCompatibleStreamErrorTests
     [InlineData("{}")]
     public static async Task ErrorEnvelope_HandlesUnexpectedMetadata(string error)
     {
-        using var client = new HttpClient(new StreamHandler("data: {\"error\":" + error + "}\n\ndata: [DONE]\n\n"));
+        using var client = new HttpClient(new StreamHandler("data: {\"error\":" + error + "}\n\ndata: [DONE]\n\n")) { Timeout = Timeout.InfiniteTimeSpan };
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
@@ -191,7 +191,8 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task NullError_AllowsNormalCompletion()
     {
         using var client = new HttpClient(new StreamHandler(
-            "data: {\"error\":null,\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"));
+            "data: {\"error\":null,\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+        { Timeout = Timeout.InfiniteTimeSpan };
 
         var chunks = await CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
@@ -213,10 +214,13 @@ public static class OpenAiCompatibleStreamErrorTests
 
     private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client, int maximumAttempts = 3)
     {
-        return new(client, new ModelProfile
+        return new(
+        client,
+        new ModelProfile
         {
             Id = ModelProfileId.New(),
             Name = "synthetic",
+            Timeout = TimeSpan.Zero,
             Provider = "openai-compatible",
             ModelId = "synthetic",
             Endpoint = new Uri("https://models.example/v1/chat/completions"),
@@ -224,7 +228,8 @@ public static class OpenAiCompatibleStreamErrorTests
             MaximumOutputTokens = 4000,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
-        });
+        },
+        timeProvider: new AdvancingTimeProvider());
     }
 
     private sealed class StreamHandler : HttpMessageHandler

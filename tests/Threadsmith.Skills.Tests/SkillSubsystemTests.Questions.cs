@@ -36,7 +36,7 @@ public sealed partial class SkillSubsystemTests
 
         var model = new SkillBatchModelProvider { Calls = [new("ask_user", arguments)] };
         var sanitizer = new SecretOutputSanitizer();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = new ModelSkillProcedureRunner(model, registry, pipeline, sanitizer, (_, _) => Task.FromResult(context), TestPromptLoader.Instance, snapshots: snapshots);
 
         await runner.RunAsync(plan, PermissionStep(), 1, [], "{}", token);

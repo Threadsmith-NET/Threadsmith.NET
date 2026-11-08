@@ -24,7 +24,7 @@ public static class SemanticCompilationCoordinatorTests
             observed.Enqueue(domainEvent);
             return Task.CompletedTask;
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
         var generation = engine.CaptureAdvancedSnapshot().Generation;
@@ -238,7 +238,7 @@ public static class SemanticCompilationCoordinatorTests
             observed.Enqueue(domainEvent);
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new SemanticLoadRequest(
             SessionId.New(),
             WorkspaceId.New(),
@@ -434,7 +434,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await diagnostic.Task.WaitAsync(TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
@@ -460,7 +460,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, TestContext.Current.CancellationToken);
@@ -485,7 +485,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, cancellationToken);
@@ -573,7 +573,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, TestContext.Current.CancellationToken);
@@ -599,7 +599,7 @@ public static class SemanticCompilationCoordinatorTests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         var before = engine.CaptureAdvancedSnapshot();
         var projectPath = before.Solution.Projects.First(project => before.CompiledProjects.Contains(project.Id)).FilePath
@@ -619,7 +619,7 @@ public static class SemanticCompilationCoordinatorTests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         var receipt = await engine.EnsurePreparedAsync(null, "symbols", true, TestContext.Current.CancellationToken)
             ?? throw new InvalidOperationException("Fixture preparation is unavailable.");
@@ -649,7 +649,7 @@ public static class SemanticCompilationCoordinatorTests
                 await release.Task.WaitAsync(token);
             }
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         try
         {
             await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
@@ -692,8 +692,8 @@ public static class SemanticCompilationCoordinatorTests
         solution = solution.AddDocument(DocumentId.CreateNewId(ids[2]), "Owner.cs", "namespace Workspace; public class Unrelated {}", filePath: Path.Combine(root, "Other", "Owner.cs"));
         solution = solution.AddProjectReference(ids[1], new ProjectReference(ids[0]));
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
-        var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var readiness = new CodeExploreReadinessSnapshot(solution, new HashSet<ProjectId>(), SemanticConfidenceLevel.PartialCompilation, root, Path.Combine(root, "Fixture.sln"), 1, 1);
         var request = new CodeExploreRequest
         {
@@ -718,7 +718,7 @@ public static class SemanticCompilationCoordinatorTests
         using var fixture = new TestSemanticSolution();
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var result = await registry.LoadForBindingAsync(request, TestContext.Current.CancellationToken);
         var engine = registry.GetEngine(request.WorkspaceId);
@@ -738,7 +738,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         await registry.LoadAsync(request, cancellationToken);
         var engine = registry.GetEngine(request.WorkspaceId);
@@ -771,7 +771,8 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
+        var clock = new ObservedTimeProvider();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), timeProvider: clock);
         await engine.LoadAsync(
             new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild),
             cancellationToken);
@@ -797,7 +798,10 @@ public static class SemanticCompilationCoordinatorTests
         try
         {
             await started.Task.WaitAsync(cancellationToken);
-            await engine.RefreshDocumentsAsync([new(document.FilePath!, text, "updated")], cancellationToken);
+            var refresh = engine.RefreshDocumentsAsync([new(document.FilePath!, text, "updated")], cancellationToken);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(1), cancellationToken);
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            await refresh;
 #pragma warning disable VSTHRD003 // The test admitted this operation before superseding its compiler owner.
             await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
 #pragma warning restore VSTHRD003
@@ -820,11 +824,13 @@ public static class SemanticCompilationCoordinatorTests
         var root = fixture.Root;
         await using var events = new DomainEventStream();
         var disposed = new TaskCompletionSource<Workspace>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new ObservedTimeProvider();
         await using var engine = new SemanticEngine(
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            cancellationBackstop: TimeSpan.FromMilliseconds(1))
+            cancellationBackstop: TimeSpan.FromMilliseconds(1),
+            timeProvider: clock)
         {
             WorkspaceDisposalObserver = workspace => disposed.TrySetResult(workspace),
         };
@@ -846,7 +852,10 @@ public static class SemanticCompilationCoordinatorTests
         try
         {
             await started.Task.WaitAsync(ct);
-            await engine.DisposeAsync();
+            var disposal = engine.DisposeAsync().AsTask();
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(1), ct);
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            await disposal;
 #pragma warning disable VSTHRD003 // This test owns the admitted operation and its retirement.
             await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
 #pragma warning restore VSTHRD003
@@ -864,8 +873,8 @@ public static class SemanticCompilationCoordinatorTests
             release.TrySetResult();
             try
             {
-                await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-                await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await engine.DisposeAsync().AsTask().WaitAsync(TestContext.Current.CancellationToken);
+                await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
             }
             catch (Exception cleanupFailure) when (primaryFailure is not null)
             {
@@ -882,7 +891,7 @@ public static class SemanticCompilationCoordinatorTests
         var ct = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var snapshot = engine.CaptureMutationSnapshot();
@@ -925,11 +934,13 @@ public static class SemanticCompilationCoordinatorTests
         var root = fixture.Root;
         await using var events = new DomainEventStream();
         var disposed = Signal();
+        var clock = new ObservedTimeProvider();
         await using var engine = new SemanticEngine(
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            cancellationBackstop: TimeSpan.FromMilliseconds(1))
+            cancellationBackstop: TimeSpan.FromMilliseconds(1),
+            timeProvider: clock)
         {
             WorkspaceDisposalObserver = _ => disposed.TrySetResult(),
         };
@@ -964,6 +975,8 @@ public static class SemanticCompilationCoordinatorTests
             await started.Task.WaitAsync(ct);
             await caller.CancelAsync();
             await callbackEntered.Task.WaitAsync(ct);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(1), ct);
+            clock.Advance(TimeSpan.FromMilliseconds(1));
 #pragma warning disable VSTHRD003 // This test owns the cancelled compiler task.
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
 #pragma warning restore VSTHRD003
@@ -980,8 +993,8 @@ public static class SemanticCompilationCoordinatorTests
             release.Set();
             try
             {
-                await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
-                await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                await engine.DisposeAsync().AsTask().WaitAsync(TestContext.Current.CancellationToken);
+                await disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
             }
             catch (Exception cleanupFailure) when (primaryFailure is not null)
             {
@@ -1037,7 +1050,8 @@ public static class SemanticCompilationCoordinatorTests
         var ct = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), resourceLimits: new SemanticResourceLimits { CompilationWorkers = 1 });
+        var clock = new ObservedTimeProvider();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), resourceLimits: new SemanticResourceLimits { CompilationWorkers = 1 }, timeProvider: clock);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var snapshot = engine.CaptureMutationSnapshot();
@@ -1059,6 +1073,8 @@ public static class SemanticCompilationCoordinatorTests
                     caller.Token);
                 await started.Task.WaitAsync(ct);
                 await caller.CancelAsync();
+                await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(1), ct);
+                clock.Advance(TimeSpan.FromMilliseconds(1));
 #pragma warning disable VSTHRD003 // The test owns each deliberately abandoned operation.
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
 #pragma warning restore VSTHRD003
@@ -1089,7 +1105,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = fixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(
             new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild),
             cancellationToken);

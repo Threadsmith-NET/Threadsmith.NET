@@ -37,12 +37,9 @@ public sealed class ScratchpadScriptTests : IDisposable
         var scope = CreateScope();
         var input = Path.Combine(scope.ScratchpadPath, "input.log");
         await File.WriteAllLinesAsync(input, Enumerable.Range(0, 100000).Select(index => index % 10 == 0 ? "ERROR" : "ok"), TestContext.Current.CancellationToken);
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        }).Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
-        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+        var config = new ConfigurationBuilder().Build();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
         var result = await engine.ExecuteAsync(
             "var count = Scratchpad.ReadLines(\"input.log\").Count(line => line.Contains(\"ERROR\")); await Scratchpad.WriteAllTextAsync(\"results/count.txt\", count.ToString()); return count;",
             ScriptKind.Statement,
@@ -66,7 +63,7 @@ public sealed class ScratchpadScriptTests : IDisposable
             ScriptAssemblies = ["System.Linq", "System.Collections", "System.Collections.Generic"],
             ResourceLimits = new Dictionary<string, int>
             {
-                ["tools:config:csharp_script:timeout_ms"] = int.MaxValue,
+                ["tools:config:csharp_script:timeout_ms"] = 5000,
                 ["tools:config:csharp_script:max_output_bytes"] = 65536,
                 ["tools:config:csharp_script:max_code_characters"] = 65536,
                 ["tools:config:csharp_script:max_assemblies"] = 32,
@@ -104,12 +101,9 @@ public sealed class ScratchpadScriptTests : IDisposable
     {
         var scope = CreateScope();
         await File.WriteAllBytesAsync(Path.Combine(scope.ScratchpadPath, "input.bin"), [1, 2, 3, 4, 5], TestContext.Current.CancellationToken);
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        }).Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
-        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+        var config = new ConfigurationBuilder().Build();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(
             """
@@ -277,7 +271,7 @@ public sealed class ScratchpadScriptTests : IDisposable
     {
         var scope = CreateScope();
         var engine = new CSharpScriptEngine(new UnusedProcessManager(), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), maximumWriteBytes: 4);
-        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAsync<ToolArgumentValidationException>(() => engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context, TestContext.Current.CancellationToken));
         Assert.Empty(Directory.EnumerateFiles(scope.ScratchpadPath));
     }

@@ -34,9 +34,9 @@ public sealed record AnthropicModelDiscoveryPage
 public static class AnthropicModelDiscoveryClient
 {
     /// <summary>Creates one discovery-scoped SDK reader; aggregate bytes include every page.</summary>
-    public static IAnthropicModelDiscoveryClient Create(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null)
+    public static IAnthropicModelDiscoveryClient Create(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
-        return new Client(httpClient, apiKey, timeout, limits);
+        return new Client(httpClient, apiKey, timeout, limits, timeProvider);
     }
 
     private sealed class Client : IAnthropicModelDiscoveryClient
@@ -45,10 +45,11 @@ public static class AnthropicModelDiscoveryClient
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly TimeSpan _timeout;
+        private readonly TimeProvider _timeProvider;
         private long _aggregateBytes;
 
         /// <summary>Initializes a new instance of the <see cref="Client"/> class.</summary>
-        internal Client(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null)
+        internal Client(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null, TimeProvider? timeProvider = null)
         {
             ArgumentNullException.ThrowIfNull(httpClient);
             ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
@@ -58,6 +59,7 @@ public static class AnthropicModelDiscoveryClient
             _httpClient = httpClient;
             _apiKey = apiKey;
             _timeout = timeout;
+            _timeProvider = timeProvider ?? TimeProvider.System;
         }
 
         /// <inheritdoc />
@@ -68,13 +70,13 @@ public static class AnthropicModelDiscoveryClient
                 throw new ArgumentOutOfRangeException(nameof(limit));
             }
 
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(_timeout);
+            using var deadline = new CancellationTokenSource(_timeout, _timeProvider);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
             long pageBytes = 0;
             using var client = AnthropicSdkClientFactory.Create(
                 _httpClient,
                 _apiKey,
-                _timeout,
+                Timeout.InfiniteTimeSpan,
                 maximumResponseBytes: _limits.MaximumMetadataBytes,
                 responseBytesObserved: count =>
                 {

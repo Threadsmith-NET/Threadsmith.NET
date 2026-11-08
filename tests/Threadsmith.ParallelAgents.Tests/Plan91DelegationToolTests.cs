@@ -22,7 +22,7 @@ public sealed partial class Plan91DelegationToolTests
     {
         const string canary = "Delegated Jira description canary";
         using var handler = new DelegatedJiraHandler(canary);
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var options = new JiraOptions
         {
             Providers = new Dictionary<string, JiraProviderOptions>
@@ -94,7 +94,8 @@ public sealed partial class Plan91DelegationToolTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
@@ -181,7 +182,8 @@ public sealed partial class Plan91DelegationToolTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var denied = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
@@ -709,12 +711,15 @@ public sealed partial class Plan91DelegationToolTests
         await using var events = new BlockingEventStream();
         var store = new EvidenceStore(events, new SecretOutputSanitizer());
         var sessionId = SessionId.New();
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
 
         // Act / Assert
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.AddBatchAsync(
+        var publishing = store.AddBatchAsync(
             [CreateEvidence(sessionId, RunId.New(), "blocked")],
-            cancellation.Token));
+            cancellation.Token);
+        await events.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publishing.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Empty(store.Snapshot(sessionId));
     }
 
@@ -764,13 +769,13 @@ public sealed partial class Plan91DelegationToolTests
         var addTask = store.AddBatchAsync(
             [CreateEvidence(sessionId, RunId.New(), "late")],
             cancellation.Token);
-        await events.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        await events.Entered.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
 #pragma warning disable VSTHRD003 // The task was started by this test before cancellation.
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => addTask);
 #pragma warning restore VSTHRD003
         events.Release();
-        await events.Completed.WaitAsync(TimeSpan.FromSeconds(5));
+        await events.Completed.WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.Empty(store.Snapshot(sessionId));
@@ -928,6 +933,8 @@ public sealed partial class Plan91DelegationToolTests
         private readonly TaskCompletionSource _never = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public IDomainEventSubscription Subscribe(
             Func<IDomainEvent, CancellationToken, Task> handler,
             int capacity = 256)
@@ -939,6 +946,7 @@ public sealed partial class Plan91DelegationToolTests
             IDomainEvent domainEvent,
             CancellationToken cancellationToken = default)
         {
+            Entered.TrySetResult();
 #pragma warning disable VSTHRD003 // The fake intentionally returns a non-cooperative publisher task.
             return _never.Task;
 #pragma warning restore VSTHRD003
@@ -949,6 +957,7 @@ public sealed partial class Plan91DelegationToolTests
             Func<bool> tryCommit,
             CancellationToken cancellationToken = default)
         {
+            Entered.TrySetResult();
 #pragma warning disable VSTHRD003 // The fake intentionally returns a non-cooperative publisher task.
             return _never.Task;
 #pragma warning restore VSTHRD003

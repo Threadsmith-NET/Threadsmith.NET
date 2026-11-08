@@ -83,7 +83,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 TrustLevel: authority.TrustLevel));
             await using var scheduler = CreateScheduler();
             var checkpoints = new DelegationCheckpointStore(connectionString);
-            var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
+            var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var provider = new InheritedToolsProvider(sessionId, snapshots, authority);
             var usage = new SessionUsageProjection();
             var options = CreateOptions();
@@ -166,7 +166,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                     ToolId = DelegateAgentsContract.ToolId,
                     ArgumentsJson = InheritedToolsProvider.DelegateInput("Run the inherited-tools integration task."),
                     Context = authority with { ModelVisibleToolSnapshotId = snapshotId },
-                }).WaitAsync(TimeSpan.FromSeconds(20));
+                }).WaitAsync(TestContext.Current.CancellationToken);
             }
             finally
             {
@@ -174,7 +174,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }
 
             Assert.True(result.Succeeded, result.Error ?? result.ModelResultContent);
-            Assert.Equal("child artifact", await ReadEventuallyAsync(Path.Combine(repository, ".inbox/child.md")));
+            Assert.Equal("child artifact", await File.ReadAllTextAsync(Path.Combine(repository, ".inbox/child.md"), TestContext.Current.CancellationToken));
             var process = Assert.Single(processes.Requests);
             Assert.NotEqual(rootRunId, process.RunId);
             Assert.Equal(repository, Path.TrimEndingDirectorySeparator(process.WorkingDirectory));
@@ -224,7 +224,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
     private static async Task DeleteDirectoryEventuallyAsync(string path)
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
             try
@@ -232,37 +231,17 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 Directory.Delete(path, recursive: true);
                 return;
             }
-            catch (IOException) when (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            catch (IOException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                await Task.Yield();
             }
-            catch (UnauthorizedAccessException) when (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            catch (UnauthorizedAccessException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+                await Task.Yield();
             }
         }
-    }
-
-    private static async Task<string> ReadEventuallyAsync(string path)
-    {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        while (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
-        {
-            try
-            {
-                return await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-            }
-            catch (DirectoryNotFoundException)
-            {
-            }
-            catch (FileNotFoundException)
-            {
-            }
-
-            await Task.Delay(25, TestContext.Current.CancellationToken);
-        }
-
-        return await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
     }
 
     private static string PhysicalTemporaryPath()

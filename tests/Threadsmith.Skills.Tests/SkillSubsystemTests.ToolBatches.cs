@@ -70,7 +70,7 @@ public sealed partial class SkillSubsystemTests
 
             return Task.CompletedTask;
         });
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var context = PermissionContext() with { RepositoryPath = package.Root };
         await using var workflow = new SkillWorkflowOrchestrator(
             catalog,
@@ -164,9 +164,9 @@ public sealed partial class SkillSubsystemTests
         var running = runner.RunAsync(BatchPlan(), PermissionStep(), 1, [], "{}");
         try
         {
-            await Task.WhenAll(first.Started.Task, second.Started.Task).WaitAsync(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(first.Started.Task, second.Started.Task).WaitAsync(TestContext.Current.CancellationToken);
             second.Release.TrySetResult();
-            await second.Completed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await second.Completed.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.False(first.Completed.Task.IsCompleted);
         }
         finally
@@ -239,9 +239,9 @@ public sealed partial class SkillSubsystemTests
         var model = new SkillBatchModelProvider { Calls = [new("batch_first", "{}"), new("batch_second", "{}")] };
         await using var events = new DomainEventStream();
         var runner = CreateBatchRunner(model, [first, second], events);
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var running = runner.RunAsync(BatchPlan(), PermissionStep(), 1, [], "{}", cancellation.Token);
-        await Task.WhenAll(first.Started.Task, second.Started.Task).WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.WhenAll(first.Started.Task, second.Started.Task).WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
         try
         {
@@ -279,9 +279,9 @@ public sealed partial class SkillSubsystemTests
             AvailableToolIds = ["write_file", "batch_blocker"],
             EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 },
         };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var running = runner.RunAsync(plan, PermissionStep(), 1, [], "{}", cancellation.Token);
-        await blocker.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await blocker.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         await cancellation.CancelAsync();
         OperationCanceledException cancellationError;
@@ -338,7 +338,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task SkillToolBatch_CancelledLaterWavePreservesCompletedWriteSideEffect()
     {
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var writer = new SkillBatchWriteFileTool(ToolConcurrencyMode.SerializedPerRegistration);
         var canceller = new SkillBatchCancelTool(cancellation);
         var later = new SkillBatchProbeTool("batch_later", ToolConcurrencyMode.SerializedPerRegistration);
@@ -384,7 +384,13 @@ public sealed partial class SkillSubsystemTests
         var sanitizer = new SecretOutputSanitizer();
         var registry = new ToolRegistry(tools);
         var pipeline = new ToolInvocationPipeline(
-            registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            registry,
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            sanitizer,
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         return new ModelSkillProcedureRunner(model, registry, pipeline, sanitizer, (_, _) => Task.FromResult(PermissionContext()), TestPromptLoader.Instance);
     }
 

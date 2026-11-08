@@ -75,7 +75,7 @@ public sealed partial class SessionConversationTests
                 var evidence = new EvidenceStore(events, sanitizer);
                 var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance, conversationStore: store);
                 var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
-                var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+                var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
                 var application = new SessionApplication(
                     events,
                     model,

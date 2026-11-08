@@ -374,7 +374,7 @@ public static class ReasoningReplayBoundaryTests
             var catalog = ReasoningReplayFixture.Catalog(codex);
             Definition = catalog.Get(catalog.DefaultModelId!.Value);
             Handler = new([response ?? ReasoningReplayFixture.Stream(codex, 0, "lookup", "{}"), ReasoningReplayFixture.Final(codex)]) { FragmentResponses = true };
-            _client = new HttpClient(Handler);
+            _client = new HttpClient(Handler) { Timeout = Timeout.InfiniteTimeSpan };
             Context = new() { HttpClient = _client, Profile = Definition.Profile, ProviderConfiguration = Definition.ProviderConfiguration, ModelConfiguration = Definition.ModelConfiguration, ResolvedSecret = "fixture-key" };
             Provider = Definition.Registration.CreateProvider(Context);
             Request = WithCapacity(new ModelStreamRequest

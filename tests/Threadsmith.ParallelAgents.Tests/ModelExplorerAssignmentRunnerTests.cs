@@ -43,7 +43,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             events,
             sanitizer,
             NullLogger<ToolInvocationPipeline>.Instance,
-            UnboundedBudget.Instance);
+            UnboundedBudget.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var provider = new ToolThenFindingProvider(tool.Definition.Id);
         var usage = new SessionUsageProjection();
         var profile = CreateProfile();
@@ -312,7 +313,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             events,
             sanitizer,
             NullLogger<ToolInvocationPipeline>.Instance,
-            UnboundedBudget.Instance);
+            UnboundedBudget.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var runner = CreateRunner(
             provider,
             pipeline,
@@ -580,7 +582,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var coordinator = new DelegationCoordinator(
             scheduler,
             new ThrowOnJoinedCheckpointStore(),
-            events);
+            events,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act / Assert
         await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.StartAsync(plan, runner));
@@ -1078,7 +1081,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var running = runner.RunAsync(plan, assignment, cancellation.Token);
         try
         {
-            await provider.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await provider.AllStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
             await cancellation.CancelAsync();
 
 #pragma warning disable VSTHRD003 // The test starts this gated task before requesting cancellation.
@@ -1145,12 +1148,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     public async Task Scheduler_CancelledChildReturnsCompleted_ClearsResponseAndPreservesMetadata()
     {
         using var parentCancellation = new CancellationTokenSource();
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            MaximumActiveChildren = 2,
-            MaximumActiveChildrenPerParent = 2,
-            ShutdownTimeout = TimeSpan.FromSeconds(2),
-        });
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                MaximumActiveChildren = 2,
+                MaximumActiveChildrenPerParent = 2,
+                ShutdownTimeout = TimeSpan.FromSeconds(2),
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile();
         var cancelledAssignment = CreateAssignment(profile.Id, []);
         var siblingAssignment = CreateAssignment(profile.Id, []);
@@ -1195,14 +1200,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var running = scheduler.RunAsync(plan, runner, parentCancellation.Token);
         try
         {
-            await runner.AllStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await runner.AllStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.True(await scheduler.CancelAssignmentAsync(plan.DelegationId, cancelledAssignment.AssignmentId));
             Assert.True(runner.ObservedTokens[cancelledAssignment.AssignmentId].IsCancellationRequested);
             Assert.False(runner.ObservedTokens[siblingAssignment.AssignmentId].IsCancellationRequested);
             Assert.False(parentCancellation.IsCancellationRequested);
             runner.Release.TrySetResult();
 
-            var outcomes = await running.WaitAsync(TimeSpan.FromSeconds(2));
+            var outcomes = await running.WaitAsync(TestContext.Current.CancellationToken);
 
             var cancelled = Assert.Single(outcomes, outcome => outcome.AssignmentId == cancelledAssignment.AssignmentId);
             Assert.Equal(AgentRunStatus.Cancelled, cancelled.Status);
@@ -1338,7 +1343,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             events,
             sanitizer,
             NullLogger<ToolInvocationPipeline>.Instance,
-            UnboundedBudget.Instance);
+            UnboundedBudget.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
     }
 
     private static AgentModelSelector CreateSelector(ModelProfile profile)
@@ -1357,14 +1363,16 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
     private static AgentRunScheduler CreateScheduler()
     {
-        return new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            QueueCapacity = 2,
-            MaximumActiveChildren = 1,
-            MaximumActiveChildrenPerParent = 1,
-            MaximumActiveImplementers = 1,
-            ShutdownTimeout = TimeSpan.FromSeconds(2),
-        });
+        return new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                QueueCapacity = 2,
+                MaximumActiveChildren = 1,
+                MaximumActiveChildrenPerParent = 1,
+                MaximumActiveImplementers = 1,
+                ShutdownTimeout = TimeSpan.FromSeconds(2),
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
     }
 
     private static Evidence CreateParentEvidence(
@@ -1432,7 +1440,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             InitialContext = "bounded child context",
             OutputSchema = AgentAssignment.ResponseSchema,
             StoppingCondition = "Return when the assigned question is answered.",
-            Deadline = DateTimeOffset.UtcNow.AddMinutes(1),
+            Deadline = DateTimeOffset.MaxValue,
             Scope = new AgentAssignmentScope { IsOwnershipProven = true },
             Policy = new AgentPolicySnapshot
             {
@@ -1452,7 +1460,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     private static DelegationPlan CreatePlan(AgentAssignment assignment)
     {
         var acceptedAt = DateTimeOffset.UtcNow;
-        assignment = assignment with { Deadline = acceptedAt.AddMinutes(1) };
         return new DelegationPlan
         {
             DelegationId = DelegationId.New(),

@@ -14,6 +14,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
     private readonly IPromptLoader _prompts;
+    private readonly TimeProvider _timeProvider;
     private readonly IDomainEventStream _events;
     private readonly ILoggerFactory _loggerFactory;
     private Func<SemanticLoadRequest, SemanticConfidenceLevel, CancellationToken, Task>? _confidencePublisher;
@@ -26,7 +27,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null,
-        SemanticStartupProgress? startupProgress = null)
+        SemanticStartupProgress? startupProgress = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
@@ -40,6 +42,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
         _prompts = prompts;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _events = events;
         _loggerFactory = loggerFactory;
         _cancellationBackstop = cancellationBackstop;
@@ -205,7 +208,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             _prompts,
             _cancellationBackstop,
             _resourceLimits,
-            StartupProgress));
+            StartupProgress,
+            _timeProvider));
         if (_confidencePublisher is { } publisher)
         {
             engine.SetConfidencePublisher(publisher);

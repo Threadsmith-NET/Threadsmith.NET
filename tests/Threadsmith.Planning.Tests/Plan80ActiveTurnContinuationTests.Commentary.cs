@@ -24,7 +24,7 @@ public static partial class Plan80ActiveTurnContinuationTests
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
         var registry = new ToolRegistry([new TestDeterministicOutputTool("Evidence.")]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile() with { ContextWindow = 32_000 };
         var resolver = new ModelResolver(new ConfiguredModelCatalog([profile]), new InMemoryModelPreferenceSnapshotProvider());
         var assembler = CreateAssembler(events, evidence, resolver, sanitizer);

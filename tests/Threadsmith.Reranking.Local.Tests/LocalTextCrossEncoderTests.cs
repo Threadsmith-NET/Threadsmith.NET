@@ -270,7 +270,7 @@ public sealed class LocalTextCrossEncoderTests
             });
         using var source = new CancellationTokenSource();
         var cancelled = encoder.ScoreAsync("query", [string.Join(' ', Enumerable.Repeat("a", 252))], source.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
         var queued = encoder.ScoreAsync("queue remains available", ["document"], TestContext.Current.CancellationToken);
 
         await source.CancelAsync();
@@ -286,7 +286,7 @@ public sealed class LocalTextCrossEncoderTests
             Assert.True(source.IsCancellationRequested);
         }
 
-        var result = await queued.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        var result = await queued.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Single(result);
         Assert.True(double.IsFinite(result[0].Score));
     }

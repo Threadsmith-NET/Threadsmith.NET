@@ -53,7 +53,7 @@ public static partial class RepositoryMemoryBindingTests
             await tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: large), context, ct);
         }
 
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var invocation = new ToolInvocationRequest
         {
             SessionId = context.SessionId,

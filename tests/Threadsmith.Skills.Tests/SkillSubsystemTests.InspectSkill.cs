@@ -46,7 +46,8 @@ public sealed partial class SkillSubsystemTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         InspectSkillOutput discovery;
         await using (var lockedSchema = new FileStream(Path.Combine(package.PackageRoot, "schemas", "input.json"), FileMode.Open, FileAccess.Read, FileShare.None))
         await using (var lockedBody = new FileStream(claudeFile, FileMode.Open, FileAccess.Read, FileShare.None))
@@ -260,7 +261,8 @@ public sealed partial class SkillSubsystemTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // A subsequent catalog refresh must preserve the same behavior as a fresh process.
         for (var attempt = 0; attempt < 2; attempt++)
@@ -338,7 +340,8 @@ public sealed partial class SkillSubsystemTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {

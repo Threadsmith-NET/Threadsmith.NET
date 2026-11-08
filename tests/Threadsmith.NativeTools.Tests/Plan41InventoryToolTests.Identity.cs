@@ -27,7 +27,7 @@ public sealed partial class Plan41InventoryToolTests
         {
             await CreateDirectoryAliasAsync(alias, repository.Path, ct);
             var logicalRoot = linkedWorktree ? Path.Combine(alias, "linked-worktree") : alias;
-            var service = new GitQueryService();
+            var service = new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var physical = await service.ShowAsync(root, new GitShowRequest { Revision = "HEAD", Path = "tracked.txt" }, ct);
             var logical = await service.ShowAsync(logicalRoot, new GitShowRequest { Revision = "HEAD", Path = "tracked.txt" }, ct);
             Assert.Equal("initial\n", physical.Content);
@@ -101,7 +101,7 @@ public sealed partial class Plan41InventoryToolTests
 
             // Cleanup owns termination and pipe draining even after the test token is cancelled.
             await Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), output, error)
-                .WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+                .WaitAsync(TestContext.Current.CancellationToken);
             throw;
         }
 

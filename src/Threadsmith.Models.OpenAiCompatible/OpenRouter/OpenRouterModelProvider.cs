@@ -13,8 +13,8 @@ internal sealed class OpenRouterModelProvider : OpenAiCompatibleModelProvider
     private readonly OpenRouterModelConfiguration _model;
 
     /// <summary>Initializes a new instance of the <see cref="OpenRouterModelProvider"/> class.</summary>
-    internal OpenRouterModelProvider(HttpClient client, ModelProfile profile, string secret, string providerId, OpenRouterModelConfiguration model)
-        : base(client, profile, secret)
+    internal OpenRouterModelProvider(HttpClient client, ModelProfile profile, string secret, string providerId, OpenRouterModelConfiguration model, TimeProvider? timeProvider = null)
+        : base(client, profile, secret, timeProvider: timeProvider)
     {
         _model = model;
         ReplayProtocol = "openrouter-v1:" + Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { providerId, model })));

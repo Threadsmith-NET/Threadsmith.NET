@@ -394,7 +394,8 @@ public static class MemoriesToolTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         const string secret = "sk-abcdefghijklmnop";
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -495,8 +496,8 @@ public static class MemoriesToolTests
             var options = new Options();
             var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance);
             var registry = new ToolRegistry([tool, new DateTimeTool(TestPromptLoader.Instance)]);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 30, TimeSpan.FromMinutes(1)));
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget);
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 30, TimeSpan.MaxValue));
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var evidence = new EvidenceStore(events, sanitizer);
             var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance, repositoryMemoryRetriever: new Retriever(memory));
             var model = new RecordingProvider(remove, memory.Entry.Id, explicitList, verifyRemoval);
@@ -581,7 +582,7 @@ public static class MemoriesToolTests
     public static async Task Provider_ObservesTransportAndPreservesMemorySchema(bool rejectBeforeTransport, bool cancelled, bool sensitiveProhibited)
     {
         using var handler = new RequestHandler();
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var id = ModelProfileId.New();
         var catalog = new EffectiveModelProviderCatalog(
             new ModelProviderCatalogConfiguration
@@ -613,7 +614,7 @@ public static class MemoriesToolTests
                 ],
             },
             new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null));
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var tool = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance);
         var submissions = 0;
         var request = new ModelStreamRequest
@@ -743,13 +744,16 @@ public static class MemoriesToolTests
         var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus(true, null)), options, TestPromptLoader.Instance);
         var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 4096 } });
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var query = new string(character, 8000);
         var result = await pipeline.InvokeAsync(
             new ToolInvocationRequest
             {
-                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = tool.Definition.Id,
-                ArgumentsJson = JsonSerializer.Serialize(new { query }), Context = Invocation(Path.GetTempPath()),
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = tool.Definition.Id,
+                ArgumentsJson = JsonSerializer.Serialize(new { query }),
+                Context = Invocation(Path.GetTempPath()),
             },
             TestContext.Current.CancellationToken);
         Assert.True(result.Succeeded, result.Error);
@@ -791,7 +795,8 @@ public static class MemoriesToolTests
         var memory = new MemoryService();
         var entry = memory.Entry with
         {
-            RepositoryIdentity = RepositoryIdentity.Create(path), Ownership = RepositoryMemoryOwnership.Intelligence,
+            RepositoryIdentity = RepositoryIdentity.Create(path),
+            Ownership = RepositoryMemoryOwnership.Intelligence,
             Supports = [new RepositoryMemorySupport { Path = "source.cs", ContentHash = "observed", ObservedAt = DateTimeOffset.UnixEpoch, IsDirty = true }],
         };
         var search = new IntelligenceSearch { Result = new([new(entry, 1, 1, null, null)], []) { IsComplete = false } };
@@ -827,8 +832,10 @@ public static class MemoriesToolTests
         var path = Path.GetTempPath();
         var entries = Enumerable.Range(0, 25).Select(_ => memory.Entry with
         {
-            Id = RepositoryMemoryId.New(), RepositoryIdentity = RepositoryIdentity.Create(path),
-            Ownership = RepositoryMemoryOwnership.Intelligence, Text = new string('x', 1600),
+            Id = RepositoryMemoryId.New(),
+            RepositoryIdentity = RepositoryIdentity.Create(path),
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            Text = new string('x', 1600),
         }).Select(entry => new RepositoryMemoryRetrievalCandidate(entry, 1, 1, null, null)).ToArray();
         var search = new IntelligenceSearch { Result = new(entries, []) };
         var options = new Options { IntelligenceEnabled = true, SearchMaximumResults = 25, MaximumListBytes = maximumBytes };
@@ -849,12 +856,16 @@ public static class MemoriesToolTests
         var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null));
         var registry = new ToolRegistry([tool]);
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var persisted = "{\"action\":\"search\",\"query\":\"architecture\",\"ownership\":\"intelligence\"}";
         var request = new ToolInvocationRequest
         {
-            SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "memories",
-            ArgumentsJson = persisted, InvocationKey = "persisted-provider-call", Context = Invocation(Path.GetTempPath()),
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "memories",
+            ArgumentsJson = persisted,
+            InvocationKey = "persisted-provider-call",
+            Context = Invocation(Path.GetTempPath()),
         };
         var result = Assert.Single(await pipeline.InvokeBatchAsync([new ToolBatchRequest(0, "persisted-provider-call", request)], ct));
         Assert.Equal("persisted-provider-call", result.CorrelationId);
@@ -875,7 +886,7 @@ public static class MemoriesToolTests
         var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(new IntelligenceSearch(), options, new IntelligenceStatus(onboarded, null)), options, TestPromptLoader.Instance);
         var registry = new ToolRegistry([tool]);
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var invocation = Invocation(Path.GetTempPath());
         var snapshot = ConversationToolAvailability.CreateSnapshot(pipeline, registry, SessionId.New(), RunId.New(), invocation, false);
         Assert.Equal(reason == "ready", snapshot.Definitions.Count == 1);
@@ -901,7 +912,10 @@ public static class MemoriesToolTests
 
         public RepositoryIntelligenceStatus Capture(string repositoryIdentity) => new()
         {
-            RepositoryIdentity = repositoryIdentity, Enabled = true, Onboarded = _onboarded, Fault = _fault,
+            RepositoryIdentity = repositoryIdentity,
+            Enabled = true,
+            Onboarded = _onboarded,
+            Fault = _fault,
         };
     }
 

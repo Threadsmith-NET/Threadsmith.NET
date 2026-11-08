@@ -412,14 +412,14 @@ public static class Plan31ModelProviderCatalogTests
         })).ToArray();
         try
         {
-            await allReadersEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await allReadersEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
         }
         finally
         {
             releaseReaders.TrySetResult();
         }
 
-        var profiles = await Task.WhenAll(readers).WaitAsync(TimeSpan.FromSeconds(2));
+        var profiles = await Task.WhenAll(readers).WaitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         Assert.All(profiles, profile => Assert.Same(profiles[0], profile));

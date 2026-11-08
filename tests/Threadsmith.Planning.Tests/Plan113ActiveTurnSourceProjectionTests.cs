@@ -56,7 +56,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var summaryProfile = CreateCompactionCandidateProfile(ModelProfileId.New());
             var assembler = new ContextAssembler(
@@ -226,7 +227,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = new ContextAssembler(
                 evidence,
@@ -321,7 +323,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = new ContextAssembler(
                 evidence,
@@ -433,7 +436,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = new ContextAssembler(
                 evidence,
@@ -1091,7 +1095,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
             events,
             new SecretOutputSanitizer(),
             NullLogger<ToolInvocationPipeline>.Instance,
-            new ExecutionBudget(new BudgetDimensions(1_000_000, 20, TimeSpan.FromMinutes(1))));
+            new ExecutionBudget(new BudgetDimensions(1_000_000, 20, TimeSpan.MaxValue)),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         Task<ToolInvocationResult> InvokeAsync(
             EvidenceId evidenceId,
             int startLine = 1,

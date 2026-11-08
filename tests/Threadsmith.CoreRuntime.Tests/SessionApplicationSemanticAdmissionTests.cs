@@ -29,7 +29,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -37,7 +37,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic admission"));
@@ -46,7 +46,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var submission = application.HandleAsync(
             new SubmitRequestCommand(sessionId, "inspect the repository"),
             cancellation.Token);
-        await refresh.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        await refresh.Entered.WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.False(submission.IsCompleted);
         Assert.False(application.HasActiveWork);
@@ -80,7 +80,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -88,7 +88,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic admission"));
@@ -112,7 +112,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -120,7 +120,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic publication"));
         var runId = await application.HandleAsync(
             new SubmitRequestCommand(sessionId, "inspect the repository"));
-        await provider.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        await provider.Entered.WaitAsync(TestContext.Current.CancellationToken);
 
         var published = false;
         var publication = application.PublishAsync(
@@ -151,7 +151,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -165,7 +165,7 @@ public static class SessionApplicationSemanticAdmissionTests
 
         var runId = await application.HandleAsync(
             new SubmitRequestCommand(firstSessionId, "inspect the repository"));
-        await provider.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        await provider.Entered.WaitAsync(TestContext.Current.CancellationToken);
         var published = false;
         var publication = application.PublishAsync(
             secondSessionId,
@@ -202,7 +202,7 @@ public static class SessionApplicationSemanticAdmissionTests
                     new ScriptedTurn { Text = "alias complete" },
                 ],
             }),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -210,7 +210,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue));
             },
             semanticRefreshCoordinator: refresh);
         var publisherSessionId = await application.HandleAsync(new CreateSessionCommand("publisher alias"));
@@ -236,11 +236,11 @@ public static class SessionApplicationSemanticAdmissionTests
 #pragma warning restore VSTHRD003
                 return true;
             });
-        await publicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await publicationEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var aliasSubmission = application.HandleAsync(
             new SubmitRequestCommand(aliasSessionId, "alias request"));
-        await refresh.WaitForEnsureAsync(aliasSessionId).WaitAsync(TimeSpan.FromSeconds(5));
+        await refresh.WaitForEnsureAsync(aliasSessionId).WaitAsync(TestContext.Current.CancellationToken);
         Assert.False(aliasSubmission.IsCompleted);
         Assert.Equal(0, Volatile.Read(ref budgetFactoryCalls));
 
@@ -272,7 +272,7 @@ public static class SessionApplicationSemanticAdmissionTests
             {
                 Turns = [new ScriptedTurn { Text = "complete" }],
             }),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -280,7 +280,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue));
             },
             semanticRefreshCoordinator: refresh);
         var publisherSessionId = await application.HandleAsync(new CreateSessionCommand("unbound publisher"));
@@ -300,7 +300,7 @@ public static class SessionApplicationSemanticAdmissionTests
 #pragma warning restore VSTHRD003
                 return true;
             });
-        await publicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await publicationEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var runId = await application.HandleAsync(
             new SubmitRequestCommand(unrelatedSessionId, "unrelated request"));
@@ -328,7 +328,7 @@ public static class SessionApplicationSemanticAdmissionTests
             {
                 Turns = [new ScriptedTurn { Text = "complete" }],
             }),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue)),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -336,7 +336,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.MaxValue));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic race"));
@@ -351,11 +351,11 @@ public static class SessionApplicationSemanticAdmissionTests
 #pragma warning restore VSTHRD003
                 return true;
             });
-        await publicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await publicationEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         var submission = application.HandleAsync(
             new SubmitRequestCommand(sessionId, "inspect the repository"));
-        await refresh.FirstEnsure.WaitAsync(TimeSpan.FromSeconds(5));
+        await refresh.FirstEnsure.WaitAsync(TestContext.Current.CancellationToken);
         refresh.MarkDirty();
         releasePublication.TrySetResult();
 

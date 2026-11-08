@@ -70,9 +70,9 @@ public static partial class RepositoryMemoryBindingTests
         ITool[] tools = [
             new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance),
             new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
-            new GitLogTool(new GitQueryService(), TestPromptLoader.Instance),
-            new GitShowTool(new GitQueryService(), TestPromptLoader.Instance),
-            new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance),
+            new GitLogTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance),
+            new GitShowTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance),
+            new GitDiffTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance),
             new IntelligenceForbiddenTool("fixture_writer", ToolSideEffect.WritesFiles, ToolCategory.FileWrite),
             new IntelligenceForbiddenTool("fixture_executor", ToolSideEffect.ExecutesCode, ToolCategory.ProcessExecution),
         ];
@@ -116,7 +116,7 @@ public static partial class RepositoryMemoryBindingTests
             },
             "api_key=onboarding-secret-value",
             finishCoverage: true);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var application = new SessionApplication(
             intelligence.Events,
             model,
@@ -216,7 +216,7 @@ public static partial class RepositoryMemoryBindingTests
             IntelligenceRun = run,
             TrustLevel = RepositoryTrustLevel.TrustedRead,
         });
-        var tool = new GitShowTool(new GitQueryService(), TestPromptLoader.Instance);
+        var tool = new GitShowTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance);
         var investigator = context with { Invocation = context.Invocation with { RequestedBy = "model", IsChildAgent = true } };
         await tool.ExecuteAsync(new GitShowInput { Revision = revision, Paths = ["guide.txt"] }, investigator, ct);
         Assert.Throws<InvalidOperationException>(() => run.ResolveSupports(["guide.txt"]));
@@ -233,7 +233,7 @@ public static partial class RepositoryMemoryBindingTests
         var state = new ToolStateManager([tool.Definition], new ConfigurationBuilder().Build(), Path.Combine(fixture.InitialRoot, ".threadsmith", "config.json"));
         await state.DisableAsync("git_show", ct);
         var registry = new ToolRegistry([tool], state);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var invocation = new ToolInvocationRequest
         {
             SessionId = context.SessionId,
@@ -317,7 +317,7 @@ public static partial class RepositoryMemoryBindingTests
         await using var run = await operations.BeginAsync(session, runId, fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct);
         var tool = new IntelligenceForbiddenTool("fixture_forbidden", effect, category);
         var registry = new ToolRegistry([tool]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var invocation = new ToolInvocationRequest
         {
             SessionId = session,
@@ -434,7 +434,7 @@ public static partial class RepositoryMemoryBindingTests
 
             // Join the terminated process and drain its pipes before fixture disposal.
             await Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), output, error)
-                .WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+                .WaitAsync(TestContext.Current.CancellationToken);
             throw;
         }
 

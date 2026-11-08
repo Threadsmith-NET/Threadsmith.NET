@@ -154,6 +154,9 @@ public sealed record ModelProviderCatalogLimits
 /// <summary>Ephemeral host-owned inputs supplied to a compiled provider factory.</summary>
 public sealed record ModelProviderActivationContext
 {
+    /// <summary>Clock used by the activated provider for deadlines and retry scheduling.</summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
     /// <summary>Shared host-owned HTTP client.</summary>
     public required HttpClient HttpClient { get; init; }
 

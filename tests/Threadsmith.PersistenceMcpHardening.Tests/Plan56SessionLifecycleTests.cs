@@ -421,7 +421,7 @@ public static partial class Plan56SessionLifecycleTests
         var committed = false;
         try
         {
-            await model.Entered.WaitAsync(TimeSpan.FromSeconds(3));
+            await model.Entered.WaitAsync(TestContext.Current.CancellationToken);
             Assert.True(harness.Sessions.HasActiveWork);
             await harness.Lifecycle.BindRepositoryAsync("repo-a");
             await Assert.ThrowsAsync<InvalidOperationException>(() => harness.Lifecycle.BindRepositoryAsync(target, _ =>
@@ -435,7 +435,7 @@ public static partial class Plan56SessionLifecycleTests
         finally
         {
             model.Release();
-            await harness.Sessions.HandleAsync(new WaitForRunCommand(run)).WaitAsync(TimeSpan.FromSeconds(3));
+            await harness.Sessions.HandleAsync(new WaitForRunCommand(run)).WaitAsync(TestContext.Current.CancellationToken);
         }
     }
 

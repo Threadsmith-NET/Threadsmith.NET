@@ -108,7 +108,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         binding.Publish(Load());
         var approval = new MutationApprovalPolicyService(configuration, _paths.RepositoryConfiguration, binding, facts);
         var tools = new ToolStateManager([], configuration, _paths.RepositoryConfiguration, userConsentPath: Path.Combine(_root, "outbound.json"), mcpApprovalPath: Path.Combine(_root, "mcp.json"), policyBinding: binding);
-        var coordinator = new RepositoryScopedBindingCoordinator(_paths.RepositoryRoot, tools, null, approval, new RepositorySecretProvider(_paths.RepositoryRoot), manager, policyBinding: binding, configurationPaths: root => root == _paths.RepositoryRoot ? _paths : throw new InvalidOperationException("Unexpected fixture root"));
+        var coordinator = new RepositoryScopedBindingCoordinator(_paths.RepositoryRoot, tools, null, approval, new RepositorySecretProvider(_paths.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), manager, policyBinding: binding, configurationPaths: root => root == _paths.RepositoryRoot ? _paths : throw new InvalidOperationException("Unexpected fixture root"));
         return (coordinator, approval, binding);
     }
 

@@ -32,6 +32,7 @@ public sealed class SourceEditApplication :
     private readonly ISemanticRefreshCoordinator? _semanticRefresh;
     private readonly TimeSpan _immediateAllowance;
     private readonly TimeSpan _finalFeedbackWait;
+    private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<SessionId, FeedbackDelivery> _feedback = new();
     private readonly ConcurrentDictionary<MutationSetId, PendingEdit> _pending = new();
 
@@ -53,13 +54,15 @@ public sealed class SourceEditApplication :
         TimeSpan? immediateAllowance = null,
         ICommandHandler<GetMutationReviewCommand, StagedMutationSet>? reviews = null,
         ICommandHandler<SetMutationPreviewCommand, MutationPreview>? previews = null,
-        EditAnalysisOptions? editAnalysisOptions = null)
+        EditAnalysisOptions? editAnalysisOptions = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(rollbacks);
         ArgumentNullException.ThrowIfNull(effects);
         ArgumentNullException.ThrowIfNull(artifacts);
         _workspaces = workspaces;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _reviews = reviews;
         _previews = previews;
         _rollbacks = rollbacks;
@@ -296,7 +299,7 @@ public sealed class SourceEditApplication :
             return RequireFinalFeedbackReview(sessionId, GetLatestFeedback(delivery) ?? feedback);
         }
 
-        using var deadline = new CancellationTokenSource(_finalFeedbackWait);
+        using var deadline = new CancellationTokenSource(_finalFeedbackWait, _timeProvider);
         using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         if (!HasPendingFeedback(delivery, runId))
         {
@@ -833,8 +836,8 @@ public sealed class SourceEditApplication :
             return true;
         }
 
-        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        budget.CancelAfter(_immediateAllowance);
+        using var deadline = new CancellationTokenSource(_immediateAllowance, _timeProvider);
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         try
         {
             await _semanticRefresh.EnsureCurrentAsync(sessionId, SemanticRefreshReason.HostMutation, budget.Token);

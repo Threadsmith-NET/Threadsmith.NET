@@ -921,11 +921,11 @@ public sealed class Plan81CodeExploreToolTests
         var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan81-unavailable-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         try
         {
             var workspaceId = WorkspaceId.New();
-            var service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            var service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var reader = new TestCodeExploreSourceReader(new ToolInvocationContext
             {
                 RepositoryPath = repositoryPath,
@@ -1275,7 +1275,7 @@ public sealed class Plan81CodeExploreToolTests
             _events = events;
             Registry = registry;
             WorkspaceId = workspaceId;
-            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public AdvancedSemanticQueryService Service { get; }
@@ -1398,7 +1398,7 @@ public sealed class Plan81CodeExploreToolTests
             WriteLinkedProject(repositoryPath, "LinkedTwo");
             WriteLinkedProject(repositoryPath, "LinkedThree");
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

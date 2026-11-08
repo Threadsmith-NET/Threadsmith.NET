@@ -22,7 +22,7 @@ public static class TuiKitImageInputTests
     public static async Task QuitRetainsAttachmentOwnershipForDisposal(string command, bool failedSubmission)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(110, 30);
+        using var backend = new ObservedBackend(110, 30);
         var store = new ImageStore();
         var failedImage = store.Image with { Id = "failed-image" };
         await using (var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: store, captureClipboard: _ => Task.FromResult(new ClipboardCapture(null, [1, 2, 3]))))
@@ -65,7 +65,7 @@ public static class TuiKitImageInputTests
     public static async Task ImagePasteShowsProgressAndIgnoresRepeats(string outcome)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(110, 30);
+        using var backend = new ObservedBackend(110, 30);
         var capture = new TaskCompletionSource<ClipboardCapture>(TaskCreationOptions.RunContinuationsAsynchronously);
         var storeEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseStore = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -144,7 +144,7 @@ public static class TuiKitImageInputTests
     public static async Task ImagePasteSubmitsThroughOrdinaryComposer(string shortcut, bool menu)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var store = new ImageStore();
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend, images: store, captureClipboard: _ => Task.FromResult(new ClipboardCapture(null, [1, 2, 3])));
         await surface.RunAsync(
@@ -177,7 +177,7 @@ public static class TuiKitImageInputTests
     public static async Task TerminalTextPasteDoesNotCaptureClipboard(string text)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var store = new ImageStore();
         var captures = 0;
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: store, captureClipboard: _ =>
@@ -207,7 +207,7 @@ public static class TuiKitImageInputTests
     public static async Task TextPasteShortcutDoesNotCaptureImage(string shortcut)
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var captures = 0;
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, readClipboard: _ => Task.FromResult<string?>("clipboard text"), images: new ImageStore(), captureClipboard: _ =>
         {
@@ -235,7 +235,7 @@ public static class TuiKitImageInputTests
     public static async Task ImagePasteWithoutImagePreservesDraft()
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: new ImageStore(), captureClipboard: _ => Task.FromResult(new ClipboardCapture("clipboard text", null)));
         await surface.RunAsync(
             async token =>
@@ -257,7 +257,7 @@ public static class TuiKitImageInputTests
     public static async Task AttachmentMenuStillRemovesExistingImage()
     {
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var store = new ImageStore();
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: store, captureClipboard: _ => Task.FromResult(new ClipboardCapture(null, [1])));
         await surface.RunAsync(
@@ -287,7 +287,7 @@ public static class TuiKitImageInputTests
     public static async Task CaptureFailurePreservesText(bool timedOut)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend, captureClipboard: _ => Task.FromException<ClipboardCapture>(timedOut ? new OperationCanceledException() : new InvalidDataException("oversized")));
         await surface.RunAsync(
             async token =>
@@ -311,7 +311,7 @@ public static class TuiKitImageInputTests
     public static async Task SecondaryImagePasteIsExplicitlyRefused(ComposerPurpose purpose, string shortcut)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var store = new ImageStore();
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend, images: store, captureClipboard: _ => Task.FromResult(new ClipboardCapture(null, [1])));
         await surface.RunAsync(
@@ -333,7 +333,7 @@ public static class TuiKitImageInputTests
     public static async Task ClosingReleasesUnsubmittedImage()
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(100, 24);
+        using var backend = new ObservedBackend(100, 24);
         var store = new ImageStore();
         var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend, images: store, captureClipboard: _ => Task.FromResult(new ClipboardCapture(null, [1])));
         await surface.RunAsync(
@@ -372,10 +372,10 @@ public static class TuiKitImageInputTests
         try
         {
             using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            using var backend = new HeadlessBackend(110, 30);
+            using var backend = new ObservedBackend(110, 30);
             var store = new ArtifactStore($"Data Source={Path.Combine(root, "state.db")};Pooling=False", Path.Combine(root, "artifacts"), new SecretOutputSanitizer());
             await store.InitializeAsync(lifetime.Token);
-            await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: store);
+            await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], lifetime.Cancel, backend, images: store, captureClipboard: token => ClipboardReader.CaptureAsync(new TuiResourceLimits(), new FakeTimeProvider(), token));
             await surface.RunAsync(
                 async token =>
             {
@@ -437,7 +437,7 @@ public static class TuiKitImageInputTests
                 $image.Dispose()
             }
             """;
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var token = deadline.Token;
         await File.WriteAllTextAsync(scriptPath, script, token);
         var start = new System.Diagnostics.ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
@@ -458,7 +458,7 @@ public static class TuiKitImageInputTests
         {
             Assert.True(helper.Start());
             Assert.Equal("ready", await helper.StandardOutput.ReadLineAsync(token));
-            var captured = await ClipboardReader.CaptureAsync(new TuiResourceLimits(), token);
+            var captured = await ClipboardReader.CaptureAsync(new TuiResourceLimits(), new FakeTimeProvider(), token);
             Assert.NotNull(captured.Image);
             Assert.Null(captured.Text);
             Assert.Equal(420, System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(captured.Image.AsSpan(16, 4)));
@@ -469,7 +469,7 @@ public static class TuiKitImageInputTests
             if (!helper.HasExited)
             {
                 await helper.StandardInput.WriteLineAsync("restore".AsMemory(), CancellationToken.None);
-                using var restoreTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var restoreTimeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
                 await helper.WaitForExitAsync(restoreTimeout.Token);
             }
 
@@ -479,20 +479,18 @@ public static class TuiKitImageInputTests
         Assert.Equal(0, helper.ExitCode);
     }
 
-    private static async Task ExpectAsync(HeadlessBackend backend, string expected, CancellationToken cancellationToken)
+    private static async Task ExpectAsync(ObservedBackend backend, string expected, CancellationToken cancellationToken)
     {
         var output = string.Empty;
         while (!output.Contains(expected, StringComparison.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            output += backend.TakeOutput();
+            output += await backend.ReadOutputAsync(cancellationToken);
             if (expected == "Image attached")
             {
                 Assert.DoesNotContain("Clipboard unavailable", output, StringComparison.Ordinal);
                 Assert.DoesNotContain("Image paste cancelled", output, StringComparison.Ordinal);
             }
-
-            await Task.Delay(10, cancellationToken);
         }
     }
 

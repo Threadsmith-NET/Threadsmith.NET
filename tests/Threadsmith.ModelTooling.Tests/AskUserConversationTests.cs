@@ -65,7 +65,7 @@ public static class AskUserConversationTests
         {
             Defaults = new ToolRuntimeOverride { MaximumOutputBytes = securityCeiling ? 8192 : limit },
         });
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, expandSanitizedOutput ? new ExpandingSanitizer() : new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, expandSanitizedOutput ? new ExpandingSanitizer() : new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ToolInvocationRequest { SessionId = session, RunId = run, ToolId = "ask_user", ArgumentsJson = Arguments, Context = context };
         var suspended = await pipeline.InvokeAsync(request, token);
         Assert.True(suspended.Suspension is not null, suspended.Error);
@@ -161,7 +161,7 @@ public static class AskUserConversationTests
         var budget = new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.MaxValue));
         var registry = new ToolRegistry([new AskUserTool(prompts), new DateTimeTool(prompts)]);
         var hooks = new RecordingHooks { FailQuestionAudit = failAfterHookAudit };
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, hooks: hooks);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks);
         var model = new QuestionProvider { Native = native, ToolName = toolName };
         var steering = new RunSteeringCoordinator();
         using var questions = new UserQuestionCoordinator(events, steering);
@@ -294,7 +294,7 @@ public static class AskUserConversationTests
         questions.Attach((_, _) => throw new InvalidOperationException("A cancelled batch must not present a question."));
         var registry = new ToolRegistry([new AskUserTool(TestPromptLoader.Instance)]);
         var hooks = new RecordingHooks();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, hooks: hooks);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks);
         var request = new ToolInvocationRequest
         {
             SessionId = SessionId.New(),
@@ -333,7 +333,7 @@ public static class AskUserConversationTests
         var token = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         var registry = new ToolRegistry([new AskUserTool(TestPromptLoader.Instance), new DateTimeTool(TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ToolInvocationRequest { SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "ask_user", ArgumentsJson = Arguments, Context = CreateContext() };
         var preflight = pipeline.PreflightBatch([new(0, "q", request), new(1, "effect", request with { ToolId = "datetime", ArgumentsJson = "{}" })]);
         Assert.False(preflight.Succeeded);
@@ -374,7 +374,7 @@ public static class AskUserConversationTests
             questions.Attach((_, _) => Task.FromResult(new UserQuestionResult(UserQuestionStatus.Cancelled, [])));
             var context = CreateContext() with { UserQuestions = questions };
             var registry = new ToolRegistry([tool], state);
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var session = SessionId.New();
             var run = RunId.New();
             steering.RegisterRun(session, run);

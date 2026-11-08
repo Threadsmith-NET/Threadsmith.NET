@@ -26,7 +26,7 @@ public static class SemanticRefreshLiveTests
 
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var sessionId = SessionId.New();
         var workspaceId = WorkspaceId.New();
         var started = Stopwatch.GetTimestamp();

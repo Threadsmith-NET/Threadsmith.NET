@@ -572,7 +572,8 @@ public sealed class Plan42NativeValidationToolTests
             new AllowApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var context = CreateToolExecutionContext(repository.Path);
 
         var result = await pipeline.InvokeAsync(

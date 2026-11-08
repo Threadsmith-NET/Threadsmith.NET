@@ -76,8 +76,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
         using var handler = new NativeChildHandler(tool.Definition.Id) { RepeatCall = repeatCall, OrdinaryRound = ordinaryRound };
-        using var client = new HttpClient(handler);
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         assignment = assignment with { Policy = assignment.Policy with { ReasoningLevel = "low" } };
         var plan = CreatePlan(assignment);

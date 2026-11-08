@@ -35,7 +35,8 @@ public static class Plan32OpenAiCompatibleProviderTests
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
             };
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var level = new ReasoningLevel(reasoning);
         var model = CreateModel(FirstModelId, "custom-model") with
         {
@@ -52,7 +53,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         var reloaded = Assert.IsType<OpenAiCompatibleModelConfiguration>(
             JsonSerializer.Deserialize<ModelConfiguration>(json, options));
         Assert.Equal(reasoning, reloaded.DefaultReasoningLevel.Value);
-        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null));
+        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
@@ -233,7 +234,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
             };
         });
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var configured = CreateProvider(
             "headers",
             new Uri("https://models.example/v1/"),
@@ -258,7 +259,8 @@ public static class Plan32OpenAiCompatibleProviderTests
             {
                 secretResolutions++;
                 return Task.FromResult<string?>("canary-secret");
-            });
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
@@ -297,7 +299,8 @@ public static class Plan32OpenAiCompatibleProviderTests
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
             };
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var configured = CreateProvider(
             "cache-affinity",
             new Uri(baseUri),
@@ -308,7 +311,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         var catalog = new EffectiveModelProviderCatalog(
             new ModelProviderCatalogConfiguration { Providers = [configured] },
             new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null));
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var cacheAffinityId = Guid.NewGuid();
 
         _ = await provider.StreamAsync(
@@ -348,10 +351,11 @@ public static class Plan32OpenAiCompatibleProviderTests
         var catalog = registration.CreateLegacyCatalog(
             new ConfiguredModelCatalog([legacy]));
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
             (_, _) => Task.FromResult<string?>("legacy-secret"),
-            legacy.Id);
+            legacy.Id,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -402,10 +406,11 @@ public static class Plan32OpenAiCompatibleProviderTests
         using var http = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("data: " + payload + "\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var model = CreateModel(FirstModelId, "byte-limit") with { MaximumStreamedBytes = maximumBytes };
         var profile = CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId);
-        var provider = new OpenAiCompatibleModelProvider(http, profile);
+        var provider = new OpenAiCompatibleModelProvider(http, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest { RunId = RunId.New(), Input = "Inspect the source." };
         if (rejected)
         {
@@ -435,13 +440,14 @@ public static class Plan32OpenAiCompatibleProviderTests
         using var http = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent("data: " + payload + "\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var model = CreateModel(FirstModelId, "tool-limit") with
         {
             MaximumToolCalls = maximum,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
         };
-        var provider = new OpenAiCompatibleModelProvider(http, CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId));
+        var provider = new OpenAiCompatibleModelProvider(http, CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -535,7 +541,7 @@ public static class Plan32OpenAiCompatibleProviderTests
                 Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
             };
         });
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var model = CreateModel(FirstModelId, "json-tool-compatibility") with
         {
             Capabilities = new ModelCapabilitySet
@@ -548,7 +554,8 @@ public static class Plan32OpenAiCompatibleProviderTests
         var provider = new ConfiguredModelProvider(
             http,
             CreateEffectiveCatalog(model),
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var chunks = new List<ModelChunk>();
         var tool = new ModelToolDefinition
         {
@@ -690,9 +697,10 @@ public static class Plan32OpenAiCompatibleProviderTests
                 });
                 var catalog = CreateEffectiveCatalog(parityCase.Model);
                 var provider = new ConfiguredModelProvider(
-                    new HttpClient(handler),
+                    new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
                     catalog,
-                    (_, _) => Task.FromResult<string?>(null));
+                    (_, _) => Task.FromResult<string?>(null),
+                    timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
                 var chunks = new List<ModelChunk>();
 
                 await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
@@ -760,9 +768,10 @@ public static class Plan32OpenAiCompatibleProviderTests
                 });
                 var catalog = CreateEffectiveCatalog(parityCase.Model);
                 var provider = new ConfiguredModelProvider(
-                    new HttpClient(handler),
+                    new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
                     catalog,
-                    (_, _) => Task.FromResult<string?>(null));
+                    (_, _) => Task.FromResult<string?>(null),
+                    timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
                 await Assert.ThrowsAsync<ModelProviderException>(async () =>
                 {
@@ -814,9 +823,10 @@ public static class Plan32OpenAiCompatibleProviderTests
         };
         var catalog = CreateEffectiveCatalog(model);
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var chunks = new List<ModelChunk>();
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
@@ -846,7 +856,8 @@ public static class Plan32OpenAiCompatibleProviderTests
                 "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"reasoning\":\"think\"}}]}\n\ndata: [DONE]\n",
                 Encoding.UTF8,
                 "text/event-stream"),
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var model = CreateModel(FirstModelId, "known-fields") with
         {
             DefaultReasoningLevel = ReasoningLevel.High,
@@ -860,7 +871,8 @@ public static class Plan32OpenAiCompatibleProviderTests
         var provider = new ConfiguredModelProvider(
             client,
             CreateEffectiveCatalog(model),
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var chunks = new List<ModelChunk>();
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
@@ -917,9 +929,10 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.False(profile.ReasoningCapability.SupportsReasoningOff);
 
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
             RunId = RunId.New(),
@@ -971,9 +984,10 @@ public static class Plan32OpenAiCompatibleProviderTests
         };
         var catalog = CreateEffectiveCatalog(model);
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var chunks = new List<ModelChunk>();
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
@@ -1018,7 +1032,8 @@ public static class Plan32OpenAiCompatibleProviderTests
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
             };
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         ReasoningLevel[] levels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, new("xhigh"), new("custom")];
         var map = levels.ToDictionary(level => level, level => level.Value);
         map[new ReasoningLevel("custom")] = "Provider-Custom";
@@ -1037,7 +1052,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.Contains("enableThinkingWithPreservationAndEffort", configurationJson, StringComparison.Ordinal);
         var reloaded = Assert.IsType<OpenAiCompatibleModelConfiguration>(
             JsonSerializer.Deserialize<ModelConfiguration>(configurationJson, options));
-        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null));
+        var provider = new ConfiguredModelProvider(client, CreateEffectiveCatalog(reloaded), (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         // Act.
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
@@ -1107,9 +1122,10 @@ public static class Plan32OpenAiCompatibleProviderTests
         });
         var catalog = CreateEffectiveCatalog(CreateModel(FirstModelId, "qwen"));
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
         {
@@ -1170,9 +1186,10 @@ public static class Plan32OpenAiCompatibleProviderTests
         };
         var catalog = CreateEffectiveCatalog(model);
         var provider = new ConfiguredModelProvider(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             catalog,
-            (_, _) => Task.FromResult<string?>(null));
+            (_, _) => Task.FromResult<string?>(null),
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
@@ -1510,6 +1527,7 @@ public static class Plan32OpenAiCompatibleProviderTests
         {
             Id = id,
             Name = modelId,
+            TimeoutSeconds = 0,
             ModelId = modelId,
             ContextWindow = 32000,
             MaximumOutputTokens = 4000,

@@ -88,8 +88,8 @@ public sealed class WebSearchCredentialPolicyTests
         var options = new WebSearchOptions { SecretReference = reference, MinimumRequestInterval = TimeSpan.Zero };
         var resolver = new RecordingResolver { CredentialPresent = credentialPresent };
         var handler = new RecordingHandler();
-        using var http = new HttpClient(handler);
-        var client = new BraveWebSearchClient(http, resolver, options, TestPromptLoader.Instance);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var client = new BraveWebSearchClient(http, resolver, options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var sanitizer = new SecretOutputSanitizer();
         var tool = new WebSearchTool(client, options, sanitizer, TestPromptLoader.Instance);
         await using var events = new DomainEventStream();
@@ -99,7 +99,8 @@ public sealed class WebSearchCredentialPolicyTests
             new DenyApprovalPolicy(),
             events,
             sanitizer,
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {

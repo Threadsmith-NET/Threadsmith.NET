@@ -9,14 +9,16 @@ using static Threadsmith.Workspaces.GitProcess;
 /// <summary>Executes closed, bounded, local-only Git inspection queries.</summary>
 public sealed partial class GitQueryService : IGitQueryService
 {
+    private readonly TimeProvider _timeProvider;
     private readonly GitResourceLimits _limits;
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
 
     /// <summary>Initializes a new instance of the <see cref="GitQueryService"/> class.</summary>
-    public GitQueryService(GitResourceLimits? limits = null)
+    public GitQueryService(GitResourceLimits? limits = null, TimeProvider? timeProvider = null)
     {
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _limits = limits ?? new GitResourceLimits();
         _limits.Validate();
     }
@@ -607,8 +609,8 @@ public sealed partial class GitQueryService : IGitQueryService
         CancellationToken cancellationToken,
         Func<StreamReader, CancellationToken, Task<BoundedText>>? readOutput = null)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
+        using var timeoutDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds), _timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutDeadline.Token);
         using var process = CreateProcess(repositoryPath, arguments);
 
         try
@@ -643,8 +645,8 @@ public sealed partial class GitQueryService : IGitQueryService
         CancellationToken cancellationToken,
         string? standardInput = null)
     {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
+        using var timeoutDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds), _timeProvider);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutDeadline.Token);
         using var process = CreateProcess(repositoryPath, arguments);
         try
         {

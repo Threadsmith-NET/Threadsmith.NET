@@ -34,7 +34,7 @@ public sealed class WebSearchContractTests
     public async Task Locale_MapsToSupportedProviderParameters(string locale, string language, string? country)
     {
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var client = CreateClient(httpClient, new CapturingSecretResolver());
         var tool = CreateTool(client);
         var input = Assert.IsType<WebSearchRequest>(tool.DeserializeInput(
@@ -59,7 +59,7 @@ public sealed class WebSearchContractTests
     public async Task Freshness_MapsToProviderPreset(int days, string expected)
     {
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var client = CreateClient(httpClient, new CapturingSecretResolver());
 
         await client.SearchAsync(new WebSearchRequest { Query = "release notes", FreshnessDays = days });
@@ -75,7 +75,7 @@ public sealed class WebSearchContractTests
     public async Task Freshness_MapsToProviderDateRange(int days)
     {
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var client = CreateClient(httpClient, new CapturingSecretResolver());
         var before = DateOnly.FromDateTime(DateTime.UtcNow);
 
@@ -97,7 +97,7 @@ public sealed class WebSearchContractTests
     public async Task OptionalArguments_PreserveDefaults(string arguments)
     {
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var client = CreateClient(httpClient, new CapturingSecretResolver());
         var input = Assert.IsType<WebSearchRequest>(CreateTool(client).DeserializeInput(arguments));
 
@@ -123,7 +123,7 @@ public sealed class WebSearchContractTests
     public async Task InvalidArguments_FailAtBothBoundaries(string arguments, string field)
     {
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var resolver = new CapturingSecretResolver();
         var client = CreateClient(httpClient, resolver);
         var tool = CreateTool(client);
@@ -149,7 +149,7 @@ public sealed class WebSearchContractTests
     {
         var query = exceedWordCount ? string.Join(' ', Enumerable.Repeat("a", 76)) : new string('a', 501);
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var resolver = new CapturingSecretResolver();
         var client = CreateClient(httpClient, resolver);
 
@@ -170,7 +170,7 @@ public sealed class WebSearchContractTests
     {
         var query = useWordBound ? string.Join(' ', Enumerable.Repeat("a", 75)) : new string('a', 500);
         var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler);
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var client = CreateClient(httpClient, new CapturingSecretResolver());
         var tool = CreateTool(client);
         var input = Assert.IsType<WebSearchRequest>(tool.DeserializeInput(
@@ -202,7 +202,7 @@ public sealed class WebSearchContractTests
     [InlineData("a\u0085b", false)]
     public void QuerySchema_SupportsFiniteStateGrammar(string query, bool accepted)
     {
-        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        using var httpClient = new HttpClient(new CapturingHttpHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         var pattern = schema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("pattern").GetString();
@@ -231,7 +231,7 @@ public sealed class WebSearchContractTests
     [InlineData("a\u0085")]
     public void QueryBinding_RejectsTrailingControlCharacters(string query)
     {
-        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        using var httpClient = new HttpClient(new CapturingHttpHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
 
         Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(JsonSerializer.Serialize(new { query })));
@@ -245,7 +245,7 @@ public sealed class WebSearchContractTests
     [InlineData("{\"query\":[\"test\"]}")]
     public void SchemaMismatch_IsRejected(string arguments)
     {
-        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        using var httpClient = new HttpClient(new CapturingHttpHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
 
         Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(arguments));
@@ -255,7 +255,7 @@ public sealed class WebSearchContractTests
     [Fact]
     public void AdvertisedContract_DescribesAndBoundsCanonicalArguments()
     {
-        using var httpClient = new HttpClient(new CapturingHttpHandler());
+        using var httpClient = new HttpClient(new CapturingHttpHandler()) { Timeout = Timeout.InfiniteTimeSpan };
         var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         var root = schema.RootElement;
@@ -292,7 +292,8 @@ public sealed class WebSearchContractTests
             httpClient,
             resolver,
             new WebSearchOptions { MinimumRequestInterval = TimeSpan.Zero },
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
     }
 
     private static WebSearchTool CreateTool(IWebSearchClient client)

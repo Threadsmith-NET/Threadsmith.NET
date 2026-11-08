@@ -9,6 +9,8 @@ using Threadsmith.Models.Anthropic;
 /// <summary>Verifies native SDK discovery, immutable catalogs, trusted policy, and cache failure behavior.</summary>
 public sealed class AnthropicCatalogTests
 {
+    private static readonly DateTimeOffset Now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     /// <summary>Hydration and final registration use the same configurable model-override count.</summary>
     [Fact]
     public void RegistrationHonorsRaisedModelOverrideLimit()
@@ -146,7 +148,7 @@ public sealed class AnthropicCatalogTests
         using var handler = new QueueHandler(
             Response(Page(["claude-opus-5"], true)),
             Response(Page(["claude-sonnet-5"], false)));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var models = await Discovery(http).DiscoverAsync(CancellationToken.None);
         Assert.Equal(2, models.Count);
         Assert.Equal(2, handler.Requests.Count);
@@ -165,7 +167,7 @@ public sealed class AnthropicCatalogTests
     public async Task SdkRejectsMalformedCursorInsteadOfPublishingPartialPage(bool hasMore, string? cursor)
     {
         using var handler = new QueueHandler(Response(Page(["claude-opus-5"], hasMore, cursor, explicitCursor: true)));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAnyAsync<Exception>(() => Discovery(http).DiscoverAsync(CancellationToken.None));
         Assert.Single(handler.Requests);
     }
@@ -175,7 +177,7 @@ public sealed class AnthropicCatalogTests
     public async Task SdkRejectsDuplicateModelOnLaterPage()
     {
         using var handler = new QueueHandler(Response(Page(["claude-opus-5"], true)), Response(Page(["claude-opus-5"], false)));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var failure = await Assert.ThrowsAnyAsync<Exception>(() => Discovery(http).DiscoverAsync(CancellationToken.None));
         Assert.Contains("duplicate", failure.Message, StringComparison.Ordinal);
     }
@@ -189,7 +191,7 @@ public sealed class AnthropicCatalogTests
         var second = Page(["claude-sonnet-5"], false);
         second = second.Insert(second.Length - 1, ",\"padding\":\"" + new string('x', 600000) + "\"");
         using var handler = new QueueHandler(Response(payload), Response(second));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var failure = await Assert.ThrowsAnyAsync<Exception>(() => Discovery(http).DiscoverAsync(CancellationToken.None));
         Assert.Contains("byte", failure.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -202,7 +204,7 @@ public sealed class AnthropicCatalogTests
     {
         var pages = new StubPages(
             DetachedPage(firstCount, "a", true), DetachedPage(secondCount, "b", false));
-        await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages).DiscoverAsync(CancellationToken.None));
+        await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages, timeProvider: new FakeTimeProvider(Now)).DiscoverAsync(CancellationToken.None));
     }
 
     /// <summary>Checks discovery enforces ten page ceiling.</summary>
@@ -210,7 +212,7 @@ public sealed class AnthropicCatalogTests
     public async Task DiscoveryEnforcesTenPageCeiling()
     {
         var pages = new StubPages([.. Enumerable.Range(0, 10).Select(index => DetachedPage(1, "m" + index, true))]);
-        var failure = await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages).DiscoverAsync(CancellationToken.None));
+        var failure = await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages, timeProvider: new FakeTimeProvider(Now)).DiscoverAsync(CancellationToken.None));
         Assert.Contains("page limit", failure.Message, StringComparison.Ordinal);
         Assert.Equal(10, pages.Calls);
     }
@@ -219,9 +221,13 @@ public sealed class AnthropicCatalogTests
     [Fact]
     public async Task DiscoveryDeadlineAndCallerCancellationAreDistinct()
     {
+        var clock = new FakeTimeProvider(Now);
         var client = new BlockingDiscovery();
-        var service = new AnthropicModelDiscoveryService(client, TimeSpan.FromMilliseconds(30));
-        var timeout = await Assert.ThrowsAnyAsync<Exception>(() => service.DiscoverAsync(CancellationToken.None));
+        var service = new AnthropicModelDiscoveryService(client, TimeSpan.FromMilliseconds(30), timeProvider: clock);
+        var discovery = service.DiscoverAsync(TestContext.Current.CancellationToken);
+        await client.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(TimeSpan.FromMilliseconds(30));
+        var timeout = await Assert.ThrowsAnyAsync<Exception>(() => discovery.WaitAsync(TestContext.Current.CancellationToken));
         Assert.IsNotType<OperationCanceledException>(timeout);
         Assert.Contains("deadline", timeout.Message, StringComparison.Ordinal);
         using var canceled = new CancellationTokenSource();
@@ -238,7 +244,7 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         var cache = await SeedCacheAsync(temporary.Path, TimeSpan.FromHours(25));
         using var handler = new QueueHandler(Response("SECRET_ERROR_CANARY", (HttpStatusCode)status));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var hydrated = await StartupAsync(temporary.Path, http);
         Assert.False(hydrated.Enabled);
         Assert.True(hydrated.CatalogSnapshot?.CredentialRejected);
@@ -253,7 +259,7 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         var cache = await SeedCacheAsync(temporary.Path, TimeSpan.FromHours(25));
         using var handler = new QueueHandler(Response(Page(["claude-sonnet-5"], true)), Response("private error", HttpStatusCode.ServiceUnavailable));
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var hydrated = await StartupAsync(temporary.Path, http);
         Assert.True(hydrated.CatalogSnapshot?.Stale);
         Assert.Equal("claude-opus-5", Assert.IsType<AnthropicModelConfiguration>(Assert.Single(hydrated.Models)).ModelId);
@@ -268,8 +274,8 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         await SeedCacheAsync(temporary.Path, TimeSpan.FromHours(1));
         using var handler = new QueueHandler();
-        using var http = new HttpClient(handler);
-        var hydrated = await AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), (_, _) => Task.FromResult<string?>(null), http, temporary.Path, CancellationToken.None);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var hydrated = await AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), (_, _) => Task.FromResult<string?>(null), http, temporary.Path, new FakeTimeProvider(Now), TestContext.Current.CancellationToken);
         Assert.False(hydrated.Enabled);
         Assert.Empty(handler.Requests);
     }
@@ -281,9 +287,9 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         await SeedCacheAsync(temporary.Path, TimeSpan.FromHours(1));
         using var handler = new QueueHandler();
-        using var http = new HttpClient(handler);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var hydrated = await StartupAsync(temporary.Path, http);
-        var maintenance = new AnthropicCatalogMaintenance([hydrated], SecretAsync, http, temporary.Path);
+        var maintenance = new AnthropicCatalogMaintenance([hydrated], SecretAsync, http, temporary.Path, timeProvider: new FakeTimeProvider(Now));
         var status = await maintenance.GetStatusAsync("primary");
         Assert.True(status.IsAvailable);
         Assert.False(status.IsAuthenticated);
@@ -298,8 +304,8 @@ public sealed class AnthropicCatalogTests
     {
         using var temporary = new TemporaryDirectory();
         using var handler = new QueueHandler(Response(Page(["claude-opus-5", "unreviewed"], false)));
-        using var http = new HttpClient(handler);
-        var maintenance = new AnthropicCatalogMaintenance([Provider() with { Enabled = false }], SecretAsync, http, temporary.Path);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var maintenance = new AnthropicCatalogMaintenance([Provider() with { Enabled = false }], SecretAsync, http, temporary.Path, timeProvider: new FakeTimeProvider(Now));
         var result = await maintenance.RefreshAsync("primary");
         var status = await maintenance.GetStatusAsync("primary");
         Assert.True(result.Refreshed);
@@ -317,8 +323,8 @@ public sealed class AnthropicCatalogTests
     {
         using var temporary = new TemporaryDirectory();
         using var handler = new QueueHandler(Response("rejected", HttpStatusCode.Unauthorized), Response("offline", HttpStatusCode.ServiceUnavailable), Response(Page(["claude-opus-5"], false)));
-        using var http = new HttpClient(handler);
-        var maintenance = new AnthropicCatalogMaintenance([Hydrate(Model())], SecretAsync, http, temporary.Path);
+        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var maintenance = new AnthropicCatalogMaintenance([Hydrate(Model())], SecretAsync, http, temporary.Path, timeProvider: new FakeTimeProvider(Now));
         Assert.False((await maintenance.RefreshAsync("primary")).Refreshed);
         Assert.False((await maintenance.RefreshAsync("primary")).Refreshed);
         Assert.False((await maintenance.GetStatusAsync("primary")).IsAvailable);
@@ -334,7 +340,7 @@ public sealed class AnthropicCatalogTests
         var cache = await SeedCacheAsync(temporary.Path, TimeSpan.FromHours(1));
         Assert.Null(await cache.LoadAsync("other", "secrets:models:anthropic", CancellationToken.None));
         Assert.Null(await cache.LoadAsync("primary", "secrets:other", CancellationToken.None));
-        await Assert.ThrowsAsync<ArgumentException>(() => cache.StoreAsync(Entry() with { FetchedAt = DateTimeOffset.UtcNow.AddHours(1) }, CancellationToken.None));
+        await Assert.ThrowsAsync<ArgumentException>(() => cache.StoreAsync(Entry() with { FetchedAt = Now.AddHours(1) }, CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentException>(() => cache.StoreAsync(Entry() with { Models = [Model(), Model()] }, CancellationToken.None));
     }
 
@@ -348,7 +354,7 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         var path = System.IO.Path.Combine(temporary.Path, "cache.json");
         await File.WriteAllTextAsync(path, json);
-        var cache = new AnthropicModelCatalogCache(path);
+        var cache = new AnthropicModelCatalogCache(path, timeProvider: new FakeTimeProvider(Now));
         Assert.Null(await cache.LoadAsync("primary", "secrets:models:anthropic", CancellationToken.None));
     }
 
@@ -359,7 +365,7 @@ public sealed class AnthropicCatalogTests
         using var temporary = new TemporaryDirectory();
         var path = System.IO.Path.Combine(temporary.Path, "cache.json");
         await File.WriteAllBytesAsync(path, new byte[AnthropicModelCatalogCache.MaximumBytes + 1]);
-        var cache = new AnthropicModelCatalogCache(path);
+        var cache = new AnthropicModelCatalogCache(path, timeProvider: new FakeTimeProvider(Now));
         Assert.Null(await cache.LoadAsync("primary", "secrets:models:anthropic", CancellationToken.None));
         await cache.StoreAsync(Entry() with { Models = [] }, CancellationToken.None);
         Assert.Empty((await cache.LoadAsync("primary", "secrets:models:anthropic", CancellationToken.None))?.Models ?? throw new InvalidOperationException());
@@ -371,7 +377,7 @@ public sealed class AnthropicCatalogTests
     {
         using var temporary = new TemporaryDirectory();
         var path = System.IO.Path.Combine(temporary.Path, "new", "cache.json");
-        var cache = new AnthropicModelCatalogCache(path);
+        var cache = new AnthropicModelCatalogCache(path, timeProvider: new FakeTimeProvider(Now));
         var token = TestContext.Current.CancellationToken;
         var entry = Entry();
         await cache.StoreAsync(entry, token);
@@ -385,7 +391,7 @@ public sealed class AnthropicCatalogTests
         Assert.Equal("claude-sonnet-5", Assert.Single(loaded!.Models).ModelId);
         var previous = await File.ReadAllBytesAsync(path, token);
         await Assert.ThrowsAsync<ArgumentException>(() => cache.StoreAsync(entry with { Models = [Model(), Model()] }, token));
-        var bounded = new AnthropicModelCatalogCache(path, new AnthropicResourceLimits { MaximumMetadataBytes = previous.Length });
+        var bounded = new AnthropicModelCatalogCache(path, new AnthropicResourceLimits { MaximumMetadataBytes = previous.Length }, timeProvider: new FakeTimeProvider(Now));
         var oversized = entry with { Models = [Model() with { DisplayName = new string('x', 256) }] };
         await Assert.ThrowsAsync<ModelProviderException>(() => bounded.StoreAsync(oversized, token));
         using var canceled = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -409,7 +415,7 @@ public sealed class AnthropicCatalogTests
         await File.WriteAllTextAsync(target, "previous", token);
         var link = System.IO.Path.Combine(temporary.Path, directoryLink ? "linked-directory" : "linked.json");
         var path = directoryLink ? System.IO.Path.Combine(link, "cache.json") : link;
-        var cache = new AnthropicModelCatalogCache(path);
+        var cache = new AnthropicModelCatalogCache(path, timeProvider: new FakeTimeProvider(Now));
         try
         {
             try
@@ -515,12 +521,12 @@ public sealed class AnthropicCatalogTests
 
     private static AnthropicModelDiscoveryService Discovery(HttpClient http)
     {
-        return new(AnthropicModelDiscoveryClient.Create(http, "fixture-key", TimeSpan.FromSeconds(15)));
+        return new(AnthropicModelDiscoveryClient.Create(http, "fixture-key", TimeSpan.FromSeconds(15), timeProvider: new FakeTimeProvider(Now)), timeProvider: new FakeTimeProvider(Now));
     }
 
     private static Task<AnthropicProviderConfiguration> StartupAsync(string directory, HttpClient http)
     {
-        return AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), SecretAsync, http, directory, CancellationToken.None);
+        return AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), SecretAsync, http, directory, new FakeTimeProvider(Now), TestContext.Current.CancellationToken);
     }
 
     private static AnthropicModelCatalogCacheEntry Entry()
@@ -529,15 +535,15 @@ public sealed class AnthropicCatalogTests
         {
             ProviderId = "primary",
             SecretReferenceIdentity = AnthropicModelCatalogCache.CreateSecretReferenceIdentity("secrets:models:anthropic"),
-            FetchedAt = DateTimeOffset.UtcNow.AddHours(-1),
+            FetchedAt = Now.AddHours(-1),
             Models = [Model()],
         };
     }
 
     private static async Task<AnthropicModelCatalogCache> SeedCacheAsync(string directory, TimeSpan age)
     {
-        var cache = AnthropicModelCatalogCache.ForProvider(directory, "primary");
-        await cache.StoreAsync(Entry() with { FetchedAt = DateTimeOffset.UtcNow - age }, CancellationToken.None);
+        var cache = AnthropicModelCatalogCache.ForProvider(directory, "primary", timeProvider: new FakeTimeProvider(Now));
+        await cache.StoreAsync(Entry() with { FetchedAt = Now - age }, CancellationToken.None);
         return cache;
     }
 
@@ -619,8 +625,11 @@ public sealed class AnthropicCatalogTests
 
     private sealed class BlockingDiscovery : IAnthropicModelDiscoveryClient
     {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public async Task<AnthropicModelDiscoveryPage> ListAsync(string? afterId, int limit, CancellationToken cancellationToken)
         {
+            Started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new InvalidOperationException();
         }

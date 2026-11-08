@@ -42,7 +42,7 @@ public sealed partial class SourceEditApplicationTests
             new TargetedTestTool(new ReceiptValidationService(), TestPromptLoader.Instance),
             new RunProcessTool(process, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "bash"),
         ]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
         var waits = 0;

@@ -18,7 +18,7 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var root = fixture.Root;
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
@@ -95,7 +95,7 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -122,7 +122,8 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
+        var clock = new ObservedTimeProvider();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), timeProvider: clock);
         var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -159,7 +160,10 @@ public static partial class SourceEditAnalysisTests
             Assert.NotNull(pending);
             Assert.True(pending.Pending);
             engine.ConfirmEditApplied(command.EffectId);
-            await engine.RefreshDocumentsAsync([new(path, changed, snapshot.Endpoints[0].AfterSha256!)], ct);
+            var refresh = engine.RefreshDocumentsAsync([new(path, changed, snapshot.Endpoints[0].AfterSha256!)], ct);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(1), ct);
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+            await refresh;
             await completed.Task.WaitAsync(ct);
             var latest = engine.GetLatestEditAnalysis(command.SessionId, command.RunId, command.EffectId)!;
             Assert.False(latest.Pending);
@@ -185,7 +189,7 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeSyntax ? ["CS1513"] : [] } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeSyntax ? ["CS1513"] : [] } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -226,7 +230,7 @@ public static partial class SourceEditAnalysisTests
             await File.WriteAllTextAsync(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>", ct);
             await File.WriteAllTextAsync(path, original, ct);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
             await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, project, RepositoryTrustLevel.TrustedBuild), ct);
             _ = await engine.AnalyzeCandidateAsync(command, root, Snapshot("Example.cs", original, broken), TimeSpan.Zero, ct);
@@ -255,7 +259,7 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var root = fixture.Root;
         var session = SessionId.New();
         var workspace = WorkspaceId.New();

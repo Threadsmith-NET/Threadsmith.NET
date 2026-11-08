@@ -1506,7 +1506,7 @@ public static class RepositoryLifecycleTests
             });
             var persistenceSubscription = events.Subscribe(eventStore.AppendAsync);
             var projectionSubscription = events.Subscribe(projections.ApplyAsync);
-            var semanticEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            var semanticEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var semanticObserver = new SemanticLifecycleObserver(
                 semanticEngines,
                 events,

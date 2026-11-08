@@ -13,9 +13,9 @@ public sealed class AnthropicTransportTests
     public async Task StreamAsync_SdkDisposal_SharedClientRemainsUsable()
     {
         var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler);
-        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "first-key", TestAnthropic.Compatibility()), TestAnthropic.Request());
-        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "second-key", TestAnthropic.Compatibility()), TestAnthropic.Request());
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "first-key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request());
+        await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "second-key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request());
         Assert.Equal(new[] { "first-key", "second-key" }, handler.Keys);
         Assert.All(handler.Uris, uri => Assert.Equal(AnthropicProviderRegistration.MessagesEndpoint, uri));
         Assert.False(client.DefaultRequestHeaders.Contains("x-api-key"));
@@ -29,12 +29,12 @@ public sealed class AnthropicTransportTests
         var prefix = TestAnthropic.Start() + TestAnthropic.Block(0, new { type = "thinking", thinking = string.Empty, signature = string.Empty })
             + TestAnthropic.Delta(0, new { type = "signature_delta", signature = "private-canary" });
         var handler = new TestAnthropicHandler((_, _) => Task.FromResult(Response(new WaitingStream(prefix, waiting))));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var cancellation = new CancellationTokenSource();
-        var task = TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true)), TestAnthropic.Request(true), cancellation.Token);
-        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var task = TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request(true), cancellation.Token);
+        await waiting.Task.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
-        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(TimeSpan.FromSeconds(1)));
+        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Equal(cancellation.Token, error.CancellationToken);
         Assert.Single(handler.Requests);
     }
@@ -43,10 +43,14 @@ public sealed class AnthropicTransportTests
     [Fact]
     public async Task StreamAsync_DeadlineDuringRetryDelay_ReturnsProviderTimeout()
     {
-        var handler = new TestAnthropicHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)));
-        using var client = new HttpClient(handler);
+        var handler = new TestAnthropicHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { Timeout = TimeSpan.FromSeconds(2), RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.FromSeconds(10) } };
-        await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()), TestAnthropic.Request()));
+        var clock = new ObservedTimeProvider();
+        var pending = TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: clock), TestAnthropic.Request(), TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(profile.RetryPolicy.Delay, TestContext.Current.CancellationToken);
+        clock.Advance(profile.Timeout);
+        await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Single(handler.Requests);
     }
 
@@ -57,9 +61,9 @@ public sealed class AnthropicTransportTests
         // This fixture intentionally exercises the exact production one-MiB single-event ceiling.
         var frame = "event: ping\ndata: " + new string(' ', 1024 * 1024) + "\n\n";
         var handler = new TestAnthropicHandler(frame);
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumStreamedBytes = 0 };
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()), TestAnthropic.Request()));
+        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request()));
         Assert.Single(handler.Requests);
     }
 
@@ -70,12 +74,12 @@ public sealed class AnthropicTransportTests
         var prefix = TestAnthropic.Start(new { input_tokens = 5, output_tokens = 2 });
         var suffix = TestAnthropic.Block(0, new { type = "text", text = new string('x', 500) });
         var handler = new TestAnthropicHandler((_, _) => Task.FromResult(Response(new SegmentedStream(prefix, suffix))));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumStreamedBytes = Encoding.UTF8.GetByteCount(prefix) + 1 };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
-            await foreach (var chunk in new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()).StreamAsync(TestAnthropic.Request()))
+            await foreach (var chunk in new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).StreamAsync(TestAnthropic.Request()))
             {
                 chunks.Add(chunk);
             }
@@ -96,13 +100,13 @@ public sealed class AnthropicTransportTests
             + TestAnthropic.Block(0, new { type = "text", text = string.Empty })
             + TestAnthropic.Delta(0, new { type = "text_delta", text = new string('x', 2000) });
         var handler = new TestAnthropicHandler((_, _) => Task.FromResult(Response(new WaitingStream(prefix, waiting))));
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         using var cancellation = new CancellationTokenSource();
         var chunks = new List<ModelChunk>();
         var task = CollectAsync();
-        await waiting.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await waiting.Task.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
-        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(TimeSpan.FromSeconds(1)));
+        var error = await Assert.ThrowsAsync<OperationCanceledException>(() => task.WaitAsync(TestContext.Current.CancellationToken));
         Assert.Equal(cancellation.Token, error.CancellationToken);
         var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage;
         Assert.NotNull(usage);
@@ -115,7 +119,7 @@ public sealed class AnthropicTransportTests
 
         async Task CollectAsync()
         {
-            await foreach (var chunk in new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility()).StreamAsync(TestAnthropic.Request(), cancellation.Token))
+            await foreach (var chunk in new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).StreamAsync(TestAnthropic.Request(), cancellation.Token))
             {
                 chunks.Add(chunk);
             }
@@ -137,12 +141,12 @@ public sealed class AnthropicTransportTests
             content.Headers.ContentType = contentType is null ? null : new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
         });
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumStreamedBytes = 0 };
         var chunks = new List<ModelChunk>();
         var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
         {
-            await foreach (var chunk in new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()).StreamAsync(TestAnthropic.Request()))
+            await foreach (var chunk in new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).StreamAsync(TestAnthropic.Request()))
             {
                 chunks.Add(chunk);
             }
@@ -194,8 +198,8 @@ public sealed class AnthropicTransportTests
 
             return Task.FromResult(Response(new MemoryStream(Encoding.UTF8.GetBytes(TestAnthropic.TextStream()))));
         });
-        using var client = new HttpClient(handler);
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility());
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestAnthropic.Request() with { SubmissionObserver = () => submissions++, IncludeReasoningText = true };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
@@ -399,8 +403,8 @@ public sealed class AnthropicAmbientEnvironmentTests
             Environment.SetEnvironmentVariable("ANTHROPIC_AUTH_TOKEN", "ambient-token-canary");
             Environment.SetEnvironmentVariable("ANTHROPIC_PROFILE", "hostile-profile");
             var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-            using var client = new HttpClient(handler);
-            await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "resolved-key", TestAnthropic.Compatibility()), TestAnthropic.Request());
+            using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(), "resolved-key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request());
             Assert.Equal("resolved-key", Assert.Single(handler.Keys));
             Assert.Equal(AnthropicProviderRegistration.MessagesEndpoint, Assert.Single(handler.Uris));
         }

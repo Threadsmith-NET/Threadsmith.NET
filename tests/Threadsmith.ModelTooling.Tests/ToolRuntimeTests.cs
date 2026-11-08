@@ -532,7 +532,7 @@ public static partial class ToolRuntimeTests
                     Context = CreateContext(repository),
                 },
                 cancellation.Token);
-            await tool.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await tool.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
             await cancellation.CancelAsync();
 
             var result = await pending;
@@ -1446,7 +1446,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget());
+                CreateBudget(),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
@@ -1488,7 +1489,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                new ExecutionBudget(new BudgetDimensions(100, 0, TimeSpan.FromMinutes(1))));
+                new ExecutionBudget(new BudgetDimensions(100, 0, TimeSpan.MaxValue)),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
@@ -1533,7 +1535,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget());
+                CreateBudget(),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.InvokeAsync(
                 new ToolInvocationRequest
@@ -1773,7 +1776,8 @@ public static partial class ToolRuntimeTests
                 "// token: abc\npublic static class Nested;\n");
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
@@ -1816,7 +1820,8 @@ public static partial class ToolRuntimeTests
                 "needle small\nneedle " + new string('x', 300_000) + "\n");
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
@@ -1903,7 +1908,8 @@ public static partial class ToolRuntimeTests
             await File.WriteAllTextAsync(Path.Combine(docs, "final.md"), "needle allowed\n");
             var processManager = new ProcessManager(
                 new SecretOutputSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var tool = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager, ripgrepExecutable: ripgrep);
             var context = CreateContext(repository) with
             {
@@ -2399,7 +2405,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget());
+                CreateBudget(),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
@@ -2530,37 +2537,43 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>A tiny post-kill drain deadline preserves the process timeout outcome.</summary>
+    /// <summary>A controlled execution deadline cancels a live process without depending on runner speed.</summary>
     [Fact]
-    public static async Task ProcessManager_TinyDrainDeadline_PreservesTimeoutResult()
+    public static async Task ProcessManager_ControlledExecutionDeadline_PreservesProcessIdentity()
     {
-        var manager = new ProcessManager(
-            new TestSanitizer(),
-            NullLogger<ProcessManager>.Instance,
-            limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = 1 });
-        var request = new ProcessExecutionRequest
+        var clock = new ObservedTimeProvider();
+        var manager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: clock);
+        var repository = CreateTemporaryDirectory();
+        try
         {
-            ToolInvocationId = ToolInvocationId.New(),
-            RunId = RunId.New(),
-            FileName = OperatingSystem.IsWindows() ? "powershell.exe" : "sh",
-            Arguments = OperatingSystem.IsWindows()
-                ? ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"]
-                : ["-c", "sleep 30"],
-            WorkingDirectory = Path.GetTempPath(),
-            Timeout = TimeSpan.FromMilliseconds(100),
-        };
-        var result = await manager.RunAsync(request, TestContext.Current.CancellationToken);
+            var request = new ProcessExecutionRequest
+            {
+                ToolInvocationId = ToolInvocationId.New(),
+                RunId = RunId.New(),
+                FileName = OperatingSystem.IsWindows() ? "powershell.exe" : "sh",
+                Arguments = OperatingSystem.IsWindows()
+                    ? ["-NoProfile", "-NonInteractive", "-Command", "[System.Threading.Thread]::Sleep(-1)"]
+                    : ["-c", "mkfifo gate; read line < gate"],
+                WorkingDirectory = repository,
+                Timeout = TimeSpan.FromMilliseconds(100),
+            };
+            var running = manager.RunAsync(request, TestContext.Current.CancellationToken);
+            await clock.WaitForTimerAsync(request.Timeout, TestContext.Current.CancellationToken);
+            var active = Assert.Single(manager.ActiveProcesses);
+            Assert.Equal(request.RunId, active.RunId);
+            Assert.Equal(request.ToolInvocationId, active.ToolInvocationId);
+            Assert.Equal(request.WorkingDirectory, active.WorkingDirectory);
+            clock.Advance(request.Timeout);
+            var result = await running;
 
-        Assert.True(result.TimedOut);
-        // Exit confirmation may exceed the tiny drain window; retain authority metadata in that case.
-        if (manager.ActiveProcesses.Count > 0)
+            Assert.True(result.TimedOut);
+            Assert.Equal(active.ProcessId, result.ProcessId);
+            Assert.NotNull(result.ExitCode);
+            Assert.Empty(manager.ActiveProcesses);
+        }
+        finally
         {
-            var retained = Assert.Single(manager.ActiveProcesses);
-            Assert.Null(result.ExitCode);
-            Assert.Equal(result.ProcessId, retained.ProcessId);
-            Assert.Equal(request.RunId, retained.RunId);
-            Assert.Equal(request.ToolInvocationId, retained.ToolInvocationId);
-            Assert.Equal(request.WorkingDirectory, retained.WorkingDirectory);
+            Directory.Delete(repository, recursive: true);
         }
     }
 
@@ -2581,7 +2594,8 @@ public static partial class ToolRuntimeTests
         {
             var manager = new ProcessManager(
                 new SecretOutputSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             string[] arguments = OperatingSystem.IsWindows()
                 ?
                 [
@@ -2905,7 +2919,8 @@ public static partial class ToolRuntimeTests
         try
         {
             var configuration = CreateScriptWorkerIntegrationConfiguration();
-            var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+            var clock = new ObservedTimeProvider();
+            var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: clock);
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
@@ -2914,7 +2929,8 @@ public static partial class ToolRuntimeTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateScriptContext(repository));
+                CreateScriptContext(repository))
+            { ExecutionTimeout = Timeout.InfiniteTimeSpan };
             var expression = await engine.ExecuteAsync(
                 "Enumerable.Range(1, 4).Sum()",
                 ScriptKind.Expression,
@@ -2985,11 +3001,14 @@ public static partial class ToolRuntimeTests
                 processManager,
                 new ToolConfig(timeoutConfiguration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
-            var timeout = await timeoutEngine.ExecuteAsync(
+            var timingOut = timeoutEngine.ExecuteAsync(
                 "while (true) { }",
                 ScriptKind.Statement,
-                context,
+                context with { ExecutionTimeout = TimeSpan.FromMilliseconds(500) },
                 TestContext.Current.CancellationToken);
+            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(500), TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromMilliseconds(500));
+            var timeout = await timingOut;
             Assert.False(timeout.Success);
             Assert.Contains("terminated", timeout.Error, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(processManager.ActiveProcesses);
@@ -3008,7 +3027,7 @@ public static partial class ToolRuntimeTests
         {
             ["tools:config:csharp_script:max_output_bytes"] = "357913259",
         }).Build();
-        var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+        var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var engine = new CSharpScriptEngine(processManager, new ToolConfig(configuration), Path.Combine(Path.GetTempPath(), "missing-worker.dll"));
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => engine.ExecuteAsync("1 + 1", ScriptKind.Expression, context));
@@ -3075,7 +3094,7 @@ public static partial class ToolRuntimeTests
                 : "Threadsmith.Scripting.Worker.dll";
             var workerPath = Path.Combine(AppContext.BaseDirectory, workerName);
             Assert.True(File.Exists(workerPath), $"Worker fixture was not copied to '{workerPath}'.");
-            var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+            var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(CreateScriptWorkerIntegrationConfiguration()),
@@ -3084,7 +3103,8 @@ public static partial class ToolRuntimeTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateScriptContext(repository));
+                CreateScriptContext(repository))
+            { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
             var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context, TestContext.Current.CancellationToken);
 
@@ -3166,7 +3186,7 @@ public static partial class ToolRuntimeTests
                 CreateBatchRequest(1, "call-a", "parallel_a", context),
             ];
 
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             var execution = pipeline.InvokeBatchAsync(requests, timeout.Token);
             await gate.AllEntered.Task.WaitAsync(timeout.Token);
             Assert.Equal(2, gate.PeakActive);
@@ -3418,7 +3438,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget());
+                CreateBudget(),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var context = CreateContext(repository);
             ToolBatchRequest[] requests =
             [
@@ -3465,7 +3486,8 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget());
+                CreateBudget(),
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             var preflight = pipeline.PreflightBatch(
                 [CreateBatchRequest(
@@ -3647,7 +3669,7 @@ public static partial class ToolRuntimeTests
                 events,
                 [new BarrierReadTool("parallel", gate)]);
             using var cancellation = new CancellationTokenSource();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
             var execution = pipeline.InvokeBatchAsync(
                 [CreateBatchRequest(1, "call", "parallel", CreateContext(repository))],
                 cancellation.Token);
@@ -3760,13 +3782,14 @@ public static partial class ToolRuntimeTests
                 sanitizer ?? new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
                 CreateBudget(),
+                timeProvider: new FakeTimeProvider(),
                 parallelOptions: parallelOptions);
     }
 
     private static ExecutionBudget CreateBudget()
     {
         return new(
-        new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(5)));
+        new BudgetDimensions(100_000, 100, TimeSpan.MaxValue));
     }
 
     private static ToolExecutionContext CreateCodeExploreExecutionContext(
@@ -3871,7 +3894,6 @@ public static partial class ToolRuntimeTests
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 // Functional worker checks follow runner cancellation, including inside the worker.
-                ["tools:config:csharp_script:timeout_ms"] = int.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 ["tools:config:csharp_script:max_output_bytes"] = "256",
                 ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
             })

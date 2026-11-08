@@ -57,10 +57,10 @@ public static partial class RepositoryMemoryBindingTests
         var application = new SessionApplication(
             intelligence.Events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromHours(1))),
+            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
-            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), intelligence.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance),
+            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), intelligence.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             toolContextFactory: (_, _) => Task.FromResult(new ToolInvocationContext { RepositoryPath = fixture.InitialRoot, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "test" }),
             contextAssembler: assembler,
             toolRegistry: registry,

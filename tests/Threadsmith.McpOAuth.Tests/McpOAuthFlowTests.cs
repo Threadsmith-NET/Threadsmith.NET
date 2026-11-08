@@ -148,7 +148,7 @@ public sealed class McpOAuthFlowTests
         Assert.Throws<System.Net.Sockets.SocketException>(competingListener.Start);
 
         var callbackTask = listener.WaitForCallbackAsync(redirectUri, TestContext.Current.CancellationToken);
-        using var client = new HttpClient();
+        using var client = new HttpClient() { Timeout = Timeout.InfiniteTimeSpan };
         using var response = await client.GetAsync(
             redirectUri + "?code=code-value&state=expected",
             TestContext.Current.CancellationToken);
@@ -223,7 +223,7 @@ public sealed class McpOAuthFlowTests
         var firstCallback = listener.WaitForCallbackAsync(
             redirectUri,
             TestContext.Current.CancellationToken);
-        using (var firstClient = new HttpClient())
+        using (var firstClient = new HttpClient() { Timeout = Timeout.InfiniteTimeSpan })
         using (var firstResponse = await firstClient.GetAsync(
             redirectUri + "?code=first&state=expected",
             TestContext.Current.CancellationToken))
@@ -236,7 +236,7 @@ public sealed class McpOAuthFlowTests
         var secondCallback = listener.WaitForCallbackAsync(
             redirectUri,
             TestContext.Current.CancellationToken);
-        using (var secondClient = new HttpClient())
+        using (var secondClient = new HttpClient() { Timeout = Timeout.InfiniteTimeSpan })
         using (var secondResponse = await secondClient.GetAsync(
             redirectUri + "?code=second&state=expected",
             TestContext.Current.CancellationToken))

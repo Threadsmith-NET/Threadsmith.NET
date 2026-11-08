@@ -155,7 +155,7 @@ public sealed class LifecycleHookTests
             Guid.NewGuid(),
             0,
             cancellationToken: cancellation.Token);
-        await adapter.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await adapter.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
         await cancellation.CancelAsync();
         OperationCanceledException? cancelled = null;
         try
@@ -184,15 +184,21 @@ public sealed class LifecycleHookTests
             {
                 Limits = new HookHandlerLimits { Timeout = TimeSpan.FromMilliseconds(100) },
             }])[0];
-        await using var coordinator = Coordinator(descriptor, store, new NonCooperativeAdapter(), []);
+        var clock = new ObservedTimeProvider();
+        await using var coordinator = Coordinator(descriptor, store, new NonCooperativeAdapter(), [], clock);
 
-        var result = await coordinator.InvokeAsync(
+        var invocation = coordinator.InvokeAsync(
             HookPoint.BeforeToolInvocation,
             SessionId.New(),
             RunId.New(),
             "repo-1",
             Guid.NewGuid(),
-            0).WaitAsync(TimeSpan.FromSeconds(2));
+            0,
+            cancellationToken: TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(descriptor.Limits.Timeout, TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(descriptor.Limits.Timeout, TestContext.Current.CancellationToken);
+        clock.Advance(descriptor.Limits.Timeout);
+        var result = await invocation;
 
         var audit = Assert.Single(result.AuditRecords);
         Assert.Equal(HookInvocationStatus.TimedOut, audit.Status);
@@ -215,7 +221,8 @@ public sealed class LifecycleHookTests
             new HookPolicyEvaluator(store, []),
             store,
             new PassthroughSanitizer(),
-            NullLogger<HookCoordinator>.Instance);
+            NullLogger<HookCoordinator>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var application = new HookManagementApplication(coordinator, store);
 
         var result = await application.HandleAsync(
@@ -382,7 +389,8 @@ public sealed class LifecycleHookTests
         HookHandlerDescriptor descriptor,
         IHookStore store,
         IHookHandlerAdapter adapter,
-        IReadOnlyList<HookManagedPolicyGrant> grants)
+        IReadOnlyList<HookManagedPolicyGrant> grants,
+        TimeProvider? timeProvider = null)
     {
         return new(
             [descriptor],
@@ -390,7 +398,8 @@ public sealed class LifecycleHookTests
             new HookPolicyEvaluator(store, grants),
             store,
             new PassthroughSanitizer(),
-            NullLogger<HookCoordinator>.Instance);
+            NullLogger<HookCoordinator>.Instance,
+            timeProvider: timeProvider ?? new FakeTimeProvider(DateTimeOffset.UtcNow));
     }
 
     private sealed class StubAdapter : IHookHandlerAdapter

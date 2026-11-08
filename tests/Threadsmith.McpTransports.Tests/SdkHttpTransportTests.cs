@@ -70,7 +70,8 @@ public sealed class SdkHttpTransportTests
         {
             Values = { ["secrets:MCP_TOKEN"] = "token-value" },
         };
-        var transport = new SdkHttpTransport(secretStore, NullLoggerFactory.Instance);
+        using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
+        var transport = new SdkHttpTransport(secretStore, NullLoggerFactory.Instance, httpClient: httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var allowed = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
         {
             Headers = new Dictionary<string, string> { ["Authorization"] = "secrets:MCP_TOKEN" },
@@ -93,9 +94,9 @@ public sealed class SdkHttpTransportTests
         {
             Headers = Enumerable.Range(0, 65).ToDictionary(index => $"X-Test-{index}", _ => "value"),
         };
-        await using var transport = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance, limits: new McpResourceLimits { MaximumHeaders = 65 });
+        await using var transport = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance, limits: new McpResourceLimits { MaximumHeaders = 65 }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         Assert.Equal(65, (await transport.ResolveHeadersAsync(profile)).Count);
-        await using var defaults = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance);
+        await using var defaults = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await Assert.ThrowsAsync<InvalidOperationException>(() => defaults.ResolveHeadersAsync(profile));
     }
 
@@ -117,6 +118,7 @@ public sealed class SdkHttpTransportTests
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
             TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
             limits: new McpResourceLimits { MaximumEnvironmentVariables = count, MaximumEnvironmentValueCharacters = characters });
         var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
         {
@@ -142,7 +144,8 @@ public sealed class SdkHttpTransportTests
             new DictionarySecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
         {
             OAuth = new McpOAuthOptions { Enabled = true, ClientId = "threadsmith", RedirectPort = 8400 },
@@ -197,7 +200,8 @@ public sealed class SdkHttpTransportTests
             {
                 Content = new StreamContent(new MemoryStream(
                     new byte[McpBoundedHttpResponseHandler.MaximumResponseBytes + 1])),
-            }))));
+            }))))
+        { Timeout = Timeout.InfiniteTimeSpan };
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => client.GetByteArrayAsync("https://mcp.example.test/result"));
@@ -215,7 +219,8 @@ public sealed class SdkHttpTransportTests
                 content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
                     "text/event-stream");
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-            })));
+            })))
+        { Timeout = Timeout.InfiniteTimeSpan };
 
         var result = await client.GetByteArrayAsync("https://mcp.example.test/events");
 
@@ -235,12 +240,14 @@ public sealed class SdkHttpTransportTests
             secrets,
             NullLogger<McpOAuthFlow>.Instance);
         using var httpClient = new HttpClient(new DelegateHttpHandler((_, _) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))));
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))))
+        { Timeout = Timeout.InfiniteTimeSpan };
         await using var transport = new SdkHttpTransport(
             secrets,
             NullLoggerFactory.Instance,
             flow,
-            httpClient);
+            httpClient,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
         {
             OAuth = new McpOAuthOptions
@@ -261,7 +268,7 @@ public sealed class SdkHttpTransportTests
     [Fact]
     public async Task Bounded_shutdown_starts_every_owned_async_resource_before_awaiting_deadline()
     {
-        var transport = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance);
+        var transport = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var blocked = new RecordingAsyncDisposable(complete: false);
         var completed = new RecordingAsyncDisposable(complete: true);
         var failed = new RecordingAsyncDisposable(complete: true, fail: true);
@@ -300,12 +307,14 @@ public sealed class SdkHttpTransportTests
             : McpTransport.Http;
         var secretStore = new DictionarySecretStore();
         var sanitizer = new SecretOutputSanitizer();
+        using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         var adapter = new McpAdapter(
-            _ => new SdkHttpTransport(secretStore, NullLoggerFactory.Instance),
+            _ => new SdkHttpTransport(secretStore, NullLoggerFactory.Instance, httpClient: httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             secretStore,
             sanitizer,
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile(endpoint, mode);
 
         var connection = await adapter.ConnectAsync(profile);
@@ -321,7 +330,8 @@ public sealed class SdkHttpTransportTests
                 ToolInvocationId.New(),
                 SessionId.New(),
                 RunId.New(),
-                CreateContext([new Uri(endpoint).Host])),
+                CreateContext([new Uri(endpoint).Host]))
+            { TimeProvider = new FakeTimeProvider() },
             CancellationToken.None);
         Assert.NotNull(result.Value);
         await adapter.DisconnectAsync(profile.Id);

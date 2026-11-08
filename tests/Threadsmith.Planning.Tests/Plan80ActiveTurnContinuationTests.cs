@@ -37,7 +37,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                toolBudget);
+                toolBudget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var resolver = new ModelResolver(
                 new ConfiguredModelCatalog([profile]),
@@ -258,7 +259,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.MaxValue));
             var registry = new ToolRegistry([new TestDeterministicOutputTool("tool output")]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -267,7 +268,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var model = new ReplayTwoRoundProvider();
             var application = new SessionApplication(
@@ -343,7 +345,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                toolBudget);
+                toolBudget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var resolver = new ModelResolver(
                 new ConfiguredModelCatalog([profile]),
@@ -455,7 +458,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                toolBudget);
+                toolBudget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = CreateAssembler(
                 events,
@@ -550,7 +554,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             // Bound the ordinary tool envelope so its final continuation still requires delivered-result reduction.
             var profile = CreateProfile() with { ContextWindow = 4_400 };
             var assembler = CreateAssembler(
@@ -651,7 +656,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = CreateAssembler(
                 events,
@@ -751,7 +757,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                toolBudget);
+                toolBudget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = CreateAssembler(
                 events,
@@ -859,7 +866,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile() with { ContextWindow = 4_500 };
             var usage = new SessionUsageProjection();
             var model = new BaselineProjectionProvider();
@@ -986,7 +994,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                budget);
+                budget,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var profile = CreateProfile();
             var assembler = CreateAssembler(
                 events,

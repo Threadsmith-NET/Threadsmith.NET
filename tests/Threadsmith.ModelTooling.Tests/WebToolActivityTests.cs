@@ -50,7 +50,7 @@ public sealed class WebToolActivityTests
         var reference = IssueReference(authority, context, requested, route);
         var transport = new ContentTransport(final);
         var tool = new WebFetchTool(
-            new WebContentFetcher(transport, options, TestPromptLoader.Instance), authority, options, TestPromptLoader.Instance);
+            new WebContentFetcher(transport, options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), authority, options, TestPromptLoader.Instance);
 
         var run = await InvokeAsync(tool, JsonSerializer.Serialize(new { reference }), context);
 
@@ -82,7 +82,7 @@ public sealed class WebToolActivityTests
         var reference = IssueReference(authority, context, url, "search");
         var transport = new ContentTransport(url);
         var tool = new WebFetchTool(
-            new WebContentFetcher(transport, options, TestPromptLoader.Instance), authority, options, TestPromptLoader.Instance);
+            new WebContentFetcher(transport, options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), authority, options, TestPromptLoader.Instance);
         var other = changedScope switch
         {
             "run" => context with { RunId = RunId.New() },
@@ -111,7 +111,7 @@ public sealed class WebToolActivityTests
         var url = new Uri("https://example.com/docs?q=public&token=credential-canary");
         var reference = IssueReference(authority, context, url, "direct");
         var tool = new WebFetchTool(
-            new WebContentFetcher(new ContentTransport(url), options, TestPromptLoader.Instance), authority, options, TestPromptLoader.Instance);
+            new WebContentFetcher(new ContentTransport(url), options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), authority, options, TestPromptLoader.Instance);
 
         var run = await InvokeAsync(tool, JsonSerializer.Serialize(new { reference }), context);
 
@@ -179,7 +179,8 @@ public sealed class WebToolActivityTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
             SessionId = context.SessionId,
@@ -188,7 +189,7 @@ public sealed class WebToolActivityTests
             ArgumentsJson = arguments,
             Context = context.Invocation,
         });
-        await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await completed.Task.WaitAsync(TestContext.Current.CancellationToken);
         return new InvocationRun(
             result, Assert.Single(observed.OfType<ToolInvocationStarted>()), Assert.Single(observed.OfType<ToolInvocationCompleted>()));
     }

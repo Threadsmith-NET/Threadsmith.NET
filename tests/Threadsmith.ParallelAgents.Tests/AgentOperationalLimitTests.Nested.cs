@@ -12,16 +12,18 @@ public sealed partial class AgentOperationalLimitTests
     [InlineData(2)]
     public async Task Scheduler_NestedForkJoinYieldsCapacityAndReacquiresBeforeResuming(int maximumActive)
     {
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            MaximumActiveChildren = maximumActive,
-            MaximumActiveChildrenPerParent = maximumActive,
-        });
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                MaximumActiveChildren = maximumActive,
+                MaximumActiveChildrenPerParent = maximumActive,
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var activity = new NestedActivity();
         var runner = new NestedRunner(scheduler, activity, depth: 2);
 
         var outcomes = await scheduler.RunAsync(CreateResponsePlan(2), runner)
-            .WaitAsync(TimeSpan.FromSeconds(10));
+            .WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.All(outcomes, outcome => Assert.Equal(AgentRunStatus.Completed, outcome.Status));
         Assert.Equal(14, activity.Completed);
@@ -35,28 +37,35 @@ public sealed partial class AgentOperationalLimitTests
     [InlineData(true)]
     public async Task Scheduler_NestedCancellationAndDeadlineReleaseCapacity(bool deadline)
     {
-        await using var scheduler = new AgentRunScheduler(new AgentSchedulerOptions
-        {
-            MaximumActiveChildren = 1,
-            MaximumActiveChildrenPerParent = 1,
-        });
+        var plan = CreateResponsePlan(1, deadline ? TimeSpan.FromSeconds(2) : TimeSpan.Zero);
+        var clock = new FakeTimeProvider(plan.AcceptedAt);
+        await using var scheduler = new AgentRunScheduler(
+            new AgentSchedulerOptions
+            {
+                MaximumActiveChildren = 1,
+                MaximumActiveChildrenPerParent = 1,
+            },
+            timeProvider: clock);
         using var cancellation = new CancellationTokenSource();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new NestedWaitingRunner(scheduler, entered);
-        var plan = CreateResponsePlan(1, deadline ? TimeSpan.FromSeconds(2) : TimeSpan.Zero);
         var running = scheduler.RunAsync(plan, runner, cancellation.Token);
-        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        if (!deadline)
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        if (deadline)
+        {
+            clock.Advance(TimeSpan.FromSeconds(2));
+        }
+        else
         {
             await cancellation.CancelAsync();
         }
 
-        var outcome = Assert.Single(await running.WaitAsync(TimeSpan.FromSeconds(10)));
+        var outcome = Assert.Single(await running.WaitAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(deadline ? AgentRunStatus.Failed : AgentRunStatus.Cancelled, outcome.Status);
         Assert.Equal(deadline ? "child timed out: assignment deadline elapsed" : "child cancellation observed", outcome.Reason);
         var retry = await scheduler.RunAsync(CreateResponsePlan(1), new NestedRunner(scheduler, new NestedActivity(), 0))
-            .WaitAsync(TimeSpan.FromSeconds(5));
+            .WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(AgentRunStatus.Completed, Assert.Single(retry).Status);
     }
 
@@ -141,7 +150,8 @@ public sealed partial class AgentOperationalLimitTests
         public async Task<AgentRunOutcome> RunAsync(DelegationPlan plan, AgentAssignment assignment, CancellationToken cancellationToken = default)
         {
             _activity.Enter();
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
             if (_depth > 0)
             {
                 _activity.Leave();
@@ -153,7 +163,8 @@ public sealed partial class AgentOperationalLimitTests
                 Assert.All(children, child => Assert.Equal(AgentRunStatus.Completed, child.Status));
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
             _activity.Leave(completed: true);
             return CompleteNestedAssignment(plan, assignment);
         }

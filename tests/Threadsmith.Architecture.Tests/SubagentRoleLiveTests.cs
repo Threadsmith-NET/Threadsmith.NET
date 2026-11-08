@@ -68,7 +68,8 @@ public sealed partial class SubagentRoleLiveTests
             var userDirectory = Path.GetDirectoryName(paths.UserConfiguration)
                 ?? throw new InvalidOperationException("The user configuration has no directory.");
             var secrets = new SecretResolver(
-                [new EnvironmentSecretProvider(), new UserFileSecretProvider(Path.Combine(userDirectory, "secrets", "config.json"))]);
+                [new EnvironmentSecretProvider(), new UserFileSecretProvider(Path.Combine(userDirectory, "secrets", "config.json"))],
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             using var models = await ModelComposition.CreateAsync(
                 configured,
                 paths,
@@ -160,7 +161,8 @@ public sealed partial class SubagentRoleLiveTests
             events,
             sanitizer,
             NullLogger<ToolInvocationPipeline>.Instance,
-            UnboundedBudget.Instance);
+            UnboundedBudget.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var recorded = new RecordingProvider(provider);
         var selection = new AgentModelSelector(
             models.Catalog,
@@ -240,11 +242,6 @@ public sealed partial class SubagentRoleLiveTests
             prompts,
             trustedModels: recorded);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (double.TryParse(Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_TIMEOUT_SECONDS"), out var seconds) && seconds > 0)
-        {
-            timeout.CancelAfter(TimeSpan.FromSeconds(seconds));
-        }
-
         var stopwatch = Stopwatch.StartNew();
         AgentRunOutcome outcome;
         try

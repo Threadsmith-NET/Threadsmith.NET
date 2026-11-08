@@ -65,14 +65,14 @@ public static partial class RepositoryMemoryBindingTests
         }
 
         var model = new CallbackModel(() => throw new InvalidOperationException("Model revalidation required."));
-        var registry = new ToolRegistry([new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new GitLogTool(new GitQueryService(), TestPromptLoader.Instance)]);
+        var registry = new ToolRegistry([new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new GitLogTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance)]);
         var application = new SessionApplication(
             intelligence.Events,
             model,
             UnboundedBudget.Instance,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance),
+            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             toolContextFactory: (_, _) => Task.FromResult(new ToolInvocationContext { RepositoryPath = fixture.InitialRoot, RequestedBy = "test", TrustLevel = RepositoryTrustLevel.TrustedRead, AllowedExecutables = ["git"] }),
             toolRegistry: registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -195,9 +195,9 @@ public static partial class RepositoryMemoryBindingTests
         var registry = new ToolRegistry([
             new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance),
             new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
-            new GitLogTool(new GitQueryService(), TestPromptLoader.Instance),
+            new GitLogTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance),
         ]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var context = new ToolInvocationContext { RepositoryPath = fixture.InitialRoot, RequestedBy = "model", TrustLevel = RepositoryTrustLevel.TrustedRead, AllowedExecutables = ["git"] };
         SessionApplication CreateApplication(ScriptedSession script) => new(
             intelligence.Events,

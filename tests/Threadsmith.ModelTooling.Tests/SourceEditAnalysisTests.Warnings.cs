@@ -16,7 +16,7 @@ public static partial class SourceEditAnalysisTests
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new TestSemanticSolution();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         const string relative = "Contracts/Services.cs";
@@ -39,7 +39,7 @@ public static partial class SourceEditAnalysisTests
         using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false, DiagnosticIds = ["TS1170"] } } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false, DiagnosticIds = ["TS1170"] } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
         await engine.LoadAsync(request, ct);
         await engine.WaitForWarmAsync(ct);
@@ -78,7 +78,7 @@ public static partial class SourceEditAnalysisTests
             MaximumRetainedDiagnostics = retained,
             MaximumReportedDiagnostics = retained,
         };
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = options });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = options }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         var path = Path.Combine(fixture.Root, "Contracts", "Services.cs");
@@ -138,7 +138,7 @@ public static partial class SourceEditAnalysisTests
         var properties = await File.ReadAllTextAsync(props, ct);
         await File.WriteAllTextAsync(props, properties.Replace("</PropertyGroup>", "<Nullable>enable</Nullable><TreatWarningsAsErrors>false</TreatWarningsAsErrors></PropertyGroup>", StringComparison.Ordinal), ct);
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CompilerWarningIds = ["CS8602", "CS8604"], MaximumReportedDiagnostics = 2 } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CompilerWarningIds = ["CS8602", "CS8604"], MaximumReportedDiagnostics = 2 } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         var changed = original + "\npublic class NewWarning { public void M(string? value) => N(value); public void N(string value) { } }";
@@ -186,7 +186,7 @@ public static partial class SourceEditAnalysisTests
         var policy = suppress ? "<NoWarn>CS1030</NoWarn>" : "<WarningsAsErrors>CS1030</WarningsAsErrors>";
         await File.WriteAllTextAsync(props, properties.Replace("</PropertyGroup>", policy + "</PropertyGroup>", StringComparison.Ordinal), ct);
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CompilerWarningIds = ["CS1030"] } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CompilerWarningIds = ["CS1030"] } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, "Contracts", "Services.cs"), ct);

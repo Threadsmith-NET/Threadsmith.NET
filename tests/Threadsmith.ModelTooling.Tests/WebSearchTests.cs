@@ -21,8 +21,7 @@ public sealed class WebSearchTests
             ["webSearch:provider:timeoutSeconds"] = maximumSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
         var options = WebSearchOptions.FromConfiguration(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
-        using var deadline = new CancellationTokenSource();
-        deadline.CancelAfter(options.Timeout);
+        using var deadline = new CancellationTokenSource(options.Timeout, new FakeTimeProvider());
         values["webSearch:provider:timeoutSeconds"] = (maximumSeconds + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         Assert.Throws<InvalidOperationException>(() =>
             WebSearchOptions.FromConfiguration(new ConfigurationBuilder().AddInMemoryCollection(values).Build()));
@@ -220,10 +219,11 @@ public sealed class WebSearchTests
         var handler = new StubHttpHandler(json);
         var options = new WebSearchOptions { MinimumRequestInterval = TimeSpan.Zero };
         var client = new BraveWebSearchClient(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             new StubSecretStore(),
             options,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var response = await client.SearchAsync(new WebSearchRequest { Query = "threadsmith", MaximumResults = 1 });
 
@@ -243,10 +243,11 @@ public sealed class WebSearchTests
         var handler = new StubHttpHandler(json);
         var resolver = new CapturingSecretResolver();
         var client = new BraveWebSearchClient(
-            new HttpClient(handler),
+            new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan },
             resolver,
             new WebSearchOptions { MinimumRequestInterval = TimeSpan.Zero },
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         await client.SearchAsync(new WebSearchRequest { Query = "threadsmith" });
 

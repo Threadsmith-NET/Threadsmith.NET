@@ -107,7 +107,7 @@ public sealed partial class MultimodalTests
         var session = SessionId.New();
         var image = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "fixture", cancellationToken: token);
         var handler = new CaptureHandler();
-        using var client = new HttpClient(handler);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var configuration = new OpenAiCompatibleProviderConfiguration
         {
             Id = "fixture",
@@ -141,7 +141,7 @@ public sealed partial class MultimodalTests
         }
         : configuration;
         var catalog = new EffectiveModelProviderCatalog(new ModelProviderCatalogConfiguration { Providers = [effectiveConfiguration] }, new ModelProviderRegistry([registration]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), images: fixture.Store);
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), images: fixture.Store, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var imageMessage = new ModelMessage
         {
             Role = toolResult ? ModelMessageRole.Tool : ModelMessageRole.User,
@@ -619,11 +619,17 @@ public sealed partial class MultimodalTests
             Events = new DomainEventStream();
             Invocation = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
             var configuration = new ConfigurationBuilder().Build();
-            var registry = new ToolRegistry([
-                new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer(), limits, artifacts: store),
-                new WriteFileTool(new WriteFileConfiguration(configuration, configuration, root), conversations, TestPromptLoader.Instance, artifacts: store),
-            ]);
-            Pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            var registry = new ToolRegistry(
+                [
+                    new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer(), limits, artifacts: store),
+                    new WriteFileTool(new WriteFileConfiguration(configuration, configuration, root), conversations, TestPromptLoader.Instance, artifacts: store),
+                ],
+                runtimeOptions: new ToolRuntimeOptions
+                {
+                    // Content tests follow runner cancellation, not production wall-clock deadlines.
+                    Defaults = new ToolRuntimeOverride { TimeoutMilliseconds = -1 },
+                });
+            Pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         }
 
         public string Root { get; }
@@ -660,7 +666,7 @@ public sealed partial class MultimodalTests
             return new SessionApplication(
                 Events,
                 provider,
-                new ExecutionBudget(new BudgetDimensions(500000, 100, TimeSpan.FromMinutes(5))),
+                new ExecutionBudget(new BudgetDimensions(500000, 100, TimeSpan.MaxValue)),
                 sanitizer,
                 NullLogger<SessionApplication>.Instance,
                 Pipeline,

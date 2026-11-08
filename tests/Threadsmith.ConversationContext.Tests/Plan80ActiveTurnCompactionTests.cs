@@ -566,7 +566,7 @@ public static class Plan80ActiveTurnCompactionTests
             policy,
             TestPromptLoader.Instance);
         var observer = new BudgetAdmissionObserver(
-            new LimitBudget(new BudgetDimensions(tokenLimit, callLimit, TimeSpan.FromMinutes(1))),
+            new LimitBudget(new BudgetDimensions(tokenLimit, callLimit, TimeSpan.MaxValue)),
             actualTokensPerCall: 0);
         var request = CreateRequest([CreateGroup(1)]) with
         {
@@ -608,7 +608,7 @@ public static class Plan80ActiveTurnCompactionTests
             policy,
             TestPromptLoader.Instance);
         var observer = new BudgetAdmissionObserver(
-            new LimitBudget(new BudgetDimensions(800, 4, TimeSpan.FromMinutes(1))),
+            new LimitBudget(new BudgetDimensions(800, 4, TimeSpan.MaxValue)),
             actualTokensPerCall: 300);
         var request = CreateRequest([CreateGroup(1)]) with
         {

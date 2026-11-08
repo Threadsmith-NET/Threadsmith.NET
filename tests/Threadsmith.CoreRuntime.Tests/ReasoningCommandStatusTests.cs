@@ -52,7 +52,7 @@ public static class ReasoningCommandStatusTests
             sessionUsage: usage);
 
         await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, surface.Statuses.Count);
         Assert.Equal(ReasoningLevel.Medium, surface.Statuses[0].Reasoning);

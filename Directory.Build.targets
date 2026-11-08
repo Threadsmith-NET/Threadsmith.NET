@@ -1,5 +1,10 @@
 <Project>
 
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" PrivateAssets="all" />
+    <Using Include="Microsoft.Extensions.Time.Testing" />
+  </ItemGroup>
+
   <!--
     Analyzer wiring for all non-spike projects (plan-01 task 4).
     Severity rules live in .editorconfig; this file only adds the analyzer

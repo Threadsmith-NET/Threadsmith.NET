@@ -49,7 +49,7 @@ public static partial class RepositoryMemoryBindingTests
             DeniedToolIds = restriction == "denied" ? ["memories"] : [],
             AllowedToolIds = restriction == "allowlist" ? ["read_file"] : [],
         };
-        ITool[] tools = [new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new GitLogTool(new GitQueryService(), TestPromptLoader.Instance)];
+        ITool[] tools = [new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new GitLogTool(new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestPromptLoader.Instance)];
         var toolState = new ToolStateManager(
             tools.Select(tool => tool.Definition),
             new ConfigurationBuilder().Build(),
@@ -118,7 +118,7 @@ public static partial class RepositoryMemoryBindingTests
             completionBudget,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance),
+            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             toolContextFactory: (_, _) => Task.FromResult(context),
             toolRegistry: registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -224,7 +224,7 @@ public static partial class RepositoryMemoryBindingTests
             toolState,
             null,
             new MutationApprovalPolicyService(config, configPath),
-            new RepositorySecretProvider(fixture.InitialRoot),
+            new RepositorySecretProvider(fixture.InitialRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
             new FailingRebindManager(false),
             intelligence.Store,
             intelligence.Options,
@@ -361,7 +361,7 @@ public static partial class RepositoryMemoryBindingTests
 
     private sealed class CollectionCompletionBudget : IBudget
     {
-        private readonly ExecutionBudget _inner = new(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1)));
+        private readonly ExecutionBudget _inner = new(new BudgetDimensions(100000, 1000, TimeSpan.MaxValue));
 
         public bool Expired { get; set; }
 

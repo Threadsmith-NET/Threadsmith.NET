@@ -224,7 +224,7 @@ public static class AnthropicConversationLoopTests
                 paused.TrySetResult(harness.Steering.RequestPause(completed.SessionId, harness.Model.Requests[0].RunId));
             }
         };
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var running = harness.RunToCompletionAsync();
         var pause = await paused.Task.WaitAsync(timeout.Token);
         var ready = await harness.Steering.WaitForPauseAsync(harness.SessionId, harness.RunId, pause.PauseId, timeout.Token);
@@ -354,7 +354,7 @@ public static class AnthropicConversationLoopTests
             _root = Path.Combine(Path.GetTempPath(), "threadsmith-native-loop-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_root);
             Handler = new NativeHandler(responses);
-            _client = new HttpClient(Handler);
+            _client = new HttpClient(Handler) { Timeout = Timeout.InfiniteTimeSpan };
             var provider = AnthropicCatalogHydrator.Hydrate(
                 new AnthropicProviderConfiguration { Id = "native", Name = "Native", SecretKeyReference = "secrets:models:native", Models = [] },
                 [new AnthropicDiscoveredModel { ModelId = "claude-opus-5", DisplayName = "Native", MaximumInputTokens = 200000, MaximumOutputTokens = 32000 }],
@@ -362,7 +362,7 @@ public static class AnthropicConversationLoopTests
             _catalog = catalog ?? new EffectiveModelProviderCatalog(
                 new ModelProviderCatalogConfiguration { Providers = [provider], DefaultModelId = provider.Models[0].Id },
                 new ModelProviderRegistry([new AnthropicProviderRegistration()]));
-            Model = new CapturingProvider(new ConfiguredModelProvider(_client, _catalog, static (_, _) => Task.FromResult<string?>("fixture-native-key")));
+            Model = new CapturingProvider(new ConfiguredModelProvider(_client, _catalog, static (_, _) => Task.FromResult<string?>("fixture-native-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)));
             Evidence = new EvidenceStore(Events, new SecretOutputSanitizer());
         }
 
@@ -411,7 +411,7 @@ public static class AnthropicConversationLoopTests
             });
             var sanitizer = new SecretOutputSanitizer();
             var registry = new ToolRegistry([new TestDeterministicOutputTool(ToolEvidence)]);
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
             var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
             Assembler = assembler;

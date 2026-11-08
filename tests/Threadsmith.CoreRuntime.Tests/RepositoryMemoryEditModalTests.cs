@@ -102,7 +102,7 @@ public static class RepositoryMemoryEditModalTests
     public static async Task Surface_manages_memories_and_restores_composer_draft()
     {
         var ct = TestContext.Current.CancellationToken;
-        using var backend = new HeadlessBackend(120, 35);
+        using var backend = new ObservedBackend(120, 35);
         var interrupts = 0;
         await using var surface = new TuiKitSurface(
             BuiltInThemes.Create()[0],
@@ -130,16 +130,16 @@ public static class RepositoryMemoryEditModalTests
                 },
                     (_, _, _, _) => throw new InvalidOperationException("Unexpected add."),
                     token);
-                await WaitForOutputAsync("Repository memories", surface, backend, token);
+                await WaitForOutputAsync("Repository memories", backend, token);
                 backend.FeedInput("\r");
-                await WaitForOutputAsync("Edit memory", surface, backend, token);
+                await WaitForOutputAsync("Edit memory", backend, token);
                 backend.FeedInput("\u0001\u0003\u0016");
-                await WaitForOutputAsync("Edited using clipboard", surface, backend, token);
+                await WaitForOutputAsync("Edited using clipboard", backend, token);
                 backend.FeedInput("\u0013");
-                await WaitForOutputAsync("Enter/F4: edit", surface, backend, token);
+                await WaitForOutputAsync("Enter/F4: edit", backend, token);
                 Assert.Equal(["Edited using clipboard"], changes);
                 backend.FeedInput("\u001b[3~");
-                await WaitForOutputAsync("0 entries", surface, backend, token);
+                await WaitForOutputAsync("0 entries", backend, token);
                 backend.FeedInput("\u001b[27u");
                 await browsing;
                 Assert.Equal(2, changes.Count);
@@ -160,7 +160,7 @@ public static class RepositoryMemoryEditModalTests
     [InlineData(2, RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Intelligence)]
     public static async Task Surface_adds_from_empty_tabs(int tab, RepositoryMemoryType type, RepositoryMemoryOwnership ownership)
     {
-        using var backend = new HeadlessBackend(120, 35);
+        using var backend = new ObservedBackend(120, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
         await surface.RunAsync(
             async token =>
@@ -184,18 +184,18 @@ public static class RepositoryMemoryEditModalTests
                         [new(RepositoryMemoryId.New(), text, RepositoryMemoryOrigin.Manual, actualType, actualOwnership)], []));
                 },
                 token);
-            await WaitForOutputAsync("Repository memories", surface, backend, token);
+            await WaitForOutputAsync("Repository memories", backend, token);
             backend.FeedInput(new string('\t', tab) + "\u001b[2~");
-            await WaitForOutputAsync("Add memory", surface, backend, token);
+            await WaitForOutputAsync("Add memory", backend, token);
             backend.FeedInput("Discard this\u001b[27u");
-            await WaitForOutputAsync("Ins: add", surface, backend, token);
+            await WaitForOutputAsync("Ins: add", backend, token);
             Assert.Equal(0, saves);
             backend.FeedInput("\u001b[2~");
-            await WaitForOutputAsync("Add memory", surface, backend, token);
+            await WaitForOutputAsync("Add memory", backend, token);
             backend.FeedInput("New memory\u0013");
-            await WaitForOutputAsync("Retry save", surface, backend, token);
+            await WaitForOutputAsync("Retry save", backend, token);
             backend.FeedInput("\u0013");
-            await WaitForOutputAsync("Ins: add", surface, backend, token);
+            await WaitForOutputAsync("Ins: add", backend, token);
             Assert.Equal(2, saves);
             backend.FeedInput("\u001b[27u");
             await browsing;
@@ -203,13 +203,12 @@ public static class RepositoryMemoryEditModalTests
             TestContext.Current.CancellationToken);
     }
 
-    private static async Task WaitForOutputAsync(string expected, TuiKitSurface surface, HeadlessBackend backend, CancellationToken cancellationToken)
+    private static async Task WaitForOutputAsync(string expected, ObservedBackend backend, CancellationToken cancellationToken)
     {
         var output = new System.Text.StringBuilder();
         while (!output.ToString().Contains(expected, StringComparison.Ordinal))
         {
-            await surface.PresentAsync(new PresentationBatch([]), cancellationToken);
-            output.Append(backend.TakeOutput());
+            output.Append(await backend.ReadOutputAsync(cancellationToken));
         }
     }
 

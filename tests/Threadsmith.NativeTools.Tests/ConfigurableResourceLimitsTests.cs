@@ -29,8 +29,7 @@ public sealed class ConfigurableResourceLimitsTests
     {
         var maximumSeconds = (int)((uint.MaxValue - 1L) / 1000);
         new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds }.Validate();
-        using var cancellation = new CancellationTokenSource();
-        cancellation.CancelAfter(TimeSpan.FromSeconds(maximumSeconds));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(maximumSeconds), new FakeTimeProvider());
         var invalid = new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds + 1 };
         Assert.Throws<ArgumentOutOfRangeException>(invalid.Validate);
         Assert.Equal(60, new ToolLimits().RunProcessMaxTimeoutSeconds);
@@ -130,7 +129,8 @@ public sealed class ConfigurableResourceLimitsTests
                 new AllowApprovalPolicy(),
                 events,
                 new SecretOutputSanitizer(),
-                NullLogger<ToolInvocationPipeline>.Instance);
+                NullLogger<ToolInvocationPipeline>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var bounded = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),

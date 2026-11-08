@@ -62,7 +62,7 @@ public sealed class Plan79DocumentationHelpTests
             };
             var model = new DocumentationSearchModelProvider(fixtureName);
             await using var events = new DomainEventStream();
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var runner = new ModelSkillProcedureRunner(model, registry, pipeline, sanitizer, (_, _) => Task.FromResult(caller), TestPromptLoader.Instance, snapshots: snapshots);
 
             await runner.RunAsync(plan, new SkillWorkflowStep { StepId = "inspect", Kind = SkillWorkflowStepKind.CollectEvidence }, 1, [], "{}", cancellationToken);
@@ -102,7 +102,7 @@ public sealed class Plan79DocumentationHelpTests
             var sanitizer = new SecretOutputSanitizer();
             var tools = new ToolRegistry([new SearchTextTool(TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, sanitizer)]);
             await using var events = new DomainEventStream();
-            var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),

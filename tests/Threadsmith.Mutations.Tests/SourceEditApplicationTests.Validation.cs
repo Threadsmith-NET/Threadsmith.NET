@@ -49,7 +49,7 @@ public sealed partial class SourceEditApplicationTests
         var history = new SqliteConversationStore(connection, artifacts, sanitizer);
         var edits = fixture.CreateApplication(analyzer: new AdvisoryAnalyzer(["Password=" + secret]));
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance, conversationStore: history);
         var provider = new CompletionProvider(1);
@@ -123,7 +123,7 @@ public sealed partial class SourceEditApplicationTests
         var history = new SqliteConversationStore(connection, artifacts, sanitizer);
         var edits = fixture.CreateApplication(effects: evidenceFailure ? new FailingReceiptStore(fixture.Store) : null, analyzer: new AdvisoryAnalyzer(["Password=" + secret]));
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance), new DotNetBuildTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance), new DotNetAnalyzerTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance), new TargetedTestTool(new ReceiptValidationService { Timeout = timeout }, TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance, conversationStore: history);
         var provider = new CompletionProvider(edit ? 1 : 0) { ValidateAfterEdits = true, Targeted = targeted, Analyzer = analyzer, ValidateBeforeEdits = before };
@@ -204,7 +204,7 @@ public sealed partial class SourceEditApplicationTests
         var sanitizer = new SecretOutputSanitizer();
         var edits = fixture.Application;
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
         var observed = new ConcurrentQueue<IDomainEvent>();

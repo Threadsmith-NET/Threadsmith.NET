@@ -24,7 +24,10 @@ public sealed class McpManagerTests
     {
         var policy = new EffectiveSessionPolicy
         {
-            BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Environment.CurrentDirectory, Fingerprint = "fixture",
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = Environment.CurrentDirectory,
+            Fingerprint = "fixture",
         };
         var binding = new SessionPolicyBinding();
         binding.Publish(policy);
@@ -36,18 +39,21 @@ public sealed class McpManagerTests
             new FakeIdentityManager(),
             new IdentitySanitizer(),
             NullLogger<McpManager>.Instance,
-            policyBinding: binding,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
             explicitReadAuthorizer: (_, _, _) =>
             {
                 binding.Publish(policy with { Generation = 2 });
                 return Task.FromResult(true);
-            });
+            },
+            policyBinding: binding);
         var ct = TestContext.Current.CancellationToken;
         _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" }, ct);
         var result = await manager.ExecuteAsync(
             new McpManagementRequest
             {
-                Action = action, ProfileId = "server", CapabilityId = capabilityId,
+                Action = action,
+                ProfileId = "server",
+                CapabilityId = capabilityId,
                 Arguments = action == McpManagementAction.GetPrompt ? new Dictionary<string, string> { ["name"] = "sample" } : new Dictionary<string, string>(),
             },
             ct);
@@ -270,7 +276,7 @@ public sealed class McpManagerTests
     [Fact]
     public async Task Connect_ConcurrentRequestsSerializeAndConnectOnce()
     {
-        var adapter = new FakeAdapter { ConnectDelay = TimeSpan.FromMilliseconds(30) };
+        var adapter = new FakeAdapter { ConnectRelease = new(TaskCreationOptions.RunContinuationsAsynchronously) };
         await using var manager = CreateManager([Profile("server")], adapter);
         var request = new McpManagementRequest
         {
@@ -278,9 +284,12 @@ public sealed class McpManagerTests
             ProfileId = "server",
         };
 
-        var results = await Task.WhenAll(
-            manager.ExecuteAsync(request),
-            manager.ExecuteAsync(request));
+        var first = manager.ExecuteAsync(request, TestContext.Current.CancellationToken);
+        await adapter.ConnectStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var second = manager.ExecuteAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(1, adapter.ConnectCount);
+        adapter.ConnectRelease.SetResult();
+        var results = await Task.WhenAll(first, second);
 
         Assert.All(results, result => Assert.True(result.Succeeded));
         Assert.Equal(1, adapter.ConnectCount);
@@ -346,14 +355,16 @@ public sealed class McpManagerTests
             new IdentitySanitizer(),
             NullLogger<McpAdapter>.Instance,
             TestPromptLoader.Instance,
-            registry);
+            registry,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await using var manager = new McpManager(
             [Profile("server")],
             adapter,
             toolState,
             new FakeIdentityManager(),
             new IdentitySanitizer(),
-            NullLogger<McpManager>.Instance);
+            NullLogger<McpManager>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         _ = await manager.ExecuteAsync(new McpManagementRequest
         {
             Action = McpManagementAction.Connect,
@@ -482,7 +493,8 @@ public sealed class McpManagerTests
             new EmptySecretStore(),
             new IdentitySanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("server") with
         {
             DrainKillTimeout = TimeSpan.FromSeconds(2),
@@ -501,9 +513,11 @@ public sealed class McpManagerTests
             });
 
         var invocation = tool.ExecuteAsync(input, context, CancellationToken.None);
-        await transport.InvocationStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.InvocationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         var disconnect = adapter.DisconnectAsync(profile.Id);
-        await Task.Delay(75);
+        Assert.Empty(adapter.GetConnections());
+        Assert.Null(adapter.GetTool(tool.Definition.Id));
+        Assert.False(transport.StopObserved);
         Assert.False(disconnect.IsCompleted);
 
         transport.CompleteInvocation();
@@ -525,7 +539,8 @@ public sealed class McpManagerTests
             new EmptySecretStore(),
             new IdentitySanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var connection = await adapter.ConnectAsync(Profile("server"));
         var resolvedBeforeDisconnect = Assert.Single(connection.Tools);
         var input = resolvedBeforeDisconnect.DeserializeInput("{\"message\":\"late\"}");
@@ -639,8 +654,9 @@ public sealed class McpManagerTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
-        }));
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await identity.RevokeAsync(Profile("server", oauth: true), false);
 
@@ -687,11 +703,16 @@ public sealed class McpManagerTests
                 "{\"issuer\":\"https://auth.example/tenant\","
                 + "\"revocation_endpoint\":\"https://auth.example/revoke\"}"));
         }));
-        using var httpClient = new HttpClient(handler);
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, new McpResourceLimits
-        {
-            MaximumOAuthMetadataBytes = maximumRepresentableLimit ? Array.MaxLength : 65536,
-        });
+        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(
+            store,
+            new UnusedSecretResolver(),
+            httpClient,
+            new McpResourceLimits
+            {
+                MaximumOAuthMetadataBytes = maximumRepresentableLimit ? Array.MaxLength : 65536,
+            },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("server", oauth: true) with
         {
             Command = "https://mcp.example/mcp",
@@ -730,8 +751,9 @@ public sealed class McpManagerTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
-        }));
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("server", oauth: true) with
         {
             OAuth = new McpOAuthOptions { Enabled = true },
@@ -774,8 +796,9 @@ public sealed class McpManagerTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
-        }));
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("server", oauth: true) with
         {
             OAuth = new McpOAuthOptions { Enabled = true },
@@ -820,11 +843,13 @@ public sealed class McpManagerTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
-        }));
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         using var identity = new McpIdentityManager(
             store,
             new FixedSecretResolver("secrets:oauth-client", "rotated-secret"),
-            httpClient);
+            httpClient,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("server", oauth: true) with
         {
             SecretScope = ["secrets:oauth-client"],
@@ -857,6 +882,8 @@ public sealed class McpManagerTests
     [Fact]
     public async Task Manager_RevocationTimeoutWithExplicitCleanup_ClearsLocalIdentity()
     {
+        var clock = new ObservedTimeProvider();
+        var revoking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["mcp:oauth:server:accessToken"] = "access-canary",
@@ -870,10 +897,12 @@ public sealed class McpManagerTests
                     "{\"revocation_endpoint\":\"https://auth.example/revoke\"}");
             }
 
+            revoking.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK);
-        }));
-        var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: clock);
         var profile = Profile("server", oauth: true) with
         {
             RequestTimeout = TimeSpan.FromMilliseconds(25),
@@ -884,15 +913,20 @@ public sealed class McpManagerTests
             new FakeToolStateManager(),
             identity,
             new IdentitySanitizer(),
-            NullLogger<McpManager>.Instance);
+            NullLogger<McpManager>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
-        var result = await manager.ExecuteAsync(new McpManagementRequest
+        var invocation = manager.ExecuteAsync(new McpManagementRequest
         {
             Action = McpManagementAction.Revoke,
             ProfileId = profile.Id,
             Confirmed = true,
             AllowLocalCleanupAfterUnconfirmedRevocation = true,
         });
+
+        await revoking.Task.WaitAsync(TestContext.Current.CancellationToken);
+        clock.Advance(profile.RequestTimeout);
+        var result = await invocation;
 
         Assert.True(result.Succeeded);
         Assert.Equal(McpManagementFailureKind.RemoteRevocationUnconfirmed, result.FailureKind);
@@ -910,8 +944,9 @@ public sealed class McpManagerTests
             ["mcp:oauth:server:authorizationServer"] = "https://auth.example/tenant",
         });
         using var httpClient = new HttpClient(new DelegateHttpHandler((_, _) =>
-            Task.FromResult(JsonResponse("{}"))));
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+            Task.FromResult(JsonResponse("{}"))))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await identity.RevokeAsync(Profile("server", oauth: true), false);
 
@@ -935,8 +970,9 @@ public sealed class McpManagerTests
             requests++;
             return Task.FromResult(JsonResponse(
                 "{\"revocation_endpoint\":\"https://different.example/revoke\"}"));
-        }));
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
         var result = await identity.RevokeAsync(Profile("server", oauth: true), false);
 
@@ -1110,7 +1146,8 @@ public sealed class McpManagerTests
         Assert.True(File.Exists(serverAssembly), $"MCP test server fixture is unavailable at '{serverAssembly}'.");
         await using var transport = new SdkStdioTransport(
             new IdentitySanitizer(),
-            NullLoggerFactory.Instance);
+            NullLoggerFactory.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = Profile("stdio-real") with
         {
             Command = "dotnet",
@@ -1393,6 +1430,7 @@ public sealed class McpManagerTests
             identityManager ?? new FakeIdentityManager(),
             sanitizer ?? new IdentitySanitizer(),
             logger ?? NullLogger<McpManager>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
             limits: limits);
     }
 
@@ -1617,7 +1655,9 @@ public sealed class McpManagerTests
             },
         ];
 
-        internal TimeSpan ConnectDelay { get; init; }
+        internal TaskCompletionSource? ConnectRelease { get; init; }
+
+        internal TaskCompletionSource ConnectStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal Exception? ConnectException { get; init; }
 
@@ -1658,9 +1698,10 @@ public sealed class McpManagerTests
             MaximumConcurrentConnects = Math.Max(MaximumConcurrentConnects, active);
             try
             {
-                if (ConnectDelay > TimeSpan.Zero)
+                ConnectStarted.TrySetResult();
+                if (ConnectRelease is { } release)
                 {
-                    await Task.Delay(ConnectDelay, cancellationToken);
+                    await release.Task.WaitAsync(cancellationToken);
                 }
 
                 var status = new McpConnectionStatus

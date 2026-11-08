@@ -90,8 +90,8 @@ public static class ToolActivityRenderingTests
     [InlineData(ToolActivitySourceKind.BuiltIn, "TOOLS: search_sectors")]
     public static async Task PendingToolIsPaintedAndTimerAdvancesBeforeCompletion(ToolActivitySourceKind kind, string label)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(120, 28);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(120, 28);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         var clock = new ActivityClock();
         var started = new ToolInvocationStarted(
@@ -230,13 +230,12 @@ public static class ToolActivityRenderingTests
         Assert.DoesNotContain("Explorer", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
     }
 
-    private static async Task<string> WaitForTextAsync(HeadlessBackend backend, string text, CancellationToken cancellationToken)
+    private static async Task<string> WaitForTextAsync(ObservedBackend backend, string text, CancellationToken cancellationToken)
     {
         var output = string.Empty;
         while (!output.Contains(text, StringComparison.Ordinal))
         {
-            await Task.Delay(10, cancellationToken);
-            output += backend.TakeOutput();
+            output += await backend.ReadOutputAsync(cancellationToken);
         }
 
         return output;

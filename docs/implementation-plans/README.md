@@ -233,6 +233,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [05-catalog-atomic-publication.md](05-catalog-atomic-publication.md) | Share catalog file writing |
 | Maintenance | [maintenance-solution-startup-performance.md](maintenance-solution-startup-performance.md) | Reduce restore, baseline, document, and watcher startup work |
 | Maintenance | [maintenance-host-startup-performance.md](maintenance-host-startup-performance.md) | Reduce persistence, repository binding, and integration startup work |
+| Maintenance | [maintenance-deterministic-tests.md](maintenance-deterministic-tests.md) | Deterministic test synchronization |
 
 ## Update discipline
 

@@ -29,7 +29,8 @@ public static partial class EditAnalyzerTests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } });
+            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
 
@@ -67,7 +68,8 @@ public static partial class EditAnalyzerTests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, ExcludedDiagnosticIds = exclude ? ["CA2016"] : [], Analyzers = new() { Enabled = true, BudgetMilliseconds = int.MaxValue } } });
+            resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = exclude ? ["CA2016"] : [], Analyzers = new() { Enabled = true, BudgetMilliseconds = int.MaxValue } } },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
@@ -111,13 +113,13 @@ public static partial class EditAnalyzerTests
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
-        var clock = new AnalyzerDeadlineClock();
+        var clock = new FakeTimeProvider();
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            resourceLimits: new() { CompilationWorkers = 2, EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } },
+            resourceLimits: new() { CompilationWorkers = 2, EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = 1, ColdStartBudgetMilliseconds = 1 } } },
             timeProvider: clock);
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
@@ -155,7 +157,7 @@ public static partial class EditAnalyzerTests
             Task<SourceEditAnalysis>? replacement = null;
             if (advanceClock)
             {
-                clock.Expire();
+                clock.Advance(TimeSpan.FromMilliseconds(1));
                 Assert.False(advisory.Task.IsCompleted);
                 Assert.Equal(1, engine.ActiveAdvisoryOperations);
             }
@@ -218,7 +220,7 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = scenario == "legacy-selection" ? ["MISSING"] : ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = scenario == "legacy-selection" ? ["MISSING"] : ["TS1170"], BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
@@ -271,7 +273,7 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, first, initial, earlierOrigin == "none" ? Repairs : Violations + "\n// first edit", null, ct);
@@ -311,7 +313,7 @@ public static partial class EditAnalyzerTests
         var workspace = WorkspaceId.New();
         var logger = new AnalyzerTestLogger();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } });
+        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var project = engine.CaptureAdvancedSnapshot().Solution.Projects.Single(item => item.Name == "Contracts");
@@ -359,7 +361,8 @@ public static partial class EditAnalyzerTests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            resourceLimits: new() { EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue, Analyzers = new() { Enabled = true } } });
+            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var created = Path.Combine(fixture.Root, "Contracts", "CreatedProbe.cs");
@@ -418,57 +421,6 @@ public static partial class EditAnalyzerTests
             if (exception is not null)
             {
                 Exceptions.Enqueue(exception);
-            }
-        }
-    }
-
-    private sealed class AnalyzerDeadlineClock : TimeProvider
-    {
-        private readonly ConcurrentBag<DeadlineTimer> _timers = [];
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = new DeadlineTimer(callback, state);
-            _timers.Add(timer);
-            return timer;
-        }
-
-        public void Expire()
-        {
-            foreach (var timer in _timers)
-            {
-                timer.Fire();
-            }
-        }
-
-        private sealed class DeadlineTimer : ITimer
-        {
-            private readonly TimerCallback _callback;
-            private readonly object? _state;
-            private int _disposed;
-
-            public DeadlineTimer(TimerCallback callback, object? state)
-            {
-                _callback = callback;
-                _state = state;
-            }
-
-            public bool Change(TimeSpan dueTime, TimeSpan period) => Volatile.Read(ref _disposed) == 0;
-
-            public void Fire()
-            {
-                if (Volatile.Read(ref _disposed) == 0)
-                {
-                    _callback(_state);
-                }
-            }
-
-            public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
-
-            public ValueTask DisposeAsync()
-            {
-                Dispose();
-                return ValueTask.CompletedTask;
             }
         }
     }

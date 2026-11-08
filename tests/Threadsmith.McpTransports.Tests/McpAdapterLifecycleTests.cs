@@ -15,15 +15,20 @@ public static class McpAdapterLifecycleTests
     [Fact]
     public static async Task Startup_timeout_is_a_nonfatal_connection_failure()
     {
+        var clock = new ObservedTimeProvider();
         var adapter = new McpAdapter(
             _ => new TimeoutTransport(),
             new EmptySecretStore(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: clock);
         var profile = CreateProfile() with { StartupTimeout = TimeSpan.FromMilliseconds(20) };
 
-        var result = await adapter.ConnectAsync(profile, CancellationToken.None);
+        var connecting = adapter.ConnectAsync(profile, TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(profile.StartupTimeout, TestContext.Current.CancellationToken);
+        clock.Advance(profile.StartupTimeout);
+        var result = await connecting;
 
         Assert.False(result.Succeeded);
         Assert.Equal(McpConnectionState.Failed, result.Status.State);
@@ -36,6 +41,7 @@ public static class McpAdapterLifecycleTests
     public static async Task Startup_timeout_bounds_secret_resolution()
     {
         var transportCreations = 0;
+        var clock = new ObservedTimeProvider();
         var adapter = new McpAdapter(
             _ =>
             {
@@ -45,15 +51,18 @@ public static class McpAdapterLifecycleTests
             new BlockingSecretResolver(),
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            timeProvider: clock);
         var profile = CreateProfile() with
         {
             SecretScope = ["secrets:tests:slow"],
             StartupTimeout = TimeSpan.FromMilliseconds(20),
         };
 
-        var result = await adapter.ConnectAsync(profile, CancellationToken.None)
-            .WaitAsync(TimeSpan.FromSeconds(2));
+        var connecting = adapter.ConnectAsync(profile, TestContext.Current.CancellationToken);
+        await clock.WaitForTimerAsync(profile.StartupTimeout, TestContext.Current.CancellationToken);
+        clock.Advance(profile.StartupTimeout);
+        var result = await connecting;
 
         Assert.False(result.Succeeded);
         Assert.Equal(McpConnectionState.Failed, result.Status.State);
@@ -74,7 +83,8 @@ public static class McpAdapterLifecycleTests
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
             TestPromptLoader.Instance,
-            registry);
+            registry,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile();
 
         var result = await adapter.ConnectAsync(profile, CancellationToken.None);
@@ -100,7 +110,8 @@ public static class McpAdapterLifecycleTests
             new SecretOutputSanitizer(),
             NullLogger<McpAdapter>.Instance,
             TestPromptLoader.Instance,
-            registry);
+            registry,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var profile = CreateProfile() with
         {
             AllowedCapabilities = [McpCapabilityKind.Tool, McpCapabilityKind.Resource],
@@ -165,11 +176,17 @@ public static class McpAdapterLifecycleTests
         var registry = new ToolRegistry([]);
         var sanitizer = new SecretOutputSanitizer();
         await using var adapter = new McpAdapter(
-            _ => transport, new EmptySecretStore(), sanitizer, NullLogger<McpAdapter>.Instance, TestPromptLoader.Instance, registry);
+            _ => transport,
+            new EmptySecretStore(),
+            sanitizer,
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
+            registry,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var connection = await adapter.ConnectAsync(CreateProfile());
         var tool = Assert.Single(connection.Tools);
         await using var events = new RecordingToolEvents();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
             ToolId = tool.Definition.Id,

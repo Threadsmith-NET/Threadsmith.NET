@@ -19,7 +19,7 @@ public static class StartupModalLifecycleTests
     [Fact]
     public static async Task CancellationReleasesUncompletedReadinessObservation()
     {
-        using var backend = new HeadlessBackend(100, 30);
+        using var backend = new ObservedBackend(100, 30);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         var pendingReadiness = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], cancellation.Cancel, backend);
@@ -41,7 +41,7 @@ public static class StartupModalLifecycleTests
     [Fact]
     public static async Task CompletedStagesStayVisibleUntilComposerTakesOver()
     {
-        using var backend = new HeadlessBackend(100, 30);
+        using var backend = new ObservedBackend(100, 30);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
         await surface.RunAsync(
             async token =>
@@ -76,7 +76,7 @@ public static class StartupModalLifecycleTests
     [InlineData(true)]
     public static async Task UnsuccessfulStageDismissesRetainedStartup(bool cancel)
     {
-        using var backend = new HeadlessBackend(100, 30);
+        using var backend = new ObservedBackend(100, 30);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
         await surface.RunAsync(
             async token =>
@@ -102,7 +102,7 @@ public static class StartupModalLifecycleTests
     public static async Task InitialThemeDoesNotDuplicateStartupWarnings()
     {
         var capabilities = new TerminalCapabilities(TerminalColorDepth.None, false, false, false, false, false, false, false, false);
-        using var backend = new HeadlessBackend(100, 30, capabilities);
+        using var backend = new ObservedBackend(100, 30, capabilities);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend, deferWorkspace: true);
         await surface.RunAsync(
             async token =>
@@ -131,22 +131,20 @@ public static class StartupModalLifecycleTests
             TestContext.Current.CancellationToken);
     }
 
-    private static async Task<string> RepaintAsync(HeadlessBackend backend, int width, CancellationToken cancellationToken)
+    private static async Task<string> RepaintAsync(ObservedBackend backend, int width, CancellationToken cancellationToken)
     {
         _ = backend.TakeOutput();
         backend.Resize(width, 30);
         var output = new StringBuilder();
         while (true)
         {
-            output.Append(backend.TakeOutput());
+            output.Append(await backend.ReadOutputAsync(cancellationToken));
             var frame = output.ToString();
             var main = frame.IndexOf("MAIN", StringComparison.Ordinal);
             if (main >= 0 && frame.LastIndexOf(Ansi.EndSynchronizedUpdate, StringComparison.Ordinal) > main)
             {
                 return frame;
             }
-
-            await Task.Delay(10, cancellationToken);
         }
     }
 }

@@ -20,7 +20,7 @@ public static partial class EditAnalyzerTests
         await ConfigureFixtureAsync(fixture.Root);
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), ct);
         await engine.WaitForWarmAsync(ct);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -62,7 +62,7 @@ public static partial class EditAnalyzerTests
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -114,7 +114,7 @@ public static partial class EditAnalyzerTests
         await ConfigureFixtureAsync(fixture.Root);
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { MaximumRetainedDiagnostics = bounded ? 1 : 64, MaximumReportedDiagnostics = 1 } });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { MaximumRetainedDiagnostics = bounded ? 1 : 64, MaximumReportedDiagnostics = 1 } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), ct);
         await engine.WaitForWarmAsync(ct);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -145,7 +145,7 @@ public static partial class EditAnalyzerTests
         await ConfigureFixtureAsync(fixture.Root);
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
         await engine.LoadAsync(request, ct);
         await engine.WaitForWarmAsync(ct);

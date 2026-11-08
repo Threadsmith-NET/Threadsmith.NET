@@ -138,8 +138,8 @@ public sealed partial class GitQueryService
             ArgumentOutOfRangeException.ThrowIfLessThan(maximumCharacters, 4096);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumCharacters, 32 * 1024);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCommits);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-            timeout.CancelAfter(_owner._limits.TimeoutMilliseconds);
+            using var timeoutDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(_owner._limits.TimeoutMilliseconds), _owner._timeProvider);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token, timeoutDeadline.Token);
             using var termination = _process is null ? default : RegisterTermination(_process, timeout.Token);
             try
             {
@@ -276,8 +276,8 @@ public sealed partial class GitQueryService
                 // Let the Git launcher reap its child on ordinary early disposal.
                 // Killing the tree and waiting only for the launcher can return while
                 // a descendant still holds the repository's working directory.
-                using var drain = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-                drain.CancelAfter(_owner._limits.TimeoutMilliseconds);
+                using var drainDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(_owner._limits.TimeoutMilliseconds), _owner._timeProvider);
+                using var drain = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token, drainDeadline.Token);
                 try
                 {
                     // Discard unread history with bounded buffering, not ReadToEnd.

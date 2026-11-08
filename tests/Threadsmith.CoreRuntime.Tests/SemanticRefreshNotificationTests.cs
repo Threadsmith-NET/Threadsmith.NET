@@ -7,6 +7,7 @@ using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
+using TUIKit.Hosting;
 using TUIKit.Modals;
 using TUIKit.Terminal;
 using Xunit;
@@ -50,7 +51,7 @@ public static class SemanticRefreshNotificationTests
     [Fact]
     public static async Task NativeRefreshIndicatorStaysVisibleDuringDraft()
     {
-        using var backend = new HeadlessBackend(120, 35);
+        using var backend = new ObservedBackend(120, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
         await surface.RunAsync(
             async token =>
@@ -66,7 +67,7 @@ public static class SemanticRefreshNotificationTests
             };
             await surface.PresentToolActivitiesAsync([activity], token);
             await surface.PresentAsync(new PresentationBatch([]), token);
-            Assert.Contains("new requests blocked", backend.TakeOutput(), StringComparison.Ordinal);
+            Assert.Contains("new requests blocked", await backend.WaitForOutputAsync("new requests blocked", token), StringComparison.Ordinal);
             Assert.False(read.IsCompleted);
             backend.FeedInput("\r");
             Assert.Equal("draft", (await read).Text);
@@ -178,9 +179,11 @@ public static class SemanticRefreshNotificationTests
     [Fact]
     public static async Task ToastPreservesComposerAndOriginalTranscript()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        using var backend = new HeadlessBackend(120, 35);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var backend = new ObservedBackend(120, 35);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        var application = (TuiApplication)typeof(TuiKitSurface).GetField("_app", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(surface)!;
+        application.Notifications.DefaultTimeoutMilliseconds = 0;
         await surface.RunAsync(
             async token =>
         {
@@ -197,7 +200,7 @@ public static class SemanticRefreshNotificationTests
                 token);
             await surface.PresentAsync(new PresentationBatch([]), token);
 
-            Assert.Contains(notification.Text, backend.TakeOutput(), StringComparison.Ordinal);
+            Assert.Contains(notification.Text, await backend.WaitForOutputAsync(notification.Text, token), StringComparison.Ordinal);
             Assert.False(read.IsCompleted);
             backend.FeedInput("\u001b[18~\u0001\u0003\u001b[18~\r");
             Assert.Equal("draft", (await read).Text);

@@ -109,8 +109,8 @@ public sealed class McpAdapter : IMcpAdapter
                 $"MCP profile '{profile.Id}' command must be a bare executable name (§22.4).");
         }
 
-        using var startupCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        startupCancellation.CancelAfter(profile.StartupTimeout);
+        using var startupCancellationDeadline = new CancellationTokenSource(profile.StartupTimeout, _timeProvider);
+        using var startupCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, startupCancellationDeadline.Token);
         IReadOnlyDictionary<string, string> environment;
         try
         {
@@ -284,7 +284,7 @@ public sealed class McpAdapter : IMcpAdapter
         var drainStarted = _timeProvider.GetTimestamp();
         var drainWindow = TimeSpan.FromTicks(connection.Profile.DrainKillTimeout.Ticks / 2);
         bool requestsDrained;
-        using (var drainCancellation = new CancellationTokenSource(drainWindow))
+        using (var drainCancellation = new CancellationTokenSource(drainWindow, _timeProvider))
         {
             try
             {
@@ -416,8 +416,7 @@ public sealed class McpAdapter : IMcpAdapter
         // Enforce the remaining drain/kill timeout at the adapter level: the transport may hang, so
         // cancel the stop after the bound and treat the server as killed (gap #6, §5.8).
         var effectiveTimeout = timeout ?? profile.DrainKillTimeout;
-        using var drainCancellation = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
-        drainCancellation.CancelAfter(effectiveTimeout);
+        using var drainCancellation = new CancellationTokenSource(effectiveTimeout, _timeProvider);
         try
         {
             return await transport.StopAsync(effectiveTimeout, drainCancellation.Token);
@@ -625,15 +624,15 @@ public sealed class McpAdapter : IMcpAdapter
         return value.Length <= maximumCharacters ? value : value[..maximumCharacters];
     }
 
-    private static async Task<T> InvokeConnectionAsync<T>(
+    private async Task<T> InvokeConnectionAsync<T>(
         Connection connection,
         Func<CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(operation);
         using var invocation = connection.AcquireInvocation(connection.CapabilityGeneration);
-        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        requestCancellation.CancelAfter(connection.Profile.RequestTimeout);
+        using var requestCancellationDeadline = new CancellationTokenSource(connection.Profile.RequestTimeout, _timeProvider);
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, requestCancellationDeadline.Token);
         return await operation(requestCancellation.Token);
     }
 

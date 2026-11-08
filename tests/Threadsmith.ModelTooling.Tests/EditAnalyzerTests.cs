@@ -53,7 +53,7 @@ public static partial class EditAnalyzerTests
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -87,7 +87,7 @@ public static partial class EditAnalyzerTests
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -132,7 +132,8 @@ public static partial class EditAnalyzerTests
         await ConfigureFixtureAsync(fixture.Root);
         var analyzer = StageExecutionAnalyzer(fixture.Root);
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        var clock = new ObservedTimeProvider();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: clock);
         await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(fixture.Root), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
         var source = engine.CaptureAdvancedSnapshot().Solution;
@@ -148,6 +149,8 @@ public static partial class EditAnalyzerTests
         {
             await TestAnalyzerBarrier.WaitForConnectionAsync(pipe, pending, TestContext.Current.CancellationToken);
             await cancellation.CancelAsync();
+            await clock.WaitForTimerAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromSeconds(2));
 #pragma warning disable VSTHRD003 // The test owns the operation and joins its explicitly cancelled observation.
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
 #pragma warning restore VSTHRD003
@@ -184,7 +187,7 @@ public static partial class EditAnalyzerTests
         var root = fixture?.Root ?? Path.GetFullPath(experiment.RepositoryRoot);
         var selection = fixture is null ? Path.GetFullPath(experiment.Selection, root) : Path.Combine(root, "SmallDotNetSolution.sln");
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var loadStarted = Stopwatch.GetTimestamp();
         var load = await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);

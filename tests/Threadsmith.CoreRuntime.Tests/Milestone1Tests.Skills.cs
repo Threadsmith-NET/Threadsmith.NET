@@ -46,7 +46,7 @@ public static partial class Milestone1Tests
         };
 
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(1, dialogs);
         Assert.Empty(surface.SelectionRequests);
@@ -93,7 +93,7 @@ public static partial class Milestone1Tests
         };
 
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
     }
 
     /// <summary>Surfaces without retained trees retain verification and enablement through sequential choices.</summary>
@@ -105,7 +105,7 @@ public static partial class Milestone1Tests
         var surface = new FakeConsoleSurface(["/skills", "/quit"], [1, 0, 1, 1, 3]);
         var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
 
-        await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Single(manager.Verifications);
         Assert.False(Assert.Single(manager.Changes).Enabled);
@@ -123,7 +123,7 @@ public static partial class Milestone1Tests
         var surface = new ToggleInteractionSurface(["/skills", "/quit"]);
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
 
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, surface.ToggleCount);
         Assert.Empty(manager.Changes);
@@ -155,7 +155,7 @@ public static partial class Milestone1Tests
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
 
-        await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
 
         Assert.Single(manager.Verifications);
     }

@@ -80,7 +80,8 @@ public sealed partial class Plan91DelegationToolTests
             new DenyApprovalPolicy(),
             events,
             new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
             SessionId = context.SessionId,
@@ -134,7 +135,8 @@ public sealed partial class Plan91DelegationToolTests
                 new DenyApprovalPolicy(),
                 events,
                 new SecretOutputSanitizer(),
-                NullLogger<ToolInvocationPipeline>.Instance);
+                NullLogger<ToolInvocationPipeline>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new ToolInvocationRequest
             {
                 SessionId = context.SessionId,
@@ -197,7 +199,8 @@ public sealed partial class Plan91DelegationToolTests
                 new DenyApprovalPolicy(),
                 events,
                 new SecretOutputSanitizer(),
-                NullLogger<ToolInvocationPipeline>.Instance);
+                NullLogger<ToolInvocationPipeline>.Instance,
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var recovery = request with
             {
                 ToolId = ChildAgentEvidenceTool.ToolId,
@@ -266,7 +269,7 @@ public sealed partial class Plan91DelegationToolTests
             Assert.Null(roundTrip.Provenance.BaselineIdentity);
             var assignment = Assert.Single(plan.Assignments);
             var child = AgentToolPolicy.Scope(context.Invocation, plan, assignment, repository);
-            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var read = await pipeline.InvokeAsync(
                 new ToolInvocationRequest
                 {

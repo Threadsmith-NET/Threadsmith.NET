@@ -10,6 +10,8 @@ For source-owner paths, deployed paths, byte limits, logging behavior, and the a
 
 Shared implementation-validation instructions live in `System-RepositoryInspection.md`, supplied to both main and child agents; edit descriptions and feedback reference them. Repository-intelligence investigation and publication rules live in `Context-RepositoryIntelligenceCollection.md`; history and coverage prompts provide boundary-specific instructions, and `Tool-memories-Description.md` owns action and reconciliation semantics. Skill discovery, input preparation, and execution-state handling are separated across their respective descriptions and result guidance. Seven unused legacy child-output and exploration-limit assets have been removed from the catalog.
 
+`System-RepositoryInspection.md` directs agents to reuse current, completed background compiler and analyzer evidence for covered documents, rules, and severities. Additional analyzer commands address concrete coverage gaps or explicit requirements; filtering, truncation, and omissions limit reuse. Builds and tests retain their concrete purposes and required gates, and whitespace verification remains separate.
+
 ## How prompt files are used
 
 Threadsmith loads the complete shipped catalog once during startup. Each file can be replaced through the user or application `repositories/<repository-key>/prompts/<owning-project>/` directory, optionally under `models/<profile-guid>/`. Overrides are excluded from the opened repository itself. Per-file precedence is user model → user all-model → application model → application all-model → shipped. Missing replacements fall through automatically, without approval or enablement settings. The receiving model selects the view independently for parents, children, helpers, fallback, and compaction. See [override paths and precedence](operations/prompts.md#repository-and-model-overrides) for the full layout.
@@ -111,7 +113,7 @@ System policy, stable conversation instructions, request envelopes, and required
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, skill routing, artifact guidance, and native-tool concept hints. | `None` |
-| `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
+| `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance; reuse of current background validation coverage, additional checks for concrete gaps or requirements, and separate whitespace verification. | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family

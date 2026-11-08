@@ -86,6 +86,55 @@ public static class StartupModalLayoutTests
         }
     }
 
+    /// <summary>One-line and two-line tips share the same footer space and progress viewport.</summary>
+    [Theory]
+    [InlineData(40, 12, 0)]
+    [InlineData(40, 12, 60)]
+    [InlineData(100, 17, 0)]
+    [InlineData(100, 17, 60)]
+    [InlineData(100, 30, 0)]
+    [InlineData(100, 30, 60)]
+    public static void ProgressLayoutStaysFixedWhenTipLineCountChanges(int width, int height, int historyCount)
+    {
+        // Arrange
+        var rows = Enumerable.Range(0, historyCount)
+            .Select(index => new SemanticStartupPhaseSnapshot(default, SemanticStartupPhaseState.Completed, TimeSpan.FromSeconds(1)) { Label = $"History {index}" }).ToList();
+        rows.Add(new(default, SemanticStartupPhaseState.Running, TimeSpan.FromSeconds(2)) { Label = "Active work" });
+        var modal = new StartupModal(StartupBanner.Text, null, [], () => { }, _ => CellStyle.Default)
+        {
+            Progress = () => rows,
+            TotalElapsed = () => TimeSpan.FromSeconds(5),
+            Tips = new StartupTips(["Short tip"]),
+        };
+        var cells = new CellBuffer(width, height);
+        modal.Render(new BufferSurface(cells));
+        var initialLines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
+        var tipRow = Array.FindIndex(initialLines, line => line.Contains("Tip: Short tip", StringComparison.Ordinal));
+        Assert.True(tipRow >= 0);
+        Assert.All(initialLines[tipRow + 1], character => Assert.True(char.IsWhiteSpace(character) || character == '│'));
+        var longTip = string.Join(" ", Enumerable.Repeat("helpful", width == 40 ? 6 : 14));
+
+        foreach (var tip in new[] { longTip, "Short tip" })
+        {
+            // Act
+            modal.Tips = new StartupTips([tip]);
+            modal.Render(new BufferSurface(cells));
+            var lines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
+
+            // Assert
+            Assert.Equal(initialLines.Take(tipRow), lines.Take(tipRow));
+            Assert.Contains("Tip:", lines[tipRow], StringComparison.Ordinal);
+            if (tip == longTip)
+            {
+                Assert.Contains("helpful", lines[tipRow + 1], StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.All(lines[tipRow + 1], character => Assert.True(char.IsWhiteSpace(character) || character == '│'));
+            }
+        }
+    }
+
     /// <summary>Old completed history cannot displace concurrent active work or the total timer.</summary>
     [Theory]
     [InlineData(40, 12)]

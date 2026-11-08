@@ -177,7 +177,10 @@ internal sealed class StartupModal : Modal
         // Keep branding and tips outside the completed-history viewport.
         var logoHeight = lines.Length;
         var logoGap = view.Size.Height > logoHeight + requiredRows ? 1 : 0;
-        var tipHeight = Math.Min(_tipLines.Length, Math.Max(0, view.Size.Height - logoHeight - logoGap - requiredRows - 1));
+
+        // A short tip keeps the same footer space as a two-line tip.
+        var tipRows = _tipLines.Length > 0 ? Math.Max(2, _tipLines.Length) : 0;
+        var tipHeight = Math.Min(tipRows, Math.Max(0, view.Size.Height - logoHeight - logoGap - requiredRows - 1));
         var progressHeight = view.Size.Height - tipHeight - (tipHeight > 0 ? 1 : 0);
         var showSplines = _label?.StartsWith("Loading ", StringComparison.Ordinal) == true
             && progressHeight - logoHeight - logoGap > requiredRows;
@@ -271,7 +274,7 @@ internal sealed class StartupModal : Modal
             Draw(view, y + 1, "press Enter to exit; Esc cancels", PresentationTextRole.Warning);
         }
 
-        for (var index = 0; index < tipHeight; index++)
+        for (var index = 0; index < Math.Min(tipHeight, _tipLines.Length); index++)
         {
             Draw(view, view.Size.Height - tipHeight + index, _tipLines[index], PresentationTextRole.Default);
         }

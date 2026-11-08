@@ -1,6 +1,7 @@
 namespace Threadsmith.Planning.Tests;
 
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -531,9 +532,15 @@ public static partial class Plan80ActiveTurnContinuationTests
     }
 
     /// <summary>The summary headroom check applies the existing delivered-result reducer before rejecting capacity.</summary>
-    [Fact]
-    public static async Task Summary_continuation_headroom_uses_delivered_result_capacity_fallback()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(8192)]
+    public static async Task Summary_continuation_headroom_uses_delivered_result_capacity_fallback(int additionalPromptCharacters)
     {
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.SystemRepositoryInspection,
+            TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)
+                + new string('p', additionalPromptCharacters));
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-fallback-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
@@ -556,15 +563,41 @@ public static partial class Plan80ActiveTurnContinuationTests
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget,
                 timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            // Bound the ordinary tool envelope so its final continuation still requires delivered-result reduction.
-            var profile = CreateProfile() with { ContextWindow = 4_400 };
+            var measurementProfile = CreateProfile() with { ContextWindow = 65_536 };
+            var envelopeTokens = await CompactionFixtureSizing.MeasureEnvelopeAsync(
+                CreateAssembler(
+                    events,
+                    evidence,
+                    new ModelResolver(
+                        new ConfiguredModelCatalog([measurementProfile]),
+                        new InMemoryModelPreferenceSnapshotProvider()),
+                    sanitizer,
+                    prompts),
+                registry,
+                measurementProfile,
+                root,
+                "Inspect the repository thoroughly.",
+                TestContext.Current.CancellationToken);
+            var largeResultTokens = TokenEstimator.Estimate(JsonSerializer.Serialize(
+                new TestDeterministicOutput(new string('x', 5_000))));
+            var recentResultTokens = TokenEstimator.Estimate(JsonSerializer.Serialize(
+                new TestDeterministicOutput(new string('y', 2_500))));
+
+            // Fit the retained results, but require reduction when summary and exchange framing
+            // are added. Prompt growth changes the envelope allowance, not payload headroom.
+            var profile = measurementProfile with
+            {
+                ContextWindow = envelopeTokens + largeResultTokens + recentResultTokens
+                    + measurementProfile.EffectiveRequestOutputTokenReserve,
+            };
             var assembler = CreateAssembler(
                 events,
                 evidence,
                 new ModelResolver(
                     new ConfiguredModelCatalog([profile]),
                     new InMemoryModelPreferenceSnapshotProvider()),
-                sanitizer);
+                sanitizer,
+                prompts);
             var model = new ToolsThenTextProvider { ToolRounds = 3 };
             var policy = new ActiveTurnCompactionPolicy
             {
@@ -578,9 +611,9 @@ public static partial class Plan80ActiveTurnContinuationTests
             var candidateProvider = new RequestCandidateProvider();
             var compactor = new ActiveTurnCompactor(
                 candidateProvider,
-                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                new ActiveTurnCompactionValidator(policy, sanitizer, prompts),
                 policy,
-                TestPromptLoader.Instance);
+                prompts);
             var application = new SessionApplication(
                 events,
                 model,
@@ -601,8 +634,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 new ExecutionLimits { MaxModelRounds = 5 },
                 activeTurnCompactor: compactor,
                 activeTurnCompactionPolicy: policy,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                correctiveMessages: new CorrectiveMessageFactory(prompts),
+                prompts: prompts);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-fallback"));
             var runId = await dispatcher.DispatchAsync(
@@ -1073,7 +1106,8 @@ public static partial class Plan80ActiveTurnContinuationTests
         IDomainEventStream events,
         IEvidenceStore evidence,
         IModelResolver resolver,
-        IOutputSanitizer sanitizer)
+        IOutputSanitizer sanitizer,
+        IPromptLoader? prompts = null)
     {
         return new ContextAssembler(
             evidence,
@@ -1082,7 +1116,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
-            TestPromptLoader.Instance,
+            prompts ?? TestPromptLoader.Instance,
             new ContextAssemblerOptions { MaximumTokens = 32_000 },
             resolver);
     }

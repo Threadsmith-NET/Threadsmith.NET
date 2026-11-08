@@ -15,9 +15,15 @@ using Xunit;
 public static class Plan113ActiveTurnSourceProjectionTests
 {
     /// <summary>The ordinary conversation path projects duplicates before sampling and avoids the summary provider.</summary>
-    [Fact]
-    public static async Task Conversation_projection_reduces_complete_request_and_advertises_recovery_only_with_receipts()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(8192)]
+    public static async Task Conversation_projection_reduces_complete_request_and_advertises_recovery_only_with_receipts(int additionalPromptCharacters)
     {
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.SystemRepositoryInspection,
+            TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)
+                + new string('p', additionalPromptCharacters));
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan1132-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
         try
@@ -46,8 +52,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 TimeSpan.FromMinutes(2)));
             var registry = new ToolRegistry(
             [
-                new ReadFileTool(TestPromptLoader.Instance, sanitizer),
-                new ActiveTurnEvidenceTool(evidence, TestPromptLoader.Instance),
+                new ReadFileTool(prompts, sanitizer),
+                new ActiveTurnEvidenceTool(evidence, prompts),
             ]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -67,18 +73,14 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 new PromptAppendLoader(sanitizer),
                 sanitizer,
                 events,
-                TestPromptLoader.Instance,
+                prompts,
                 new ContextAssemblerOptions { MaximumTokens = 65_536 },
                 new ModelResolver(
                     new ConfiguredModelCatalog([profile]),
                     new InMemoryModelPreferenceSnapshotProvider()));
             var model = new DuplicateReadProvider();
-            var compactionPolicy = new ActiveTurnCompactionPolicy
-            {
-                PressureTargetPercent = 21,
-                OutputReserveTokens = 128,
-                MinimumSavingsTokens = 1,
-            };
+            var compactionPolicy = await CreateProjectionPolicyAsync(
+                assembler, registry, profile, root, lines, TestContext.Current.CancellationToken);
             var summaryProvider = new UnexpectedSummaryProvider();
             var application = new SessionApplication(
                 events,
@@ -100,13 +102,13 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 new ExecutionLimits { MaxModelRounds = 4 },
                 activeTurnCompactor: new ActiveTurnCompactor(
                     summaryProvider,
-                    new ActiveTurnCompactionValidator(compactionPolicy, sanitizer, TestPromptLoader.Instance),
+                    new ActiveTurnCompactionValidator(compactionPolicy, sanitizer, prompts),
                     compactionPolicy,
-                    TestPromptLoader.Instance),
+                    prompts),
                 activeTurnCompactionPolicy: compactionPolicy,
                 activeTurnCompactionProfile: summaryProfile,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                correctiveMessages: new CorrectiveMessageFactory(prompts),
+                prompts: prompts);
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113.2"));
             var runId = await dispatcher.DispatchAsync(
@@ -150,6 +152,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
             // Prompt wording and advertised schemas may grow; the source reduction must still
             // reclaim the fixture's payload and account for the complete dispatched request.
             Assert.True(inspection.BeforeInputTokens > inspection.AfterInputTokens);
+            Assert.True(inspection.BeforeInputTokens >= inspection.PressureTargetTokens);
+            Assert.True(inspection.AfterInputTokens < inspection.PressureTargetTokens);
             Assert.Equal(inspection.AfterInputTokens, projectedRequest.WireEstimate?.WireInputTokens);
             Assert.True(model.Requests[1].WireEstimate?.WireInputTokens > model.Requests[0].WireEstimate?.WireInputTokens);
             var unreducedTotal = model.Requests.Take(2).Sum(request => request.WireEstimate?.WireInputTokens)
@@ -243,12 +247,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                     new ConfiguredModelCatalog([profile]),
                     new InMemoryModelPreferenceSnapshotProvider()));
             var model = new DuplicateReadProvider();
-            var policy = new ActiveTurnCompactionPolicy
-            {
-                PressureTargetPercent = 21,
-                OutputReserveTokens = 128,
-                MinimumSavingsTokens = 1,
-            };
+            var policy = await CreateProjectionPolicyAsync(
+                assembler, registry, profile, root, lines, TestContext.Current.CancellationToken);
             var application = new SessionApplication(
                 events,
                 model,
@@ -452,13 +452,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
                     new ConfiguredModelCatalog([profile]),
                     new InMemoryModelPreferenceSnapshotProvider()));
             var model = new ProjectionThenUniqueReadProvider();
-            var policy = new ActiveTurnCompactionPolicy
-            {
-                PressureTargetPercent = 21,
-                OutputReserveTokens = 128,
-                MinimumSavingsTokens = 1,
-                RetainedRecentTokens = 1,
-            };
+            var policy = await CreateProjectionPolicyAsync(
+                assembler, registry, profile, root, lines, TestContext.Current.CancellationToken);
             var summaryProvider = new CapturingFailingSummaryProvider();
             var application = new SessionApplication(
                 events,
@@ -1424,6 +1419,36 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Relevance = 1,
             EstimatedTokens = Math.Max(1, content.Length / 4),
             InvalidationKeys = content == "stale body" ? ["stale-key"] : ["repository"],
+        };
+    }
+
+    private static async Task<ActiveTurnCompactionPolicy> CreateProjectionPolicyAsync(
+        ContextAssembler assembler,
+        ToolRegistry registry,
+        ModelProfile profile,
+        string repositoryPath,
+        IReadOnlyList<string> lines,
+        CancellationToken cancellationToken)
+    {
+        var envelopeTokens = await CompactionFixtureSizing.MeasureEnvelopeAsync(
+            assembler,
+            registry,
+            profile,
+            repositoryPath,
+            "Read the same fixture twice, then finish.",
+            cancellationToken);
+        var sourceTokens = TokenEstimator.Estimate(string.Join('\n', lines));
+
+        // Place pressure between one retained source payload and two duplicate payloads,
+        // independently of shipped prompt and recovery-schema wording.
+        var pressureTokens = envelopeTokens + (sourceTokens * 3 / 2);
+        var inputBudget = profile.ContextWindow - profile.EffectiveRequestOutputTokenReserve;
+        return new ActiveTurnCompactionPolicy
+        {
+            PressureTargetPercent = ((pressureTokens * 100) + inputBudget - 1) / inputBudget,
+            OutputReserveTokens = profile.EffectiveRequestOutputTokenReserve,
+            MinimumSavingsTokens = 1,
+            RetainedRecentTokens = 1,
         };
     }
 

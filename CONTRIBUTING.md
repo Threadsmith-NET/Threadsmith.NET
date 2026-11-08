@@ -92,21 +92,23 @@ Important repository conventions include:
 - Prefer small, focused changes and avoid unrelated formatting or refactoring.
 - Add or update meaningful tests for externally observable behavior changes.
 
-The root [`.editorconfig`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.editorconfig) owns formatting and style. Check formatting without rewriting unrelated files:
+The root [`.editorconfig`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.editorconfig) owns formatting and style. Check whitespace without rewriting unrelated files or rerunning analyzers:
 
 ```powershell
-dotnet format src/Threadsmith.sln --verify-no-changes --no-restore
+dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore
 ```
 
 If formatting must be applied, limit it to the files or projects involved in your change and review the resulting diff carefully.
 
-Visual Studio also displays suggestion-level analyzer diagnostics. A build summary with zero warnings and errors does not include those suggestions. Check them explicitly when verifying changed code:
+Visual Studio also displays suggestion-level analyzer diagnostics. A build summary with zero warnings and errors does not include those suggestions. Reuse completed background compiler and analyzer feedback for the final source state when it covers the changed documents, required rules, and severities, including suggestions. Do not repeat an equivalent analyzer check merely because the evidence came from background analysis. Check status, filtering, truncation, and omissions before relying on that coverage; changed-document results do not establish a clean project or cover compilation-wide diagnostics.
+
+When that evidence is unavailable or leaves a concrete coverage gap, run an explicit check:
 
 ```powershell
 dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info
 ```
 
-Use `--include` with the changed file paths to focus this check. Correct relevant findings in the code; do not disable their rules to obtain a clean result.
+Use `--include` with the changed file paths to focus whitespace and analyzer checks. Broaden analyzer scope only when the missing coverage requires it. Correct relevant findings in the code; do not disable their rules to obtain a clean result. Background feedback does not replace required builds, tests, or explicit user, PR, and CI checks.
 
 ## Testing changes
 

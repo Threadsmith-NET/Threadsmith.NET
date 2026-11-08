@@ -98,8 +98,11 @@ public static class StartupModalLifecycleTests
     }
 
     /// <summary>Initial theme application leaves warning publication to the coordinator; runtime changes still warn.</summary>
-    [Fact]
-    public static async Task InitialThemeDoesNotDuplicateStartupWarnings()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public static async Task InitialThemeDoesNotDuplicateStartupWarnings(int expectedWarnings)
     {
         var capabilities = new TerminalCapabilities(TerminalColorDepth.None, false, false, false, false, false, false, false, false);
         using var backend = new ObservedBackend(100, 30, capabilities);
@@ -112,23 +115,28 @@ public static class StartupModalLifecycleTests
             await surface.BeginProcessStartupAsync(progress, () => observation.Snapshot, token);
             await surface.ConfigureStartupAsync(new ConfigurationBuilder().Build(), token);
             var warning = Assert.Single(surface.ThemeDiagnostics);
-            var agents = Assert.IsType<Lazy<AgentViews>>(typeof(TuiKitSurface).GetField("_agentWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(surface)).Value;
-            var cells = new CellBuffer(300, 10);
-            agents.Main.Transcript.Render(new BufferSurface(cells));
-            Assert.DoesNotContain(warning, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
 
-            // The existing coordinator publishes each startup warning once.
-            await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]), token);
-            cells = new CellBuffer(300, 10);
-            agents.Main.Transcript.Render(new BufferSurface(cells));
-            Assert.Equal(1, TUIKit.Testing.Snapshot.ToText(cells).Split(warning, StringSplitOptions.None).Length - 1);
+            if (expectedWarnings >= 1)
+            {
+                // The existing coordinator publishes each startup warning once.
+                await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]), token);
+            }
 
-            await surface.SetThemeAsync(BuiltInThemes.Create()[0], token);
-            cells = new CellBuffer(300, 10);
-            agents.Main.Transcript.Render(new BufferSurface(cells));
-            Assert.Equal(2, TUIKit.Testing.Snapshot.ToText(cells).Split(warning, StringSplitOptions.None).Length - 1);
+            if (expectedWarnings >= 2)
+            {
+                await surface.SetThemeAsync(BuiltInThemes.Create()[0], token);
+            }
         },
             TestContext.Current.CancellationToken);
+
+        // RunAsync joins the terminal loop. Rendering the retained transcript is now exclusive:
+        // Render changes its layout state and must never race the terminal owner's rendering.
+        Assert.True(backend.IsStopped);
+        var agents = Assert.IsType<Lazy<AgentViews>>(typeof(TuiKitSurface).GetField("_agentWorkspace", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(surface)).Value;
+        var cells = new CellBuffer(300, 10);
+        agents.Main.Transcript.Render(new BufferSurface(cells));
+        var diagnostic = Assert.Single(surface.ThemeDiagnostics);
+        Assert.Equal(expectedWarnings, TUIKit.Testing.Snapshot.ToText(cells).Split(diagnostic, StringSplitOptions.None).Length - 1);
     }
 
     private static async Task<string> RepaintAsync(ObservedBackend backend, int width, CancellationToken cancellationToken)

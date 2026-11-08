@@ -175,6 +175,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 2. Confirm validated children are visible, bounded and confined to the actual inherited advertised tools; ordinary children cannot call `edit_source`.
 3. Confirm cancellation, progress, joins, provider/model provenance and partial results remain observable.
 4. Apply resulting advice through the parent's ordinary source-edit path with exact authorization and configured validation.
+5. Confirm cumulative run quotas and child deadlines are inactive unless configured. Set a positive limit and confirm its enforcement remains observable.
 
 **Verifies:** explicit model-requested delegation, preserved child restrictions and one parent source writer.
 
@@ -780,9 +781,17 @@ Record automated and physical-terminal evidence separately; unexecuted operator 
 
 ## Scenario AU — TUIKit agent workspace
 
+Submitting a new conversation turn closes stopped tabs for completed, cancelled, and discarded children. Failed tabs and queued or running children remain open. Closing the selected tab returns to MAIN without changing its draft. Local commands, active-run steering, and automatic intelligence refresh do not clear these tabs. Session history and child results remain available.
+
+MAIN stays leftmost. New children appear immediately to its right, pushing older tabs toward right-side overflow without changing selection. Overflow arrows act on their last painted targets when membership changes before the next frame. Retention still evicts the oldest stopped views first.
+
+Finished child tabs display `[stopped]` and an `x` close control. Clicking `x` closes only that finished view; closing the selected view returns to MAIN without losing its draft. MAIN and active children cannot be closed through this control. Late terminal corrections do not reopen closed tabs.
+
 After required startup choices, the splash must paint before loading begins. Actual semantic startup steps have live monotonic timers; successful steps freeze their durations and use the success role, while failure/cancellation remain distinct. Reticulating Splines runs a random 500–1000 ms timer alongside loading without delaying readiness; its own duration freezes on completion. Snapshot capture and final monitoring/document reconciliation are visible, and the composer still waits for authoritative readiness. On small terminals, recent work and timers remain readable.
 
 Follow [the agent workspace procedure](../operations/agent-workspace.md#verification-procedure). Confirm stable person/role labels and one-cell tab gaps, suffix collisions, targeted output/tool/status/counters, selected and unselected retirement, child input blocking, draft retention, centered modal isolation, immediate authoritative toggles, single theme selection, OAuth actions/cancellation, modal help columns, startup input discard and splash-only successful output, seven theme roles, semantic-refresh toasts, narrow layout/overflow, and queue/retention notices. Tool activities must appear before completion with independent timers; named child status rows update inside their originating delegation block and remain below its final timer without duplicates. MAIN’s active-turn hint is transient. Optional reasoning counts distinguish missing from zero and never add to output totals a second time; latest-request cache reporting remains independent. Repeat physical Windows and Unix cases and record evidence independently; automated headless success does not close those platform checks.
+
+Each child transcript starts with sanitized instructions from its effective initial prepared request, in delivered section order, including expanded shared and individual context. The display observation retains at most 65,536 UTF-16 characters across labels and bodies and eight sections; larger content shows an explicit retention-omission notice without changing model input. A child that stops before preparation instead shows its frozen assignment and an explicit model-not-prepared explanation. Instructions precede response text, diagnostics, tool output, and terminal details. Concurrent children remain isolated; duplicate events, retries, tab changes, and resizing do not duplicate instructions, and stale generations cannot replace them. Literal quoted content uses existing selection, copy, retention, and omission behavior without active links or terminal controls. Historical sessions do not acquire reconstructed instructions.
 
 ## Scenario AV — Focused review skills
 

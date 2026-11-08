@@ -56,6 +56,9 @@ public interface IAgentWorkspaceSurface
     /// <summary>Replaces session ownership and clears retired-session child views.</summary>
     Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default);
 
+    /// <summary>Closes stopped nonfailed child views when the user starts a new turn.</summary>
+    Task BeginUserTurnAsync(SessionId sessionId, CancellationToken cancellationToken = default);
+
     /// <summary>Updates or retires an accepted child. Output never creates membership.</summary>
     Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default);
 }

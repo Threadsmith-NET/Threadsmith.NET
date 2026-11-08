@@ -14,9 +14,8 @@ Before code changes, read these documents:
 
 Reduce the time to the first usable display. Keep required security and storage checks before dependent operations.
 
-This plan covers the last three items from the startup review:
+This plan covers the remaining host startup work from the review:
 
-5. Check only new or changed storage data when previous checks remain valid.
 6. Avoid repeated setup for the initial repository.
 7. Let optional connections complete after the first display.
 
@@ -40,7 +39,7 @@ Do not add another startup scheduler. Do not put service lifetime control in the
 
 ## 3 Scope
 
-Limit storage reads. Reuse valid audit results. Avoid repeated repository setup.
+Avoid repeated repository setup. Keep required retention work in its existing storage owner.
 
 Let optional provider work and MCP connections continue after the first display.
 
@@ -57,11 +56,7 @@ Use these technical terms throughout this plan:
 
 | Term | Meaning |
 |---|---|
-| Audit | A check of stored data for secrets that need redaction. |
-| Redaction | Replacement of secret content with safe text. |
-| Sanitizer | The component that replaces secret content. |
 | Artifact | Content that the host stores separately from event rows. |
-| Checkpoint | A stored record of audit work that completed successfully. |
 | Retention | The rules that control how long stored data remains available. |
 | Binding | The connection between application services and one repository. |
 | Binding record | Evidence that the host completed a binding with specified inputs. |
@@ -71,7 +66,7 @@ Use these technical terms throughout this plan:
 
 ## 4 Non-Scope
 
-Keep redaction and retention limits. Keep schema migrations and policy checks.
+Keep output sanitization and retention limits. Keep schema migrations and policy checks.
 
 Do not start untrusted connections. Do not change authentication permissions or secret precedence.
 
@@ -85,8 +80,7 @@ The review examined source code. The review did not measure startup time.
 
 | Component or method | Current behavior |
 |---|---|
-| `InitializePersistenceAsync` | Waits for storage setup, migrations, audit, and retention work. |
-| `RedactionAudit.RunAsync` | Reads all event rows for a session before it applies `MaxEventsPerSession`. It also lists and reads artifacts. |
+| `InitializePersistenceAsync` | Waits for storage setup, migrations, and retention work. |
 | `ApplicationComposition.CreateAsync` | Prepares memory, scratchpad, and skill catalogs before the shell starts. |
 | `BindRepositoryAsync` | Reads prompts and configuration. It repeats service binding and skill refresh during the initial repository open. |
 | `ModelComposition.CreateAsync` | Reads catalogs. It can request credentials or provider capabilities before the shell starts. |
@@ -109,7 +103,7 @@ Embedding and ranking models already load when needed. Repository extension auto
 Measure these operations:
 
 - Configuration and prompt reads.
-- Storage setup, audit, and retention.
+- Storage setup and retention.
 - Provider catalog reads.
 - MCP connections.
 - Skill discovery.
@@ -124,48 +118,10 @@ Use these conditions:
 
 Keep inputs controlled between comparisons. Report work that moves from startup to the first request.
 
-### 6.2 Limit storage reads
+### 6.2 Removed stored-data audit work
 
-1. Add bounded event reads to the existing event store.
-2. Apply the sample limit in the database query.
-3. Read rows in stable sequence order.
-4. Read session lists in pages where necessary.
-5. Read artifact lists in pages where necessary.
-
-Set a maximum size for each page. Use a stable cursor to select the next page.
-
-Do not load a complete list before dividing the list into pages.
-
-### 6.3 Reuse completed audit work
-
-Add checkpoints through the existing storage component.
-
-Record these facts:
-
-- Sanitizer version.
-- Audit options.
-- Event range.
-- Artifact content identity.
-
-Do not store secret values in a checkpoint.
-
-1. Check one bounded batch.
-2. Complete required artifact repairs.
-3. Save the checkpoint only after the batch succeeds.
-
-If a batch stops before completion, resume the incomplete work after restart. If sanitizer rules or audited content change, mark the affected checkpoint invalid.
-
-Keep sampled events separate from complete audit coverage. Do not mark unchecked events as audited.
-
-Let later bounded passes include new events.
-
-Keep the existing artifact repair procedure. Save successful repair evidence only after both content storage and required deletion succeed.
-
-If a checkpoint is missing or corrupt, use the existing audit procedure.
-
-Do not expose unchecked content to reduce startup time. Keep current audit work before startup completion until content readers provide equivalent protection.
-
-If readers need extra checks, extend the existing readers. Do not add another sanitizer.
+The user removed the retrospective stored-data audit from the product.
+Item 5 is retired. Do not add audit checkpoints, repair passes, or replacement scans.
 
 ### 6.4 Separate required retention work
 
@@ -264,7 +220,7 @@ Do not discard a task reference while the task can still report a result or fail
 
 Keep current commands and permission decisions. Use existing MCP status and tool availability records where possible.
 
-Use host-owned records for checkpoints and binding data. Keep provider, terminal, and extension types out of persistent state.
+Use host-owned records for binding data. Keep provider, terminal, and extension types out of persistent state.
 
 If the design needs a new readiness state, define its owner and transitions in Core. Keep readiness decisions in the host.
 
@@ -277,7 +233,6 @@ Inspect these files before changes:
 - `src/Threadsmith.App/ModelComposition.cs`
 - `src/Threadsmith.App/IntegrationComposition.cs`
 - `src/Threadsmith.App/ApplicationComposition.cs`
-- `src/Threadsmith.Persistence/RedactionAudit.cs`
 - `src/Threadsmith.Persistence/SqliteEventStore.cs`
 - `src/Threadsmith.Persistence/RetentionService.cs`
 
@@ -292,16 +247,14 @@ Change storage contracts or migrations only where necessary. Use existing persis
 3. Record required and optional startup dependencies.
 4. Record the component that controls each task during shutdown.
 5. Measure startup before code changes.
-6. Implement the bounded queries from section 6.2.
-7. Implement the audit checkpoints from section 6.3.
-8. Separate retention work as specified in section 6.4.
-9. Implement the binding record from section 6.5.
-10. Delay optional provider work as specified in section 6.6.
-11. Delay optional MCP connections as specified in section 6.7.
-12. Check task lifetime against section 6.8.
-13. Test each change separately.
-14. Measure startup and the first dependent request.
-15. Record results and remaining work in this plan.
+6. Separate retention work as specified in section 6.4.
+7. Implement the binding record from section 6.5.
+8. Delay optional provider work as specified in section 6.6.
+9. Delay optional MCP connections as specified in section 6.7.
+10. Check task lifetime against section 6.8.
+11. Test each change separately.
+12. Measure startup and the first dependent request.
+13. Record results and remaining work in this plan.
 
 ## 10 Testing
 
@@ -309,9 +262,6 @@ These tests apply to implementation. The plan-writing task did not run builds or
 
 | Area | Required test conditions |
 |---|---|
-| Audit queries | Use a large history. Exceed one page. Add new events between passes. |
-| Audit checkpoints | Change sanitizer rules. Corrupt a checkpoint. Interrupt a batch. Repeat an artifact identity. |
-| Artifact repair | Fail content storage. Fail deletion. Check that failed repair produces no success checkpoint. |
 | Retention | Exceed a limit. Write during cleanup. Interrupt cleanup. Restart. Keep referenced data. |
 | Initial binding | Open without changes. Change a prompt. Add or delete a skill. Change user configuration. |
 | Binding recovery | Revoke trust. Change startup permissions. Switch repositories. Fail rollback. |
@@ -342,7 +292,7 @@ Record exact commands and results. Report Windows, Linux, and macOS results sepa
 
 ## 11 Security/Permissions
 
-Keep sanitization at existing content access points. A checkpoint does not replace those checks.
+Keep sanitization at existing content access points.
 
 Do not log stored content or credentials during measurements.
 
@@ -359,7 +309,6 @@ Use existing logs and operation status.
 Report these facts:
 
 - Event rows and artifacts read.
-- Audit batches completed.
 - Binding steps reused.
 - Connection state.
 - Sanitized failures.
@@ -370,10 +319,6 @@ Keep failure details available after the first display.
 
 ## 13 Migration/Compatibility
 
-Give persistent checkpoints a format version through the existing migration component.
-
-If a checkpoint is absent or incompatible, treat its data as unaudited.
-
 Keep binding records in memory unless a specific requirement needs persistent storage. Do not store live services or credentials in a binding record.
 
 Keep configured automatic connections. Change only when those connections complete relative to the first display.
@@ -382,10 +327,6 @@ Keep required waits for dependent requests in both startup modes.
 
 ## 14 Acceptance Criteria
 
-- The database applies event limits before rows enter application memory.
-- Each page uses bounded memory and permits progress to the next page.
-- An interrupted audit resumes without marking unchecked data complete.
-- Failed repair cannot produce a successful repair checkpoint.
 - Valid initial binding reuse avoids repeated catalog discovery and prompt parsing.
 - Changed inputs cause normal binding or the existing restart requirement.
 - Optional network work does not delay the first display or independent local operations.
@@ -399,8 +340,6 @@ Set acceptable performance limits before comparison. Report the first-use delay 
 
 ## 15 Risks
 
-Changed sanitizer rules can make checkpoints invalid. Include the rule version in each checkpoint.
-
 A binding record can miss a new file. Include directory membership in the relevant checks.
 
 An earlier display can expose incomplete services. Keep host checks before dependent requests.
@@ -413,7 +352,7 @@ Keep this plan in the planning index. Record implementation results here.
 
 Keep completed milestone contracts unchanged. Document visible pending connections for operators.
 
-Change manual procedures only when the operator workflow changes. Do not describe sampled audit data as complete coverage.
+Change manual procedures only when the operator workflow changes.
 
 Writing reference: [asd-ste100 skill](https://github.com/danyuchn/asd-ste100-skill/blob/master/SKILL.md).
 The rewrite uses the skill's structural rules. The rewrite does not establish compliance with the official dictionary.
@@ -422,7 +361,6 @@ The rewrite uses the skill's structural rules. The rewrite does not establish co
 
 | Decision | Required action until resolved |
 |---|---|
-| Which audit work can complete after startup? | Keep the work before startup completion until content protection remains equivalent. |
 | Which retention work enforces a hard limit? | Keep that work before dependent writes. |
 | Which inputs prove a valid initial binding? | Use the full binding procedure when proof is incomplete. |
 | Which profiles and hooks can run simultaneously? | Keep dependent operations in their current order. |

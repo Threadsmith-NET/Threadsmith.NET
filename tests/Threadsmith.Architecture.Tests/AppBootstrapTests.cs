@@ -111,14 +111,44 @@ public static partial class AppBootstrapTests
         Assert.False(File.Exists(database));
     }
 
-    /// <summary>Cumulative execution tokens are unlimited unless the user configures a ceiling.</summary>
-    [Fact]
-    public static void ConfigurationBootstrap_DefaultExecutionTokenBudget_IsNotConfigured()
+    /// <summary>Omitted and zero execution quotas retain usage accounting without a cumulative ceiling.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void ConfigurationBootstrap_ExecutionBudgetsAreOptIn(bool explicitZero)
     {
         using var temporary = new TemporaryDirectory("budget-default");
-        var configuration = ConfigurationBootstrap.Build([], CreatePaths(temporary.Root));
+        string[] arguments = explicitZero
+            ? ["--set:budget:tokens=0", "--set:budget:calls=0", "--set:budget:wallClockSeconds=0", "--set:budget:cost=0"]
+            : [];
+        var configuration = ConfigurationBootstrap.Build(arguments, CreatePaths(temporary.Root));
+        var budget = HostFoundation.CreateExecutionBudget(configuration);
+        var maximum = new BudgetDimensions(long.MaxValue, int.MaxValue, TimeSpan.MaxValue, decimal.MaxValue);
 
-        Assert.Null(configuration.GetValue<long?>("budget:tokens"));
+        Assert.False(budget.Accrue(maximum).IsExhausted);
+        var status = budget.Accrue(new BudgetDimensions(1, 1, TimeSpan.FromTicks(1), 1));
+
+        Assert.False(status.IsExhausted);
+        Assert.Equal(maximum, status.Used);
+        Assert.Equal(BudgetExhaustionDimension.None, status.ExhaustedDimensions);
+    }
+
+    /// <summary>Each positive quota is enforced independently without enabling the other dimensions.</summary>
+    [Theory]
+    [InlineData("tokens", BudgetExhaustionDimension.Tokens)]
+    [InlineData("calls", BudgetExhaustionDimension.Calls)]
+    [InlineData("wallClockSeconds", BudgetExhaustionDimension.WallClock)]
+    [InlineData("cost", BudgetExhaustionDimension.Cost)]
+    public static void ConfigurationBootstrap_PositiveExecutionQuotaEnforcesOnlyItsDimension(string setting, BudgetExhaustionDimension dimension)
+    {
+        using var temporary = new TemporaryDirectory("budget-opt-in");
+        var configuration = ConfigurationBootstrap.Build([$"--set:budget:{setting}=1"], CreatePaths(temporary.Root));
+        var budget = HostFoundation.CreateExecutionBudget(configuration);
+
+        var status = budget.Accrue(new BudgetDimensions(2, 2, TimeSpan.FromSeconds(2), 2));
+
+        Assert.True(status.IsExhausted);
+        Assert.Equal(dimension, status.ExhaustedDimensions);
     }
 
     /// <summary>Repository settings cannot change limits governing user-wide approval and skill stores.</summary>

@@ -218,6 +218,11 @@ internal sealed class ChildAgentModelLoop
                 var fitted = FitRequest(plan.Provenance.SessionId.Value, assignment, model, messages, BindPrompts, round, history.RewriteGeneration, transientState);
                 model = fitted.Model;
                 previousRequest = fitted.Request;
+                if (round == 0)
+                {
+                    await ChildAgentInstructionObservation.ObservePreparedAsync(plan, assignment, fitted.Request, cancellationToken);
+                }
+
                 using var selectedPromptScope = _prompts.BeginModelScope(model.ProfileId);
                 childToolContext = childToolContext with
                 {

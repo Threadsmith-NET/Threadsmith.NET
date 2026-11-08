@@ -913,7 +913,8 @@ public sealed partial class InteractionCoordinator
                     break;
                 }
 
-                if (input.Kind == InteractionInputKind.IdleOutputYield)
+                var automaticRefresh = input.Kind == InteractionInputKind.IdleOutputYield;
+                if (automaticRefresh)
                 {
                     var intelligencePath = activeRepository?.Repository?.RepositoryPath ?? snapshot.RepositoryPath;
                     if (intelligencePath is null || !await _presenter.TakeIntelligenceRefreshAsync(sessionId, intelligencePath, lifetime.Token))
@@ -1650,6 +1651,11 @@ public sealed partial class InteractionCoordinator
                 try
                 {
                     await EnsureCurrentUserUrlConsentAsync(submittedText, operation.Token);
+                    if (!automaticRefresh && _surface.Surface is IAgentWorkspaceSurface workspace)
+                    {
+                        await workspace.BeginUserTurnAsync(sessionId, operation.Token);
+                    }
+
                     renderedRunCompletion = new TaskCompletionSource<string?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     runCompletionQueued = false;

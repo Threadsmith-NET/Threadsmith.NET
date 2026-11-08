@@ -1482,6 +1482,8 @@ public static partial class ToolRuntimeTests
             await using var events = new DomainEventStream();
             var approval = new CountingApprovalPolicy();
             var tool = new CountingTool();
+            var budget = new ExecutionBudget(new BudgetDimensions(100, 1, TimeSpan.MaxValue));
+            budget.Accrue(new BudgetDimensions(0, 1, TimeSpan.Zero));
             var pipeline = new ToolInvocationPipeline(
                 new ToolRegistry([tool]),
                 new DefaultPolicyEngine(),
@@ -1489,7 +1491,7 @@ public static partial class ToolRuntimeTests
                 events,
                 new TestSanitizer(),
                 NullLogger<ToolInvocationPipeline>.Instance,
-                new ExecutionBudget(new BudgetDimensions(100, 0, TimeSpan.MaxValue)),
+                budget,
                 timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest

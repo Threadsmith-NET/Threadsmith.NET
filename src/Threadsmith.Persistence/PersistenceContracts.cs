@@ -38,10 +38,6 @@ public interface IArtifactStore : IImageArtifactStore
     /// <returns><see langword="true"/> when artifact metadata existed and was removed.</returns>
     Task<bool> DeleteAsync(string contentHash, CancellationToken cancellationToken = default);
 
-    /// <summary>Deletes unsafe text for redaction repair, revoking historical receipt ownership.</summary>
-    Task<bool> DeleteForRedactionAsync(string contentHash, CancellationToken cancellationToken = default)
-        => DeleteAsync(contentHash, cancellationToken);
-
     /// <summary>Lists artifact metadata, optionally scoped to a session.</summary>
     /// <param name="sessionId">The owning session, or <see langword="null"/> for all.</param>
     /// <param name="cancellationToken">A token that cancels the listing.</param>

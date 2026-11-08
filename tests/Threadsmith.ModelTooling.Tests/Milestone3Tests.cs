@@ -1867,7 +1867,7 @@ public static class Milestone3Tests
 
     /// <summary>Missing provider usage is estimated and remains enforceable by the cost budget.</summary>
     [Fact]
-    public static async Task OpenAiAdapter_MissingUsage_EstimatesCostAndCanPauseBudget()
+    public static async Task OpenAiAdapter_MissingUsage_EstimatesCostAndExhaustsConfiguredBudget()
     {
         const string stream = "data: {\"choices\":[{\"delta\":{\"content\":\"estimated output\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
         var provider = new OpenAiCompatibleModelProvider(
@@ -1889,7 +1889,7 @@ public static class Milestone3Tests
             TimeSpan.Zero,
             usage.EstimatedCost));
         Assert.True(status.IsExhausted);
-        Assert.Contains("pause", status.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(BudgetExhaustionDimension.Cost, status.ExhaustedDimensions);
     }
 
     /// <summary>Retryable statuses are bounded while client errors remain permanent.</summary>

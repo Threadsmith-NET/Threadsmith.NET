@@ -32,7 +32,7 @@ Include progress for:
 - Configuration paths, configuration loading, migration, and policy.
 - Deployed prompts and repository prompt overrides.
 - Database initialization and migrations.
-- Artifact storage, redaction audit, retention, and repository facts.
+- Artifact storage, retention, and repository facts.
 - Model configuration, credentials, and conditional catalog refreshes.
 - MCP initialization and automatic connections.
 - Memory initialization and scratchpad initialization.
@@ -148,7 +148,7 @@ Implement the following bounded opportunity:
 
 Retain the existing bounded MCP connection concurrency. Report individual connection states through that execution path.
 
-For additional opportunities, inspect shared state, configuration writes, event publication, and resource ownership first. Keep migration, redaction, retention, dependent reads, and service publication in their required order.
+For additional opportunities, inspect shared state, configuration writes, event publication, and resource ownership first. Keep database migrations, retention, dependent reads, and service publication in their required order.
 
 For every parallel group, record its prerequisites and join point. Cancel and observe sibling tasks after a fatal failure. Do not dispose resources while sibling tasks still use them.
 

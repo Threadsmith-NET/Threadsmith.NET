@@ -43,6 +43,20 @@ internal sealed partial class TuiKitSurface
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task BeginUserTurnAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(
+            () =>
+        {
+            if (Agents.BeginUserTurn(sessionId))
+            {
+                AgentSelectionChanged();
+            }
+        },
+            cancellationToken);
+    }
+
     private static Rect ComposerScreenRect(Rect region)
     {
         var content = WorkspaceLayout.ComposerContent(new Size(region.Width, region.Height));
@@ -63,6 +77,20 @@ internal sealed partial class TuiKitSurface
         }
 
         if (Agents.Select(view))
+        {
+            AgentSelectionChanged();
+        }
+    }
+
+    private void CloseAgent(AgentView view)
+    {
+        if (_app.Modals.IsActive || _startupBlocked)
+        {
+            return;
+        }
+
+        var previous = Agents.Selected;
+        if (Agents.Close(view) && !ReferenceEquals(previous, Agents.Selected))
         {
             AgentSelectionChanged();
         }
@@ -155,7 +183,7 @@ internal sealed partial class TuiKitSurface
         var reasoning = child?.Reasoning ?? _status?.Reasoning ?? default;
         var context = child is not null ? child.ContextTokens : _status?.ContextTokens;
         var limit = child is not null ? child.ContextLimit : _status?.ContextLimit;
-        return new AgentHeaderState(child?.Label ?? "MAIN", model, provider, reasoning, context, limit, usage, _status?.IsPostResume == true);
+        return new AgentHeaderState(Agents.Selected.Label, model, provider, reasoning, context, limit, usage, _status?.IsPostResume == true);
     }
 
     private sealed class OutputPane : IWidget, IFocusable, IMouseAware

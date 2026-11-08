@@ -71,6 +71,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(ExecutionOutcomeRecorded), "executionOutcomeRecorded")]
 [JsonDerivedType(typeof(DelegationCheckpointWritten), "delegationCheckpointWritten")]
 [JsonDerivedType(typeof(AgentRunLifecycleObserved), "agentRunLifecycleObserved")]
+[JsonDerivedType(typeof(AgentRunInstructionsObserved), "agentRunInstructionsObserved")]
 [JsonDerivedType(typeof(SkillCatalogRefreshed), "skillCatalogRefreshed")]
 [JsonDerivedType(typeof(SkillVerificationDecided), "skillVerificationDecided")]
 [JsonDerivedType(typeof(SkillWorkflowCheckpointWritten), "skillWorkflowCheckpointWritten")]
@@ -774,6 +775,40 @@ public sealed record AgentRunLifecycleObserved(
     string Reason,
     long Revision = 1) : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>Identifies the instructions available when a child starts.</summary>
+public enum AgentInstructionSource
+{
+    /// <summary>The effective initial model request was prepared.</summary>
+    PreparedRequest,
+
+    /// <summary>Only the frozen assignment was available.</summary>
+    AssignmentOnly,
+}
+
+/// <summary>One sanitized instruction section, in delivered order.</summary>
+public sealed record AgentInstructionSection(string Label, string Text);
+
+/// <summary>Instructions captured before the child's initial output, outside model accounting.</summary>
+public sealed record AgentRunInstructionsObserved(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    DelegationId DelegationId,
+    AgentAssignmentId AssignmentId,
+    RunId ChildRunId,
+    int Generation,
+    AgentInstructionSource Source,
+    IReadOnlyList<AgentInstructionSection> Sections) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Maximum retained label and body characters per child observation, measured in UTF-16 code units.</summary>
+    public const int MaximumRetainedCharacters = 64 * 1024;
+
+    /// <summary>Maximum retained sections per child observation.</summary>
+    public const int MaximumRetainedSections = 8;
+
+    /// <summary>Gets whether the display copy omitted instruction content at its retention boundary.</summary>
+    public bool IsTruncated { get; init; }
+}
+
 /// <summary>A metadata-only skill catalog refresh completed.</summary>
 public sealed record SkillCatalogRefreshed(
     SessionId SessionId,
@@ -968,6 +1003,7 @@ public static class DomainEventJson
             ["executionOutcomeRecorded"] = typeof(ExecutionOutcomeRecorded),
             ["delegationCheckpointWritten"] = typeof(DelegationCheckpointWritten),
             ["agentRunLifecycleObserved"] = typeof(AgentRunLifecycleObserved),
+            ["agentRunInstructionsObserved"] = typeof(AgentRunInstructionsObserved),
             ["skillCatalogRefreshed"] = typeof(SkillCatalogRefreshed),
             ["skillVerificationDecided"] = typeof(SkillVerificationDecided),
             ["skillWorkflowCheckpointWritten"] = typeof(SkillWorkflowCheckpointWritten),

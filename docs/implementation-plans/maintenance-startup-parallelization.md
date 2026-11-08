@@ -11,7 +11,7 @@ Use the document structure in [shared context, section G](00-shared-context.md#g
 
 Run independent startup operations at the same time. Keep the required order for dependent operations.
 
-Include all 14 opportunities from the startup review. Do not remove an opportunity because of an assumed acceptable amount of parallel execution.
+P01 is removed at the user's request. Include the remaining 13 opportunities from the startup review. Do not remove an opportunity because of an assumed acceptable amount of parallel execution.
 
 Keep existing limits. Use measurements to support any necessary new limit.
 The user approved a configurable starting value of four semantic file reads. This value is provisional, not a measured optimum. See sections 17 and 18.
@@ -83,7 +83,7 @@ The review used source code. The review did not measure startup time or prove a 
 
 Several independent operations currently run in sequence:
 
-- Configuration file migrations and configuration views.
+- Configuration views.
 - Prompt file reads and validation.
 - The main persistence chain and repository facts initialization.
 - Model, MCP, and extension host composition.
@@ -120,23 +120,17 @@ Do not use `Task.Run` around every synchronous operation without evidence of use
 
 Keep diagnostic and catalog order stable. Operation completion order must not change configuration precedence or duplicate selection.
 
-### 6.2 P01 — Configuration file migrations
+### 6.2 P01 — Removed configuration migration
 
-Source: [RetiredPlanningConfiguration.cs](../../src/Threadsmith.App/RetiredPlanningConfiguration.cs).
-
-1. Resolve configuration paths before the group starts.
-2. Identify distinct physical files for machine, user, repository, and session configuration.
-3. Run migrations for independent files in parallel.
-4. Retain the existing `RepositorySettingsCoordinator` write gate for each file.
-5. Join all migrations before configuration reload.
-
-Use serial execution when paths can identify the same file. Preserve atomic writes and authority checks.
+The user removed configuration migration from the product.
+Do not restore the migration or parallelize its former file writes.
+Keep P01 as a removed item so the remaining opportunity identifiers stay stable.
 
 ### 6.3 P02 — Configuration views
 
 Source: [Program.cs](../../src/Threadsmith.App/Program.cs).
 
-1. Complete migrations and configuration reload.
+1. Complete initial configuration loading.
 2. Build the trusted configuration and load the security policy snapshot in separate branches.
 3. Join both branches before service composition.
 4. Publish the policy before any consumer uses it.
@@ -168,9 +162,9 @@ Source: [HostFoundation.cs](../../src/Threadsmith.App/HostFoundation.cs).
 
 Keep this order within the main chain:
 
-`database initialization -> migrations -> artifact initialization -> redaction -> retention`
+`database initialization -> migrations -> artifact initialization -> retention`
 
-Use serial execution if file identity is uncertain. Do not run redaction and retention against shared storage at the same time.
+Use serial execution if file identity is uncertain. Join required retention work before dependent services start.
 
 ### 6.6 P05 — Service composition
 
@@ -332,7 +326,7 @@ Do not promise a speed increase before measurements exist.
 
 | Area | Existing files to change where necessary |
 |---|---|
-| Configuration and composition | `src/Threadsmith.App/Program.cs`, `RetiredPlanningConfiguration.cs`, `HostFoundation.cs`, `IntegrationComposition.cs`. |
+| Configuration and composition | `src/Threadsmith.App/Program.cs`, `HostFoundation.cs`, `IntegrationComposition.cs`. |
 | Model initialization | `src/Threadsmith.App/ModelComposition.cs`, `src/Threadsmith.Models.Anthropic/AnthropicCatalogMaintenance.cs`. |
 | Prompt acquisition | `src/Threadsmith.Context/DeployedPromptLoader.cs`. |
 | MCP | `src/Threadsmith.Mcp/McpManager.cs`, `McpAdapter.cs`, `SdkHttpTransport.cs`, `SdkStdioTransport.cs`. |
@@ -349,7 +343,7 @@ Do not add a shared framework for independent async calls.
 1. Compare P01 through P14 with the active source code.
 2. Record actual prerequisites, shared writes, join points, and existing resource controls.
 3. Record baseline startup measurements through the existing progress mechanism.
-4. Implement P01 through P04 within their existing owners.
+4. Implement P02 through P04 within their existing owners.
 5. Implement P06 and P07 within model composition.
 6. Implement P08 and P09 within the existing MCP lifecycle.
 7. Implement P10 and P11 within application and skill services.
@@ -407,7 +401,7 @@ Keep performance measurements separate from correctness tests.
 
 Keep configuration as data. Keep repository code loading and privileged secret access under existing policy.
 Complete required validation before dependent file writes, process starts, authentication, or network activity.
-Keep path containment, link checks, redaction, retention, and mutation approval.
+Keep path containment, link checks, output sanitization, retention, and mutation approval.
 Do not expose prompt bodies, credentials, headers, or environment secrets in diagnostics.
 
 ## 12 Observability
@@ -429,7 +423,7 @@ Keep current optional provider and MCP fallback behavior.
 
 ## 14 Acceptance Criteria
 
-1. P01 through P14 have implementation evidence or a documented source dependency that prevents the proposed overlap.
+1. P02 through P14 have implementation evidence or a documented source dependency that prevents the proposed overlap.
 2. All possible remaining overlap in a constrained item has an explicit disposition.
 3. Independent branches have runtime evidence of overlap through deterministic tests.
 4. Required validation, admission, ordering, and join points remain effective.
@@ -513,7 +507,7 @@ A fresh follow-up test review inspected the revised diff and found no remaining 
 
 | Item | Current disposition |
 |---|---|
-| P01 | Not changed. Migration uses `RepositorySettingsCoordinator` atomic updates. Its normalized-path gates do not prove independence through all aliases or hard links. Retain serial execution while physical identity is uncertain. No new identity machinery was added. |
+| P01 | Removed at the user's request. Startup and repository changes no longer migrate configuration. |
 | P02 | Not implemented. The synchronous trusted-configuration and policy readers can use a deliberately scheduled pair with joined root cleanup. |
 | P03 | Not implemented. Override selection, byte admission, and cache mutation must remain under the loader owner before concurrent acquisition. |
 | P04 | Not changed. The configured main database can identify the facts database. Path inequality alone is insufficient. Keep the main chain and facts serial while physical identity is uncertain. |
@@ -527,7 +521,7 @@ A fresh follow-up test review inspected the revised diff and found no remaining 
 | P13 | Authoritative snapshot capture and loaded-document reconciliation use bounded parallel reads through the unchanged `ReadStableFileAsync`. Results merge in inventory order after the join. The new semantic setting controls each pass. Other independent refresh loops and final performance measurements remain open. |
 | P14 | Loaded-document text and identity acquisition now uses the configured read limit. It retains path deduplication, generation-owned snapshot admission, and indexed result order. Extraction still follows the initial compilation frontier; extraction/compilation overlap is not implemented. A call-scoped internal load result can carry earlier identities to binding without a persistent cache. Keep final disk reconciliation and background compilation publication boundaries. |
 
-The P01 and P04 restrictions do not dispose of the other opportunities.
+The P04 restriction does not dispose of the other opportunities.
 No new scheduler, cache, storage format, or lifecycle owner has been added.
 
 ### Configurable semantic file reads

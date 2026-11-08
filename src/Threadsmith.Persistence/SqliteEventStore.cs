@@ -120,31 +120,6 @@ public sealed partial class SqliteEventStore
         return rows;
     }
 
-    /// <summary>Lists session ids that have at least one persisted event.</summary>
-    /// <param name="cancellationToken">A token that cancels the listing.</param>
-    /// <returns>The persisted session ids in first-event order.</returns>
-    public async Task<IReadOnlyList<SessionId>> ListSessionsAsync(
-        CancellationToken cancellationToken = default)
-    {
-        var sessions = new List<SessionId>();
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT session_id
-            FROM domain_events
-            GROUP BY session_id
-            ORDER BY MIN(sequence);
-            """;
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            sessions.Add(new SessionId(Guid.Parse(reader.GetString(0))));
-        }
-
-        return sessions;
-    }
-
     /// <summary>Deletes all events and artifacts for sessions older than the threshold (§19.6).</summary>
     /// <param name="cutoff">Sessions whose last event precedes this timestamp are removed.</param>
     /// <param name="cancellationToken">A token that cancels the deletion.</param>

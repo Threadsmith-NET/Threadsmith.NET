@@ -7,7 +7,7 @@ Review the assigned changes and requirements within this role's focus. Inspect r
 Note: It's OK to not find any issues. Don't seek extreme hypotheticals just to provide an issue.
 
 ## Task
-- Read the assigned code, applicable AGENTS.md, and relevant architecture documents (if any). 
+- Read the assigned code and relevant architecture documents (if any). Apply applicable repository instructions using supplied content where available.
 - Consider dependency direction, ownership, composition, public contracts, and
 subsystem boundaries. Explain concrete concerns or useful improvements, relating them to the
 repository's established design where helpful. Say when the change fits that design, and distinguish

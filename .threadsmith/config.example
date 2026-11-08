@@ -147,6 +147,8 @@
   // ── Parallel agents and isolated workers (M11.1 / plan 38) ────────────
   // Delegation is one level deep. Children are in-process asynchronous runs;
   // these limits never authorize mutation, process, network, or model access.
+  // Cumulative run quotas are opt-in. Zero disables a quota while retaining usage accounting.
+  "budget": { "tokens": 0, "calls": 0, "wallClockSeconds": 0, "cost": 0 },
   "agents": {
     // Bounded fair admission queue across parents.
     "queueCapacity": 32,
@@ -176,6 +178,9 @@
     // inherited models do not gain the trusted role catalog's authority.
     // Legacy agents.roleProfiles is rejected in trusted configuration.
     // See docs/operations/model-providers.md for complete user JSON.
+    // No child deadline is imposed by default. To opt in, set
+    // agents.delegation.childBudget.wallTime to a positive duration in trusted
+    // user/machine configuration; "00:00:00" disables it.
     // Child history tuning also belongs in trusted user/machine configuration:
     // "delegation": { "compaction": { "enabled": true, "triggerTokens": 0,
     //   "triggerPercent": 75, "targetTokens": 20000, "recentTokens": 12000,
@@ -792,13 +797,6 @@
       // an independent age window and may be removed without orphaning metadata.
       "retainConversationBodies": false,
       "conversationMessageBodyAge": "30.00:00:00"
-    },
-    // Defense-in-depth startup scan of persisted events/artifacts for unredacted secrets (plan-20, §19.6).
-    // Event payloads are immutable history and are never rewritten; artifacts are re-sanitized when
-    // repairArtifacts is set.
-    "redactionAudit": {
-      "enabled": true,
-      "repairArtifacts": true
     }
   },
 

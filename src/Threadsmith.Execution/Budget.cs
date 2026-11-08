@@ -2,7 +2,7 @@ namespace Threadsmith.Execution;
 
 using Threadsmith.Core;
 
-/// <summary>Thread-safe execution budget.</summary>
+/// <summary>Thread-safe usage accounting with opt-in limits; zero disables a dimension's limit.</summary>
 public sealed class ExecutionBudget : IBudget
 {
     private readonly Lock _gate = new();
@@ -67,17 +67,18 @@ public sealed class ExecutionBudget : IBudget
             TimeSpan.FromTicks(SaturatingAdd(_used.WallClock.Ticks, delta.WallClock.Ticks)),
             SaturatingAdd(_used.Cost, delta.Cost));
         var exhaustedDimensions = BudgetExhaustionDimension.None;
-        if (WouldExceed(_used.Tokens, delta.Tokens, _limit.Tokens))
+        if (_limit.Tokens > 0 && WouldExceed(_used.Tokens, delta.Tokens, _limit.Tokens))
         {
             exhaustedDimensions |= BudgetExhaustionDimension.Tokens;
         }
 
-        if (WouldExceed(_used.Calls, delta.Calls, _limit.Calls))
+        if (_limit.Calls > 0 && WouldExceed(_used.Calls, delta.Calls, _limit.Calls))
         {
             exhaustedDimensions |= BudgetExhaustionDimension.Calls;
         }
 
-        if (WouldExceed(_used.WallClock.Ticks, delta.WallClock.Ticks, _limit.WallClock.Ticks))
+        if (_limit.WallClock > TimeSpan.Zero
+            && WouldExceed(_used.WallClock.Ticks, delta.WallClock.Ticks, _limit.WallClock.Ticks))
         {
             exhaustedDimensions |= BudgetExhaustionDimension.WallClock;
         }
@@ -91,7 +92,7 @@ public sealed class ExecutionBudget : IBudget
         return new BudgetStatus(
             exhausted,
             prospective,
-            exhausted ? $"Execution budget exhausted ({exhaustedDimensions}); pause required." : null)
+            exhausted ? $"Execution budget exhausted ({exhaustedDimensions})." : null)
         {
             ExhaustedDimensions = exhaustedDimensions,
         };

@@ -263,22 +263,6 @@ public sealed partial class ArtifactStore
         return await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    /// <inheritdoc />
-    public async Task<bool> DeleteForRedactionAsync(string contentHash, CancellationToken cancellationToken = default)
-    {
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using var revoke = connection.CreateCommand();
-        revoke.Transaction = transaction;
-        revoke.CommandText = "DELETE FROM receipt_evidence WHERE content_hash = $hash;";
-        revoke.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
-        await revoke.ExecuteNonQueryAsync(cancellationToken);
-        var deleted = await DeleteUnreferencedAsync(connection, transaction, contentHash, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return deleted;
-    }
-
     private static async Task IndexEvidenceAsync(SqliteConnection connection, SqliteTransaction transaction, string hash, string content, CancellationToken cancellationToken)
     {
         var offset = 0;

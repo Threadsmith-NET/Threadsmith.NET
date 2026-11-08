@@ -310,9 +310,9 @@ public sealed record DelegateAgentsOptions
         init => _resultLimits = value;
     }
 
-    /// <summary>Reserved resources for each delegated child.</summary>
+    /// <summary>Child usage accounting with an opt-in wall-time limit; the default has no deadline.</summary>
     public AgentResourceBudget ChildBudget { get; init; } =
-        AgentResourceBudget.CreateTelemetryOnly(TimeSpan.FromMinutes(5));
+        AgentResourceBudget.CreateTelemetryOnly(TimeSpan.Zero);
 
     /// <summary>Effective child budget after applying the global operational-limit switch.</summary>
     public AgentResourceBudget EffectiveChildBudget => EnforceOperationalLimits

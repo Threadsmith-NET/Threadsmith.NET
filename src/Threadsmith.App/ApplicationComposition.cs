@@ -575,7 +575,8 @@ internal static class ApplicationComposition
                 agentScheduler,
                 persistence.DelegationCheckpoints,
                 host.Events,
-                delegateAgentsOptions.EnforceOperationalLimits ? delegateAgentsOptions.ProgressCheckpointTimeout : TimeSpan.Zero);
+                delegateAgentsOptions.EnforceOperationalLimits ? delegateAgentsOptions.ProgressCheckpointTimeout : TimeSpan.Zero,
+                sanitizer: host.Sanitizer);
             var childModelSelection = new AgentModelSelector(
                 integration.Models.Catalog,
                 new DefaultModelSelectionPolicy(integration.Models.Catalog),
@@ -1327,10 +1328,6 @@ internal sealed class RepositoryScopedBindingCoordinator
                     throw new InvalidDataException("PolicyGenerationStale: specialized integration definitions changed; restart Threadsmith to validate and rebuild MCP, hook, skill, provider and secret adapters before continuing.");
                 }
 
-                await RetiredPlanningConfiguration.MigrateFileAsync(nextPaths.RepositoryConfiguration, cancellationToken);
-                await RetiredPlanningConfiguration.MigrateFileAsync(nextPaths.SessionConfiguration, cancellationToken);
-                nextConfiguration.Reload();
-                var configurationWarning = RetiredPlanningConfiguration.GetWarning(nextConfiguration);
                 if (_activeModels is not null)
                 {
                     await _activeModels.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
@@ -1392,7 +1389,6 @@ internal sealed class RepositoryScopedBindingCoordinator
                     .. candidatePolicy?.Diagnostics ?? [],
                     .. _activeModels?.RepositorySelectionWarning is { } modelWarning ? new[] { modelWarning } : [],
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
-                    .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
                 ];
                 _initialSkillBindingPending = false;
             }

@@ -2,6 +2,8 @@
 // See docs/operations/resource-limits.md for trusted-only settings and interacting limits.
 // Numbers ending in Bytes are bytes; Characters are UTF-16 code units. Defaults preserve prior behavior.
 {
+  // Cumulative run quotas are opt-in. Zero disables a quota while retaining usage accounting.
+  "budget": { "tokens": 0, "calls": 0, "wallClockSeconds": 0, "cost": 0 },
   "limits": {
     "workspace": {
       "maximumSdkConfigurationBytes": 1048576,
@@ -394,6 +396,8 @@
   },
   "agents": {
     "delegation": {
+      // No child deadline unless a positive duration is explicitly configured.
+      "childBudget": { "wallTime": "00:00:00" },
       "maximumDisagreements": 8,
       "maximumDisagreementSubjectCharacters": 256
     }

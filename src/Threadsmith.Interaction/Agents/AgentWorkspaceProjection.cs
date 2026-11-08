@@ -169,6 +169,12 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 return false;
             }
 
+            if (item is AgentRunInstructionsObserved instructions)
+            {
+                await ObserveInstructionsAsync(instructions, cancellationToken);
+                return true;
+            }
+
             await DrainAsync(cancellationToken);
             if (item is AgentRunLifecycleObserved lifecycle)
             {
@@ -176,56 +182,34 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 return true;
             }
 
-            var skillRun = item switch
+            var activityRun = item switch
             {
-                SkillWorkflowCheckpointWritten skillCheckpoint => skillCheckpoint.RunId,
+                ToolInvocationStarted start => start.RunId,
+                ToolInvocationCompleted end => _tools.GetValueOrDefault(end.ToolInvocationId)?.RunId ?? end.RunId,
+                SkillWorkflowCheckpointWritten skill => skill.RunId,
                 SkillInvocationProgressObserved progress => progress.RunId,
                 _ => null,
             };
-            if (skillRun is { } owner && _children.TryGetValue(owner, out var skillChild))
+            if (activityRun is { } run && _children.TryGetValue(run, out var pendingChild) && !pendingChild.InstructionsInserted)
             {
-                if (skillChild.Operations.Observe(item))
+                if (pendingChild.PendingActivity.Count < _limits.MaximumPendingAgentUpdates)
                 {
-                    skillChild.Snapshot = skillChild.Snapshot with { ToolActivities = skillChild.Operations.Activities };
-                    await _workspace.PresentAgentAsync(skillChild.Snapshot, cancellationToken);
+                    if (item is ToolInvocationStarted start)
+                    {
+                        _tools[start.ToolInvocationId] = start;
+                    }
+
+                    pendingChild.PendingActivity.Add(item);
+                }
+                else
+                {
+                    pendingChild.OmittedActivity++;
                 }
 
                 return true;
             }
 
-            if (item is ToolInvocationStarted started && _children.ContainsKey(started.RunId))
-            {
-                _tools[started.ToolInvocationId] = started;
-                await FlushAsync(_children[started.RunId], cancellationToken);
-                var child = _children[started.RunId];
-                child.Operations.Observe(started);
-                child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
-                await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
-                return true;
-            }
-
-            if (item is ToolInvocationCompleted completed)
-            {
-                var matched = _tools.Remove(completed.ToolInvocationId, out var start);
-                if (start is not null && _children.TryGetValue(start.RunId, out var child))
-                {
-                    await FlushAsync(child, cancellationToken);
-                    var text = child.BlockSpacing.BeforeBlock()
-                        + InteractionPresentationFormatter.FormatToolCompletion(start, completed, _showOperationDurations, maximumInspectionCharacters: _limits.MaximumToolInspectionCharacters, limits: _limits);
-                    child.BlockSpacing.Observe(text);
-                    var segments = new List<PresentationTextSegment>();
-                    InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);
-                    await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
-                    child.Operations.Observe(completed);
-                    child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
-                    await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
-                    return true;
-                }
-
-                return matched || (completed.RunId != default && _usage?.IsChildRun(_session, completed.RunId) == true);
-            }
-
-            return item is ToolInvocationStarted late && _usage?.IsChildRun(_session, late.RunId) == true;
+            return await ObserveActivityAsync(item, cancellationToken);
         }
         finally
         {
@@ -242,17 +226,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             await DrainAsync(cancellationToken);
             foreach (var child in _children.Values)
             {
-                var request = _usage?.GetRequestStatus(_session, child.Snapshot.Target.RunId);
-                var profile = request is null ? null : _models?.Profiles.FirstOrDefault(profile => profile.Id == request.ProfileId);
-                var snapshot = child.Snapshot with
-                {
-                    Model = request is null ? null : profile?.Name ?? "Model unavailable",
-                    ProviderName = profile?.ProviderName ?? profile?.Provider,
-                    Reasoning = request?.Reasoning ?? default,
-                    ContextTokens = request?.ContextTokens,
-                    ContextLimit = request?.ContextLimit,
-                    Usage = _usage?.GetOwnerSnapshot(_session, child.Snapshot.Target.RunId),
-                };
+                var snapshot = ProjectMetadata(child.Snapshot);
                 if (snapshot != child.Snapshot)
                 {
                     child.Snapshot = snapshot;
@@ -290,6 +264,128 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         }
     }
 
+    private AgentPresentationSnapshot ProjectMetadata(AgentPresentationSnapshot snapshot)
+    {
+        var request = _usage?.GetRequestStatus(_session, snapshot.Target.RunId);
+        var profile = request is null ? null : _models?.Profiles.FirstOrDefault(profile => profile.Id == request.ProfileId);
+        return snapshot with
+        {
+            Model = request is null ? null : profile?.Name ?? "Model unavailable",
+            ProviderName = profile?.ProviderName ?? profile?.Provider,
+            Reasoning = request?.Reasoning ?? default,
+            ContextTokens = request?.ContextTokens,
+            ContextLimit = request?.ContextLimit,
+            Usage = _usage?.GetOwnerSnapshot(_session, snapshot.Target.RunId),
+        };
+    }
+
+    private async Task<bool> ObserveActivityAsync(IDomainEvent item, CancellationToken cancellationToken)
+    {
+        var skillRun = item switch
+        {
+            SkillWorkflowCheckpointWritten skillCheckpoint => skillCheckpoint.RunId,
+            SkillInvocationProgressObserved progress => progress.RunId,
+            _ => null,
+        };
+        if (skillRun is { } owner && _children.TryGetValue(owner, out var skillChild))
+        {
+            if (skillChild.Operations.Observe(item))
+            {
+                skillChild.Snapshot = skillChild.Snapshot with { ToolActivities = skillChild.Operations.Activities };
+                await _workspace.PresentAgentAsync(skillChild.Snapshot, cancellationToken);
+            }
+
+            return true;
+        }
+
+        if (item is ToolInvocationStarted started && _children.TryGetValue(started.RunId, out var startedChild))
+        {
+            _tools[started.ToolInvocationId] = started;
+            await FlushAsync(startedChild, cancellationToken);
+            startedChild.Operations.Observe(started);
+            startedChild.Snapshot = startedChild.Snapshot with { ToolActivities = startedChild.Operations.Activities };
+            await _workspace.PresentAgentAsync(startedChild.Snapshot, cancellationToken);
+            return true;
+        }
+
+        if (item is ToolInvocationCompleted completed)
+        {
+            var matched = _tools.Remove(completed.ToolInvocationId, out var start);
+            if (start is not null && _children.TryGetValue(start.RunId, out var child))
+            {
+                await FlushAsync(child, cancellationToken);
+                var text = child.BlockSpacing.BeforeBlock()
+                    + InteractionPresentationFormatter.FormatToolCompletion(start, completed, _showOperationDurations, maximumInspectionCharacters: _limits.MaximumToolInspectionCharacters, limits: _limits);
+                child.BlockSpacing.Observe(text);
+                var segments = new List<PresentationTextSegment>();
+                InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);
+                await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
+                child.Operations.Observe(completed);
+                child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
+                await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
+                return true;
+            }
+
+            return matched || (completed.RunId != default && _usage?.IsChildRun(_session, completed.RunId) == true);
+        }
+
+        return item is ToolInvocationStarted late && _usage?.IsChildRun(_session, late.RunId) == true;
+    }
+
+    private async Task ObserveInstructionsAsync(AgentRunInstructionsObserved instructions, CancellationToken cancellationToken)
+    {
+        var target = new AgentPresentationTarget(instructions.SessionId, instructions.DelegationId, instructions.AssignmentId, instructions.ChildRunId, instructions.Generation);
+        if (!_accepted.TryGetValue(instructions.DelegationId, out var generation) || generation != instructions.Generation
+            || !_children.TryGetValue(instructions.ChildRunId, out var child) || child.Snapshot.Target != target
+            || child.InstructionsInserted)
+        {
+            return;
+        }
+
+        var assignmentOnly = instructions.Source == AgentInstructionSource.AssignmentOnly;
+        var segments = new List<PresentationTextSegment>
+        {
+            new(assignmentOnly ? "Assignment instructions\n" : "Instructions\n", PresentationTextRole.Status),
+        };
+        if (assignmentOnly)
+        {
+            segments.Add(new("Model instructions were not prepared.\n", PresentationTextRole.Status));
+        }
+
+        foreach (var section in instructions.Sections)
+        {
+            segments.Add(new(TerminalControlEncoder.Encode(section.Label) + "\n", PresentationTextRole.Status));
+            var safe = TerminalControlEncoder.Encode(section.Text.ReplaceLineEndings("\n"));
+            segments.Add(new("> " + safe.Replace("\n", "\n> ", StringComparison.Ordinal) + "\n\n", PresentationTextRole.MarkdownQuote));
+        }
+
+        if (instructions.IsTruncated)
+        {
+            segments.Add(new("[Instruction display omitted content at the retention limit; model input is unchanged]\n\n", PresentationTextRole.Warning));
+        }
+
+        await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = target }, cancellationToken);
+        child.InstructionsInserted = true;
+        child.BlockSpacing.Observe("\n\n");
+        await DrainAsync(cancellationToken);
+        foreach (var activity in child.PendingActivity)
+        {
+            await ObserveActivityAsync(activity, cancellationToken);
+        }
+
+        child.PendingActivity.Clear();
+        if (child.OmittedActivity > 0)
+        {
+            await _surface.PresentAsync(
+                new PresentationBatch([new PresentationTextItem([
+                    new($"[Child display queue omitted {child.OmittedActivity} activity updates; execution and accounting are unaffected]\n", PresentationTextRole.Warning),
+                ])])
+                { Target = target },
+                cancellationToken);
+            child.OmittedActivity = 0;
+        }
+    }
+
     private async Task PumpAsync(CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
@@ -323,6 +419,11 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 _names.Release(target);
                 _terminal[target] = terminalSnapshot with { State = lifecycle.Status, Revision = lifecycle.Revision };
                 await PresentOutcomeAsync(_terminal[target], lifecycle.Reason, revision > 0, cancellationToken);
+                if (revision > 0)
+                {
+                    await _workspace.PresentAgentAsync(_terminal[target], cancellationToken);
+                }
+
                 _usage?.RetireRequestStatus(_session, lifecycle.ChildRunId);
                 return;
             }
@@ -347,7 +448,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         {
             await FlushAsync(state, cancellationToken);
             state.Operations.Observe(new RunCompleted(_session, lifecycle.OccurredAt, lifecycle.ChildRunId, false));
-            state.Snapshot = state.Snapshot with { ToolActivities = [] };
+            state.Snapshot = ProjectMetadata(state.Snapshot) with { ToolActivities = [] };
             _terminal[target] = state.Snapshot;
             await PresentOutcomeAsync(state.Snapshot, lifecycle.Reason, false, cancellationToken);
             _children.Remove(lifecycle.ChildRunId);
@@ -443,9 +544,9 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 continue;
             }
 
-            if (!_children.TryGetValue(item.RunId, out var child))
+            if (!_children.TryGetValue(item.RunId, out var child) || !child.InstructionsInserted)
             {
-                if (!_revisions.Keys.Any(target => target.RunId == item.RunId))
+                if (child is not null || !_revisions.Keys.Any(target => target.RunId == item.RunId))
                 {
                     if (_pendingDisplay.Count < _limits.MaximumPendingAgentUpdates)
                     {
@@ -466,7 +567,8 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 await _surface.PresentAsync(
                     new PresentationBatch([new PresentationTextItem([
                         new($"{Environment.NewLine}{TerminalControlEncoder.Encode(item.Text)}{Environment.NewLine}", PresentationTextRole.Warning),
-                    ])]) { Target = child.Snapshot.Target },
+                    ])])
+                    { Target = child.Snapshot.Target },
                     cancellationToken);
                 continue;
             }
@@ -547,6 +649,12 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         }
 
         internal AgentPresentationSnapshot Snapshot { get; set; }
+
+        internal bool InstructionsInserted { get; set; }
+
+        internal List<IDomainEvent> PendingActivity { get; } = [];
+
+        internal int OmittedActivity { get; set; }
 
         internal ModelAnswerCollector Answer { get; }
 

@@ -11,8 +11,10 @@ using Xunit;
 public static class SemanticEngineInventoryTests
 {
     /// <summary>Text refresh retains membership, full reload replaces it, and metadata-only load clears it.</summary>
-    [Fact]
-    public static async Task InventoryIsImmutableAndTracksPublishedSolutionMembership()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(4)]
+    public static async Task InventoryIsImmutableAndTracksPublishedSolutionMembership(int maximumConcurrentFileReads)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         // MSBuild can canonicalize reference paths through macOS's /var -> /private/var
@@ -57,7 +59,12 @@ public static class SemanticEngineInventoryTests
             await File.WriteAllTextAsync(additionalPath, "{}", cancellationToken);
             await File.WriteAllTextAsync(configPath, "root = true", cancellationToken);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            await using var engine = new SemanticEngine(
+                events,
+                NullLogger<SemanticEngine>.Instance,
+                TestPromptLoader.Instance,
+                resourceLimits: new SemanticResourceLimits { MaximumConcurrentFileReads = maximumConcurrentFileReads },
+                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var empty = engine.GetRefreshInventory();
             var request = new SemanticLoadRequest(
                 SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);

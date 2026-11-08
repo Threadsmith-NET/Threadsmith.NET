@@ -1,6 +1,6 @@
 # Run independent startup operations in parallel
 
-**Status:** Proposed.
+**Status:** In progress. Source assessment is complete. Implementation and validation are in progress on `maintenance/startup-parallelization`.
 **Delivery track:** Maintenance.
 **Prerequisites:** The existing startup, composition, persistence, MCP, skill, repository, and semantic services at revision `c741bd39a4fd323dd98e1270b4cdee0abef0b499`.
 
@@ -13,7 +13,8 @@ Run independent startup operations at the same time. Keep the required order for
 
 Include all 14 opportunities from the startup review. Do not remove an opportunity because of an assumed acceptable amount of parallel execution.
 
-This plan does not select new concurrency limits. Keep existing limits. Use measurements to support any necessary new limit.
+Keep existing limits. Use measurements to support any necessary new limit.
+The user approved a configurable starting value of four semantic file reads. This value is provisional, not a measured optimum. See sections 17 and 18.
 
 Use [ASD-STE100 Issue 9](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf) for the plan text.
 Keep software names and code identifiers in their exact forms.
@@ -320,7 +321,8 @@ Keep remaining compilation preparation after the required lifecycle publication.
 
 ## 7 Public Contracts
 
-Preserve public APIs, configuration names, event schemas, persistence formats, and exit codes.
+Preserve existing API behavior, configuration names, event schemas, persistence formats, and exit codes.
+Add the user-approved `limits:semantic:maximumConcurrentFileReads` setting. Its default is `4`. Require a positive integer and restart after changes.
 Preserve service identity and resource ownership across interactive and headless startup.
 
 Operation start and completion times can change. Stable display order and complete readiness requirements must remain the same.
@@ -470,9 +472,84 @@ Use the official [STE guidance](https://www.asd-ste100.org/STE_faq.html) for sof
 
 | Decision | Evidence needed before implementation selects an option |
 |---|---|
-| New limits for file reads or provider work | Existing resource controls, measured contention, memory use, and task counts. |
+| Semantic file reads | User approved `limits:semantic:maximumConcurrentFileReads`, default `4`, as a configurable starting value. Existing baseline and compiler limits remain separate. This is a per-pass limit, not a process-wide I/O ceiling. Representative contention, memory, and startup measurements remain open. |
+| New limits for other file reads or provider work | Existing resource controls, measured contention, memory use, and task counts. |
 | Placement of early skill metadata discovery | Actual configuration inputs and the existing compatibility publication boundary. |
 | Placement of document extraction beside compilation | Engine generation ownership and coordinator cancellation boundaries. |
 | SDK support for concurrent MCP list requests | The pinned SDK contract and controlled transport integration results. |
 
 Resolve these decisions in the owning components. Do not use an arbitrary concurrency preference to reduce scope.
+
+## 18 Implementation evidence
+
+Implementation uses the active checkout on `maintenance/startup-parallelization`.
+The plan is not complete.
+
+### Applied MCP changes
+
+- P08: `McpManager.AutoConnectAsync` starts eligible connections in profile ID order. Each connection uses `ExecuteAsync`, its profile gate, and the existing shared connection limiter. Automatic connections cannot request OAuth user interaction. Ordinary failure results remain optional. The owner joins all started tasks before returning. Warning results retain profile order.
+- P09, discovery only: HTTP and stdio discovery start the permitted, advertised capability families together after the SDK handshake. Each family retains its SDK pagination and mapping limits. The owner joins the families before merging them in tools, resources, templates, and prompts order. Duplicate normalized identities still fail before publication. Startup and refresh use the same discovery methods.
+- Controlled tests exercise simultaneous profile entry, the connection limit, optional failure, required joins, simultaneous capability-family entry, SDK tool pagination, and stable result order. Both discovery methods use the actual pinned SDK over controlled HTTP responses. The stdio case does not exercise process startup or stdio framing.
+
+### Review
+
+A fresh production review inspected the actual MCP diff and surrounding adapter, registry, hook, startup, refresh, and cleanup paths. It found no actionable introduced defect in the assessed slice.
+A separate test review found that reversed release signals did not establish reversed response readiness. The test now waits for response-ready signals in reverse family order while tools remain suspended. These signals identify the controlled HTTP response boundary, not completion of SDK parsing.
+A fresh follow-up test review inspected the revised diff and found no remaining actionable test defect. The production and test conclusions cover only the applied MCP slice. No full-plan clean review is claimed.
+
+### Validation so far
+
+- Native Debug build of `tests/Threadsmith.McpLifecycle.Tests/Threadsmith.McpLifecycle.Tests.csproj`: passed without returned diagnostics after fixing the added test's XML comment.
+- `dotnet test --project tests/Threadsmith.McpLifecycle.Tests/Threadsmith.McpLifecycle.Tests.csproj --configuration Debug --no-build`: 51 passed, zero failed or skipped.
+- Native Debug build of `tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj`: passed without returned diagnostics after the final C# change.
+- `dotnet test --project tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj --configuration Debug --no-build`: 37 passed, zero failed, one live-endpoint test skipped before the response-ready test adjustment. Repeating that full command was rejected by the tool's duplicate-call guard; no second full-suite result is claimed.
+- The follow-up reviewer ran `dotnet test --project tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj --configuration Debug --no-build --filter-method '*DiscoveryOverlapsFamiliesAndPreservesOrder'`: both revised discovery cases passed. The subsequent source change was whitespace only, followed by a successful build.
+- Scoped whitespace verification passed for `McpManager.cs` and `McpManagerTests.cs`. The five-file check found one initializer line-break issue in the transport test. It was repaired. `dotnet format whitespace tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj --verify-no-changes --no-restore --include tests/Threadsmith.McpTransports.Tests/SdkHttpTransportTests.cs` then passed.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` passed for 118 packaged files. `git diff --check` passed before the last whitespace repair and this evidence update.
+- Completed changed-document compiler and enabled-analyzer feedback reports no introduced findings. Seven existing suggestions remain outside the changed statements. This is not a clean solution or compilation-wide analyzer check.
+- No representative startup measurements, full solution gate, macOS/Linux execution, live endpoint verification, commit, or push has been performed.
+
+### Remaining work and source constraints
+
+| Item | Current disposition |
+|---|---|
+| P01 | Not changed. Migration uses `RepositorySettingsCoordinator` atomic updates. Its normalized-path gates do not prove independence through all aliases or hard links. Retain serial execution while physical identity is uncertain. No new identity machinery was added. |
+| P02 | Not implemented. The synchronous trusted-configuration and policy readers can use a deliberately scheduled pair with joined root cleanup. |
+| P03 | Not implemented. Override selection, byte admission, and cache mutation must remain under the loader owner before concurrent acquisition. |
+| P04 | Not changed. The configured main database can identify the facts database. Path inequality alone is insufficient. Keep the main chain and facts serial while physical identity is uncertain. |
+| P05 | Not implemented. Register hook adapters before launching MCP. Join successful branches before cleanup or application consumption. |
+| P06–P07 | Not implemented. Keep descriptor validation, credential authority, cache identities, optional fallbacks, and raw-log validation before provider use. |
+| P08 | Applied as described above. Broader cancellation and production-path coverage remains part of final verification. |
+| P09 | Capability-family discovery is applied. Environment secrets, header secrets, and HTTP OAuth preparation remain sequential. |
+| P10 | Not implemented. Existing catalogs can prepare metadata before compatibility evaluation without a second refresh owner. Memory capacity must precede memory snapshot capture. |
+| P11 | Not implemented. Admit manifests in stable order before creating acquisition tasks. Keep the compatible catalog as the native/Claude refresh owner. |
+| P12 | Not implemented. Path validation and callbacks precede the independent repository preparation group. Restore remains before MSBuild loading. |
+| P13 | Authoritative snapshot capture and loaded-document reconciliation use bounded parallel reads through the unchanged `ReadStableFileAsync`. Results merge in inventory order after the join. The new semantic setting controls each pass. Other independent refresh loops and final performance measurements remain open. |
+| P14 | Loaded-document text and identity acquisition now uses the configured read limit. It retains path deduplication, generation-owned snapshot admission, and indexed result order. Extraction still follows the initial compilation frontier; extraction/compilation overlap is not implemented. A call-scoped internal load result can carry earlier identities to binding without a persistent cache. Keep final disk reconciliation and background compilation publication boundaries. |
+
+The P01 and P04 restrictions do not dispose of the other opportunities.
+No new scheduler, cache, storage format, or lifecycle owner has been added.
+
+### Configurable semantic file reads
+
+- `SemanticResourceLimits.MaximumConcurrentFileReads` defaults to `4` and rejects nonpositive values. The existing strict host binder captures it at startup. `HostFoundation` passes the same semantic options to the registry and refresh coordinator.
+- `CaptureAuthoritativeInputSnapshotAsync`, `ReconcileBoundDocumentsAsync`, and `SemanticEngine.GetLoadedDocumentsAsync` use bounded `Parallel.ForEachAsync` passes. Branches write separate indexed result slots. State mutation and reconciliation remain serial after the join. The stable reader, path policy, binary flags, and snapshot lifetime owner remain unchanged.
+- The setting controls each pass. It is not a global semaphore and does not change baseline hashing or compiler worker limits. `1` permits sequential acquisition. Both configuration samples and the operator resource-limit reference document it.
+- Deterministic coordinator tests cover limits `1`, `2`, and `4`, source reconciliation, worker-token cancellation, and joins. Initial snapshots admit graph controls, not source text. The first fixture incorrectly blocked on source files and caused two test commands to time out. The fixture now supplies graph controls for snapshot cases and blocks source reads only for document reconciliation. No deadline was increased.
+- The existing inventory test now runs with limits `1` and `4`. It checks text/identity equivalence and membership. It does not prove Roslyn read overlap. The coordinator tests do not force reversed per-file completion order.
+- Fresh-context production and test reviews found no remaining actionable defect in this semantic slice after the cancellation-test repair and fixture correction. The final production review inspected the scoped Git diff and snapshot lifetime paths. Reviews do not complete the wider plan or establish a speed increase.
+
+### Semantic slice validation
+
+All commands below ran on Windows in the active checkout. macOS/Linux and representative startup measurements remain unperformed.
+
+- `dotnet restore src/Threadsmith.sln`: passed.
+- Native Debug build of `src/Threadsmith.sln` (no restore): passed with no returned diagnostics for the final C# state. An earlier build reported four new XML-comment warnings in configuration tests; those were repaired.
+- Native Debug build of `tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj`: passed with no returned diagnostics after the fixture correction.
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-method '*FileReadPassHonorsLimitAndJoins' --output Detailed`: six passed, zero failed or skipped after the fixture correction.
+- `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj --configuration Debug --no-build`: 569 passed, zero failed, six skipped. The final solution run also reports this module passed.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4`: 5,264 passed, 71 skipped, one failed. `Threadsmith.ModelTooling.Tests` and `Threadsmith.Architecture.Tests` passed. The failure is `Threadsmith.Validation.Tests.Milestone6Tests.BuildExecutor_CancelledBuild_ThrowsCancellation` at line 1213: the build task completed before child readiness. Its test and production validation files have no diff. The root cause is unresolved; no retry-until-green or unrelated repair was made. The overall suite is not clean.
+- The existing staged fixture `artifacts/test-ripgrep/stage/tools/rg.exe --version` reported ripgrep 15.2.0 before the solution tests.
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include src/Threadsmith.Core/OperationalLimits.cs src/Threadsmith.App/HostFoundation.cs src/Threadsmith.DotNet/SemanticRefreshCoordinator.cs src/Threadsmith.DotNet/SemanticEngine.cs tests/Threadsmith.Architecture.Tests/SemanticResourceLimitsConfigurationTests.cs tests/Threadsmith.Architecture.Tests/ResourceLimitSampleTests.cs tests/Threadsmith.ModelTooling.Tests/SemanticEngineInventoryTests.cs tests/Threadsmith.ModelTooling.Tests/SemanticRefreshCoordinatorTests.cs`: passed before the last fixture correction. The same whitespace check scoped to `SemanticRefreshCoordinatorTests.cs` passed after that correction.
+- Completed changed-document compiler and enabled-analyzer feedback reports zero new compiler errors and no new analyzer findings after repairs. Existing suggestions outside this slice remain. This evidence excludes compilation-wide analyzer actions.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1`: passed for 118 packaged files after the operator reference change. No commit, push, PR, or cross-platform CI validation was performed.

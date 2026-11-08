@@ -512,8 +512,9 @@ internal sealed class HostFoundation : IAsyncDisposable
                 events,
                 loggerFactory.CreateLogger<SemanticRefreshCoordinator>(),
                 semanticRefreshPublicationGate,
+                resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 fileObserver: repositoryFileObserver,
-                resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true));
+                semanticResourceLimits: operationalLimits.Semantic);
             var semanticMutations = new SemanticMutationEngine(
                 semanticEngines,
                 loggerFactory.CreateLogger<SemanticMutationEngine>());

@@ -319,44 +319,60 @@ internal sealed class SdkStdioTransport : IMcpTransport
         McpConnectionProfile profile,
         CancellationToken cancellationToken)
     {
-        var capabilities = new List<McpImportedCapability>();
-        if (profile.AllowedCapabilities.Contains(McpCapabilityKind.Tool)
-            && client.ServerCapabilities.Tools is not null)
-        {
-            var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(_mapping.MapTools(profile, tools));
-        }
-
-        if (client.ServerCapabilities.Resources is not null)
-        {
-            if (profile.AllowedCapabilities.Contains(McpCapabilityKind.Resource))
-            {
-                var resources = await client.ListResourcesAsync(cancellationToken: cancellationToken);
-                capabilities.AddRange(_mapping.MapResources(profile, resources));
-            }
-
-            if (profile.AllowedCapabilities.Contains(McpCapabilityKind.ResourceTemplate))
-            {
-                var templates = await client.ListResourceTemplatesAsync(
-                    cancellationToken: cancellationToken);
-                capabilities.AddRange(_mapping.MapResourceTemplates(profile, templates));
-            }
-        }
-
-        if (profile.AllowedCapabilities.Contains(McpCapabilityKind.Prompt)
-            && client.ServerCapabilities.Prompts is not null)
-        {
-            var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(_mapping.MapPrompts(profile, prompts));
-        }
-
+        using var discovery = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        McpCapabilityKind[] families =
+        [
+            McpCapabilityKind.Tool,
+            McpCapabilityKind.Resource,
+            McpCapabilityKind.ResourceTemplate,
+            McpCapabilityKind.Prompt,
+        ];
+        var tasks = families
+            .Where(kind => profile.AllowedCapabilities.Contains(kind)
+                && kind switch
+                {
+                    McpCapabilityKind.Tool => client.ServerCapabilities.Tools is not null,
+                    McpCapabilityKind.Resource or McpCapabilityKind.ResourceTemplate
+                        => client.ServerCapabilities.Resources is not null,
+                    McpCapabilityKind.Prompt => client.ServerCapabilities.Prompts is not null,
+                    _ => false,
+                })
+            .Select(DiscoverFamilyAsync)
+            .ToArray();
+        var results = await Task.WhenAll(tasks);
+        cancellationToken.ThrowIfCancellationRequested();
+        var capabilities = results.SelectMany(result => result).ToArray();
         if (capabilities.Select(capability => capability.Id).Distinct(StringComparer.Ordinal).Count()
-            != capabilities.Count)
+            != capabilities.Length)
         {
             throw new InvalidOperationException("The MCP server advertises duplicate normalized capability identities.");
         }
 
         return capabilities;
+
+        async Task<IReadOnlyList<McpImportedCapability>> DiscoverFamilyAsync(McpCapabilityKind kind)
+        {
+            try
+            {
+                return kind switch
+                {
+                    McpCapabilityKind.Tool => _mapping.MapTools(
+                        profile, await client.ListToolsAsync(cancellationToken: discovery.Token)),
+                    McpCapabilityKind.Resource => _mapping.MapResources(
+                        profile, await client.ListResourcesAsync(cancellationToken: discovery.Token)),
+                    McpCapabilityKind.ResourceTemplate => _mapping.MapResourceTemplates(
+                        profile, await client.ListResourceTemplatesAsync(cancellationToken: discovery.Token)),
+                    McpCapabilityKind.Prompt => _mapping.MapPrompts(
+                        profile, await client.ListPromptsAsync(cancellationToken: discovery.Token)),
+                    _ => throw new InvalidOperationException("Unsupported MCP capability family."),
+                };
+            }
+            catch
+            {
+                await discovery.CancelAsync();
+                throw;
+            }
+        }
     }
 
     /// <summary>Maps a host-owned connection profile to SDK stdio transport options.</summary>

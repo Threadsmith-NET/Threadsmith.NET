@@ -65,6 +65,7 @@ public sealed class SemanticRefreshCoordinator :
     private readonly ISemanticRefreshPublicationGate? _publicationGate;
     private readonly TimeSpan _recentHostEchoLifetime;
     private readonly SemanticRefreshResourceLimits _resourceLimits;
+    private readonly int _maximumConcurrentFileReads;
     private readonly TimeSpan _settleInterval;
     private readonly TimeProvider _timeProvider;
     private readonly IRepositoryFileObserver _fileObserver;
@@ -83,7 +84,8 @@ public sealed class SemanticRefreshCoordinator :
         TimeSpan? settleInterval = null,
         TimeSpan? maximumBurstWindow = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
-        IRepositoryFileObserver? fileObserver = null)
+        IRepositoryFileObserver? fileObserver = null,
+        SemanticResourceLimits? semanticResourceLimits = null)
         : this(
             new RegistrySemanticRefreshBackend(semanticEngines),
             events,
@@ -96,7 +98,8 @@ public sealed class SemanticRefreshCoordinator :
             fileSnapshotReader: null,
             pathSafetyValidator: null,
             resourceLimits: resourceLimits,
-            fileObserver: fileObserver)
+            fileObserver: fileObserver,
+            semanticResourceLimits: semanticResourceLimits)
     {
         semanticEngines.SetConfidencePublisher(PublishWorkspaceConfidenceAsync);
         _startupProgress = semanticEngines.StartupProgress;
@@ -182,7 +185,8 @@ public sealed class SemanticRefreshCoordinator :
         Func<string, FileSystemWatcher>? watcherFactory = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
         SemanticStartupProgress? startupProgress = null,
-        IRepositoryFileObserver? fileObserver = null)
+        IRepositoryFileObserver? fileObserver = null,
+        SemanticResourceLimits? semanticResourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(events);
@@ -210,6 +214,9 @@ public sealed class SemanticRefreshCoordinator :
         _publicationGate = publicationGate;
         _recentHostEchoLifetime = recentHostEchoLifetime ?? _defaultRecentHostEchoLifetime;
         _resourceLimits = resourceLimits ?? SemanticRefreshResourceLimits.Production;
+        var semanticLimits = semanticResourceLimits ?? new SemanticResourceLimits();
+        semanticLimits.Validate();
+        _maximumConcurrentFileReads = semanticLimits.MaximumConcurrentFileReads;
         _pathSafetyValidator = pathSafetyValidator;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _settleInterval = settleInterval ?? _defaultSettleInterval;
@@ -2296,17 +2303,13 @@ public sealed class SemanticRefreshCoordinator :
             binaryPaths.Add(normalized);
         }
 
+        var orderedPaths = paths.ToArray();
+        var captured = await ReadStableFilesAsync(binding, orderedPaths, binaryPaths, cancellationToken);
         var contents = new Dictionary<string, StableFileContent>(PathComparer);
-        foreach (var path in paths)
+        for (var index = 0; index < orderedPaths.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var content = await ReadStableFileAsync(
-                binding,
-                path,
-                cancellationToken,
-                readAsBinary: binaryPaths.Contains(path),
-                retainText: false);
-            contents[path] = content with { Text = null };
+            contents[orderedPaths[index]] = captured[index] with { Text = null };
         }
 
         return new AuthoritativeInputSnapshot(
@@ -2732,16 +2735,42 @@ public sealed class SemanticRefreshCoordinator :
         return normalized is not null && PathComparer.Equals(normalized, path);
     }
 
+    private async Task<StableFileContent[]> ReadStableFilesAsync(
+        WorkspaceBinding binding,
+        IReadOnlyList<string> paths,
+        IReadOnlySet<string>? binaryPaths,
+        CancellationToken cancellationToken)
+    {
+        var captured = new StableFileContent[paths.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, paths.Count),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = _maximumConcurrentFileReads,
+                CancellationToken = cancellationToken,
+            },
+            async (index, token) => captured[index] = await ReadStableFileAsync(
+                binding,
+                paths[index],
+                token,
+                readAsBinary: binaryPaths?.Contains(paths[index]) == true,
+                retainText: false));
+        return captured;
+    }
+
     private async Task<IReadOnlyDictionary<string, StableFileContent>> ReconcileBoundDocumentsAsync(
         WorkspaceBinding binding,
         IReadOnlyList<SemanticDocumentRefresh> loadedDocuments,
         CancellationToken cancellationToken)
     {
+        var paths = loadedDocuments.Select(document => document.Path).ToArray();
+        var captured = await ReadStableFilesAsync(binding, paths, null, cancellationToken);
         var verified = new Dictionary<string, StableFileContent>(PathComparer);
-        foreach (var document in loadedDocuments)
+        for (var index = 0; index < loadedDocuments.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var current = await ReadStableFileAsync(binding, document.Path, cancellationToken, retainText: false);
+            var document = loadedDocuments[index];
+            var current = captured[index];
             if (!current.IsStable)
             {
                 throw new InvalidDataException(

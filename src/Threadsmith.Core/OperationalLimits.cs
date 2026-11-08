@@ -109,9 +109,12 @@ public sealed record WorkspaceResourceLimits
     }
 }
 
-/// <summary>Limits for fallback search and project inventory, separate from semantic input loading.</summary>
+/// <summary>Limits for semantic preparation, file reads, fallback search, and project inventory.</summary>
 public sealed record SemanticResourceLimits
 {
+    /// <summary>Maximum concurrent reads per semantic file snapshot or loaded-document pass, captured at startup.</summary>
+    public int MaximumConcurrentFileReads { get; init; } = 4;
+
     /// <summary>Maximum concurrent compiler workers per engine, captured at startup.</summary>
     public int CompilationWorkers { get; init; } = 2;
 
@@ -193,6 +196,7 @@ public sealed record SemanticResourceLimits
     /// <summary>Rejects nonpositive resource limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumConcurrentFileReads);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(CompilationWorkers);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(CompilationWorkers, Array.MaxLength);
         _ = checked(CompilationWorkers + 1);

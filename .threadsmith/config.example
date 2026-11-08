@@ -37,6 +37,8 @@
   "limits": {
     "workspace": { "maximumBaselineContentBytes": 268435456, "maximumMutations": 100 },
     "semantic": {
+      // Concurrent reads per semantic snapshot/document pass; restart after changing.
+      "maximumConcurrentFileReads": 4,
       "maximumFallbackFiles": 10000,
       // Advisory output only; restart after changing. Empty warnings means errors only.
       "editAnalysis": {

@@ -21,6 +21,7 @@
       "maximumValidationPolicyCharacters": 256
     },
     "semantic": {
+      "maximumConcurrentFileReads": 4,
       "editAnalysis": {
         "analyzers": {
           "enabled": false,

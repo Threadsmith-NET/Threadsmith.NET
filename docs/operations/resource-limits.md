@@ -87,6 +87,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.
 
 | Field | Default | Purpose |
 |---|---:|---|
+| `maximumConcurrentFileReads` | `4` | Maximum concurrent reads per semantic file snapshot or loaded-document pass. Positive integer; `1` reads sequentially. Captured at startup; restart after changes. Separate from baseline hashes and compiler workers; not a process-wide I/O limit. |
 | `maximumFallbackEntries` | `50000` | Maximum fallback directory entries inspected. |
 | `maximumFallbackFiles` | `10000` | Maximum fallback files inspected. |
 | `maximumFallbackMatches` | `500` | Maximum fallback matches returned. |

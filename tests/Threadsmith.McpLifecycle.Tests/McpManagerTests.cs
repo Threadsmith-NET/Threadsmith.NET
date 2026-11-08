@@ -1406,6 +1406,72 @@ public sealed class McpManagerTests
         Assert.Contains("\"profileId\":\"server\"", output.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Automatic connections overlap under the shared limit and join optional failures.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AutoConnect_OverlapsWithinLimitAndJoinsEveryProfile(bool failSecond)
+    {
+        // Arrange
+        var token = TestContext.Current.CancellationToken;
+        var started = Enumerable.Range(0, 3)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var release = Enumerable.Range(0, 3)
+            .Select(_ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var adapter = new FakeAdapter
+        {
+            ConnectObserver = async (profile, cancellationToken) =>
+            {
+                var index = profile.Id[0] - 'a';
+                started[index].TrySetResult();
+                await release[index].Task.WaitAsync(cancellationToken);
+                if (index == 1 && failSecond)
+                {
+                    throw new InvalidOperationException("Optional fixture connection failed.");
+                }
+            },
+        };
+        await using var manager = CreateManager(
+            [Profile("c") with { AutoConnect = true }, Profile("a") with { AutoConnect = true }, Profile("b") with { AutoConnect = true }],
+            adapter,
+            maximumConcurrentConnections: 2);
+
+        // Act: two profiles enter in stable order; the third waits for the shared limiter.
+        var automatic = manager.AutoConnectAsync(token);
+        try
+        {
+            var entered = Task.WhenAll(started[0].Task, started[1].Task);
+            await Task.WhenAny(entered, automatic).WaitAsync(token);
+            Assert.True(entered.IsCompletedSuccessfully);
+            Assert.False(started[2].Task.IsCompleted);
+            Assert.False(automatic.IsCompleted);
+            release[1].TrySetResult();
+            await Task.WhenAny(started[2].Task, automatic).WaitAsync(token);
+            Assert.True(started[2].Task.IsCompletedSuccessfully);
+            release[2].TrySetResult();
+            Assert.False(automatic.IsCompleted);
+        }
+        finally
+        {
+            foreach (var signal in release)
+            {
+                signal.TrySetResult();
+            }
+
+            await automatic;
+        }
+
+        // Assert
+        Assert.Equal(3, adapter.ConnectCount);
+        Assert.Equal(2, adapter.MaximumConcurrentConnects);
+        Assert.All(adapter.OAuthInteractionAttempts, Assert.False);
+        var result = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.List }, token);
+        Assert.Equal(["a", "b", "c"], result.Profiles.Select(profile => profile.ProfileId));
+        Assert.Equal(failSecond ? 2 : 3, result.Profiles.Count(profile => profile.State == "Connected"));
+    }
+
     private static HttpResponseMessage JsonResponse(string json)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)
@@ -1421,7 +1487,8 @@ public sealed class McpManagerTests
         FakeIdentityManager? identityManager = null,
         IOutputSanitizer? sanitizer = null,
         ILogger<McpManager>? logger = null,
-        McpResourceLimits? limits = null)
+        McpResourceLimits? limits = null,
+        int maximumConcurrentConnections = 4)
     {
         return new McpManager(
             profiles,
@@ -1431,6 +1498,7 @@ public sealed class McpManagerTests
             sanitizer ?? new IdentitySanitizer(),
             logger ?? NullLogger<McpManager>.Instance,
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
+            maximumConcurrentConnections: maximumConcurrentConnections,
             limits: limits);
     }
 
@@ -1620,7 +1688,7 @@ public sealed class McpManagerTests
     {
         internal int ExplicitReadCalls { get; private set; }
 
-        private readonly Dictionary<string, McpConnectionStatus> _connections = new(StringComparer.Ordinal);
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, McpConnectionStatus> _connections = new(StringComparer.Ordinal);
         private int _activeConnects;
 
         internal IReadOnlyList<McpImportedCapability> Capabilities { get; init; } =
@@ -1654,6 +1722,8 @@ public sealed class McpManagerTests
                 ],
             },
         ];
+
+        internal Func<McpConnectionProfile, CancellationToken, Task>? ConnectObserver { get; init; }
 
         internal TaskCompletionSource? ConnectRelease { get; init; }
 
@@ -1699,6 +1769,11 @@ public sealed class McpManagerTests
             try
             {
                 ConnectStarted.TrySetResult();
+                if (ConnectObserver is { } observer)
+                {
+                    await observer(profile, cancellationToken);
+                }
+
                 if (ConnectRelease is { } release)
                 {
                     await release.Task.WaitAsync(cancellationToken);
@@ -1734,7 +1809,7 @@ public sealed class McpManagerTests
         public Task DisconnectAsync(string profileId, CancellationToken cancellationToken = default)
         {
             DisconnectCount++;
-            _connections.Remove(profileId);
+            _connections.TryRemove(profileId, out _);
             return Task.CompletedTask;
         }
 

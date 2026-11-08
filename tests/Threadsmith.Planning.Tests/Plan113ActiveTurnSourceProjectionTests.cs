@@ -148,7 +148,12 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Assert.NotEqual(summaryProfile.ProfileId.Value, inspection.CandidateProfileId);
             Assert.True(inspection.SummaryAvoidedBySourceProjection);
             Assert.Equal(1, inspection.SourceRemovedRangeCount);
-            Assert.Equal(36_615, inspection.SourceReclaimedCharacters);
+            var originalReadResult = Assert.Single(
+                model.Requests[1].Messages,
+                message => message.Role == ModelMessageRole.Tool && message.ToolName == "read_file");
+            var originalRead = JsonSerializer.Deserialize<ReadFileOutput>(originalReadResult.GetModelVisibleContent());
+            Assert.NotNull(originalRead);
+            Assert.Equal(string.Join('\n', originalRead.Lines).Length, inspection.SourceReclaimedCharacters);
             // Prompt wording and advertised schemas may grow; the source reduction must still
             // reclaim the fixture's payload and account for the complete dispatched request.
             Assert.True(inspection.BeforeInputTokens > inspection.AfterInputTokens);

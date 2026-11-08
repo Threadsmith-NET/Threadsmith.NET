@@ -37,7 +37,9 @@ public static class SessionStatusTests
             new ModelRequestUsageId(runId, "conversation", 1, Guid.NewGuid()),
             new ModelUsage(4, 1));
 
-        Assert.Equal(new SessionUsageSnapshot(16, 4, true), projection.GetSnapshot(sessionId));
+        var snapshot = projection.GetSnapshot(sessionId);
+        Assert.Equal(new SessionUsageSnapshot(16, 4, true), snapshot);
+        Assert.Equal(20, snapshot.TotalTokens);
     }
 
     /// <summary>An untouched session remains unknown rather than presenting an unreported zero.</summary>
@@ -175,7 +177,7 @@ public static class SessionStatusTests
     [Fact]
     public static void StatusFactory_ModelWindowBelowPolicyBudget_UsesModelWindow()
     {
-        var profile = CreateProfile(16_000);
+        var profile = CreateProfile(16_000) with { ProviderName = "Remote service" };
         var inspection = new ContextInspectionProjection
         {
             RunId = RunId.New(),
@@ -195,6 +197,7 @@ public static class SessionStatusTests
         Assert.Equal(8_000, status.ContextTokens);
         Assert.Equal(16_000, status.ContextLimit);
         Assert.Equal("Status model", status.Model);
+        Assert.Equal("Remote service", status.ProviderName);
     }
 
     /// <summary>The status denominator reports the selected model's full configured window.</summary>
@@ -241,14 +244,19 @@ public static class SessionStatusTests
     [InlineData(200)]
     public static void StatusFormatter_CompatibilityWidths_NeverWrapOrOverflow(int width)
     {
-        var rendered = TuiSessionStatusFormatter.Format(CreateStatus(12_000, 32_000), width, " | ");
-
-        Assert.DoesNotContain('\n', rendered);
-        Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered) == width);
-        if (!string.IsNullOrEmpty(rendered))
+        string?[] branches = [null, "main"];
+        foreach (var branch in branches)
         {
-            Assert.Contains("ctx ", rendered, StringComparison.Ordinal);
-            Assert.Contains("tokens ", rendered, StringComparison.Ordinal);
+            var rendered = TuiSessionStatusFormatter.Format(
+                CreateStatus(12_000, 32_000) with { Branch = branch }, width, " | ");
+
+            Assert.DoesNotContain('\n', rendered);
+            Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered) == width);
+            if (!string.IsNullOrEmpty(rendered))
+            {
+                Assert.Contains("ctx ", rendered, StringComparison.Ordinal);
+                Assert.Contains("tokens ", rendered, StringComparison.Ordinal);
+            }
         }
     }
 
@@ -281,6 +289,71 @@ public static class SessionStatusTests
         Assert.Equal(200, UnicodeWidth.GetWidth(rendered));
         Assert.Contains("folder C:/…/工具箱/src", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("very-long-root-name", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>The status formatter omits low-priority segments and never exceeds the available width.</summary>
+    [Fact]
+    public static void StatusFormatter_NarrowWidth_PreservesPriorityWithoutWrapping()
+    {
+        var status = new SessionStatusSnapshot(
+            "C:\\source\\repos\\a-very-long-working-folder",
+            "a-very-long-repository-name",
+            "Configured model with a long display name/model-id",
+            ReasoningLevel.High,
+            12_000,
+            32_000,
+            new SessionUsageSnapshot(8_000, 2_000, true));
+
+        var rendered = TuiSessionStatusFormatter.Format(status, 80, " | ");
+
+        Assert.NotEmpty(rendered);
+        Assert.DoesNotContain('\n', rendered);
+        Assert.True(UnicodeWidth.GetWidth(rendered) <= 80);
+        Assert.Contains("model ", rendered, StringComparison.Ordinal);
+        Assert.Contains("(high)", rendered, StringComparison.Ordinal);
+        Assert.Contains("ctx ~12k/32k 38%", rendered, StringComparison.Ordinal);
+        Assert.Contains("tokens ~10k", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("folder ", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>Long paths use bounded end-biased abbreviation when the full layout fits.</summary>
+    [Fact]
+    public static void StatusFormatter_LongPath_AbbreviatesSafely()
+    {
+        var status = new SessionStatusSnapshot(
+            "C:\\a-very-long-root-name\\a-very-long-parent-name\\Threadsmith\\src",
+            "Threadsmith",
+            "model",
+            ReasoningLevel.None,
+            1,
+            100,
+            new SessionUsageSnapshot(1, 1, false));
+
+        var rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
+
+        Assert.Contains("folder C:/…/Threadsmith/src", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("a-very-long-root-name", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>The status formatter measures and truncates wide Unicode values in terminal cells.</summary>
+    [Fact]
+    public static void StatusFormatter_WideUnicode_DoesNotExceedTerminalWidth()
+    {
+        var status = new SessionStatusSnapshot(
+            "C:\\source\\リポジトリ",
+            "工具箱",
+            "模型模型模型模型模型",
+            ReasoningLevel.High,
+            12_000,
+            32_000,
+            new SessionUsageSnapshot(8_000, 2_000, true));
+
+        var rendered = TuiSessionStatusFormatter.Format(status, 60, "｜");
+
+        Assert.NotEmpty(rendered);
+        Assert.Equal(60, UnicodeWidth.GetWidth(rendered));
+        Assert.Contains("(high)", rendered, StringComparison.Ordinal);
+        Assert.Contains('…', rendered);
     }
 
     private static ModelProfile CreateProfile(int contextWindow)

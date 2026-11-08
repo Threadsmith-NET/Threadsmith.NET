@@ -88,6 +88,29 @@ public static partial class AppBootstrapTests
         Assert.False(File.Exists(database));
     }
 
+    /// <summary>Corrective-turn configuration is consumed as a typed value before persistence begins.</summary>
+    [Fact]
+    public static async Task InvalidCorrectiveTurnConfigurationPrecedesPersistence()
+    {
+        using var temporary = new TemporaryDirectory("invalid-corrective-turn-policy");
+        var database = temporary.GetPath("must-not-create.db");
+        const string key = "execution:maxCorrectiveTurns";
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["persistence:path"] = database,
+            [key] = "invalid",
+            // Stop before persistence even if the corrective-turn binding is accidentally removed.
+            ["events:subscriberCapacity"] = "0",
+        }).Build();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => HostFoundation.CreateAsync(
+            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Contains(key, failure.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(database));
+    }
+
     /// <summary>Cumulative execution tokens are unlimited unless the user configures a ceiling.</summary>
     [Fact]
     public static void ConfigurationBootstrap_DefaultExecutionTokenBudget_IsNotConfigured()

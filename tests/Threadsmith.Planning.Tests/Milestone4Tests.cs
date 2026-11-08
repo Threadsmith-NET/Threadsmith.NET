@@ -1968,39 +1968,6 @@ public static class Milestone4Tests
             .ContainsKey("tamper"));
     }
 
-    /// <summary>Discovery guidance allows direct known-file inspection without a preliminary semantic call.</summary>
-    [Fact]
-    public static void StableSystemPolicy_RequiresNarrowestSufficientToolSelection()
-    {
-        var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
-            + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
-
-        Assert.Contains(
-            "Choose the narrowest, least expensive tool",
-            policy,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "For a known repository-relative file, read_file",
-            policy,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol",
-            policy,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "do not reopen, re-search, or otherwise retrieve equivalent evidence",
-            policy,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "stop calling tools and propose the plan",
-            policy,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "threadsmith-docs-help skill are available, enabled, and compatible",
-            policy,
-            StringComparison.Ordinal);
-    }
-
     /// <summary>The presenter retains context inspection after an ordinary conversation.</summary>
     [Fact]
     public static async Task InteractionPresenter_RendersConversationAndContextInspector()

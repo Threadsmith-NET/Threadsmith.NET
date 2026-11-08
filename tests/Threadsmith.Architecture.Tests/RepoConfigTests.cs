@@ -60,27 +60,6 @@ public static class RepoConfigTests
         }
     }
 
-    /// <summary>The config example file must exist.</summary>
-    [Fact]
-    public static void ConfigExampleFileExists()
-    {
-        Assert.True(File.Exists(ConfigExamplePath), $"Expected config example at {ConfigExamplePath}.");
-    }
-
-    /// <summary>
-    /// The config example must load via Microsoft.Extensions.Configuration without error.
-    /// The file is JSON-with-comments (the Json provider supports comments).
-    /// </summary>
-    [Fact]
-    public static void ConfigExampleLoadsWithoutError()
-    {
-        var config = LoadConfigExample();
-        Assert.NotNull(config);
-        // The config must not be empty (proves the JSON-with-comments parsed).
-        var children = config.GetChildren().ToList();
-        Assert.True(children.Count > 0, "Config example loaded but produced no top-level keys (JSON parse failed?).");
-    }
-
     /// <summary>The documented solution preference uses the nested configuration-provider path.</summary>
     [Fact]
     public static void ConfigExampleContainsNestedSolutionPath()
@@ -134,15 +113,16 @@ public static class RepoConfigTests
     }
 
     /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>
-    [Theory]
-    [MemberData(nameof(RequiredKeyData))]
-    public static void ConfigExampleContainsRequiredKey(string key)
+    [Fact]
+    public static void ConfigExampleContainsRequiredKeys()
     {
         var config = LoadConfigExample();
-        var section = config.GetSection(key);
-        Assert.True(
-            section.Exists() || config.GetChildren().Any(c => c.Key == key),
-            $"Config example is missing required §21.2 key '{key}'.");
+        var topLevelKeys = config.GetChildren().Select(section => section.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.All(_requiredKeys, key => Assert.True(
+            config.GetSection(key).Exists() || topLevelKeys.Contains(key),
+            $"Config example is missing required §21.2 key '{key}'."));
     }
 
     /// <summary>The prompt-append-files key must resolve to a non-empty list (§21.2).</summary>
@@ -321,18 +301,6 @@ public static class RepoConfigTests
         Assert.DoesNotContain("write_file", config.GetSection("tools:deny").Get<string[]>() ?? []);
     }
 
-    /// <summary>The production composition root binds the documented corrective-turn limit key.</summary>
-    [Fact]
-    public static void HostFoundationBindsCorrectiveTurnLimit()
-    {
-        var repoRoot = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ConfigExamplePath) ?? ".", ".."));
-        var source = File.ReadAllText(Path.Combine(repoRoot, "src", "Threadsmith.App", "HostFoundation.cs"));
-        Assert.Contains("execution:maxCorrectiveTurns", source, StringComparison.Ordinal);
-        Assert.Contains("MaxCorrectiveTurns = maximumCorrectiveTurns", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("execution:maxPlanProposalRepairAttempts", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("execution:maxMutationProposalRepairAttempts", source, StringComparison.Ordinal);
-    }
-
     /// <summary>M8 persistence, retention, MCP, and diagnostic keys bind to their documented values (plan-18/19/20).</summary>
     [Fact]
     public static void Milestone8ConfigurationKeysBindToConfiguredValues()
@@ -450,9 +418,4 @@ public static class RepoConfigTests
             .AddJsonStream(stream)
             .Build();
     }
-
-    /// <summary>Theory data: every required §21.2 key.</summary>
-    // ReSharper disable once MemberCanBePrivate.Global
-    public static System.Collections.Generic.IEnumerable<TheoryDataRow<string>> RequiredKeyData =>
-        _requiredKeys.Select(static key => new TheoryDataRow<string>(key));
 }

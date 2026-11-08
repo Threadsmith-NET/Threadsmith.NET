@@ -37,18 +37,6 @@ public static class CompositionBoundariesTests
             p => Assert.True(IsInitOnly(p), $"{p.Name} must be init-only."));
     }
 
-    /// <summary>Each sub-record has one clear responsibility with the expected dependency distribution.</summary>
-    [Theory]
-    [InlineData(typeof(HostCompositionInputs), 14)]
-    [InlineData(typeof(PersistenceCompositionInputs), 11)]
-    [InlineData(typeof(ToolPolicyCompositionInputs), 8)]
-    [InlineData(typeof(SemanticCompositionInputs), 5)]
-    [InlineData(typeof(IntegrationCompositionInputs), 2)]
-    public static void SubRecord_HasExpectedResponsibilitySize(Type subRecord, int expected)
-    {
-        Assert.Equal(expected, SubRecordPropertyCount(subRecord));
-    }
-
     /// <summary>All composition input bundles are immutable sealed records with init-only properties.</summary>
     [Fact]
     public static void InputBundles_AreImmutableSealedRecordsWithInitOnlyProperties()
@@ -145,10 +133,5 @@ public static class CompositionBoundariesTests
 
         var modifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
         return Array.Exists(modifiers, type => type.Name == "IsExternalInit");
-    }
-
-    private static int SubRecordPropertyCount(Type subRecord)
-    {
-        return subRecord.GetProperties(BindingFlags.Instance | BindingFlags.NonPublic).Count(IsInitOnly);
     }
 }

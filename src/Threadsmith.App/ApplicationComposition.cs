@@ -881,6 +881,11 @@ internal static class ApplicationComposition
                 new CodexAuthenticationApplication(host.Paths),
                 integration.McpManager,
             };
+            if (persistence.ToolStatistics is { } statistics)
+            {
+                handlers.Add(new ToolStatisticsApplication(statistics, persistence.RepositoryMemoryStore));
+            }
+
             if (integration.Models.CatalogMaintenance is { } catalogMaintenance)
             {
                 handlers.Add(new ModelCatalogMaintenanceApplication(catalogMaintenance));
@@ -1105,6 +1110,9 @@ internal sealed record PersistenceCompositionInputs
 
     /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
     internal required RepositoryBoundMemoryStore RepositoryMemoryStore { get; init; }
+
+    /// <summary>Gets the foundation-owned ordered tool statistics store, when composed.</summary>
+    internal IToolStatisticsStore? ToolStatistics { get; init; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal required SqliteSessionLifecycleStore SessionLifecycleStore { get; init; }

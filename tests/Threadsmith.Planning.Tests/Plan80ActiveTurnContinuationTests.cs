@@ -1437,6 +1437,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             IReadOnlyDictionary<string, string>? payload = null,
             IReadOnlyList<ExecutionArtifactReference>? artifacts = null,
             IReadOnlyList<string>? callChain = null,
+            RepositoryStorageBinding? storageBinding = null,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1475,7 +1476,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                 payload,
                 artifacts,
                 callChain,
-                cancellationToken);
+                cancellationToken: cancellationToken);
         }
 
         public bool SetEnabled(HookHandlerId handlerId, bool enabled)

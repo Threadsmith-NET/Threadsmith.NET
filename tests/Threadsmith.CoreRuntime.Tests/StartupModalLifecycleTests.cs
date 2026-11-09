@@ -51,13 +51,13 @@ public static class StartupModalLifecycleTests
                 // Force a complete frame while the host is between startup operations.
                 var betweenStages = await RepaintAsync(backend, 101, token);
                 Assert.Contains("Startup logo", betweenStages, StringComparison.Ordinal);
-                Assert.Contains("Loading solution Sample.sln Completed", betweenStages, StringComparison.Ordinal);
+                Assert.Contains("Loading solution Sample.sln".PadRight(42) + " Completed", betweenStages, StringComparison.Ordinal);
 
                 await surface.ShowStartupAsync("Startup logo", "Semantic Loading ...", Task.CompletedTask, token);
                 var beforeComposer = await RepaintAsync(backend, 102, token);
                 Assert.Contains("Startup logo", beforeComposer, StringComparison.Ordinal);
-                Assert.Contains("Semantic Loading ... Completed", beforeComposer, StringComparison.Ordinal);
-                Assert.Contains("Loading solution Sample.sln Completed", beforeComposer, StringComparison.Ordinal);
+                Assert.Contains("Semantic Loading".PadRight(42) + " Completed", beforeComposer, StringComparison.Ordinal);
+                Assert.Contains("Loading solution Sample.sln".PadRight(42) + " Completed", beforeComposer, StringComparison.Ordinal);
 
                 var read = surface.ReadComposerAsync(new ComposerRequest("Ready prompt > "), token);
                 await surface.PresentAsync(new PresentationBatch([]), token);

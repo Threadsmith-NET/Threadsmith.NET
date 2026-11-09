@@ -467,6 +467,14 @@ public sealed record ToolInvocationRequest
 
     /// <summary>Policy context.</summary>
     public required ToolInvocationContext Context { get; init; }
+
+    /// <summary>Detached database ownership captured before preparation or scheduler waiting.</summary>
+    [JsonIgnore]
+    public RepositoryStorageBinding? StorageBinding { get; init; }
+
+    /// <summary>Invocation-local terminal owner attached only during execution.</summary>
+    [JsonIgnore]
+    internal ToolSuspensionCompletion? Completion { get; init; }
 }
 
 /// <summary>One source used to produce a tool result.</summary>

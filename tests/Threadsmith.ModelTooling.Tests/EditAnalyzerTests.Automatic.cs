@@ -29,7 +29,6 @@ public static partial class EditAnalyzerTests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
-            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);

@@ -332,7 +332,7 @@ Compiled defaults:
 | Setting | Default |
 |---|---:|
 | `mode` | `ConversationAware` |
-| `recentTurnTokens` | 8,000 |
+| `recentTurnTokens` | 32,768 |
 | `recentTurnCount` | 12 |
 | `recentTurnMaximumAge` | 7 days |
 | `compactionPressurePercent` | 75 |

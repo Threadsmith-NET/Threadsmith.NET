@@ -21,6 +21,16 @@ public interface IRepositoryMemoryListSurface
     }
 }
 
+/// <summary>Optional retained statistics browser whose storage requests remain host-owned.</summary>
+public interface IToolStatisticsSurface
+{
+    /// <summary>Shows statistics and permits reset through shared commands. Closing cancels only the caller's wait.</summary>
+    Task ShowToolStatisticsAsync(
+        Func<CancellationToken, Task<ToolStatisticsSnapshot>> load,
+        Func<CancellationToken, Task<ToolStatisticsSnapshot>> reset,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>Optional retained presentation of a frozen, size-only request snapshot.</summary>
 public interface IContextUsageSurface
 {

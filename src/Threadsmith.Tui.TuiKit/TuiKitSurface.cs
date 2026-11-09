@@ -64,10 +64,12 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private readonly OutputPane _outputPane;
     private readonly ComposerPane _composerPane;
     private Size _layoutSize;
+    private IToolStatisticsHealthSource? _toolStatisticsHealth;
 
     private TranscriptView SelectedTranscript => Agents.Selected.Transcript;
 
     private readonly CachedTextRun _terminalTooSmall = new();
+    private readonly ToolStatisticsHealthIndicator _statisticsIndicator = new();
     private readonly Action _interrupt;
     private readonly bool _suppressStyles;
     private readonly Lazy<TuiKitComposer> _ordinaryWorkspace;
@@ -212,6 +214,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                     Composer.VisibleCaret,
                     ResolveStyle(PresentationTextRole.Default),
                     ResolveStyle(PresentationTextRole.SelectionHighlight));
+            }
+
+            if (_toolStatisticsHealth?.PersistenceDisabled == true)
+            {
+                _statisticsIndicator.Render(surface, _suppressStyles);
             }
 
             // TUIKit streams a complete first frame through the bottom-right cell and relies on
@@ -1199,6 +1206,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         }
 
         var width = WorkspaceLayout.RowContent(_backend.Size).Width;
+        if (_toolStatisticsHealth?.PersistenceDisabled == true)
+        {
+            width = Math.Max(0, width - ToolStatisticsHealthIndicator.Message.Length - 1);
+        }
+
         var separator = _theme.Ui.FooterSeparator;
         if (!ReferenceEquals(_status, _formattedStatus) || width != _statusWidth || separator != _statusSeparator)
         {

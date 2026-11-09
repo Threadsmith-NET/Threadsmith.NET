@@ -591,6 +591,7 @@ public sealed class DefaultMigrations
         new ImageQuotaIndexMigration(),
         new ConversationReceiptMigration(),
         new ReceiptEvidenceMigration(),
+        new ToolStatisticsMigration(),
     ];
 
     /// <summary>Uses the effective repository capacity during first import so valid manual memories are not prematurely evicted.</summary>

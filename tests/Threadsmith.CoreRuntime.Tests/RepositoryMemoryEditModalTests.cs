@@ -203,6 +203,88 @@ public static class RepositoryMemoryEditModalTests
             TestContext.Current.CancellationToken);
     }
 
+    /// <summary>Escape cancels only pending storage waits and restores modal/composer ownership.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Statistics_escape_releases_pending_storage_and_restores_composer(bool blockReset)
+    {
+        using var backend = new ObservedBackend(120, 35);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            var draft = surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            backend.FeedInput("Unsent statistics draft\u001b[27u");
+            Assert.False((await draft).IsSubmitted);
+            var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var storage = new TaskCompletionSource<ToolStatisticsSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cancelled = false;
+            async Task<ToolStatisticsSnapshot> PendingAsync(CancellationToken ct)
+            {
+                entered.TrySetResult();
+                try
+                {
+                    return await storage.Task.WaitAsync(ct);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    cancelled = true;
+                    throw;
+                }
+            }
+
+            _ = backend.TakeOutput();
+            var browsing = surface.ShowToolStatisticsAsync(
+                ct => blockReset ? Task.FromResult(new ToolStatisticsSnapshot([])) : PendingAsync(ct),
+                PendingAsync,
+                token);
+            try
+            {
+                if (blockReset)
+                {
+                    await WaitForOutputAsync("R: Reset all statistics", backend, token);
+                    backend.FeedInput("r");
+                }
+                else
+                {
+                    await WaitForOutputAsync("Repository tool statistics", backend, token);
+                }
+
+                await entered.Task.WaitAsync(token);
+                backend.FeedInput("\u001b[27u");
+                await browsing;
+                Assert.True(cancelled);
+                Assert.False(storage.Task.IsCompleted);
+                _ = backend.TakeOutput();
+                var reopened = surface.ShowToolStatisticsAsync(
+                    _ => Task.FromResult(new ToolStatisticsSnapshot([])),
+                    _ => throw new InvalidOperationException("Unexpected reset."),
+                    token);
+                await WaitForOutputAsync("No completed tool invocations", backend, token);
+                storage.TrySetResult(new([]));
+                backend.FeedInput("\u001b[27u");
+                await reopened;
+                var resumed = surface.ReadComposerAsync(new ComposerRequest("ordinary"), token);
+                await surface.PresentAsync(new PresentationBatch([]), token);
+                backend.FeedInput("!\r");
+                Assert.Equal("Unsent statistics draft!", (await resumed).Text);
+            }
+            finally
+            {
+                storage.TrySetResult(new([]));
+                if (!browsing.IsCompleted)
+                {
+                    backend.FeedInput("\u001b[27u");
+                }
+
+                await browsing;
+            }
+        },
+            TestContext.Current.CancellationToken);
+    }
+
     private static async Task WaitForOutputAsync(string expected, ObservedBackend backend, CancellationToken cancellationToken)
     {
         var output = new System.Text.StringBuilder();

@@ -6,6 +6,7 @@ using Threadsmith.Core;
 public sealed class HookEventObserver : IAsyncDisposable
 {
     private readonly IHookCoordinator _coordinator;
+    private readonly IRepositoryStorageBindingSource? _storageBindings;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ApprovalId, MutationSetId> _mutationApprovals = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<MutationSetId, PendingMutationTransaction> _mutationTransactions = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<SessionId, string> _repositories = new();
@@ -17,10 +18,11 @@ public sealed class HookEventObserver : IAsyncDisposable
     private readonly Task _worker;
 
     /// <summary>Initializes a new instance of the <see cref="HookEventObserver"/> class.</summary>
-    public HookEventObserver(IHookCoordinator coordinator)
+    public HookEventObserver(IHookCoordinator coordinator, IRepositoryStorageBindingSource? storageBindings = null)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         _coordinator = coordinator;
+        _storageBindings = storageBindings;
         _worker = ProcessInvocationsAsync();
     }
 
@@ -73,6 +75,7 @@ public sealed class HookEventObserver : IAsyncDisposable
                 domainEvent.SessionId,
                 mapped.Value.RunId,
                 repositoryIdentity,
+                _storageBindings?.CaptureBinding(repositoryIdentity is null ? null : RepositoryIdentity.Create(repositoryIdentity)),
                 mapped.Value.OperationId,
                 mapped.Value.Payload),
             cancellationToken).ConfigureAwait(false);
@@ -90,6 +93,7 @@ public sealed class HookEventObserver : IAsyncDisposable
                 invocation.OperationId,
                 0,
                 invocation.Payload,
+                storageBinding: invocation.StorageBinding,
                 cancellationToken: _shutdown.Token).ConfigureAwait(false);
         }
     }
@@ -159,6 +163,7 @@ public sealed class HookEventObserver : IAsyncDisposable
         SessionId SessionId,
         RunId? RunId,
         string? RepositoryIdentity,
+        RepositoryStorageBinding? StorageBinding,
         Guid OperationId,
         IReadOnlyDictionary<string, string> Payload);
 }

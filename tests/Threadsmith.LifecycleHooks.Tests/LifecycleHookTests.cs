@@ -364,6 +364,78 @@ public sealed class LifecycleHookTests
         }
     }
 
+    /// <summary>Deferred hook work retains its original database through queueing, rebind and shutdown drain.</summary>
+    [Fact]
+    public static async Task Deferred_hooks_capture_binding_before_queue_and_do_not_serialize_it()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var repository = Path.GetFullPath("hook-statistics-repository");
+        var bindings = new MutableBindings(new(RepositoryIdentity.Create(repository), "Data Source=original-private.db"));
+        var original = bindings.Current;
+        var adapter = new BarrierRecordingAdapter();
+        var descriptor = Descriptor(HookHandlerScope.Machine, HookAuthority.Advisory, HookFailureMode.FailOpen, hookPoint: HookPoint.RepositoryOpened);
+        await using var coordinator = Coordinator(descriptor, new InMemoryHookStore(), adapter, []);
+        await using var observer = new HookEventObserver(coordinator, bindings);
+        var session = SessionId.New();
+        Task? stopping = null;
+        try
+        {
+            await observer.ObserveAsync(new RepositoryOpened(session, DateTimeOffset.UnixEpoch, repository, WorkspaceId.New(), RepositoryTrustLevel.UntrustedInspection), ct);
+            await adapter.Entered.Task.WaitAsync(ct);
+            await observer.ObserveAsync(new RepositoryOpened(session, DateTimeOffset.UnixEpoch, repository, WorkspaceId.New(), RepositoryTrustLevel.UntrustedInspection), ct);
+            bindings.Current = new(RepositoryIdentity.Create(repository + "-b"), "Data Source=later.db");
+            stopping = observer.DisposeAsync().AsTask();
+            Assert.False(stopping.IsCompleted);
+        }
+        finally
+        {
+            adapter.Release.TrySetResult();
+            if (stopping is not null)
+            {
+                await stopping.WaitAsync(ct);
+            }
+        }
+
+        Assert.Equal(2, adapter.Envelopes.Count);
+        Assert.All(adapter.Envelopes, envelope =>
+        {
+            Assert.Equal(original, envelope.StorageBinding);
+            Assert.DoesNotContain("original-private", System.Text.Json.JsonSerializer.Serialize(envelope), StringComparison.Ordinal);
+        });
+    }
+
+    private sealed class MutableBindings : IRepositoryStorageBindingSource
+    {
+        internal MutableBindings(RepositoryStorageBinding binding) => Current = binding;
+
+        internal RepositoryStorageBinding Current { get; set; }
+
+        public RepositoryStorageBinding CaptureBinding(string? repositoryIdentity = null)
+        {
+            Assert.Equal(Current.RepositoryIdentity, repositoryIdentity);
+            return Current;
+        }
+    }
+
+    private sealed class BarrierRecordingAdapter : IHookHandlerAdapter
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public List<HookInvocationEnvelope> Envelopes { get; } = [];
+
+        public HookAdapterKind Kind => HookAdapterKind.Mcp;
+
+        public async Task<HookHandlerResult> InvokeAsync(HookHandlerDescriptor descriptor, HookInvocationEnvelope envelope, CancellationToken cancellationToken = default)
+        {
+            Envelopes.Add(envelope);
+            Entered.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return new HookAcknowledgeResult();
+        }
+    }
+
     private static HookHandlerDescriptor Descriptor(
         HookHandlerScope scope,
         HookAuthority authority,

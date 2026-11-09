@@ -49,7 +49,7 @@ public sealed record ConversationContextPolicy
     public ConversationContextMode Mode { get; init; } = ConversationContextMode.ConversationAware;
 
     /// <summary>Maximum tokens used by recent complete turns.</summary>
-    public int RecentTurnTokens { get; init; } = 8_000;
+    public int RecentTurnTokens { get; init; } = 32_768;
 
     /// <summary>Maximum complete prior user/assistant turns considered.</summary>
     public int RecentTurnCount { get; init; } = 12;

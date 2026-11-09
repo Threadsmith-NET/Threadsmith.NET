@@ -75,6 +75,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     private readonly IToolRegistry _registry;
     private readonly IOutputSanitizer _sanitizer;
     private readonly TimeProvider _timeProvider;
+    private readonly IToolTelemetryProducer? _toolTelemetry;
+    private readonly IRepositoryStorageBindingSource? _storageBindings;
     private readonly ToolParallelOptions _parallelOptions;
     private readonly ToolSourceConcurrencyLimiter _sourceConcurrencyLimiter = new();
 
@@ -103,6 +105,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             ?? throw new InvalidOperationException("The continuation has no captured output bound.");
         var completion = suspended.SuspensionCompletion
             ?? throw new InvalidOperationException("The continuation has no terminal publication owner.");
+        request = request with { Completion = completion, StorageBinding = completion.Binding };
+        var elapsedMilliseconds = completion.SuspendedElapsedMilliseconds;
         var json = JsonSerializer.Serialize(answer);
         if (Encoding.UTF8.GetByteCount(json) > maximumOutputBytes)
         {
@@ -113,7 +117,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 "The tool result exceeded its declared output bound.",
                 question.CreatedAt,
                 isTruncated: true,
-                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)));
+                elapsedMilliseconds: elapsedMilliseconds));
         }
 
         json = JsonOutputSanitizer.Sanitize(json, _sanitizer);
@@ -126,7 +130,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 "The sanitized tool result exceeded its declared output bound.",
                 question.CreatedAt,
                 isTruncated: true,
-                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)));
+                elapsedMilliseconds: elapsedMilliseconds));
         }
 
         var error = succeeded ? null : "Clarification was interrupted before delivery.";
@@ -135,9 +139,18 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         // Once publication begins, retain that attempt even if publication or hook audit fails.
         return await completion.CompleteAsync(async () =>
         {
-            await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, CancellationToken.None);
-            await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
-            return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
+            var status = ToolTelemetryStatus.Failed;
+            try
+            {
+                await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: elapsedMilliseconds) { RunId = request.RunId }, CancellationToken.None);
+                await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
+                status = succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed;
+                return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
+            }
+            finally
+            {
+                completion.Record(status, elapsedMilliseconds);
+            }
         });
     }
 
@@ -155,7 +168,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ToolParallelOptions? parallelOptions = null,
         ToolPresentationLimits? presentationLimits = null,
         SessionPolicyBinding? policyBinding = null,
-        IPromptLoader? prompts = null)
+        IPromptLoader? prompts = null,
+        IToolTelemetryProducer? toolTelemetry = null,
+        IRepositoryStorageBindingSource? storageBindings = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(policy);
@@ -163,6 +178,13 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        if (toolTelemetry is not null && storageBindings is null)
+        {
+            throw new ArgumentException("Tool telemetry requires the repository storage binding source.", nameof(storageBindings));
+        }
+
+        _toolTelemetry = toolTelemetry;
+        _storageBindings = storageBindings;
         _presentationLimits = presentationLimits ?? new();
         _policyBinding = policyBinding;
         _prompts = prompts;
@@ -306,9 +328,16 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
     private ToolInvocationRequest CapturePolicy(ToolInvocationRequest request)
     {
-        return _policyBinding is not null && request.Context.SecurityPolicy is null
-            ? request with { Context = request.Context with { SecurityPolicy = _policyBinding.Current, PolicyBinding = _policyBinding } }
-            : request;
+        var context = _policyBinding is not null && request.Context.SecurityPolicy is null
+            ? request.Context with { SecurityPolicy = _policyBinding.Current, PolicyBinding = _policyBinding }
+            : request.Context;
+        var binding = request.StorageBinding;
+        if (binding is null && _toolTelemetry is not null)
+        {
+            binding = _storageBindings?.CaptureBinding();
+        }
+
+        return request with { Context = context, StorageBinding = binding };
     }
 
     private ToolParallelOptions CaptureParallelOptions(IReadOnlyList<ToolBatchRequest> requests)
@@ -382,6 +411,14 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     {
         var invocation = usePreparedSnapshot ? planned.Request.Invocation
             : planned.Request.Invocation with { ExpectedRegistration = planned.Registration };
+        invocation = invocation with
+        {
+            Completion = new ToolSuspensionCompletion(
+                _toolTelemetry,
+                invocation.StorageBinding,
+                planned.Registration?.Tool.Definition.Id ?? invocation.ToolId,
+                _timeProvider),
+        };
         try
         {
             batchCancellation.Token.ThrowIfCancellationRequested();
@@ -405,6 +442,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
         catch (OperationCanceledException)
         {
+            invocation.Completion?.Record(ToolTelemetryStatus.Failed, null);
             return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, new ToolInvocationResult
             {
                 ToolInvocationId = ToolInvocationId.New(),
@@ -449,7 +487,29 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Context);
+        var completion = request.Completion ?? new ToolSuspensionCompletion(
+            _toolTelemetry, request.StorageBinding, request.ToolId, _timeProvider);
+        request = request with { Completion = completion };
+        try
+        {
+            return await InvokeCoreOwnedAsync(request, preparationError, preparedRegistration, returnCancellationResult, admittedAt, cancellationToken);
+        }
+        catch (Exception)
+        {
+            // Cover failures before ordinary execution catches without replacing a selected outcome.
+            completion.Record(ToolTelemetryStatus.Failed, null);
+            throw;
+        }
+    }
 
+    private async Task<ToolInvocationResult> InvokeCoreOwnedAsync(
+        ToolInvocationRequest request,
+        string? preparationError,
+        ToolRegistration? preparedRegistration,
+        bool returnCancellationResult,
+        DateTimeOffset admittedAt,
+        CancellationToken cancellationToken)
+    {
         var invocationId = ToolInvocationId.New();
         using var promptScope = _prompts?.BeginModelScope(request.Context.ModelProfileId);
         var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
@@ -465,6 +525,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             {
                 registration = null;
             }
+        }
+
+        if (request.Completion is { } completion)
+        {
+            completion.ToolId = registration?.Tool.Definition.Id ?? request.ExpectedRegistration?.Tool.Definition.Id ?? request.ToolId;
         }
 
         var source = registration?.Source
@@ -584,6 +649,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                         ["phase"] = request.Phase.ToString(),
                         ["requestedBy"] = request.Context.RequestedBy,
                     },
+                    storageBinding: request.StorageBinding,
                     cancellationToken: cancellationToken);
             }
             catch (OperationCanceledException)
@@ -757,11 +823,18 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 executionContext,
                 timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
+            var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
+                ?? ToElapsedMilliseconds(executionDuration);
             if (execution.Suspension is { } suspension)
             {
                 if (ConfiguredTool.Unwrap(tool) is not AskUserTool)
                 {
                     throw new InvalidOperationException("Only the compiled clarification tool may suspend a conversation.");
+                }
+
+                if (request.Completion is { } suspendedCompletion)
+                {
+                    suspendedCompletion.SuspendedElapsedMilliseconds = authoritativeElapsedMilliseconds;
                 }
 
                 return new ToolInvocationResult
@@ -770,13 +843,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ToolId = tool.Definition.Id,
                     Suspension = suspension,
                     SuspensionMaximumOutputBytes = tool.Definition.MaximumOutputBytes,
-                    SuspensionCompletion = new ToolSuspensionCompletion(),
+                    SuspensionCompletion = request.Completion,
                     Duration = executionDuration,
                 };
             }
 
-            var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
-                ?? ToElapsedMilliseconds(executionDuration);
             var serializationCancellationToken = execution.Failure?.Classification == ToolErrorClassification.Cancelled
                 ? CancellationToken.None
                 : timeoutCancellation.Token;
@@ -898,6 +969,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 { RunId = request.RunId },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
+            request.Completion?.Record(succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, authoritativeElapsedMilliseconds);
             return new ToolInvocationResult
             {
                 ToolInvocationId = invocationId,
@@ -1178,6 +1250,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         string? transientError = null,
         IReadOnlyList<string>? concepts = null)
     {
+        request.Completion?.Record(ToolTelemetryStatus.Failed, elapsedMilliseconds);
         var sanitizedError = _sanitizer.Sanitize(error);
         var returnedError = transientError is null
             ? sanitizedError
@@ -1281,6 +1354,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ["succeeded"] = succeeded.ToString(),
                 ["classification"] = classification ?? "None",
             },
+            storageBinding: request.StorageBinding,
             cancellationToken: CancellationToken.None);
     }
 }

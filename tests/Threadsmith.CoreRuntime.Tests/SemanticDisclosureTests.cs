@@ -92,8 +92,8 @@ public sealed class SemanticDisclosureTests
         Assert.InRange(view.RetainedBytes, 0, 512);
         Assert.Contains("Details omitted", Render(view, 80), StringComparison.Ordinal);
         view.Present(new PresentationBatch([new PresentationTextItem([new(new string('z', 700), PresentationTextRole.Default)])]));
-        Assert.DoesNotContain("SEMANTIC CHECKS", Render(view), StringComparison.Ordinal);
-        Assert.DoesNotContain("SEMANTIC CHECKS", Render(view, 160), StringComparison.Ordinal);
+        Assert.DoesNotContain("Compiler Checks", Render(view), StringComparison.Ordinal);
+        Assert.DoesNotContain("Compiler Checks", Render(view, 160), StringComparison.Ordinal);
     }
 
     /// <summary>Overall roles indicate findings and uncertainty.</summary>

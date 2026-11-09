@@ -368,7 +368,7 @@ public static class OperationDurationFormatterTests
         Assert.True(transcript.Apply(completed));
 
         Assert.Equal(
-            " SEMANTIC CHECKS: pre-mutation overlay syntax - completed \u00B7 243ms"
+            " Compiler Checks: pre-mutation overlay syntax - completed \u00B7 243ms"
                 + Environment.NewLine
                 + "   \u2514 3 files, 0 diagnostics, 0 blocking, 1 omissions"
                 + Environment.NewLine,
@@ -409,8 +409,8 @@ public static class OperationDurationFormatterTests
         Assert.False(transcript.Apply(second));
         Assert.True(transcript.Apply(completed));
 
-        Assert.Contains("SEMANTIC CHECKS: first semantic check - completed", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("SEMANTIC CHECKS: second semantic check - completed", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Compiler Checks: first semantic check - completed", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compiler Checks: second semantic check - completed", transcript.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Transcript preserves unknown semantic-check outcomes instead of promoting them to success.</summary>
@@ -439,7 +439,7 @@ public static class OperationDurationFormatterTests
         Assert.True(transcript.Apply(completed));
 
         Assert.Contains(
-            "SEMANTIC CHECKS: semantic post-mutation diagnostics - unknown",
+            "Compiler Checks: semantic post-mutation diagnostics - unknown",
             transcript.Text,
             StringComparison.Ordinal);
         Assert.DoesNotContain("- completed", transcript.Text, StringComparison.Ordinal);
@@ -727,7 +727,7 @@ public static class OperationDurationFormatterTests
         Assert.True(transcript.Apply(completed));
 
         Assert.Contains(
-            " SEMANTIC CHECKS: semantic diagnostics (pre-apply baseline capture) - completed",
+            " Compiler Checks: semantic diagnostics (pre-apply baseline capture) - completed",
             transcript.Text,
             StringComparison.Ordinal);
     }

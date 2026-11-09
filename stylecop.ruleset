@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <RuleSet Name="Threadsmith.NET StyleCop rules" Description="StyleCop rule enablement for Threadsmith.NET (guardrails G-1..G-29). Per-rule severity is overridden in .editorconfig." ToolsVersion="17.0">
   <Rules AnalyzerId="StyleCop.Analyzers" RuleNamespace="StyleCop.Analyzers">
     <!-- Documentation rules (G-18) -->
@@ -21,5 +21,9 @@
     <Rule Id="VSTHRD100" Action="Warning" />
     <Rule Id="VSTHRD200" Action="Info" />
     <Rule Id="VSTHRD003" Action="Warning" />
+  </Rules>
+  <Rules AnalyzerId="Roslynator.CSharp.Analyzers" RuleNamespace="Roslynator.CSharp.Analyzers">
+    <Rule Id="RCS1143" Action="Warning" />
+    <Rule Id="RCS1111" Action="Info" />
   </Rules>
 </RuleSet>

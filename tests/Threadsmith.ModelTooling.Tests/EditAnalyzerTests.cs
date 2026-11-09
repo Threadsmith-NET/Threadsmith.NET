@@ -187,7 +187,7 @@ public static partial class EditAnalyzerTests
         var root = fixture?.Root ?? Path.GetFullPath(experiment.RepositoryRoot);
         var selection = fixture is null ? Path.GetFullPath(experiment.Selection, root) : Path.Combine(root, "SmallDotNetSolution.sln");
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers, EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var loadStarted = Stopwatch.GetTimestamp();
         var load = await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);

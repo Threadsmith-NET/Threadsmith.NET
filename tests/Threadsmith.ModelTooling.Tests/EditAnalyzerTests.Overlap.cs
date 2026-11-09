@@ -129,7 +129,7 @@ public static partial class EditAnalyzerTests
         var workspace = WorkspaceId.New();
         var run = RunId.New();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers, EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var loadStarted = Stopwatch.GetTimestamp();
         var load = await engine.LoadAsync(new(session, workspace, root, selection, RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);

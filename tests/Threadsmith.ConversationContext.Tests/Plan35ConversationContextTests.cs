@@ -742,6 +742,22 @@ public static class Plan35ConversationContextTests
         Assert.Null(result.Inspection.CompactedThroughMessageSequence);
     }
 
+    /// <summary>The default history budget retains 32,768 tokens without changing count or age limits.</summary>
+    [Fact]
+    public static void Conversation_policy_defaults_to_32768_recent_turn_tokens()
+    {
+        // Arrange
+        var policy = new ConversationContextPolicy();
+
+        // Act
+        policy.Validate();
+
+        // Assert
+        Assert.Equal(32_768, policy.RecentTurnTokens);
+        Assert.Equal(12, policy.RecentTurnCount);
+        Assert.Equal(TimeSpan.FromDays(7), policy.RecentTurnMaximumAge);
+    }
+
     /// <summary>Conversation policy rejects unsafe or nonsensical bounds.</summary>
     [Fact]
     public static void Conversation_policy_validation_is_bounded()

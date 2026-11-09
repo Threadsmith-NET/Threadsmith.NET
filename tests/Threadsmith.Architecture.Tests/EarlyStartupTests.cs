@@ -97,7 +97,7 @@ public static class EarlyStartupTests
                 Assert.Same(value.GetValue(workspace), value.GetValue(workspace));
             }
 
-            await surface.AttachStartupServicesAsync(null, token);
+            await surface.AttachStartupServicesAsync(null, null, token);
             operation?.Complete();
             return 0;
         },
@@ -128,7 +128,7 @@ public static class EarlyStartupTests
                 }
                 else
                 {
-                    await surface.AttachStartupServicesAsync(null, token);
+                    await surface.AttachStartupServicesAsync(null, null, token);
                 }
             }
 

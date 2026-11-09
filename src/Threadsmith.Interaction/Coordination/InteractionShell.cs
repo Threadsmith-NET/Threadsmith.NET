@@ -762,6 +762,24 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
+    /// <summary>Lists committed tool statistics through the host boundary.</summary>
+    public Task<ToolStatisticsSnapshot> ListToolStatisticsAsync(SessionId sessionId, string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new ListToolStatisticsCommand(sessionId, repositoryIdentity), cancellationToken);
+    }
+
+    /// <summary>Resets statistics and obtains a fresh snapshot after committed acknowledgement.</summary>
+    public async Task<ToolStatisticsSnapshot> ResetToolStatisticsAsync(SessionId sessionId, string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        var committed = await _dispatcher.DispatchAsync(new ResetToolStatisticsCommand(sessionId, repositoryIdentity), cancellationToken);
+        if (!committed)
+        {
+            throw new InvalidOperationException("Tool statistics reset was not acknowledged.");
+        }
+
+        return await ListToolStatisticsAsync(sessionId, repositoryIdentity, cancellationToken);
+    }
+
     /// <summary>Lists repository-scoped memory through the host boundary.</summary>
     public Task<RepositoryMemoryReadSnapshot> ListRepositoryMemoryAsync(
         SessionId sessionId,

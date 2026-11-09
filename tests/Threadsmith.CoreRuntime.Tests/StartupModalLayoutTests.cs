@@ -10,6 +10,77 @@ using Xunit;
 /// <summary>Verifies automatic overflow and textual status at supported terminal sizes.</summary>
 public static class StartupModalLayoutTests
 {
+    /// <summary>Elapsed time and every outcome keep stable column boundaries.</summary>
+    [Theory]
+    [InlineData(0, SemanticStartupPhaseState.Running, "  0.0s", "Running  ")]
+    [InlineData(12.3, SemanticStartupPhaseState.Completed, " 12.3s", "Completed")]
+    [InlineData(999.9, SemanticStartupPhaseState.Failed, "999.9s", "Failed   ")]
+    [InlineData(1000, SemanticStartupPhaseState.Cancelled, "999.9s", "Cancelled")]
+    public static void StartupColumnsHaveFixedWidths(double seconds, SemanticStartupPhaseState state, string elapsed, string status)
+    {
+        var row = StartupModal.FormatRow(TimeSpan.FromSeconds(seconds), "Memory capacity", state, string.Empty, 86);
+
+        Assert.Equal(elapsed + " " + "Memory capacity".PadRight(42) + " " + status, row);
+        Assert.Equal(59, row.Length);
+        Assert.DoesNotContain("...", row, StringComparison.Ordinal);
+    }
+
+    /// <summary>The normal item width includes a 25-character solution name before truncation.</summary>
+    [Theory]
+    [InlineData(25)]
+    [InlineData(26)]
+    public static void SolutionNamesUseTwentyFiveCharacterAllowance(int nameLength)
+    {
+        var label = "Loading solution " + new string('a', nameLength);
+        var row = StartupModal.FormatRow(TimeSpan.FromSeconds(1), label, SemanticStartupPhaseState.Completed, string.Empty, 86);
+        var expectedItem = nameLength == 25 ? label : label[..39] + "...";
+
+        Assert.Equal("  1.0s " + expectedItem + " Completed", row);
+        Assert.Equal(59, row.Length);
+    }
+
+    /// <summary>Wide graphemes cannot shift or hide the status column.</summary>
+    [Theory]
+    [InlineData(34)]
+    [InlineData(86)]
+    public static void TruncationPreservesGraphemesAndStatusColumn(int width)
+    {
+        var row = StartupModal.FormatRow(TimeSpan.Zero, string.Concat(Enumerable.Repeat("界", 30)), SemanticStartupPhaseState.Failed, string.Empty, width);
+        var itemWidth = Math.Min(42, width - 17);
+
+        Assert.Equal(17 + itemWidth, UnicodeWidth.GetWidth(row));
+        Assert.Contains("...", row, StringComparison.Ordinal);
+        Assert.EndsWith(" Failed   ", row, StringComparison.Ordinal);
+        Assert.DoesNotContain('\uFFFD', row);
+    }
+
+    /// <summary>Retained, process, semantic, decorative, current and total rows share formatting.</summary>
+    [Fact]
+    public static void AllStartupRowSourcesShareColumnsWithoutDecorativeEllipses()
+    {
+        var modal = new StartupModal("Logo", "Loading solution Sample.sln", [new(default, SemanticStartupPhaseState.Completed, TimeSpan.FromSeconds(3)) { Label = "Retained phase" }], () => { }, _ => CellStyle.Default)
+        {
+            Progress = () => [new(default, SemanticStartupPhaseState.Failed, TimeSpan.FromSeconds(2)) { Label = "Memory capacity" }],
+            SemanticProgress = () => [new(SemanticStartupPhase.CaptureSnapshots, SemanticStartupPhaseState.Completed, TimeSpan.FromSeconds(1))],
+            TotalElapsed = () => TimeSpan.FromSeconds(5),
+        };
+        var cells = new CellBuffer(100, 30);
+
+        modal.Render(new BufferSurface(cells));
+        var text = TUIKit.Testing.Snapshot.ToText(cells);
+
+        foreach (var label in new[] { "Memory capacity", "Capture file snapshots", "Retained phase", "Reticulating Splines", "Loading solution Sample.sln" })
+        {
+            Assert.Contains(label.PadRight(42) + " ", text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("  5.0s Total startup", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("...", text, StringComparison.Ordinal);
+        var legacy = StartupModal.FormatRow(TimeSpan.Zero, "Semantic Loading ...", SemanticStartupPhaseState.Running, " — Details...", 86);
+        Assert.Contains("Semantic Loading".PadRight(42) + " Running  ", legacy, StringComparison.Ordinal);
+        Assert.DoesNotContain("...", legacy, StringComparison.Ordinal);
+    }
+
     /// <summary>Optional decoration and old diagnostics cannot squeeze out a full banner that fits.</summary>
     [Theory]
     [InlineData(17, 0)]
@@ -277,7 +348,8 @@ public static class StartupModalLayoutTests
         var text = TUIKit.Testing.Snapshot.ToText(cells);
         Assert.Contains("Cannot initialize database:", text, StringComparison.Ordinal);
         Assert.Contains("access denied", text, StringComparison.Ordinal);
-        Assert.Contains("Startup Failed", text, StringComparison.Ordinal);
+        Assert.Contains("Startup", text, StringComparison.Ordinal);
+        Assert.Contains("Failed", text, StringComparison.Ordinal);
         Assert.Contains("press Enter to exit", text, StringComparison.Ordinal);
         Assert.Contains("Total startup", text, StringComparison.Ordinal);
         Assert.Contains(PresentationTextRole.Error, roles);
@@ -289,6 +361,6 @@ public static class StartupModalLayoutTests
         Assert.True(confirmationRow > errorRow + 1);
         Assert.All(lines[confirmationRow - 1], character => Assert.True(char.IsWhiteSpace(character) || character == '│'));
         Assert.DoesNotContain(lines.Skip(confirmationRow + 1), line => line.Contains("History", StringComparison.Ordinal)
-            || line.Contains("Startup Failed", StringComparison.Ordinal) || line.Contains("Total startup", StringComparison.Ordinal));
+            || line.Contains("Failed", StringComparison.Ordinal) || line.Contains("Total startup", StringComparison.Ordinal));
     }
 }

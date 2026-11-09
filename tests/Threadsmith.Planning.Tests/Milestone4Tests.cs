@@ -2932,6 +2932,7 @@ public static class Milestone4Tests
             IReadOnlyDictionary<string, string>? payload = null,
             IReadOnlyList<ExecutionArtifactReference>? artifacts = null,
             IReadOnlyList<string>? callChain = null,
+            RepositoryStorageBinding? storageBinding = null,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2962,7 +2963,7 @@ public static class Milestone4Tests
                 payload,
                 artifacts,
                 callChain,
-                cancellationToken);
+                cancellationToken: cancellationToken);
         }
 
         public bool SetEnabled(HookHandlerId handlerId, bool enabled)

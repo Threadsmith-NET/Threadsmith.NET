@@ -53,7 +53,8 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Equal(resources.InitialPreparationFrontier, limits.Frontier);
         Assert.Equal(resources.MaximumQueuedCompilerOperations, limits.MaximumQueuedOperations);
         limits.Validate();
-        (limits with { Workers = 1 }).Validate();
+        Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = 1 }).Validate());
+        new SemanticPreparationLimits(resources with { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = 1 }.Validate();
         (limits with { Workers = 3, Frontier = 3 }).Validate();
         Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = 0 }).Validate());
         Assert.Throws<ArgumentOutOfRangeException>(() => (limits with { Workers = int.MaxValue }).Validate());
@@ -111,7 +112,7 @@ public static class SemanticCompilationCoordinatorTests
         var order = new ConcurrentQueue<ProjectId>();
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new() { Workers = 1 },
+            new(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = 1 },
             new HashSet<ProjectId>(),
             async (id, token) =>
             {
@@ -153,7 +154,7 @@ public static class SemanticCompilationCoordinatorTests
         var published = new ConcurrentQueue<ProjectId>();
         var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new() { Workers = workers },
+            new(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = workers },
             new HashSet<ProjectId>(),
             async (id, _) =>
             {
@@ -306,7 +307,7 @@ public static class SemanticCompilationCoordinatorTests
         var order = new ConcurrentQueue<string>();
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new() { Workers = 1 },
+            new(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = 1 },
             new HashSet<ProjectId>(),
             async (id, token) =>
             {
@@ -350,7 +351,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var coordinator = new SemanticCompilationCoordinator(
             solution,
-            new() { Workers = 1 },
+            new(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = 1 },
             solution.ProjectIds.ToHashSet(),
             static (id, _) => Task.FromResult(new SemanticPreparationOutcome(id, true)),
             static (_, _, _) => Task.CompletedTask);
@@ -1051,7 +1052,7 @@ public static class SemanticCompilationCoordinatorTests
         var root = fixture.Root;
         await using var events = new DomainEventStream();
         var clock = new ObservedTimeProvider();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), resourceLimits: new SemanticResourceLimits { CompilationWorkers = 1 }, timeProvider: clock);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1), resourceLimits: new SemanticResourceLimits { CompilationWorkers = 1, EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: clock);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var snapshot = engine.CaptureMutationSnapshot();

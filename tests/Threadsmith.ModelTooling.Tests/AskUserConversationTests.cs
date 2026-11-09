@@ -35,7 +35,10 @@ public static class AskUserConversationTests
         var token = TestContext.Current.CancellationToken;
         var answer = new UserQuestionResult(UserQuestionStatus.Answered, [new("q", null, new string('é', 200))]);
         var limit = Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(answer)) + extraBytes;
-        await using var events = new DomainEventStream();
+        var clock = new FakeTimeProvider();
+        var telemetry = new RecordingTelemetry();
+        var originalBinding = telemetry.Binding;
+        await using var events = new DomainEventStream(timeProvider: clock);
         var observed = new ConcurrentQueue<IDomainEvent>();
         await using var subscription = events.Subscribe((value, _) =>
         {
@@ -65,17 +68,30 @@ public static class AskUserConversationTests
         {
             Defaults = new ToolRuntimeOverride { MaximumOutputBytes = securityCeiling ? 8192 : limit },
         });
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, expandSanitizedOutput ? new ExpandingSanitizer() : new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var hooks = new RecordingHooks();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, expandSanitizedOutput ? new ExpandingSanitizer() : new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock, hooks: hooks, toolTelemetry: telemetry, storageBindings: telemetry);
         var request = new ToolInvocationRequest { SessionId = session, RunId = run, ToolId = "ask_user", ArgumentsJson = Arguments, Context = context };
         var suspended = await pipeline.InvokeAsync(request, token);
         Assert.True(suspended.Suspension is not null, suspended.Error);
         Assert.NotNull(suspended.Suspension);
         UserQuestionValidation.ValidateAnswers(suspended.Suspension.Questions, answer.Answers);
 
+        Assert.Empty(telemetry.Entries);
+        clock.Advance(TimeSpan.FromHours(1));
+        telemetry.Binding = new("repository-b", "Data Source=b.db");
         // Completion must retain the admitted ceiling even without the original policy context.
         var result = await pipeline.CompleteSuspensionAsync(request with { Context = CreateContext() }, suspended, answer, token);
         var repeated = await pipeline.CompleteSuspensionAsync(request, suspended, new(UserQuestionStatus.Interrupted, []), token);
         Assert.Same(result, repeated);
+        var concurrent = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => pipeline.CompleteSuspensionAsync(request, suspended, answer, token)));
+        Assert.All(concurrent, item => Assert.Same(result, item));
+        var entry = Assert.Single(telemetry.Entries);
+        Assert.Equal(originalBinding, entry.Binding);
+        Assert.Equal(2, hooks.Bindings.Count);
+        Assert.All(hooks.Bindings, binding => Assert.Equal(originalBinding, binding));
+        Assert.Equal(0L, entry.ElapsedMilliseconds);
+        Assert.Equal(clock.GetUtcNow(), entry.CompletedAtUtc);
+        Assert.Equal(result.Succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, entry.Status);
 
         var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
         Assert.Equal(suspended.ToolInvocationId, result.ToolInvocationId);
@@ -160,8 +176,9 @@ public static class AskUserConversationTests
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, prompts, modelResolver: resolver);
         var budget = new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.MaxValue));
         var registry = new ToolRegistry([new AskUserTool(prompts), new DateTimeTool(prompts)]);
-        var hooks = new RecordingHooks { FailQuestionAudit = failAfterHookAudit };
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks);
+        var hooks = new RecordingHooks { FailAuditToolId = failAfterHookAudit ? "ask_user" : null };
+        var telemetry = new RecordingTelemetry();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks, toolTelemetry: telemetry, storageBindings: telemetry);
         var model = new QuestionProvider { Native = native, ToolName = toolName };
         var steering = new RunSteeringCoordinator();
         using var questions = new UserQuestionCoordinator(events, steering);
@@ -205,6 +222,7 @@ public static class AskUserConversationTests
         Assert.True(first == ready.Task, string.Join("\n", observed.OfType<DiagnosticObserved>().Select(value => value.Message)));
         Assert.Single(model.Requests);
         Assert.DoesNotContain(observed.OfType<ToolInvocationCompleted>(), value => value.ToolInvocationId == observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId);
+        Assert.DoesNotContain(telemetry.Entries, entry => entry.ToolId == "ask_user");
         cancelDuringHandoff = async () => Assert.True(await dispatcher.DispatchAsync(new CancelRunCommand(session, run), token));
         if (stopRun)
         {
@@ -234,6 +252,7 @@ public static class AskUserConversationTests
             var questionId = observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId;
             Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>(), item => item.ToolInvocationId == questionId).Succeeded);
             Assert.Equal(bool.TrueString, Assert.Single(hooks.AfterInvocations, item => item.OperationId == questionId.Value).Succeeded);
+            Assert.Equal(ToolTelemetryStatus.Failed, Assert.Single(telemetry.Entries, item => item.ToolId == "ask_user").Status);
             Assert.Single(model.Requests);
             return;
         }
@@ -272,6 +291,7 @@ public static class AskUserConversationTests
         Assert.True(observed.OfType<UserQuestionStateChanged>().Last().Consumed);
         var invocationId = observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId;
         Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>(), value => value.ToolInvocationId == invocationId).Succeeded);
+        Assert.Equal(ToolTelemetryStatus.Succeeded, Assert.Single(telemetry.Entries, item => item.ToolId == "ask_user").Status);
     }
 
     /// <summary>A cancelled batch must finish admitted suspensions before returning its partial results.</summary>
@@ -294,7 +314,8 @@ public static class AskUserConversationTests
         questions.Attach((_, _) => throw new InvalidOperationException("A cancelled batch must not present a question."));
         var registry = new ToolRegistry([new AskUserTool(TestPromptLoader.Instance)]);
         var hooks = new RecordingHooks();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks);
+        var telemetry = new RecordingTelemetry();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow), hooks: hooks, toolTelemetry: telemetry, storageBindings: telemetry);
         var request = new ToolInvocationRequest
         {
             SessionId = SessionId.New(),
@@ -324,6 +345,7 @@ public static class AskUserConversationTests
         var hook = Assert.Single(hooks.AfterInvocations);
         Assert.Equal(completed.ToolInvocationId.Value, hook.OperationId);
         Assert.Equal(bool.FalseString, hook.Succeeded);
+        Assert.Equal(ToolTelemetryStatus.Failed, Assert.Single(telemetry.Entries).Status);
     }
 
     /// <summary>Batch and caller admission reject unsupported waits before registration.</summary>
@@ -419,7 +441,75 @@ public static class AskUserConversationTests
         }
     }
 
+    /// <summary>After-hook audit failures select one failure entry even when failure completion also throws.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task AfterHookAuditFailure_RecordsFailureExactlyOnce(bool failFailureAudit)
+    {
+        // Arrange
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var tool = new DateTimeTool(TestPromptLoader.Instance);
+        var hooks = new RecordingHooks { FailAuditToolId = tool.Definition.Id, FailFailureAudit = failFailureAudit };
+        var telemetry = new RecordingTelemetry();
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([tool]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UnixEpoch),
+            hooks: hooks,
+            toolTelemetry: telemetry,
+            storageBindings: telemetry);
+        var request = new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = tool.Definition.Id,
+            ArgumentsJson = "{}",
+            Context = CreateContext(),
+        };
+
+        // Act
+        if (failFailureAudit)
+        {
+            var failure = await Assert.ThrowsAsync<IOException>(() => pipeline.InvokeAsync(request, cancellationToken));
+            Assert.Equal("Synthetic after-tool audit failure", failure.Message);
+        }
+        else
+        {
+            var result = await pipeline.InvokeAsync(request, cancellationToken);
+            Assert.False(result.Succeeded);
+            Assert.Equal(ToolErrorClassification.ExecutionFailure, result.ErrorClassification);
+        }
+
+        // Assert
+        Assert.Equal([bool.TrueString, bool.FalseString], hooks.AfterInvocations.Select(item => item.Succeeded));
+        var entry = Assert.Single(telemetry.Entries);
+        Assert.Equal(tool.Definition.Id, entry.ToolId);
+        Assert.Equal(ToolTelemetryStatus.Failed, entry.Status);
+        Assert.Equal(telemetry.Binding, entry.Binding);
+    }
+
     private static ToolInvocationContext CreateContext() => new() { RepositoryPath = Path.GetTempPath(), TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
+
+    private sealed class RecordingTelemetry : IToolTelemetryProducer, IRepositoryStorageBindingSource
+    {
+        internal ConcurrentQueue<ToolCompletionEntry> Entries { get; } = new();
+
+        internal RepositoryStorageBinding Binding { get; set; } = new("repository-a", "Data Source=a.db");
+
+        public RepositoryStorageBinding CaptureBinding(string? repositoryIdentity = null) => Binding;
+
+        public bool TryRecord(ToolCompletionEntry entry)
+        {
+            Entries.Enqueue(entry);
+            return true;
+        }
+    }
 
     private sealed class CancellingQuestionAdmission : IUserQuestionAdmission
     {
@@ -444,23 +534,29 @@ public static class AskUserConversationTests
 
     private sealed class RecordingHooks : IHookCoordinator
     {
-        public bool FailQuestionAudit { get; init; }
+        public string? FailAuditToolId { get; init; }
+
+        public bool FailFailureAudit { get; init; } = true;
 
         public IReadOnlyList<HookHandlerDescriptor> Handlers => [];
 
         public List<(Guid OperationId, string Succeeded)> AfterInvocations { get; } = [];
 
+        public List<RepositoryStorageBinding?> Bindings { get; } = [];
+
         public HookHandlerDescriptor? GetHandler(HookHandlerId handlerId) => null;
 
         public bool SetEnabled(HookHandlerId handlerId, bool enabled) => false;
 
-        public Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default)
+        public Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, RepositoryStorageBinding? storageBinding = null, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Bindings.Add(storageBinding);
             if (point == HookPoint.AfterToolInvocation)
             {
                 AfterInvocations.Add((operationId, payload!["succeeded"]));
-                if (FailQuestionAudit && payload["toolId"].Equals("ask_user", StringComparison.OrdinalIgnoreCase))
+                if (payload["toolId"].Equals(FailAuditToolId, StringComparison.OrdinalIgnoreCase)
+                    && (FailFailureAudit || payload["succeeded"] == bool.TrueString))
                 {
                     throw new IOException("Synthetic after-tool audit failure");
                 }

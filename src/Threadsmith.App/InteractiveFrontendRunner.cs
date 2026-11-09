@@ -83,7 +83,7 @@ internal static class InteractiveFrontendRunner
     private static async Task RunTuiKitAsync(ShellRunContext context, SessionThemePreferences themes, TuiDisplayOptions display, CancellationTokenSource processCancellation)
     {
         var surface = context.EarlySurface ?? throw new InvalidOperationException("Interactive startup requires the early terminal surface.");
-        await surface.AttachStartupServicesAsync(context.ImageArtifacts, processCancellation.Token);
+        await surface.AttachStartupServicesAsync(context.ImageArtifacts, context.ToolStatisticsHealth, processCancellation.Token);
         var coordinator = CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync);
         var trusted = ConfigurationBootstrap.BuildTrusted(context.Paths);
         using var trustedLifetime = trusted as IDisposable;

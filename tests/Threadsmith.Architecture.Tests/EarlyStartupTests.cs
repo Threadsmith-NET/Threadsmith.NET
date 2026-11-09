@@ -167,7 +167,7 @@ public static class EarlyStartupTests
                 TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             }
 
-            Assert.Contains("Database initialization Failed", output, StringComparison.Ordinal);
+            Assert.Matches(@"Database initialization\s+Failed", output);
             Assert.Contains("Host services failed", output, StringComparison.Ordinal);
             Assert.Contains("Configuration error: SemanticMinimum (65)", output, StringComparison.Ordinal);
             Assert.Contains("between", output, StringComparison.Ordinal);

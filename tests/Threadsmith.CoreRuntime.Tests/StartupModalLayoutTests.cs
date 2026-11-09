@@ -16,11 +16,11 @@ public static class StartupModalLayoutTests
     [InlineData(12.3, SemanticStartupPhaseState.Completed, " 12.3s", "Completed")]
     [InlineData(999.9, SemanticStartupPhaseState.Failed, "999.9s", "Failed   ")]
     [InlineData(1000, SemanticStartupPhaseState.Cancelled, "999.9s", "Cancelled")]
-    public static void StartupColumnsHaveFixedWidths(double seconds, SemanticStartupPhaseState state, string elapsed, string status)
+    public static void StartupColumnsHaveFixedWidths(double seconds, SemanticStartupPhaseState state, string elapsedText, string status)
     {
         var row = StartupModal.FormatRow(TimeSpan.FromSeconds(seconds), "Memory capacity", state, string.Empty, 86);
 
-        Assert.Equal(elapsed + " " + "Memory capacity".PadRight(42) + " " + status, row);
+        Assert.Equal(elapsedText + " " + "Memory capacity".PadRight(42) + " " + status, row);
         Assert.Equal(59, row.Length);
         Assert.DoesNotContain("...", row, StringComparison.Ordinal);
     }

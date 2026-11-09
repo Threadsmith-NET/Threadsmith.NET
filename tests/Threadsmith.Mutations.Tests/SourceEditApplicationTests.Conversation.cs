@@ -30,7 +30,7 @@ public sealed partial class SourceEditApplicationTests
         var publication = new TestPublicationGate();
         await using var fixture = await EditFixture.CreateAsync(ct, events =>
         {
-            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = excludeDiagnostics ? ["CS0246", "CS8602"] : [] } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false }, ExcludedDiagnosticIds = excludeDiagnostics ? ["CS0246", "CS8602"] : [] } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance, publication);
             return createdRefresh;
         });

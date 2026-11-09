@@ -244,7 +244,7 @@ public static class RepositoryMemoryEditModalTests
             {
                 if (blockReset)
                 {
-                    await WaitForOutputAsync("R: Reset all statistics", backend, token);
+                    await WaitForOutputAsync("R reset", backend, token);
                     backend.FeedInput("r");
                 }
                 else

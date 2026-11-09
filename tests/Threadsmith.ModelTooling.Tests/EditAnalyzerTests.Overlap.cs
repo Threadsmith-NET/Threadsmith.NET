@@ -31,7 +31,7 @@ public static partial class EditAnalyzerTests
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
         var clock = new ObservedTimeProvider();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = 2, InitialPreparationFrontier = 2, EditAnalysis = new() { CandidateLifetimeMilliseconds = int.MaxValue } }, timeProvider: clock);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = 2, InitialPreparationFrontier = 2, EditAnalysis = new() { Analyzers = new() { Enabled = false }, CandidateLifetimeMilliseconds = int.MaxValue } }, timeProvider: clock);
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
         var source = engine.CaptureAdvancedSnapshot().Solution;

@@ -1403,6 +1403,12 @@ public static class SemanticRefreshCoordinatorTests
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            return Task.CompletedTask;
+        });
         var timeProvider = new AdvancingTimeProvider();
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         await using var coordinator = CreateCoordinator(
@@ -1437,13 +1443,16 @@ public static class SemanticRefreshCoordinatorTests
             createdPath,
             SemanticFileChangeKind.Created,
             SemanticRefreshReason.ExternalChange));
-        var result = await coordinator.EnsureCurrentAsync(
+        await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
 
-        Assert.True(result.WasRefreshed);
-        Assert.Equal(SemanticRefreshReason.ExternalChange, result.Reason);
+        // The background worker may finish before admission; verify completed work rather than waiter scheduling.
         Assert.Equal(3, backend.RefreshCount);
+        Assert.Contains(observed, domainEvent => domainEvent is SemanticRefreshCompleted
+        {
+            Reason: SemanticRefreshReason.ExternalChange,
+        });
     }
 
     /// <summary>An unstable snapshot retains dirty state and reports its failure kind.</summary>

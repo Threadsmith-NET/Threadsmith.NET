@@ -102,6 +102,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         IReadOnlyDictionary<string, string>? payload = null,
         IReadOnlyList<ExecutionArtifactReference>? artifacts = null,
         IReadOnlyList<string>? callChain = null,
+        RepositoryStorageBinding? storageBinding = null,
         CancellationToken cancellationToken = default)
     {
         return await InvokeCoreAsync(
@@ -115,6 +116,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
             payload,
             artifacts,
             callChain,
+            storageBinding,
             cancellationToken);
     }
 
@@ -143,6 +145,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
             payload,
             artifacts,
             callChain,
+            storageBinding: null,
             cancellationToken);
     }
 
@@ -168,6 +171,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         IReadOnlyDictionary<string, string>? payload,
         IReadOnlyList<ExecutionArtifactReference>? artifacts,
         IReadOnlyList<string>? callChain,
+        RepositoryStorageBinding? storageBinding,
         CancellationToken cancellationToken)
     {
         if (operationId == Guid.Empty || generation < 0)
@@ -228,6 +232,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
                 safePayload,
                 safeArtifacts,
                 [.. chain, chainIdentity],
+                storageBinding,
                 cancellationToken);
             audits.Add(audit);
             if (audit.Status == HookInvocationStatus.Advised || (audit.Status == HookInvocationStatus.Denied && audit.Decision == HookDecisionKind.Continue))
@@ -264,6 +269,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         IReadOnlyDictionary<string, string> payload,
         IReadOnlyList<ExecutionArtifactReference> artifacts,
         IReadOnlyList<string> callChain,
+        RepositoryStorageBinding? storageBinding,
         CancellationToken cancellationToken)
     {
         var startedAt = _timeProvider.GetUtcNow();
@@ -276,6 +282,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
             SessionId = sessionId,
             RunId = runId,
             RepositoryIdentity = repositoryIdentity,
+            StorageBinding = storageBinding,
             OperationId = operationId,
             Generation = generation,
             OccurredAt = startedAt,

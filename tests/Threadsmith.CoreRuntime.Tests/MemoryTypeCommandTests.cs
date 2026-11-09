@@ -242,6 +242,129 @@ public static class MemoryTypeCommandTests
         Assert.Equal(3, surface.Snapshots[^1].Entries.Count);
     }
 
+    /// <summary>Both statistics reset entry points use the same committed host command and refresh.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Statistics_reset_paths_use_the_same_command(bool modal)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = Path.GetFullPath("statistics-command-fixture");
+        var store = new StatisticsStore(path);
+        var dispatcher = new MemoryDispatcher(0) { StatisticsDispatcher = new CommandDispatcher([new ToolStatisticsApplication(store, store)]) };
+        var surface = modal ? (RecordingSurface)new StatisticsBrowserSurface(["/toolstats", "/quit"]) : new RecordingSurface([" /TOOLSTATS\tReSeT \r\n", "/quit"]);
+        await using var events = new DomainEventStream();
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        var running = coordinator.RunAsync(path, requestedTrust: RepositoryTrustLevel.UntrustedInspection, repositoryConfigurationDirectoryExistedAtStartup: true, cancellationToken: ct);
+        try
+        {
+            await store.Entered.Task.WaitAsync(ct);
+            Assert.Equal(modal ? 1 : 0, store.Reads);
+        }
+        finally
+        {
+            store.Commit.TrySetResult();
+            await running;
+        }
+
+        Assert.Single(dispatcher.Commands.OfType<ResetToolStatisticsCommand>());
+        Assert.Equal(modal ? 2 : 1, dispatcher.Commands.OfType<ListToolStatisticsCommand>().Count());
+        Assert.DoesNotContain(dispatcher.Commands, item => item is SubmitRequestCommand);
+        if (!modal)
+        {
+            Assert.Contains("reset committed", surface.Output, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Statistics parsing stays local and unsupported arguments never access storage.</summary>
+    [Theory]
+    [InlineData("/toolstats list")]
+    [InlineData("/toolstats reset extra")]
+    [InlineData("/toolstats\treset\treset")]
+    public static async Task Statistics_invalid_arguments_remain_local(string command)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var dispatcher = new MemoryDispatcher(0);
+        var surface = new RecordingSurface([command, "/quit"]);
+        await using var events = new DomainEventStream();
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync("statistics-command-fixture", requestedTrust: RepositoryTrustLevel.UntrustedInspection, repositoryConfigurationDirectoryExistedAtStartup: true, cancellationToken: ct);
+        Assert.Contains("Usage: /toolstats [reset]", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain(dispatcher.Commands, item => item is ListToolStatisticsCommand or ResetToolStatisticsCommand or SubmitRequestCommand);
+    }
+
+    /// <summary>A surface without a browser receives stored statistics as ordinary safe text.</summary>
+    [Fact]
+    public static async Task Statistics_text_fallback_uses_stored_rows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = Path.GetFullPath("statistics-command-fixture");
+        var store = new StatisticsStore(path);
+        var dispatcher = new MemoryDispatcher(0) { StatisticsDispatcher = new CommandDispatcher([new ToolStatisticsApplication(store, store)]) };
+        var surface = new RecordingSurface(["/toolstats", "/quit"]);
+        await using var events = new DomainEventStream();
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync(path, requestedTrust: RepositoryTrustLevel.UntrustedInspection, repositoryConfigurationDirectoryExistedAtStartup: true, cancellationToken: ct);
+        Assert.Contains("removed-tool", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Last invocation (UTC)", surface.Output, StringComparison.Ordinal);
+        Assert.Single(dispatcher.Commands.OfType<ListToolStatisticsCommand>());
+        Assert.DoesNotContain(dispatcher.Commands, item => item is SubmitRequestCommand);
+    }
+
+    private sealed class StatisticsBrowserSurface : RecordingSurface, IToolStatisticsSurface
+    {
+        internal StatisticsBrowserSurface(IEnumerable<string> inputs)
+            : base(inputs)
+        {
+        }
+
+        public async Task ShowToolStatisticsAsync(Func<CancellationToken, Task<ToolStatisticsSnapshot>> load, Func<CancellationToken, Task<ToolStatisticsSnapshot>> reset, CancellationToken cancellationToken = default)
+        {
+            Assert.Single((await load(cancellationToken)).Rows);
+            Assert.Empty((await reset(cancellationToken)).Rows);
+        }
+    }
+
+    private sealed class StatisticsStore : IToolStatisticsStore, IRepositoryStorageBindingSource
+    {
+        private readonly RepositoryStorageBinding _binding;
+        private int _reads;
+        private bool _committed;
+
+        internal StatisticsStore(string path)
+        {
+            _binding = new(RepositoryIdentity.Create(path), "Data Source=unused.db");
+        }
+
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource Commit { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal int Reads => Volatile.Read(ref _reads);
+
+        public RepositoryStorageBinding CaptureBinding(string? repositoryIdentity = null)
+        {
+            Assert.Equal(_binding.RepositoryIdentity, repositoryIdentity);
+            return _binding;
+        }
+
+        public Task<ToolStatisticsSnapshot> GetSnapshotAsync(RepositoryStorageBinding binding, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(_binding, binding);
+            Interlocked.Increment(ref _reads);
+            return Task.FromResult(new ToolStatisticsSnapshot(_committed ? [] : [new("removed-tool", 3, 2, 1, DateTimeOffset.UnixEpoch, 400, 2, null)]));
+        }
+
+        public async Task ResetAsync(RepositoryStorageBinding binding, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(_binding, binding);
+            Entered.TrySetResult();
+            await Commit.Task.WaitAsync(cancellationToken);
+            _committed = true;
+        }
+    }
+
     private sealed class MemoryBrowserSurface : RecordingSurface, IRepositoryMemoryListSurface
     {
         public MemoryBrowserSurface(IEnumerable<string> inputs)
@@ -299,6 +422,8 @@ public static class MemoryTypeCommandTests
 
         public bool Reconcile { get; init; }
 
+        internal ICommandDispatcher? StatisticsDispatcher { get; init; }
+
         internal List<object> Commands { get; } = [];
 
         internal List<RepositoryMemoryEntry> Entries { get; } = [];
@@ -307,6 +432,11 @@ public static class MemoryTypeCommandTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Commands.Add(command);
+            if (command is ListToolStatisticsCommand or ResetToolStatisticsCommand)
+            {
+                return (StatisticsDispatcher ?? throw new InvalidOperationException("Unexpected statistics command.")).DispatchAsync(command, cancellationToken);
+            }
+
             object response = command switch
             {
                 CreateSessionCommand => _sessionId,

@@ -349,6 +349,10 @@ public sealed record HookInvocationEnvelope
     /// <summary>Repository identity when present.</summary>
     public string? RepositoryIdentity { get; init; }
 
+    /// <summary>Runtime-only database ownership captured before deferred hook admission.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public RepositoryStorageBinding? StorageBinding { get; init; }
+
     /// <summary>Stable owning operation identity.</summary>
     public required Guid OperationId { get; init; }
 
@@ -520,7 +524,7 @@ public interface IHookCoordinator
     bool SetEnabled(HookHandlerId handlerId, bool enabled);
 
     /// <summary>Evaluates and invokes the eligible handlers for one authoritative boundary.</summary>
-    Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default);
+    Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, RepositoryStorageBinding? storageBinding = null, CancellationToken cancellationToken = default);
 
     /// <summary>Evaluates and invokes one selected eligible handler for an explicit management test.</summary>
     Task<HookBoundaryDecision> InvokeHandlerAsync(HookHandlerId handlerId, HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default);

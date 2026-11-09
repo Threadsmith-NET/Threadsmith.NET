@@ -175,7 +175,7 @@ internal static class InteractionPresentationFormatter
             : completed.CheckName;
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
-                "SEMANTIC CHECKS",
+                GetSemanticCheckCaption(checkName),
                 GetSemanticCheckTitle(completed.Phase, checkName),
                 GetSemanticOutcomeText(completed.Outcome),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
@@ -207,7 +207,7 @@ internal static class InteractionPresentationFormatter
         lines.AddRange(GetEditAnalysisLines(analysis, SemanticCheckPhase.PostMutation, true, limits));
         var role = GetFinalizedEditFeedbackRole(analysis);
         return FormatBlock(new TuiBlockPresentation(
-            new TuiBlockHeader("SEMANTIC CHECKS", "finalized edit feedback", state, null, role, role),
+            new TuiBlockHeader("Consolidated Edit Feedback", "finalized edit feedback", state, null, role, role),
             lines,
             ChildIndent: "  "));
     }
@@ -311,6 +311,12 @@ internal static class InteractionPresentationFormatter
         }
 
         return summary;
+    }
+
+    /// <summary>Identifies the diagnostic producer consistently in live and retained check output.</summary>
+    internal static string GetSemanticCheckCaption(string checkName)
+    {
+        return checkName == "advisory edit analyzers" ? "Analyzer Checks" : "Compiler Checks";
     }
 
     /// <summary>Names advisory phases consistently in live activity and retained completion blocks.</summary>

@@ -418,6 +418,7 @@ public static class Program
                 {
                     ConversationStore = foundation.ConversationStore,
                     RepositoryMemoryStore = foundation.RepositoryMemoryStore,
+                    ToolStatistics = foundation.ToolStatistics,
                     SessionLifecycleStore = foundation.SessionLifecycleStore,
                     SessionRestorer = foundation.SessionRestorer,
                     ArtifactStore = foundation.ArtifactStore,
@@ -483,6 +484,7 @@ public static class Program
             {
                 EarlySurface = surface,
                 ImageArtifacts = foundation.ArtifactStore,
+                ToolStatisticsHealth = foundation.ToolStatistics,
                 SemanticStartupProgress = foundation.SemanticEngines.StartupProgress,
                 CommandLine = commandLine,
                 Paths = paths,
@@ -527,6 +529,7 @@ public static class Program
             new ToolInvocationRequest
             {
                 ExpectedRegistration = registration,
+                StorageBinding = envelope.StorageBinding,
                 SessionId = envelope.SessionId,
                 RunId = envelope.RunId ?? default,
                 Phase = RunPhase.Intake,

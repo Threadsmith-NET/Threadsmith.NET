@@ -293,6 +293,7 @@ After required startup choices, the TUI paints the startup modal before loading 
 | `/thinking [on\|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
 | `/tips` | Print all tips as local bullets without adding them to model context. |
 | `/tools` | Browse and toggle non-essential repository tools. |
+| `/toolstats [reset]` | Inspect persistent repository tool counts and durations in a horizontally scrollable table; reset all rows. See [statistics controls and limits](operations/tools.md#repository-tool-statistics). |
 | `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
 
 

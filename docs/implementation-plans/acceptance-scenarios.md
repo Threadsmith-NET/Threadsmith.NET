@@ -4,6 +4,17 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario TOOL-STATS — Repository tool completion statistics
+
+1. Complete successful, rejected and failed central-pipeline tool requests. Open `/toolstats` and inspect its nine columns: Tool ID, Total, Success, Failure, Last invocation (UTC), Total duration, Average duration, Last-run duration, and Measured invocations. Average duration uses measured invocation count and rounds to the nearest whole millisecond with midpoint values rounded up; unavailable and measured-zero durations remain distinct.
+2. Inspect an unexecuted batch and leave a clarification suspended. Neither adds a row until a terminal request exists; final clarification completion counts once without human-wait duration.
+3. Disconnect or remove a tool, restart normally, and inspect its retained row without requiring a current catalog entry.
+4. Reset from the modal and `/toolstats reset`. Both acknowledge committed deletion and refresh through the same host command. Later completions can appear; cancellation of the wait is not rollback.
+5. Change repositories with a late old invocation. Its completion belongs to its original database. A configured initial database remains authoritative on return.
+6. Inspect at narrow supported sizes. Navigate rows with Up/Down, Page Up/Down and Home/End, and reach all offscreen columns with Left/Right. With mouse capture enabled, verify vertical-wheel row navigation and horizontal-wheel column scrolling over the table. There is no separate details pane or Tab list/details switch. Escape during storage work releases modal/input ownership and restores the composer draft.
+
+**Verifies:** Non-waiting producer admission, ordered persistent aggregation and reset, exact-once terminal selection, unknown-versus-zero measurements, repository isolation, no payload/history retention, and explicit unavailable/incomplete accounting on storage failure. Abrupt exit may lose in-memory queued entries.
+
 ## Scenario A — Read-Only Investigation
 
 1. User opens a multi-project .NET solution.

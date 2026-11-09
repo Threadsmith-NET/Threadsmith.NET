@@ -42,8 +42,8 @@
       "maximumFallbackFiles": 10000,
       // Advisory output only; restart after changing. Empty warnings means errors only.
       "editAnalysis": {
-        // Measurement controls only; automatic analyzer feedback is not enabled in this release.
-        "analyzers": { "enabled": false, "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"], "budgetMilliseconds": 1000, "coldStartBudgetMilliseconds": 10000, "maximumConcurrentOperations": 1, "concurrentAnalysis": false },
+        // Automatic analyzer feedback is enabled by default; diagnosticIds and budgets apply only to explicit measurements.
+        "analyzers": { "enabled": true, "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"], "budgetMilliseconds": 1000, "coldStartBudgetMilliseconds": 10000, "maximumConcurrentOperations": 1, "concurrentAnalysis": false },
         "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],
         // Exact IDs, case-insensitive. Exclusions win even for compiler errors.
         "excludedDiagnosticIds": []
@@ -346,7 +346,7 @@
     // not change the host-owned 75% active-turn tool-continuation trigger.
     "conversation": {
       "mode": "conversationAware",
-      "recentTurnTokens": 8000,
+      "recentTurnTokens": 32768,
       "recentTurnCount": 12,
       "recentTurnMaximumAge": "7.00:00:00",
       "compactionPressurePercent": 75

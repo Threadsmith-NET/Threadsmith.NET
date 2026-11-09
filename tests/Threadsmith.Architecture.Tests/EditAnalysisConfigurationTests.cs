@@ -52,6 +52,7 @@ public sealed class EditAnalysisConfigurationTests
         Assert.Equal(1234, options.CandidateLifetimeMilliseconds);
         Assert.Equal(4567, options.FinalFeedbackWaitMilliseconds);
         var defaults = HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().Build()).Semantic.EditAnalysis;
+        Assert.True(defaults.Analyzers.Enabled);
         Assert.Equal(Timeout.Infinite, defaults.FinalFeedbackWaitMilliseconds);
         Assert.Equal(Timeout.Infinite, defaults.CandidateLifetimeMilliseconds);
         Assert.Equal(0, defaults.MaximumRetainedDiagnostics);
@@ -75,12 +76,25 @@ public sealed class EditAnalysisConfigurationTests
         Assert.Empty(options.CompilerWarningIds);
         Assert.Empty(options.ExcludedDiagnosticIds);
         Assert.Empty(options.Analyzers.DiagnosticIds);
-        Assert.False(options.Analyzers.Enabled);
+        Assert.True(options.Analyzers.Enabled);
         Assert.False(options.Analyzers.ConcurrentAnalysis);
         var policy = new DiagnosticReportingPolicy(options);
         Assert.True(policy.ShouldReport("CS0246", DiagnosticSeverity.Error));
         Assert.False(policy.ShouldReport("CS4014", DiagnosticSeverity.Warning));
         Assert.Empty(HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().Build()).Semantic.EditAnalysis.ExcludedDiagnosticIds);
+    }
+
+    /// <summary>Explicit opt-out survives startup binding and capture.</summary>
+    [Fact]
+    public void AnalyzerFeedbackCanBeDisabledExplicitly()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["limits:semantic:editAnalysis:analyzers:enabled"] = "false",
+        }).Build();
+        var options = HostFoundation.LoadOperationalLimits(configuration).Semantic.EditAnalysis;
+        Assert.False(options.Analyzers.Enabled);
+        Assert.False(options.Capture().Analyzers.Enabled);
     }
 
     /// <summary>Invalid or unknown options fail through the host binder.</summary>

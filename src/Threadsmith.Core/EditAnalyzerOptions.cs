@@ -1,10 +1,10 @@
 namespace Threadsmith.Core;
 
-/// <summary>Startup-captured controls for project-provided optional edit analyzers.</summary>
+/// <summary>Startup-captured controls for project-provided edit analyzers.</summary>
 public sealed record EditAnalyzerOptions
 {
     /// <summary>Enables project-provided analyzer feedback without extending the edit's immediate observation window.</summary>
-    public bool Enabled { get; init; }
+    public bool Enabled { get; init; } = true;
 
     /// <summary>Rule selection for explicit performance experiments only; automatic feedback uses project configuration.</summary>
     public string[] DiagnosticIds { get; init; } = [];

@@ -7,8 +7,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.PersistenceMcpHardening.Tests" />
     <PackageReference Include="StbImageSharp" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />

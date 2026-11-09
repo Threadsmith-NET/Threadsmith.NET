@@ -47,6 +47,7 @@ public static class InteractiveCommandCatalog
         new("/thinking", "/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
         new("/tips", "/tips", "Show all tips locally without adding them to model context"),
         new("/tools", "/tools", "Browse and toggle repository tool availability"),
+        new("/toolstats", "/toolstats [reset]", "Inspect or reset repository tool completion counts and durations"),
         new("/trust", "/trust [inspect|read|build|mutation|automation]", "Remember repository trust upgrades in user-owned permissions"),
     ];
 

@@ -1,5 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using System.Globalization;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Presentation;
 using TUIKit;
@@ -10,6 +11,9 @@ using TUIKit.Modals;
 /// <summary>A modal startup projection that discards all ordinary keys and paste.</summary>
 internal sealed class StartupModal : Modal
 {
+    private const int ElapsedWidth = 6;
+    private const int ItemWidth = 17 + 25; // "Loading solution " plus a 25-character solution name.
+    private const int StatusWidth = 9; // Completed (also accommodates Cancelled).
     private static readonly string[] CompactLogo = ["Threadsmith.NET"];
     private readonly string[] _logoLines;
     private readonly int _logoWidth;
@@ -111,7 +115,7 @@ internal sealed class StartupModal : Modal
     /// <inheritdoc />
     public override void Render(ISurface surface)
     {
-        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default), expandHeight: true, preferredSize: new Size(90, 32));
+        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default), expandHeight: true, preferredSize: new Size(90, 29));
         if (view is null)
         {
             return;
@@ -246,7 +250,8 @@ internal sealed class StartupModal : Modal
 
         if (showSplines && y < progressHeight - 1)
         {
-            Draw(view, y++, $"{SplinesElapsed.TotalSeconds:0.0}s Reticulating Splines ...{(SplinesCompleted ? " Completed" : string.Empty)}", SplinesCompleted ? PresentationTextRole.Success : PresentationTextRole.Status);
+            var state = SplinesCompleted ? SemanticStartupPhaseState.Completed : SemanticStartupPhaseState.Running;
+            Draw(view, y++, FormatRow(SplinesElapsed, "Reticulating Splines", state, string.Empty, view.Size.Width), Role(state));
         }
 
         if (_label is not null)
@@ -258,7 +263,7 @@ internal sealed class StartupModal : Modal
 
         if (TotalElapsed is { } total && y < progressHeight)
         {
-            Draw(view, y++, $"{total().TotalSeconds:0.0}s Total startup", PresentationTextRole.Status);
+            Draw(view, y++, FormatRow(total(), "Total startup", null, string.Empty, view.Size.Width), PresentationTextRole.Status);
         }
 
         for (var index = 0; index < fatalDetailRows; index++)
@@ -293,6 +298,22 @@ internal sealed class StartupModal : Modal
         _state = state;
     }
 
+    /// <summary>Formats every startup status through the same fixed display-cell columns.</summary>
+    internal static string FormatRow(TimeSpan elapsed, string label, SemanticStartupPhaseState? state, string detail, int width)
+    {
+        var itemWidth = Math.Min(ItemWidth, Math.Max(3, width - ElapsedWidth - StatusWidth - 2));
+        var item = TranscriptView.Safe(label.Replace("...", string.Empty, StringComparison.Ordinal)).Trim();
+        if (UnicodeWidth.GetWidth(item) > itemWidth)
+        {
+            item = item[..UnicodeWidth.GetLengthThatFits(item, itemWidth - 3)] + "...";
+        }
+
+        item += new string(' ', itemWidth - UnicodeWidth.GetWidth(item));
+        var seconds = (Math.Clamp(elapsed.TotalSeconds, 0, 999.9).ToString("0.0", CultureInfo.InvariantCulture) + "s").PadLeft(ElapsedWidth);
+        var status = (state?.ToString() ?? string.Empty).PadRight(StatusWidth);
+        return $"{seconds} {item} {status}{TranscriptView.Safe(detail.Replace("...", string.Empty, StringComparison.Ordinal))}";
+    }
+
     private void AppendRows(IReadOnlyList<SemanticStartupPhaseSnapshot> source, bool labeled)
     {
         for (var index = 0; index < source.Count; index++)
@@ -313,12 +334,6 @@ internal sealed class StartupModal : Modal
         }
 
         _lineRuns[y].Draw(surface, 0, y, text, _style(role));
-    }
-
-    private static string FormatRow(TimeSpan elapsed, string label, SemanticStartupPhaseState state, string detail, int width)
-    {
-        var text = TranscriptView.Safe($"{elapsed.TotalSeconds:0.0}s {label} {state}{detail}");
-        return UnicodeWidth.GetWidth(text) <= width ? text : TranscriptView.Safe($"{elapsed.TotalSeconds:0.0}s {state} {label}{detail}");
     }
 
     private static PresentationTextRole Role(SemanticStartupPhaseState state) => state switch

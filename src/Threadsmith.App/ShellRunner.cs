@@ -375,6 +375,9 @@ internal sealed record ShellRunContext
     /// <summary>Shared binary capability of the existing artifact store.</summary>
     internal IImageArtifactStore? ImageArtifacts { get; init; }
 
+    /// <summary>Gets the shared nonblocking statistics persistence health source.</summary>
+    internal IToolStatisticsHealthSource? ToolStatisticsHealth { get; init; }
+
     /// <summary>Gets transient timings for the interactive startup projection.</summary>
     internal SemanticStartupProgress? SemanticStartupProgress { get; init; }
 

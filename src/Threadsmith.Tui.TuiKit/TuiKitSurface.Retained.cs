@@ -12,7 +12,7 @@ using Threadsmith.Telemetry;
 using TUIKit.Modals;
 
 /// <summary>Owns startup, command-help, and immediate-toggle modal lifetimes on the existing terminal runtime.</summary>
-internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface, IRepositoryMemoryListSurface
+internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface, IRepositoryMemoryListSurface, IToolStatisticsSurface
 {
     private readonly List<SemanticStartupPhaseSnapshot> _startupPhases = [];
     private SemanticStartupProgress _startupTiming = new();
@@ -41,7 +41,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         CancellationToken cancellationToken = default)
     {
         var modal = new RepositoryMemoryModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), () => _app.MouseCaptureEnabled) { CanManage = true };
-        return RunMemoryModalAsync(
+        return RunRetainedActionModalAsync(
             modal,
             modal.Changes,
             async (request, token) =>
@@ -70,6 +70,49 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             }
 
             await EnqueueAsync(() => modal.CompleteChange(refreshed, error), token);
+            return false;
+        },
+            nested: false,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task ShowToolStatisticsAsync(
+        Func<CancellationToken, Task<ToolStatisticsSnapshot>> load,
+        Func<CancellationToken, Task<ToolStatisticsSnapshot>> reset,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(load);
+        ArgumentNullException.ThrowIfNull(reset);
+        var modal = new ToolStatisticsModal(ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), () => _app.MouseCaptureEnabled);
+        return RunRetainedActionModalAsync(
+            modal,
+            modal.Requests,
+            async (resetRequested, token) =>
+        {
+            ToolStatisticsTableSnapshot? snapshot = null;
+            string? error = null;
+            try
+            {
+                var stored = resetRequested ? await reset(token) : await load(token);
+
+                // Prepare immutable display values off the terminal owner, even for synchronous loads.
+                snapshot = await Task.Run(() => ToolStatisticsTableSnapshot.Create(stored, token), token);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                error = exception.Message;
+            }
+
+            await EnqueueAsync(
+                () =>
+            {
+                if (!token.IsCancellationRequested)
+                {
+                    modal.CompleteRequest(snapshot, error);
+                }
+            },
+                token);
             return false;
         },
             nested: false,
@@ -194,12 +237,13 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                     await EnqueueAsync(
                         () =>
                     {
-                        var completed = $"{modal.Elapsed.TotalSeconds:0.0}s {label} {outcome}";
-                        _startupPhases.Add(tracked.Snapshot);
+                        var snapshot = tracked.Snapshot;
+                        var completed = StartupModal.FormatRow(snapshot.Elapsed, label, Enum.Parse<SemanticStartupPhaseState>(outcome), string.Empty, int.MaxValue);
+                        _startupPhases.Add(snapshot);
 
                         if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal) && modal.SplinesCompleted)
                         {
-                            _startupPhases.Add(new(default, SemanticStartupPhaseState.Completed, modal.SplinesElapsed) { Label = "Reticulating Splines ..." });
+                            _startupPhases.Add(new(default, SemanticStartupPhaseState.Completed, modal.SplinesElapsed) { Label = "Reticulating Splines" });
                         }
 
                         if (outcome != "Completed")
@@ -284,8 +328,8 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             cancellationToken);
     }
 
-    /// <summary>Attaches image storage once before the composer is available.</summary>
-    internal Task AttachStartupServicesAsync(IImageArtifactStore? images, CancellationToken cancellationToken)
+    /// <summary>Attaches storage services once before the composer is available.</summary>
+    internal Task AttachStartupServicesAsync(IImageArtifactStore? images, IToolStatisticsHealthSource? statistics, CancellationToken cancellationToken)
     {
         return EnqueueAsync(
             () =>
@@ -297,6 +341,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
 
             _startupServicesAttached = true;
             _imageArtifacts = images;
+            _toolStatisticsHealth = statistics;
         },
             cancellationToken);
     }
@@ -362,7 +407,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         var modal = new RepositoryMemoryEditModal(initialText, ResolveStyle, _limits, () => _app.MouseCaptureEnabled, () => _app.ToggleMouseCapture()) { CopyRequested = Copy, Title = title };
         modal.PasteRequested = () => RequestPaste(modal, () => modal.Text);
         RepositoryMemoryListSnapshot? refreshed = null;
-        await RunMemoryModalAsync(
+        await RunRetainedActionModalAsync(
             modal,
             modal.Saves,
             async (text, token) =>
@@ -384,7 +429,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     }
 
     [SuppressMessage("Usage", "VSTHRD003", Justification = "Modal completion is owned by the dedicated terminal loop.")]
-    private async Task RunMemoryModalAsync<T>(
+    private async Task RunRetainedActionModalAsync<T>(
         Modal modal,
         ChannelReader<T> requests,
         Func<T, CancellationToken, Task<bool>> apply,
@@ -419,7 +464,22 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                     break;
                 }
 
-                if (await apply(await next, cancellationToken))
+                var action = apply(await next, lifetime.Token);
+                if (await Task.WhenAny(action, completion) == completion)
+                {
+                    await lifetime.CancelAsync();
+                    try
+                    {
+                        await action;
+                    }
+                    catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+                    {
+                    }
+
+                    break;
+                }
+
+                if (await action)
                 {
                     await EnqueueAsync(
                         () =>

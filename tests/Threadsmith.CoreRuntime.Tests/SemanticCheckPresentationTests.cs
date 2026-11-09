@@ -100,7 +100,7 @@ public static class SemanticCheckPresentationTests
         InteractionEventSegments.Append(segments, restored, transcript.Text);
         var text = string.Concat(segments.Select(segment => segment.Text));
         Assert.Equal(transcript.Text, text);
-        Assert.Contains("SEMANTIC CHECKS: finalized edit feedback - available", text, StringComparison.Ordinal);
+        Assert.Contains("Consolidated Edit Feedback: finalized edit feedback - available", text, StringComparison.Ordinal);
         Assert.Contains(segments, segment => segment.Text.Contains("finalized edit feedback", StringComparison.Ordinal)
             && segment.Role == PresentationTextRole.Error);
         Assert.Contains("Committed source generation: 33", text, StringComparison.Ordinal);
@@ -177,7 +177,7 @@ public static class SemanticCheckPresentationTests
 
         var text = Render(analysis);
 
-        Assert.Contains("SEMANTIC CHECKS: pre-mutation candidate analysis - completed", text, StringComparison.Ordinal);
+        Assert.Contains("Compiler Checks: pre-mutation candidate analysis - completed", text, StringComparison.Ordinal);
         Assert.Contains("Syntax: 2 C# document instances checked; 0 reportable errors", text, StringComparison.Ordinal);
         Assert.Contains("Compiler: 3/3 affected project instances analyzed", text, StringComparison.Ordinal);
         Assert.Contains("5 current; 1 new; 2 resolved", text, StringComparison.Ordinal);

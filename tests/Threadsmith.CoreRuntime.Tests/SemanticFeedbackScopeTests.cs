@@ -251,7 +251,7 @@ public static class SemanticFeedbackScopeTests
         InteractionEventSegments.Append(segments, restored, transcript.Text);
         var disclosure = InteractionEventSegments.CreateDisclosure(restored, segments);
         Assert.NotNull(disclosure);
-        Assert.Contains(segments, segment => segment.Text.Contains("SEMANTIC CHECKS:", StringComparison.Ordinal) && segment.Role == disclosure.Role);
+        Assert.Contains(segments, segment => (segment.Text.Contains("Compiler Checks:", StringComparison.Ordinal) || segment.Text.Contains("Analyzer Checks:", StringComparison.Ordinal) || segment.Text.Contains("Consolidated Edit Feedback:", StringComparison.Ordinal)) && segment.Role == disclosure.Role);
         Assert.Equal(transcript.Text, string.Concat(segments.Select(segment => segment.Text)));
         return (transcript.Text, disclosure);
     }

@@ -2165,6 +2165,7 @@ public static partial class Milestone1Tests
             "/thinking [on|off]",
             "/tips",
             "/tools",
+            "/toolstats [reset]",
             "/trust [inspect|read|build|mutation|automation]",
         ];
         var commandLines = surface.Output
@@ -3586,10 +3587,10 @@ public static partial class Milestone1Tests
             await surface.WaitUntilAsync(
                 () =>
                 surface.Output.Contains(
-                    "SEMANTIC CHECKS: first semantic check - completed",
+                    "Compiler Checks: first semantic check - completed",
                     StringComparison.Ordinal)
                 && surface.ActiveStatuses.Any(status => status.StartsWith(
-                    "SEMANTIC CHECKS: second semantic check",
+                    "Compiler Checks: second semantic check",
                     StringComparison.Ordinal)),
                 TestContext.Current.CancellationToken);
         }

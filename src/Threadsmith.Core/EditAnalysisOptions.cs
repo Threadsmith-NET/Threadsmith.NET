@@ -3,7 +3,7 @@ namespace Threadsmith.Core;
 /// <summary>Startup-captured compiler advisory policy and bounds; these do not suppress compilation or validation.</summary>
 public sealed record EditAnalysisOptions
 {
-    /// <summary>Selected analyzer measurement controls; automatic edits do not execute analyzers.</summary>
+    /// <summary>Project-provided automatic analyzer feedback and explicit measurement controls.</summary>
     public EditAnalyzerOptions Analyzers { get; init; } = new();
 
     /// <summary>Selected effective warnings; an empty list includes only errors.</summary>

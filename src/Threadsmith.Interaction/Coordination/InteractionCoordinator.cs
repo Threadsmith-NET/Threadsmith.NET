@@ -1337,6 +1337,14 @@ public sealed partial class InteractionCoordinator
                     continue;
                 }
 
+                if (InteractiveCommandRouter.TryParse(commandText, out var statisticsInvocation)
+                    && statisticsInvocation is { } toolStatistics
+                    && string.Equals(toolStatistics.Descriptor.Name, "/toolstats", StringComparison.OrdinalIgnoreCase))
+                {
+                    await HandleToolStatisticsCommandAsync(sessionId, activeRepository?.Repository?.RepositoryPath, toolStatistics.Argument, lifetime.Token);
+                    continue;
+                }
+
                 if (commandText.StartsWith("/memory", StringComparison.OrdinalIgnoreCase)
                     && (commandText.Length == 7 || char.IsWhiteSpace(commandText[7])))
                 {
@@ -2615,7 +2623,7 @@ public sealed partial class InteractionCoordinator
     private static string FormatActiveSemanticCheckLabel(SemanticCheckStarted started)
     {
         ArgumentNullException.ThrowIfNull(started);
-        return $"SEMANTIC CHECKS: {InteractionPresentationFormatter.GetSemanticCheckTitle(started.Phase, started.CheckName)}";
+        return $"{InteractionPresentationFormatter.GetSemanticCheckCaption(started.CheckName)}: {InteractionPresentationFormatter.GetSemanticCheckTitle(started.Phase, started.CheckName)}";
     }
 
     private static bool TryGetLatestSemanticActivity(
@@ -3295,6 +3303,47 @@ public sealed partial class InteractionCoordinator
                 $"Lifecycle-hook command failed: {exception.Message}{Environment.NewLine}",
                 PresentationTextRole.Error,
                 cancellationToken);
+        }
+    }
+
+    private async Task HandleToolStatisticsCommandAsync(SessionId sessionId, string? repositoryPath, string argument, CancellationToken cancellationToken)
+    {
+        if (argument.Length > 0 && !string.Equals(argument, "reset", StringComparison.OrdinalIgnoreCase))
+        {
+            await _surface.WriteAsync("Usage: /toolstats [reset]\n", PresentationTextRole.Warning, cancellationToken);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            await _surface.WriteAsync("Tool statistics require an open repository.\n", PresentationTextRole.Error, cancellationToken);
+            return;
+        }
+
+        var identity = RepositoryIdentity.Create(repositoryPath);
+        try
+        {
+            if (argument.Length > 0)
+            {
+                var refreshed = await _presenter.ResetToolStatisticsAsync(sessionId, identity, cancellationToken);
+                await _surface.WriteAsync("Tool statistics reset committed. Later completions can appear below.\n" + ToolStatisticsFormatter.Format(refreshed), PresentationTextRole.Status, cancellationToken);
+            }
+            else if (_surface.Surface is IToolStatisticsSurface statisticsSurface)
+            {
+                await statisticsSurface.ShowToolStatisticsAsync(
+                    token => _presenter.ListToolStatisticsAsync(sessionId, identity, token),
+                    token => _presenter.ResetToolStatisticsAsync(sessionId, identity, token),
+                    cancellationToken);
+            }
+            else
+            {
+                var snapshot = await _presenter.ListToolStatisticsAsync(sessionId, identity, cancellationToken);
+                await _surface.WriteAsync(ToolStatisticsFormatter.Format(snapshot), PresentationTextRole.Status, cancellationToken);
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await _surface.WriteAsync($"Tool statistics request failed; no successful reset or exact snapshot is confirmed: {exception.Message}\n", PresentationTextRole.Error, cancellationToken);
         }
     }
 

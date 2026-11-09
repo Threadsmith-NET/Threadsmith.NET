@@ -675,7 +675,7 @@ public static class Plan117RoslynUpgradeTests
             var workers = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_WORKERS") == "2" ? 2 : 1;
             var logger = new RecordingLogger<SemanticEngine>();
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, new SemanticPreparationLimits { Workers = workers, Frontier = workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, new SemanticPreparationLimits(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = workers, Frontier = workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),

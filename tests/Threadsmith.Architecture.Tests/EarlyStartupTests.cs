@@ -97,7 +97,7 @@ public static class EarlyStartupTests
                 Assert.Same(value.GetValue(workspace), value.GetValue(workspace));
             }
 
-            await surface.AttachStartupServicesAsync(null, token);
+            await surface.AttachStartupServicesAsync(null, null, token);
             operation?.Complete();
             return 0;
         },
@@ -128,7 +128,7 @@ public static class EarlyStartupTests
                 }
                 else
                 {
-                    await surface.AttachStartupServicesAsync(null, token);
+                    await surface.AttachStartupServicesAsync(null, null, token);
                 }
             }
 
@@ -167,7 +167,7 @@ public static class EarlyStartupTests
                 TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
             }
 
-            Assert.Contains("Database initialization Failed", output, StringComparison.Ordinal);
+            Assert.Matches(@"Database initialization\s+Failed", output);
             Assert.Contains("Host services failed", output, StringComparison.Ordinal);
             Assert.Contains("Configuration error: SemanticMinimum (65)", output, StringComparison.Ordinal);
             Assert.Contains("between", output, StringComparison.Ordinal);

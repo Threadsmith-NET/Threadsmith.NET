@@ -1,5 +1,6 @@
 namespace Threadsmith.ModelTooling.Tests;
 
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Text;
 using System.Text.Json;
@@ -286,21 +287,236 @@ public static class Plan49ToolTimingTests
         Assert.Equal(OperationActivityOutcome.Failed, completed.Outcome);
     }
 
+    /// <summary>Every execution terminal outcome attempts one canonical statistics entry.</summary>
+    [Theory]
+    [InlineData("success", ToolErrorClassification.None, 1200L)]
+    [InlineData("returned-failure", ToolErrorClassification.ExecutionFailure, 1200L)]
+    [InlineData("exception", ToolErrorClassification.ExecutionFailure, 1500L)]
+    [InlineData("typed-exception", ToolErrorClassification.ExecutionFailure, 321L)]
+    [InlineData("timeout", ToolErrorClassification.Timeout, 1500L)]
+    [InlineData("deadline-cancellation", ToolErrorClassification.Timeout, 1500L)]
+    [InlineData("caller-cancellation", ToolErrorClassification.Cancelled, 1500L)]
+    [InlineData("output-limit", ToolErrorClassification.OutputLimitExceeded, 1200L)]
+    public static async Task Pipeline_Telemetry_RecordsEachExecutionTerminalOnce(string scenario, ToolErrorClassification classification, long elapsedMilliseconds)
+    {
+        var clock = new ManualTimeProvider();
+        var telemetry = new RecordingTelemetry();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var tool = new AuthoritativeTimedTool(
+            clock,
+            maximumOutputBytes: scenario == "output-limit" ? 1 : 1024,
+            execute: async (_, executionToken) =>
+        {
+            switch (scenario)
+            {
+                case "exception":
+                    throw new InvalidOperationException("Expected execution failure.");
+                case "typed-exception":
+                    throw new ToolExecutionException("Expected adapter failure.", ToolErrorClassification.ExecutionFailure, authoritativeElapsedMilliseconds: 321);
+                case "timeout":
+                    throw new TimeoutException("Expected timeout.");
+                case "deadline-cancellation":
+                    throw new OperationCanceledException("Expected deadline cancellation.");
+                case "caller-cancellation":
+                    await cancellation.CancelAsync();
+                    throw new OperationCanceledException(executionToken);
+                default:
+                    return new ToolExecutionEnvelope(
+                        new TimedOutput(),
+                        [],
+                        IsTruncated: false,
+                        AuthoritativeElapsedMilliseconds: 1200,
+                        Failure: scenario == "returned-failure" ? new(ToolErrorClassification.ExecutionFailure, "Expected failure.") : null);
+            }
+        });
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
+        var request = CreateRequest(tool.Definition.Id.ToUpperInvariant());
+        if (scenario == "caller-cancellation")
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.InvokeAsync(request, cancellation.Token));
+        }
+        else
+        {
+            var result = await pipeline.InvokeAsync(request, cancellation.Token);
+            Assert.Equal(classification, result.ErrorClassification);
+        }
+
+        var entry = Assert.Single(telemetry.Entries);
+        Assert.Equal(tool.Definition.Id, entry.ToolId);
+        Assert.Equal(classification == ToolErrorClassification.None ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, entry.Status);
+        Assert.Equal(elapsedMilliseconds, entry.ElapsedMilliseconds);
+        Assert.Equal(telemetry.Binding, entry.Binding);
+        Assert.Equal(clock.GetUtcNow(), entry.CompletedAtUtc);
+        Assert.Equal(1, telemetry.Attempts);
+    }
+
+    /// <summary>Early rejections count as failed without manufacturing duration measurements.</summary>
+    [Theory]
+    [InlineData("unknown", ToolErrorClassification.InvalidArguments)]
+    [InlineData("validation", ToolErrorClassification.InvalidArguments)]
+    [InlineData("policy", ToolErrorClassification.PolicyDenied)]
+    [InlineData("approval", ToolErrorClassification.ApprovalDenied)]
+    [InlineData("budget", ToolErrorClassification.PolicyDenied)]
+    public static async Task Pipeline_Telemetry_EarlyRejectionsHaveUnknownDuration(string scenario, ToolErrorClassification classification)
+    {
+        var clock = new ManualTimeProvider();
+        var tool = new TimedTool(clock, false);
+        var telemetry = new RecordingTelemetry();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var budget = new ExecutionBudget(new BudgetDimensions(100000, 1, TimeSpan.MaxValue));
+        budget.Accrue(new BudgetDimensions(0, 1, TimeSpan.Zero));
+        var pipeline = CreatePipeline(
+            events,
+            tool,
+            clock,
+            telemetry: telemetry,
+            approvalPolicy: new DenyApprovalPolicy(),
+            budget: scenario == "budget" ? budget : null);
+        var request = CreateRequest(scenario == "unknown" ? "missing_tool" : tool.Definition.Id, scenario == "validation" ? "[]" : "{}");
+        request = request with
+        {
+            Context = request.Context with
+            {
+                DenyAllTools = scenario == "policy",
+                RequireApprovalToolIds = scenario == "approval" ? [tool.Definition.Id] : [],
+            },
+        };
+        var result = await pipeline.InvokeAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(classification, result.ErrorClassification);
+        var entry = Assert.Single(telemetry.Entries);
+        Assert.Equal(ToolTelemetryStatus.Failed, entry.Status);
+        Assert.Null(entry.ElapsedMilliseconds);
+    }
+
+    /// <summary>Valid zero remains measured and negative adapter timing becomes unknown.</summary>
+    [Theory]
+    [InlineData(0L)]
+    [InlineData(-1L)]
+    [InlineData(1200L)]
+    public static async Task Pipeline_Telemetry_PreservesZeroAndNormalizesInvalidTiming(long measurement)
+    {
+        var clock = new ManualTimeProvider();
+        var tool = new AuthoritativeTimedTool(clock, measurement);
+        var telemetry = new RecordingTelemetry();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
+        Assert.True((await pipeline.InvokeAsync(CreateRequest(tool.Definition.Id), TestContext.Current.CancellationToken)).Succeeded);
+        Assert.Equal(measurement >= 0 ? (long?)measurement : null, Assert.Single(telemetry.Entries).ElapsedMilliseconds);
+    }
+
+    /// <summary>Rejected or broken statistics admission never changes a tool result.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Pipeline_TelemetryFailure_DoesNotChangeToolResult(bool throws)
+    {
+        var clock = new ManualTimeProvider();
+        var tool = new TimedTool(clock, false);
+        var telemetry = new RecordingTelemetry { Reject = true, Throws = throws };
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
+        Assert.True((await pipeline.InvokeAsync(CreateRequest(tool.Definition.Id), TestContext.Current.CancellationToken)).Succeeded);
+        Assert.Equal(1, telemetry.Attempts);
+    }
+
+    /// <summary>Prepared execution retains original database ownership; inspection counts nothing.</summary>
+    [Fact]
+    public static async Task Pipeline_PreparedTelemetry_RetainsOriginalBindingWithoutCountingPreflight()
+    {
+        var clock = new ManualTimeProvider();
+        var tool = new TimedTool(clock, false);
+        var telemetry = new RecordingTelemetry();
+        var original = telemetry.Binding;
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
+        var preflight = pipeline.PreflightBatch([new(0, "first", CreateRequest(tool.Definition.Id))]);
+        Assert.Empty(telemetry.Entries);
+        telemetry.Binding = new("repository-b", "Data Source=b.db");
+        var results = await pipeline.InvokePreparedBatchAsync(Assert.IsType<ToolBatchPreparation>(preflight.Preparation), TestContext.Current.CancellationToken);
+        Assert.True(Assert.Single(results).Result.Succeeded);
+        Assert.Equal(original, Assert.Single(telemetry.Entries).Binding);
+    }
+
+    /// <summary>Started and queued requests each select one cancelled terminal entry.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "This test owns every task and explicitly cancels/joins the batch.")]
+    public static async Task Telemetry_counts_queued_batch_cancellation(bool prepared)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clock = new ManualTimeProvider();
+        var telemetry = new RecordingTelemetry();
+        var original = telemetry.Binding;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var tool = new AuthoritativeTimedTool(clock, execute: async (_, executionToken) =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(executionToken);
+            return new ToolExecutionEnvelope(new TimedOutput(), [], IsTruncated: false);
+        });
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry, parallelOptions: new() { MaximumConcurrency = 1 });
+        ToolBatchRequest[] requests = [new(0, "first", CreateRequest(tool.Definition.Id)), new(1, "second", CreateRequest(tool.Definition.Id))];
+        var batch = prepared
+            ? pipeline.InvokePreparedBatchAsync(Assert.IsType<ToolBatchPreparation>(pipeline.PreflightBatch(requests).Preparation), cancellation.Token)
+            : pipeline.InvokeBatchAsync(requests, cancellation.Token);
+        try
+        {
+            await entered.Task.WaitAsync(ct);
+            telemetry.Binding = new("repository-b", "Data Source=b.db");
+            await cancellation.CancelAsync();
+            var failure = await Assert.ThrowsAsync<ToolBatchCancelledException>(() => batch);
+            Assert.Equal(2, failure.Results.Count);
+            Assert.Equal(2, telemetry.Entries.Count);
+            Assert.All(telemetry.Entries, entry =>
+            {
+                Assert.Equal(ToolTelemetryStatus.Failed, entry.Status);
+                Assert.Equal(original, entry.Binding);
+            });
+            Assert.Single(telemetry.Entries, entry => entry.ElapsedMilliseconds == 1500);
+            Assert.Single(telemetry.Entries, entry => entry.ElapsedMilliseconds is null);
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            release.TrySetResult();
+            try
+            {
+                await batch;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+    }
+
     private static ToolInvocationPipeline CreatePipeline(
         IDomainEventStream events,
         ITool tool,
         TimeProvider timeProvider,
-        ToolPresentationLimits? presentationLimits = null)
+        ToolPresentationLimits? presentationLimits = null,
+        RecordingTelemetry? telemetry = null,
+        IApprovalPolicy? approvalPolicy = null,
+        IBudget? budget = null,
+        ToolParallelOptions? parallelOptions = null)
     {
         return new ToolInvocationPipeline(
             new ToolRegistry([tool]),
             new DefaultPolicyEngine(),
-            new AllowApprovalPolicy(),
+            approvalPolicy ?? new AllowApprovalPolicy(),
             events,
             new TestSanitizer(),
             NullLogger<ToolInvocationPipeline>.Instance,
+            budget: budget,
             timeProvider: timeProvider,
-            presentationLimits: presentationLimits);
+            parallelOptions: parallelOptions,
+            presentationLimits: presentationLimits,
+            toolTelemetry: telemetry,
+            storageBindings: telemetry);
     }
 
     private static ToolInvocationRequest CreateRequest(
@@ -363,8 +579,20 @@ public static class Plan49ToolTimingTests
         }
     }
 
-    private sealed class AuthoritativeTimedTool(ManualTimeProvider timeProvider) : ITool
+    private sealed class AuthoritativeTimedTool : ITool
     {
+        private readonly ManualTimeProvider _timeProvider;
+        private readonly long? _measurement;
+        private readonly Func<ToolExecutionContext, CancellationToken, Task<ToolExecutionEnvelope>>? _execute;
+
+        internal AuthoritativeTimedTool(ManualTimeProvider timeProvider, long? measurement = 1200, int maximumOutputBytes = 1024, Func<ToolExecutionContext, CancellationToken, Task<ToolExecutionEnvelope>>? execute = null)
+        {
+            _timeProvider = timeProvider;
+            _measurement = measurement;
+            _execute = execute;
+            Definition = Definition with { MaximumOutputBytes = maximumOutputBytes };
+        }
+
         public ToolDefinition Definition { get; } = new()
         {
             Id = "plan49_authoritative_timed",
@@ -407,12 +635,12 @@ public static class Plan49ToolTimingTests
             ToolExecutionContext context,
             CancellationToken cancellationToken = default)
         {
-            timeProvider.Advance(TimeSpan.FromMilliseconds(1500));
-            return Task.FromResult(new ToolExecutionEnvelope(
+            _timeProvider.Advance(TimeSpan.FromMilliseconds(1500));
+            return _execute?.Invoke(context, cancellationToken) ?? Task.FromResult(new ToolExecutionEnvelope(
                 new TimedOutput(),
                 [],
                 IsTruncated: false,
-                AuthoritativeElapsedMilliseconds: 1200));
+                AuthoritativeElapsedMilliseconds: _measurement));
         }
     }
 
@@ -420,20 +648,11 @@ public static class Plan49ToolTimingTests
 
     private sealed record TimedOutput;
 
-    private sealed class ManualTimeProvider : TimeProvider
+    private sealed class ManualTimeProvider : FakeTimeProvider
     {
-        private long _timestamp;
-
-        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
-
-        public override long GetTimestamp()
+        internal ManualTimeProvider()
+            : base(new DateTimeOffset(2026, 11, 8, 12, 0, 0, TimeSpan.Zero))
         {
-            return _timestamp;
-        }
-
-        internal void Advance(TimeSpan duration)
-        {
-            _timestamp += duration.Ticks;
         }
     }
 
@@ -499,6 +718,43 @@ public static class Plan49ToolTimingTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(true);
+        }
+    }
+
+    private sealed class RecordingTelemetry : IToolTelemetryProducer, IRepositoryStorageBindingSource
+    {
+        private int _attempts;
+
+        internal ConcurrentQueue<ToolCompletionEntry> Entries { get; } = new();
+
+        internal RepositoryStorageBinding Binding { get; set; } = new("repository-a", "Data Source=a.db");
+
+        internal bool Reject { get; init; }
+
+        internal bool Throws { get; init; }
+
+        internal int Attempts => Volatile.Read(ref _attempts);
+
+        public RepositoryStorageBinding CaptureBinding(string? repositoryIdentity = null)
+        {
+            return Binding;
+        }
+
+        public bool TryRecord(ToolCompletionEntry entry)
+        {
+            Interlocked.Increment(ref _attempts);
+            if (Throws)
+            {
+                throw new InvalidOperationException("Expected telemetry failure.");
+            }
+
+            if (Reject)
+            {
+                return false;
+            }
+
+            Entries.Enqueue(entry);
+            return true;
         }
     }
 

@@ -42,6 +42,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SqliteRepositoryFactsStore repositoryFacts,
         SqliteConversationStore conversationStore,
         RepositoryBoundMemoryStore repositoryMemoryStore,
+        SqliteToolStatisticsWorker toolStatistics,
         SqliteSessionLifecycleStore sessionLifecycleStore,
         SessionRestorer sessionRestorer,
         ArtifactStore artifactStore,
@@ -91,6 +92,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         RepositoryFacts = repositoryFacts;
         ConversationStore = conversationStore;
         RepositoryMemoryStore = repositoryMemoryStore;
+        ToolStatistics = toolStatistics;
         SessionLifecycleStore = sessionLifecycleStore;
         SessionRestorer = sessionRestorer;
         ArtifactStore = artifactStore;
@@ -136,6 +138,12 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Disposes event observers in reverse dependency order before closing the event stream.</summary>
     async ValueTask IAsyncDisposable.DisposeAsync()
     {
+        // Projected hooks can invoke the ordinary pipeline independently of active runs.
+        // Join them while their execution, binding and telemetry dependencies remain alive.
+        await _hookSubscription.DisposeAsync();
+        await _hookObserver.DisposeAsync();
+        await HookCoordinator.DisposeAsync();
+        await ToolStatistics.DisposeAsync();
         RepositoryMemoryStore.Dispose();
         WebFetchAuthorization.RevokeAll();
         await _webFetchLifecycleSubscription.DisposeAsync();
@@ -144,9 +152,6 @@ internal sealed class HostFoundation : IAsyncDisposable
         await _semanticObserver.DisposeAsync();
         await SemanticRefreshCoordinator.DisposeAsync();
         RepositoryFileObserver.Dispose();
-        await _hookSubscription.DisposeAsync();
-        await _hookObserver.DisposeAsync();
-        await HookCoordinator.DisposeAsync();
         _hookHttpClient.Dispose();
         _jiraHttpClient?.Dispose();
         _prHttpClient?.Dispose();
@@ -181,6 +186,9 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Gets durable local repository-scoped cross-session memory storage.</summary>
     internal RepositoryBoundMemoryStore RepositoryMemoryStore { get; }
+
+    /// <summary>Gets the shared completion producer and ordered statistics store.</summary>
+    internal SqliteToolStatisticsWorker ToolStatistics { get; }
 
     /// <summary>Gets repository-bound durable session metadata and clone storage.</summary>
     internal SqliteSessionLifecycleStore SessionLifecycleStore { get; }
@@ -453,6 +461,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SemanticLifecycleObserver? semanticObserver = null;
         HttpClient? jiraHttpClient = null;
         HttpClient? prHttpClient = null;
+        SqliteToolStatisticsWorker? toolStatistics = null;
 
         try
         {
@@ -466,6 +475,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory,
                 progress,
                 cancellationToken);
+            toolStatistics = new SqliteToolStatisticsWorker(loggerFactory.CreateLogger<SqliteToolStatisticsWorker>());
             var eventStore = persistence.EventStore;
             var factsDirectory = Path.Combine(
                 Threadsmith.Core.HostStoragePaths.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -557,7 +567,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory.CreateLogger<HookCoordinator>(),
                 events,
                 limits: trustedConfiguration.GetSection("hooks:limits").Get<HookResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new());
-            var hookObserver = new HookEventObserver(hookCoordinator);
+            var hookObserver = new HookEventObserver(hookCoordinator, persistence.RepositoryMemoryStore);
             hookSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
                     ? Task.CompletedTask
@@ -643,7 +653,9 @@ internal sealed class HostFoundation : IAsyncDisposable
                 parallelOptions: parallelOptions,
                 presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 policyBinding: policyBinding,
-                prompts: promptLoader);
+                prompts: promptLoader,
+                toolTelemetry: toolStatistics,
+                storageBindings: persistence.RepositoryMemoryStore);
             composition?.Complete();
             return new HostFoundation(
                 events,
@@ -654,6 +666,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 repositoryFacts,
                 persistence.ConversationStore,
                 persistence.RepositoryMemoryStore,
+                toolStatistics,
                 persistence.SessionLifecycleStore,
                 persistence.SessionRestorer,
                 persistence.ArtifactStore,
@@ -698,6 +711,11 @@ internal sealed class HostFoundation : IAsyncDisposable
         catch
         {
             // Reverse partial initialization so a failed startup does not retain subscriptions or workspace state.
+            if (toolStatistics is not null)
+            {
+                await toolStatistics.DisposeAsync();
+            }
+
             await DisposeIfPresentAsync(semanticSubscription);
             if (semanticObserver is not null)
             {

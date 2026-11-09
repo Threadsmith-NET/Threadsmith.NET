@@ -9,9 +9,9 @@ public static partial class Milestone1Tests
 {
     /// <summary>The final wait restores the original semantic clock and ignores completed checks.</summary>
     [Theory]
-    [InlineData("compiler analysis")]
-    [InlineData("advisory edit analyzers")]
-    public static async Task InteractionCoordinator_SemanticWait_RestoresOriginalElapsedTime(string checkName)
+    [InlineData("compiler analysis", "Compiler Checks")]
+    [InlineData("advisory edit analyzers", "Analyzer Checks")]
+    public static async Task InteractionCoordinator_SemanticWait_RestoresOriginalElapsedTime(string checkName, string caption)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var provider = new GatedAnswerModelProvider();
@@ -26,7 +26,7 @@ public static partial class Milestone1Tests
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var started = new SemanticCheckStarted(sessionId, DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, checkName) { EffectId = Guid.NewGuid() };
             await harness.EventStream.PublishAsync(started, cancellationToken);
-            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith($"SEMANTIC CHECKS: {checkName}", StringComparison.Ordinal)), cancellationToken);
+            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith($"{caption}: {checkName}", StringComparison.Ordinal)), cancellationToken);
             clock.Advance(TimeSpan.FromSeconds(5));
             await harness.EventStream.PublishAsync(new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "answer before feedback"), cancellationToken);
             await harness.EventStream.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "TestBoundary", "flush answer"), cancellationToken);

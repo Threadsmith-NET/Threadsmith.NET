@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
 /// <summary>Rebinds explicit memories to the active repository database with an identity fence per operation.</summary>
-public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, IRepositoryMemoryTermResolver, IDisposable
+public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, IRepositoryMemoryTermResolver, IRepositoryStorageBindingSource, IDisposable
 {
     private readonly TimeProvider _timeProvider;
     private readonly SqliteEventStore? _retentionOwner;
@@ -24,6 +24,7 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
             RepositoryIdentity.Create(initialRepositoryRoot),
             Path.GetFullPath(initialRepositoryRoot),
             Path.GetFullPath(new SqliteConnectionStringBuilder(initialConnectionString).DataSource),
+            initialConnectionString,
             new SqliteManagedRepositoryMemoryStore(initialConnectionString, _timeProvider),
             null);
         _binding = _initialBinding;
@@ -31,6 +32,13 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
 
     /// <summary>Most recent verified backup location for the currently bound repository, when a migration occurred.</summary>
     public string? MigrationBackupPath => Volatile.Read(ref _binding).BackupPath;
+
+    /// <inheritdoc />
+    public RepositoryStorageBinding CaptureBinding(string? repositoryIdentity = null)
+    {
+        var binding = repositoryIdentity is null ? Volatile.Read(ref _binding) : GetBinding(repositoryIdentity);
+        return new RepositoryStorageBinding(binding.RepositoryIdentity, binding.ConnectionString);
+    }
 
     /// <summary>Initializes the host-selected repository database, then atomically publishes the new binding.</summary>
     public Task BindRepositoryAsync(string repositoryRoot, CancellationToken cancellationToken = default)
@@ -89,6 +97,7 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
                 identity,
                 Path.GetFullPath(repositoryRoot),
                 path,
+                connectionString,
                 store,
                 migrations.LastBackupPath));
         }
@@ -303,5 +312,5 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         return binding;
     }
 
-    private sealed record Binding(string RepositoryIdentity, string RepositoryRoot, string DatabasePath, SqliteManagedRepositoryMemoryStore Store, string? BackupPath);
+    private sealed record Binding(string RepositoryIdentity, string RepositoryRoot, string DatabasePath, string ConnectionString, SqliteManagedRepositoryMemoryStore Store, string? BackupPath);
 }

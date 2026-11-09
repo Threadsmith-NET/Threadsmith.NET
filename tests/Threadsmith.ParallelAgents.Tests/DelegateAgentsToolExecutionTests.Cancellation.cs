@@ -17,6 +17,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCancellation = new ManualResetEventSlim();
+        CancellationTokenRegistration cancellationBarrier = default;
         await using var events = new DomainEventStream();
         await using var subscription = events.Subscribe((domainEvent, deliveryToken) =>
         {
@@ -28,6 +31,13 @@ public sealed partial class DelegateAgentsToolExecutionTests
                 return Task.CompletedTask;
             }
 
+            // Cancellation callbacks run in reverse registration order. Hold the coordinator's
+            // earlier callback back while the publication's later WaitAsync observes cancellation.
+            cancellationBarrier = deliveryToken.Register(() =>
+            {
+                cancellationEntered.TrySetResult();
+                releaseCancellation.Wait(ct);
+            });
             entered.TrySetResult(deliveryToken);
             return release.Task.WaitAsync(deliveryToken);
         });
@@ -40,12 +50,14 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         // Act
         var running = coordinator.StartAsync(plan, runner, cancellation.Token);
+        var cancelling = Task.CompletedTask;
         try
         {
             var deliveryToken = await entered.Task.WaitAsync(ct);
             // Fail deterministically for the regression before waiting on cancellation.
             Assert.Equal(cancellation.Token, deliveryToken);
-            await cancellation.CancelAsync();
+            cancelling = cancellation.CancelAsync();
+            await cancellationEntered.Task.WaitAsync(ct);
             var terminal = await running.WaitAsync(ct);
 
             // Assert
@@ -61,7 +73,10 @@ public sealed partial class DelegateAgentsToolExecutionTests
         finally
         {
             // Always release and join, including when the token assertion exposes the regression.
+            releaseCancellation.Set();
+            await cancelling;
             await cancellation.CancelAsync();
+            await cancellationBarrier.DisposeAsync();
             release.TrySetResult();
             await running.WaitAsync(ct);
         }

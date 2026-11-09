@@ -1145,8 +1145,10 @@ public sealed class DelegationCoordinator :
 
             return terminal;
         }
-        catch (OperationCanceledException) when (active.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || active.IsCancellationRequested)
         {
+            // A cancelled publication can resume before the caller's active.Cancel callback executes.
+            active.Cancel();
             return await SaveCancellationAsync(plan, observedOutcomes, revisions, active);
         }
         catch (AgentQueueCapacityException)

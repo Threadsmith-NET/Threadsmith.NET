@@ -35,9 +35,7 @@ public static class ToolStatisticsFormatter
     public static IReadOnlyList<string> Details(ToolStatisticsRow row)
     {
         ArgumentNullException.ThrowIfNull(row);
-        var average = row.MeasuredInvocationCount > 0
-            ? ((decimal)row.TotalDurationMilliseconds / row.MeasuredInvocationCount).ToString("0.############################", CultureInfo.InvariantCulture) + " ms"
-            : "unavailable";
+        var average = AverageDuration(row);
         var last = row.LastDurationMilliseconds is { } milliseconds ? Duration(milliseconds) : "unavailable";
         var coverage = row.MeasuredInvocationCount == row.TotalCount ? string.Empty : " (not every invocation has a duration)";
         return
@@ -50,6 +48,15 @@ public static class ToolStatisticsFormatter
             "Last-run duration: " + last,
             string.Create(CultureInfo.InvariantCulture, $"Measured invocations: {row.MeasuredInvocationCount:N0}/{row.TotalCount:N0}{coverage}"),
         ];
+    }
+
+    /// <summary>Formats a measured average rounded to the nearest whole millisecond, with midpoint values rounded up.</summary>
+    public static string AverageDuration(ToolStatisticsRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.MeasuredInvocationCount > 0
+            ? decimal.Round((decimal)row.TotalDurationMilliseconds / row.MeasuredInvocationCount, 0, MidpointRounding.AwayFromZero).ToString("0", CultureInfo.InvariantCulture) + " ms"
+            : "unavailable";
     }
 
     private static string Duration(long milliseconds)

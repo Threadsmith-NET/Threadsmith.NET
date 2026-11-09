@@ -90,11 +90,14 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             modal.Requests,
             async (resetRequested, token) =>
         {
-            ToolStatisticsSnapshot? snapshot = null;
+            ToolStatisticsTableSnapshot? snapshot = null;
             string? error = null;
             try
             {
-                snapshot = resetRequested ? await reset(token) : await load(token);
+                var stored = resetRequested ? await reset(token) : await load(token);
+
+                // Prepare immutable display values off the terminal owner, even for synchronous loads.
+                snapshot = await Task.Run(() => ToolStatisticsTableSnapshot.Create(stored, token), token);
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {

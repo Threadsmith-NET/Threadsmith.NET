@@ -31,6 +31,7 @@ public sealed class SourceEditApplication :
     private readonly ISourceEditAnalyzer? _analyzer;
     private readonly ISemanticRefreshCoordinator? _semanticRefresh;
     private readonly TimeSpan _immediateAllowance;
+    private readonly TimeSpan _preEditCheckWait;
     private readonly TimeSpan _finalFeedbackWait;
     private readonly TimeProvider _timeProvider;
     private readonly ConcurrentDictionary<SessionId, FeedbackDelivery> _feedback = new();
@@ -80,6 +81,7 @@ public sealed class SourceEditApplication :
         var editOptions = editAnalysisOptions ?? new EditAnalysisOptions();
         editOptions.Validate();
         _immediateAllowance = immediateAllowance ?? TimeSpan.FromMilliseconds(editOptions.ImmediateObservationMilliseconds);
+        _preEditCheckWait = TimeSpan.FromMilliseconds(editOptions.PreEditCheckWaitMilliseconds);
         _finalFeedbackWait = TimeSpan.FromMilliseconds(editOptions.FinalFeedbackWaitMilliseconds);
         ArgumentOutOfRangeException.ThrowIfLessThan(_immediateAllowance, TimeSpan.Zero);
     }
@@ -160,6 +162,18 @@ public sealed class SourceEditApplication :
 
             var snapshot = await workspace.CaptureEffectAsync(mutations.MutationSetId, approval, cancellationToken);
             var analysis = await AnalyzeCandidateAsync(command, workspace.Isolation.RepositoryPath, snapshot, cancellationToken);
+            if (_preEditCheckWait > TimeSpan.Zero && analysis is { Pending: false, CandidateInputsComplete: true, CompilerCompletedSuccessfully: true }
+                && SourceEditAnalysisPolicy.GetCompilerFindingSeverity(analysis) is DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+            {
+                const string detail = "The edit was not applied because completed pre-edit compiler checks found errors or warnings. Revise the candidate using the attached diagnostics and submit a new edit.";
+                var rejected = await _effects.RecordRejectionAsync(
+                    command,
+                    new(command.EffectId, mutations.MutationSetId, SourceEditStatus.NotApplied, [], detail) { Analysis = analysis },
+                    CancellationToken.None);
+                pending.Completion.TrySetException(new SourceEditReviewUnavailableException(detail));
+                return rejected;
+            }
+
             var originals = await _diffs.CaptureAsync(command.SessionId, workspace, snapshot.Endpoints.Select(endpoint => endpoint.RelativePath), new Dictionary<string, ExecutionArtifactReference?>(), cancellationToken);
             var receipt = await _effects.CommitEditAsync(command, staged, approval, snapshot, originals, cancellationToken);
             if (receipt.Status == SourceEditStatus.Applied)
@@ -817,7 +831,8 @@ public sealed class SourceEditApplication :
                 return new SourceEditAnalysis { EffectId = command.EffectId, Omissions = ["Semantic publication is pending or unavailable; the authorized write remains independent."] };
             }
 
-            return await _analyzer.AnalyzeCandidateAsync(command, repositoryPath, snapshot, _immediateAllowance, cancellationToken);
+            var observation = _preEditCheckWait > TimeSpan.Zero ? _preEditCheckWait : _immediateAllowance;
+            return await _analyzer.AnalyzeCandidateAsync(command, repositoryPath, snapshot, observation, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

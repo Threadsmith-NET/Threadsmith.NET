@@ -4823,14 +4823,22 @@ public sealed partial class InteractionCoordinator
             cancellationToken);
         if (selected == 0)
         {
-            _ = await controller.CommitMutationSetAsync(
-                mutationSetId,
-                new MutationApproval
-                {
-                    Level = MutationApprovalLevel.EntireSet,
-                    ApprovalId = approvalId,
-                },
-                cancellationToken);
+            try
+            {
+                _ = await controller.CommitMutationSetAsync(
+                    mutationSetId,
+                    new MutationApproval
+                    {
+                        Level = MutationApprovalLevel.EntireSet,
+                        ApprovalId = approvalId,
+                    },
+                    cancellationToken);
+            }
+            catch (SourceEditReviewUnavailableException)
+            {
+                // The edit tool supplies the terminal non-applied receipt and compiler feedback.
+            }
+
             return InteractiveDecisionResult.ContinueWaiting;
         }
 

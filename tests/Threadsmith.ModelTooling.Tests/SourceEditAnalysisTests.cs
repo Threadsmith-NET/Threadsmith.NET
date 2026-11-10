@@ -201,7 +201,18 @@ public static partial class SourceEditAnalysisTests
         {
             Endpoints = [.. existing.Endpoints, new("Contracts/New.cs", null, Hash(added)) { FinalBytes = Encoding.UTF8.GetBytes(added) }],
         };
-        var result = await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.FromSeconds(20), ct);
+        var completed = new TaskCompletionSource<SemanticCheckCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            if (item is SemanticCheckCompleted { CheckName: "advisory edit analysis" } check && check.Analysis?.EffectId == command.EffectId)
+            {
+                completed.TrySetResult(check);
+            }
+
+            return Task.CompletedTask;
+        });
+        _ = await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.FromSeconds(20), ct);
+        var result = (await completed.Task.WaitAsync(ct)).Analysis;
         Assert.NotNull(result);
         Assert.False(result.Pending);
         Assert.Equal(2, result.SyntaxDocumentsAnalyzed);

@@ -238,8 +238,10 @@ internal static class InteractionPresentationFormatter
     {
         var includeCompiler = checkName != "advisory edit analyzers";
         var includeAnalyzers = checkName is null or "advisory edit analyzers";
+        var compilerSeverity = outcome is not (SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled) && includeCompiler && analysis is not null
+            ? SourceEditAnalysisPolicy.GetCompilerFindingSeverity(analysis) : null;
         if (outcome is SemanticCheckOutcome.Failed or SemanticCheckOutcome.Cancelled
-            || (analysis is { Obsolete: false } && ((includeCompiler && (analysis.CurrentErrors > 0 || analysis.SyntaxErrors > 0))
+            || (analysis is { Obsolete: false } && (compilerSeverity == DiagnosticSeverity.Error
                 || GetScopedDiagnostics(analysis, checkName).Any(item => item.Severity == DiagnosticSeverity.Error))))
         {
             return PresentationTextRole.Error;
@@ -252,7 +254,7 @@ internal static class InteractionPresentationFormatter
 
         if (analysis.Obsolete
             || (includeCompiler && (analysis.Pending || analysis.ProjectsAnalyzed == 0 || analysis.ProjectsAnalyzed < analysis.ProjectsInScope
-                || analysis.CurrentWarnings is null or > 0))
+                || analysis.CurrentWarnings is null || compilerSeverity == DiagnosticSeverity.Warning))
             || (includeAnalyzers && (analysis.Analyzers.Status is not ("disabled" or "completed" or "skipped")
                 || (analysis.Analyzers.Status == "completed" && analysis.Analyzers.DocumentsAnalyzed < analysis.Analyzers.DocumentsInScope)))
             || AreScopedFindingsTruncated(analysis, checkName)

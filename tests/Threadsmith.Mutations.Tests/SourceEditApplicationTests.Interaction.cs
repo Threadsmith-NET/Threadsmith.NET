@@ -133,20 +133,39 @@ public sealed partial class SourceEditApplicationTests
     [InlineData("approve")]
     [InlineData("deny")]
     [InlineData("escape")]
+    [InlineData("precheck")]
     public async Task Interaction_CoordinatorPresentsMutationSelectionAfterReleasingRunInput(string decision)
     {
         var token = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(token, approvalPolicy: MutationApprovalPolicy.ReviewAll);
         var provider = new ReviewedEditProvider();
         provider.Finish.TrySetResult();
-        var sessions = CreateReviewedSession(fixture, provider);
+        var analyzer = new ControlledCandidateAnalyzer();
+        var edits = decision == "precheck" ? fixture.CreateApplication(analyzer: analyzer) : fixture.Application;
+        var sessions = CreateReviewedSession(fixture, provider, edits);
         var projections = new InMemoryProjectionStore();
         await using var projectionSubscription = fixture.Events.Subscribe(projections.ApplyAsync);
-        var dispatcher = new CommandDispatcher([sessions, fixture.Application]);
+        var dispatcher = new CommandDispatcher([sessions, edits]);
         var surface = new MutationReviewSurface(decision);
         var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, projections), fixture.Events, surface);
 
-        await coordinator.RunAsync(modelStatus: "Fixture", cancellationToken: token);
+        var interaction = coordinator.RunAsync(modelStatus: "Fixture", cancellationToken: token);
+        if (decision == "precheck")
+        {
+            var command = await analyzer.Entered.Task.WaitAsync(token);
+            analyzer.Result.SetResult(new()
+            {
+                EffectId = command.EffectId,
+                CandidateInputsComplete = true,
+                CompilerCompletedSuccessfully = true,
+                ProjectsAnalyzed = 1,
+                ProjectsInScope = 1,
+                CurrentWarnings = 1,
+                Diagnostics = [new("CS8618", "Initialize the field", "Example.cs", 1, "Example", "net10.0", "introduced") { Severity = DiagnosticSeverity.Warning }],
+            });
+        }
+
+        await interaction;
 
         var selection = Assert.Single(surface.Selections);
         Assert.Contains("Mutation review", selection.Title, StringComparison.Ordinal);
@@ -156,11 +175,17 @@ public sealed partial class SourceEditApplicationTests
         Assert.All(surface.ComposerRequests, request => Assert.Equal(ComposerPurpose.Conversation, request.Purpose));
         Assert.Equal(decision == "approve" ? "class Changed { int Value; }" : "class Example { }", await File.ReadAllTextAsync(fixture.SourcePath, token));
         Assert.True(provider.Continuation.Task.IsCompletedSuccessfully);
+        if (decision == "precheck")
+        {
+            Assert.Contains("NotApplied", provider.LastRequest, StringComparison.Ordinal);
+            Assert.Contains("CS8618", provider.LastRequest, StringComparison.Ordinal);
+            Assert.Equal(0, fixture.Commits.Count);
+        }
     }
 
-    private static SessionApplication CreateReviewedSession(EditFixture fixture, ReviewedEditProvider provider)
+    private static SessionApplication CreateReviewedSession(EditFixture fixture, ReviewedEditProvider provider, SourceEditApplication? sourceEdits = null)
     {
-        var edits = fixture.Application;
+        var edits = sourceEdits ?? fixture.Application;
         var registry = new ToolRegistry([new SourceEditTool(edits, TestPromptLoader.Instance)]);
         var sanitizer = new SecretOutputSanitizer();
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
@@ -217,7 +242,7 @@ public sealed partial class SourceEditApplicationTests
             Selections.Add(request);
             return Task.FromResult(_decision == "escape"
                 ? new InteractionSelectionResult(null, IsCancelled: true)
-                : new InteractionSelectionResult(request.Options[_decision == "approve" ? 0 : 1].Id));
+                : new InteractionSelectionResult(request.Options[_decision is "approve" or "precheck" ? 0 : 1].Id));
         }
 
         public IActiveRunInputLease BeginActiveRunInput(TimeProvider timeProvider)

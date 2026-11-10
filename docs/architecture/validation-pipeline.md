@@ -1,6 +1,6 @@
 # Validation Pipeline
 
-`Threadsmith.Validation` owns authoritative build, diagnostic, test and acceptance evidence for explicitly invoked validation workflows. Cumulative direct-edit completion records disk effects without invoking this pipeline. Incremental compiler feedback is advisory and does not grant write authority.
+`Threadsmith.Validation` owns authoritative build, diagnostic, test and acceptance evidence for explicitly invoked validation workflows. Cumulative direct-edit completion records disk effects without invoking this pipeline. Bounded pre-edit compiler admission is separate from this pipeline; subsequent incremental compiler and analyzer feedback is advisory. Neither grants write authority nor proves build/test success.
 
 ## Build-half flow
 
@@ -40,7 +40,7 @@ Selection is intentionally conservative and project-level for M6. Projects marke
 
 ## Direct-editing integration
 
-Incremental semantic feedback is advisory. The ordinary model conversation can use findings to repair source without a mandatory per-edit correction phase or a compiler-clean prerequisite. Exact-diff authorization, source conflicts and transaction checks remain hard boundaries.
+After exact-diff authorization, `SourceEditApplication` observes candidate compiler analysis for up to `limits:semantic:editAnalysis:preEditCheckWaitMilliseconds` (default `5000`). Completed reported compiler errors or selected warnings reject the candidate before write intent and return a durable non-applied receipt with diagnostics for a revised invocation, but only when the semantic owner confirms that all proposed semantic inputs are represented. A zero setting preserves advisory-only admission. Expiry permits the existing authorized-write path without cancelling candidate analysis; pending, obsolete, unavailable or input-incomplete evidence does not reject the edit. Admission also requires explicit successful completion of all scoped compiler work; partial findings retained after cancellation or failure remain advisory. Membership and graph changes not represented in the candidate return without observing the blocking window, retaining the same background analysis, and remain advisory until the existing graph refresh owner evaluates the written inputs. Diagnostic filters and coverage limits remain explicit. This bounded admission check does not run a build or test, and separate analyzers retain their existing lifecycle and post-edit feedback wait. Subsequent incremental feedback remains advisory: the ordinary model conversation can use findings to repair source without a mandatory per-edit correction phase. Exact-diff authorization, source conflicts and transaction checks remain hard boundaries.
 
 Builds and tests run only when explicitly requested through the existing tools or validation commands. The model chooses when verification is needed, with guidance to resolve incremental compiler errors and obtain current feedback first. `SourceEditApplication` records cumulative disk effects at ordinary completion without invoking validation. `validation:stages` configures explicit validation workflows; it does not schedule work at response completion. Omitted stages are never reported as passed.
 

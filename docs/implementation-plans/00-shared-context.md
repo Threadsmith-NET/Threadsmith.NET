@@ -52,13 +52,13 @@ Host Surfaces (TUI | CLI | future API | future IDE)
 Application Coordination (sessions | commands | approvals | config | lifecycle)
    → Ordinary Model/Tool Conversation  +  Context Governor
    → Tool Runtime (files | search | process | git | MCP | extensions | policy)
-   → .NET Semantic Engine (advisory feedback)  +  Transactional Workspace (exact authorization)
+   → .NET Semantic Engine (bounded compiler admission + advisory feedback)  +  Transactional Workspace (exact authorization)
    → Explicit Validation Pipeline (build | diagnostics | analyzers | tests)
    → Persistence/Events/Telemetry/Artifacts
 Extension Runtime (discovery | collectible ALCs | activation | draining | registry | unload | hot-replace)
 ```
 
-The model selects read/edit order through ordinary tools. Compiler feedback is advisory and versioned; it does not gate authorized writes or prove build/test success. Ordinary completion records cumulative disk effects without invoking validation. Written plans are optional conversation text. See [the current conversation flow and diagram](../operations/conversation-loop.md) for feedback boundaries and final-response handling.
+The model selects read/edit order through ordinary tools. After exact authorization, candidate compiler analysis is observed for up to `limits:semantic:editAnalysis:preEditCheckWaitMilliseconds` (default `5000`). Completed reported compiler errors or selected warnings reject the candidate before write intent only when the semantic owner confirms that all proposed semantic inputs are represented. A zero setting preserves advisory-only admission. Expiry permits the existing authorized-write path without cancelling candidate analysis; pending, obsolete, unavailable or input-incomplete evidence does not reject the edit. Later compiler and analyzer feedback remains advisory and versioned, with coverage limits explicit; it does not prove build/test success. Ordinary completion records cumulative disk effects without invoking validation. Builds and tests require explicit tool or validation-command invocation. Written plans are optional conversation text. See [the current conversation flow and diagram](../operations/conversation-loop.md) for feedback boundaries and final-response handling.
 
 **Boundary rules (§7.1):**
 - Core execution works **without** any interactive terminal library.

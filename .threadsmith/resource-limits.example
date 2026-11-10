@@ -44,6 +44,7 @@
         "maximumDiagnosticProjectCharacters": 128,
         "maximumDiagnosticFrameworkCharacters": 64,
         "immediateObservationMilliseconds": 500,
+        "preEditCheckWaitMilliseconds": 5000,
         "finalFeedbackWaitMilliseconds": -1,
         "candidateLifetimeMilliseconds": -1
       },

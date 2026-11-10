@@ -72,6 +72,12 @@ public sealed record SourceEditAnalysis
     /// <summary>Monotonic result revision for deduplicated delivery.</summary>
     public long Revision { get; init; }
 
+    /// <summary>Whether every proposed semantic input is represented in the candidate snapshot; false for unknown or omitted membership/graph changes.</summary>
+    public bool CandidateInputsComplete { get; init; }
+
+    /// <summary>Whether all scoped compiler work completed successfully; partial, cancelled, failed and older results remain advisory.</summary>
+    public bool CompilerCompletedSuccessfully { get; init; }
+
     /// <summary>Whether broader compiler work is still pending.</summary>
     public bool Pending { get; init; }
 

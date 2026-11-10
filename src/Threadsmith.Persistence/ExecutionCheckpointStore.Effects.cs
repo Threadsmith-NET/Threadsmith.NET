@@ -172,7 +172,7 @@ public sealed partial class ExecutionCheckpointStore
         {
             ArgumentNullException.ThrowIfNull(record.SnapshotArtifact);
         }
-        else if (record.SnapshotArtifact is not null || record.Receipt is not { Status: SourceEditStatus.Denied or SourceEditStatus.Conflict, Commit: null } receipt
+        else if (record.SnapshotArtifact is not null || record.Receipt is not { Status: SourceEditStatus.Denied or SourceEditStatus.Conflict or SourceEditStatus.NotApplied, Commit: null } receipt
             || receipt.ChangedFiles.Count != 0 || receipt.EffectId != record.EffectId || receipt.MutationSetId != record.MutationSetId)
         {
             throw new InvalidDataException("A rejected edit must contain only a matching terminal non-write receipt.");

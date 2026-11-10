@@ -1,6 +1,6 @@
 namespace Threadsmith.Core;
 
-/// <summary>Startup-captured compiler advisory policy and bounds; these do not suppress compilation or validation.</summary>
+/// <summary>Startup-captured candidate admission, compiler feedback policy and bounds; these do not suppress compilation or validation.</summary>
 public sealed record EditAnalysisOptions
 {
     /// <summary>Project-provided automatic analyzer feedback and explicit measurement controls.</summary>
@@ -39,6 +39,9 @@ public sealed record EditAnalysisOptions
     /// <summary>Immediate observation allowance; zero returns without waiting.</summary>
     public int ImmediateObservationMilliseconds { get; init; } = 500;
 
+    /// <summary>Pre-edit compiler observation window; completed errors or selected warnings reject the candidate. Zero preserves advisory-only admission; expiry allows the edit and retains background feedback.</summary>
+    public int PreEditCheckWaitMilliseconds { get; init; } = 5000;
+
     /// <summary>Wait for pending edit feedback before model continuation or completion; -1 waits until completion or cancellation, zero disables waiting.</summary>
     public int FinalFeedbackWaitMilliseconds { get; init; } = Timeout.Infinite;
 
@@ -61,6 +64,7 @@ public sealed record EditAnalysisOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticProjectCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnosticFrameworkCharacters);
         ArgumentOutOfRangeException.ThrowIfNegative(ImmediateObservationMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegative(PreEditCheckWaitMilliseconds);
         ArgumentOutOfRangeException.ThrowIfLessThan(FinalFeedbackWaitMilliseconds, Timeout.Infinite);
         ArgumentOutOfRangeException.ThrowIfLessThan(CandidateLifetimeMilliseconds, Timeout.Infinite);
         ArgumentOutOfRangeException.ThrowIfZero(CandidateLifetimeMilliseconds);

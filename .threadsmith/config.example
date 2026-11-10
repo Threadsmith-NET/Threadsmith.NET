@@ -40,8 +40,10 @@
       // Concurrent reads per semantic snapshot/document pass; restart after changing.
       "maximumConcurrentFileReads": 4,
       "maximumFallbackFiles": 10000,
-      // Advisory output only; restart after changing. Empty warnings means errors only.
+      // Candidate checks and diagnostic output; restart after changing. Empty warnings means errors only.
       "editAnalysis": {
+        // Hold the edit for compiler checks; timeout retains existing asynchronous feedback. Zero disables rejection.
+        "preEditCheckWaitMilliseconds": 5000,
         // Automatic analyzer feedback is enabled by default; diagnosticIds and budgets apply only to explicit measurements.
         "analyzers": { "enabled": true, "diagnosticIds": ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100"], "budgetMilliseconds": 1000, "coldStartBudgetMilliseconds": 10000, "maximumConcurrentOperations": 1, "concurrentAnalysis": false },
         "compilerWarningIds": ["CS4014", "CS8602", "CS8604", "CS8618"],

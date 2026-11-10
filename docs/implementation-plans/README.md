@@ -237,6 +237,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-host-startup-performance.md](maintenance-host-startup-performance.md) | Reduce persistence, repository binding, and integration startup work |
 | Maintenance | [maintenance-startup-parallelization.md](maintenance-startup-parallelization.md) | Run independent startup operations in parallel |
 | Maintenance | [maintenance-deterministic-tests.md](maintenance-deterministic-tests.md) | Deterministic test synchronization |
+| Maintenance | [maintenance-pre-edit-check-wait.md](maintenance-pre-edit-check-wait.md) | Bounded pre-edit compiler checks with asynchronous timeout fallback |
 
 ## Update discipline
 

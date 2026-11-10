@@ -722,16 +722,20 @@ public class InteractionController
             }
         }
 
-        var result = await _presenter.CommitMutationSetAsync(sessionId, mutationSetId, approval, cancellationToken);
-        lock (_gate)
+        try
         {
-            if (_stagedMutationSet?.MutationSet.MutationSetId == mutationSetId)
+            return await _presenter.CommitMutationSetAsync(sessionId, mutationSetId, approval, cancellationToken);
+        }
+        finally
+        {
+            lock (_gate)
             {
-                _stagedMutationSet = null;
+                if (_stagedMutationSet?.MutationSet.MutationSetId == mutationSetId)
+                {
+                    _stagedMutationSet = null;
+                }
             }
         }
-
-        return result;
     }
 
     /// <summary>Declines the exact pending edit without ending its ordinary conversation.</summary>

@@ -26,6 +26,7 @@ public sealed class EditAnalysisConfigurationTests
             ["limits:semantic:editAnalysis:maximumOmissions"] = "2",
             ["limits:semantic:editAnalysis:maximumDiagnosticMessageCharacters"] = "12",
             ["limits:semantic:editAnalysis:immediateObservationMilliseconds"] = "0",
+            ["limits:semantic:editAnalysis:preEditCheckWaitMilliseconds"] = "123",
             ["limits:semantic:editAnalysis:candidateLifetimeMilliseconds"] = "1234",
             ["limits:semantic:editAnalysis:finalFeedbackWaitMilliseconds"] = "4567",
             ["limits:semantic:editAnalysis:analyzers:diagnosticIds:0"] = " ca2016 ",
@@ -49,10 +50,12 @@ public sealed class EditAnalysisConfigurationTests
         Assert.Equal(2, options.MaximumOmissions);
         Assert.Equal(12, options.MaximumDiagnosticMessageCharacters);
         Assert.Equal(0, options.ImmediateObservationMilliseconds);
+        Assert.Equal(123, options.PreEditCheckWaitMilliseconds);
         Assert.Equal(1234, options.CandidateLifetimeMilliseconds);
         Assert.Equal(4567, options.FinalFeedbackWaitMilliseconds);
         var defaults = HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().Build()).Semantic.EditAnalysis;
         Assert.True(defaults.Analyzers.Enabled);
+        Assert.Equal(5000, defaults.PreEditCheckWaitMilliseconds);
         Assert.Equal(Timeout.Infinite, defaults.FinalFeedbackWaitMilliseconds);
         Assert.Equal(Timeout.Infinite, defaults.CandidateLifetimeMilliseconds);
         Assert.Equal(0, defaults.MaximumRetainedDiagnostics);
@@ -104,6 +107,7 @@ public sealed class EditAnalysisConfigurationTests
     [InlineData("maximumReportedDiagnostics", "-1")]
     [InlineData("candidateLifetimeMilliseconds", "0")]
     [InlineData("immediateObservationMilliseconds", "-1")]
+    [InlineData("preEditCheckWaitMilliseconds", "-1")]
     [InlineData("finalFeedbackWaitMilliseconds", "-2")]
     [InlineData("excludedDiagnosticIds:0", " ")]
     [InlineData("compilerWarningIds:0", "")]

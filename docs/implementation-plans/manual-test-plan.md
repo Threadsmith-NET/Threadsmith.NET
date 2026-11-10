@@ -1412,8 +1412,8 @@ Current limitation: live-provider smoke verification is operator-initiated and r
 
 ### MTP-162 — Compiler repair and final validation
 
-1. Apply an authorized edit introducing compiler errors; verify applied status plus advisory findings.
-2. Repair through an ordinary edit call.
+1. With the default `limits:semantic:editAnalysis:preEditCheckWaitMilliseconds=5000`, submit an authorized edit whose candidate compiler checks complete with an error, then with a selected warning. Verify the existing running activity and elapsed timer; each completed failing candidate returns NotApplied with diagnostics, leaves source unchanged and permits a revised ordinary edit call. Repeat with a clean candidate and confirm application.
+2. Hold compiler work past the configured window with a controlled fixture. Verify application after observation expiry, retained candidate work, and later feedback through the existing post-edit path. Set the pre-edit window to zero, restart, and verify advisory-only admission. Separately hold analyzer work and verify it does not delay compiler admission. Cancel during pre-edit observation and confirm no source effect. Restore the default setting.
 3. Exercise explicitly requested build/test failure and omitted stages; verify actual results are visible. End an edit-only response and confirm no build or test starts automatically.
 4. Verify malformed-call limits remain independent of compiler findings.
 

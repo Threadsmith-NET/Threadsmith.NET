@@ -29,6 +29,9 @@ public sealed partial class SemanticEngine
     /// <summary>Gets aggregate counters without retaining source or model payloads.</summary>
     internal (long DiagnosticPasses, long CandidatePromotions) EditAnalysisStatistics => (Interlocked.Read(ref _editDiagnosticPasses), Interlocked.Read(ref _editCandidatePromotions));
 
+    /// <summary>Observes the syntax-to-project boundary for deterministic partial-analysis lifecycle verification.</summary>
+    internal Func<SourceEditAnalysis, CancellationToken, Task>? EditSyntaxAnalysisObserver { get; init; }
+
     /// <summary>Captures the exact current writer candidate for explicitly requested scoped analyzer measurements.</summary>
     internal Solution CaptureEditCandidateSnapshot(Guid effectId)
     {
@@ -189,6 +192,7 @@ public sealed partial class SemanticEngine
                 {
                     EffectId = command.EffectId,
                     SourceGeneration = _solutionGeneration,
+                    CandidateInputsComplete = promotable,
                     Pending = scope.Length > 0,
                     ProjectsInScope = scope.Length,
                     ProjectsOmitted = Math.Max(0, carried.Length - carryLimit),
@@ -214,11 +218,23 @@ public sealed partial class SemanticEngine
             candidate.AnalyzerWork = AnalyzeAutomaticEditAnalyzersAsync(candidate);
         }
 
+        lock (_gate)
+        {
+            // Omitted membership or graph inputs cannot reject admission. Keep the same
+            // background work for committed feedback without occupying the edit lease.
+            if (!candidate.Result.CandidateInputsComplete)
+            {
+                return candidate.Work.IsCompleted ? candidate.Result : candidate.Result with { Pending = true };
+            }
+        }
+
+        var observedCompletion = false;
         try
         {
 #pragma warning disable VSTHRD003 // The candidate owns its single continuation; this caller observes only the immediate allowance.
             await candidate.Work.WaitAsync(immediateAllowance, _analyzerTimeProvider, cancellationToken);
 #pragma warning restore VSTHRD003
+            observedCompletion = true;
         }
         catch (TimeoutException)
         {
@@ -226,7 +242,9 @@ public sealed partial class SemanticEngine
 
         lock (_gate)
         {
-            return candidate.Result;
+            // A completion racing the observation deadline belongs to later feedback, not admission.
+            // Keep the candidate alive and return the pending state observed at the deadline.
+            return observedCompletion ? candidate.Result : candidate.Result with { Pending = true };
         }
     }
 
@@ -408,6 +426,11 @@ public sealed partial class SemanticEngine
                 CurrentErrors = syntax.Errors,
                 OutputFiltered = syntax.Filtered,
             });
+            if (EditSyntaxAnalysisObserver is { } observer)
+            {
+                await observer(candidate.Result, candidate.Token);
+            }
+
             var syntaxOnlyFindings = syntax.Findings.Where(item => item.Unassigned).ToArray();
             foreach (var projectId in candidate.Projects)
             {
@@ -450,7 +473,11 @@ public sealed partial class SemanticEngine
                 }
             }
 
-            UpdateEditResult(candidate, result => result with { Pending = false });
+            UpdateEditResult(candidate, result =>
+            {
+                candidate.Token.ThrowIfCancellationRequested();
+                return result with { Pending = false, CompilerCompletedSuccessfully = true };
+            });
         }
         catch (OperationCanceledException)
         {
@@ -475,7 +502,7 @@ public sealed partial class SemanticEngine
                     "advisory edit analysis",
                     outcome,
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    "Advisory analysis finished; compiler findings do not gate this edit.")
+                    "Compiler analysis finished; build and test validation remain separate.")
                 {
                     Analysis = candidate.Result,
                 };

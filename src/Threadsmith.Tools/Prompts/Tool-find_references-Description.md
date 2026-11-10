@@ -1,1 +1,1 @@
-Primary compiler-aware tool for C# symbol references. Use the symbolId returned by find_symbol. For reference or usage relationships, use this instead of text search; fall back only if it fails or reports incomplete evidence.
+Primary compiler-aware tool for C# symbol references. Use the symbolId returned by find_symbol. For reference or usage relationships, use this instead of text search; reuse a current symbolId when available, and use targeted fallbacks only when unavailable or incomplete semantic evidence leaves a question unresolved.

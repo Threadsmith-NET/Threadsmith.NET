@@ -869,8 +869,12 @@ public sealed class Plan43AdvancedSemanticToolTests
         Assert.All(tools, tool => Assert.Equal(ToolSideEffect.ReadOnly, tool.Definition.SideEffect));
         Assert.All(tools, tool => Assert.Equal(ToolCategory.SemanticSearch, tool.Definition.Category));
         Assert.All(
-            tools,
-            tool => Assert.Contains("fall back only", tool.Definition.Description, StringComparison.OrdinalIgnoreCase));
+            tools.Take(3),
+            tool => Assert.Contains(
+                "targeted fallbacks only when unavailable or incomplete semantic evidence leaves a question unresolved",
+                tool.Definition.Description,
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("fall back only", tools[3].Definition.Description, StringComparison.OrdinalIgnoreCase);
         Assert.All(tools, tool =>
         {
             using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);

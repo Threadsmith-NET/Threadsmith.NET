@@ -1,30 +1,62 @@
 namespace Threadsmith.Models.OpenAiCompatible.OpenRouter;
 
+using System.Net;
+using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using Threadsmith.Core;
 using Threadsmith.Models;
 
-/// <summary>OpenRouter wire differences on the shared, nonvirtual transport and model lifecycle.</summary>
-internal sealed class OpenRouterModelProvider : OpenAiCompatibleModelProvider
+/// <summary>Streams native OpenRouter Responses through the shared host resilience lifecycle.</summary>
+internal sealed class OpenRouterModelProvider : IModelProvider
 {
+    private readonly HttpClient _client;
+    private readonly ModelProfile _profile;
+    private readonly string _secret;
     private readonly OpenRouterModelConfiguration _model;
+    private readonly TimeProvider _timeProvider;
+    private readonly string _protocol;
 
     /// <summary>Initializes a new instance of the <see cref="OpenRouterModelProvider"/> class.</summary>
     internal OpenRouterModelProvider(HttpClient client, ModelProfile profile, string secret, string providerId, OpenRouterModelConfiguration model, TimeProvider? timeProvider = null)
-        : base(client, profile, secret, timeProvider: timeProvider)
     {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(model);
+        _client = client;
+        _profile = profile;
+        _secret = secret;
         _model = model;
-        ReplayProtocol = "openrouter-v1:" + Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { providerId, model })));
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _protocol = "openrouter-responses-v1:" + Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { providerId, model })));
     }
 
-    private OpenRouterModelProvider(ModelProfile profile, OpenRouterModelConfiguration model)
-        : base(profile)
+    /// <inheritdoc />
+    public IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, CancellationToken cancellationToken = default)
     {
-        _model = model;
-        ReplayProtocol = "openrouter-projection";
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ResolvedProfileId is { } id && id != _profile.Id)
+        {
+            throw new ModelProviderException("The resolved model profile does not match the OpenRouter adapter.");
+        }
+
+        if (!_profile.Capabilities.Streaming || (request.Tools.Count > 0 && !_profile.Capabilities.ToolCalls))
+        {
+            throw new InvalidOperationException("The OpenRouter profile does not advertise the required streaming/tool capability.");
+        }
+
+        if (request.ContainsSensitiveData && _profile.SensitiveDataPolicy != ModelSensitiveDataPolicy.Allowed)
+        {
+            throw new ModelProviderException("The OpenRouter profile prohibits sensitive request content.");
+        }
+
+        var maximum = request.MaximumOutputTokens ?? _model.EffectiveRequestOutputTokenReserve;
+        if (maximum <= 0 || maximum > _profile.MaximumOutputTokens)
+        {
+            throw new ModelProviderException("The requested output ceiling exceeds the resolved profile limits.");
+        }
+
+        return StreamCoreAsync(request, maximum, cancellationToken);
     }
 
     /// <summary>Uses dispatch projection with size-only image placeholders before credentials are resolved.</summary>
@@ -34,350 +66,143 @@ internal sealed class OpenRouterModelProvider : OpenAiCompatibleModelProvider
             .Where(part => part.IsModelVisible && part.Image is not null)
             .Select(part => part.Image ?? throw new ModelProviderException("Missing image metadata."))
             .DistinctBy(image => image.Id).ToDictionary(image => image.Id, _ => ReadOnlyMemory<byte>.Empty);
-        return new OpenRouterModelProvider(profile, model).ProjectWireRequest(request with { ImageData = images }).ToArray();
+        return OpenRouterResponsesProjection.Create(request with { ImageData = images }, profile, model);
     }
 
-    /// <summary>Shared deterministic controls for preparation and serialization.</summary>
-    internal static void ProjectControls(JsonObject body, ModelStreamRequest request, OpenRouterModelConfiguration model)
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(ModelStreamRequest request, int maximum, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (!model.SupportedReasoningLevels.Contains(request.ReasoningLevel))
+        request = request with { ResolvedProfileId = request.ResolvedProfileId ?? _profile.Id };
+        if (!_model.SupportsReasoningReplay && request.TransientState is { HasResponses: true })
         {
-            throw new ModelProviderException("The selected reasoning level is unsupported by this OpenRouter profile.");
+            throw new ModelProviderException("This model does not support private reasoning replay; start a fresh turn.");
         }
 
-        if (model.ReasoningControl == ReasoningControllability.Selectable)
+        ProviderResponseReplay.Validate(request, _profile, _secret, _protocol);
+        var capacity = ProviderResponseReplay.Estimate(request, _profile).TotalCapacityTokens;
+        if (Math.Max(capacity, request.WireEstimate?.TotalCapacityTokens ?? 0) > _profile.ContextWindow)
         {
-            var reasoning = new JsonObject();
-            if (request.ReasoningLevel == ReasoningLevel.None)
+            throw new ModelProviderException("OpenRouter input and output reserve exceed the selected context window.");
+        }
+
+        request = await ModelImages.ResolveAsync(request, _profile, cancellationToken);
+        var names = ModelToolWireNameMap.Create(ModelToolCanonicalizer.Canonicalize(request.Tools));
+        using var deadline = _profile.Timeout > TimeSpan.Zero ? new CancellationTokenSource(_profile.Timeout, _timeProvider) : null;
+        using var linked = deadline is null ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var content = OpenRouterResponsesProjection.Create(request, _profile, _model);
+        ModelUsage? interruptedUsage = null;
+        try
+        {
+            await foreach (var chunk in ModelStreamResilience.ExecuteAsync(SendAttemptAsync, _profile.RetryPolicy, _timeProvider, _profile.Timeout, linked.Token, cancellationToken))
             {
-                reasoning["enabled"] = false;
+                yield return chunk;
             }
-            else if (model.ReasoningBudgets.TryGetValue(request.ReasoningLevel, out var budget))
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(content);
+        }
+
+        async IAsyncEnumerable<ModelChunk> SendAttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken token)
+        {
+            var previousUsage = interruptedUsage;
+            using var message = new HttpRequestMessage(HttpMethod.Post, _profile.Endpoint);
+            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secret);
+            message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+            message.Content = new ReadOnlyMemoryContent(content);
+            message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+            HttpResponseMessage response;
+            try
             {
-                if (budget >= (request.MaximumOutputTokens ?? model.EffectiveRequestOutputTokenReserve))
+                token.ThrowIfCancellationRequested();
+                var pending = _client.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, token);
+                request.SubmissionObserver?.Invoke();
+                response = await pending.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw token.IsCancellationRequested ? TimeoutFailure(exception)
+                    : new TransientModelException("OpenRouter transport was cancelled before response headers.", exception);
+            }
+            catch (HttpRequestException exception) when (IsTransient(exception))
+            {
+                throw new TransientModelException($"OpenRouter transport remained unavailable after {attempt} attempts ({TransportFailureKind(exception)}).", exception);
+            }
+
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
                 {
-                    throw new ModelProviderException("Reasoning budget leaves no visible completion headroom.");
-                }
-
-                reasoning["max_tokens"] = budget;
-            }
-            else
-            {
-                reasoning["effort"] = model.EffortMap[request.ReasoningLevel];
-            }
-
-            body["reasoning"] = reasoning;
-        }
-        else if (model.ReasoningControl == ReasoningControllability.AlwaysOn)
-        {
-            body["reasoning"] = new JsonObject { ["enabled"] = true };
-        }
-
-        body["session_id"] = (request.CacheAffinityId ?? request.RunId.Value).ToString("D");
-        body["provider"] = new JsonObject
-        {
-            ["require_parameters"] = true,
-            ["allow_fallbacks"] = model.Upstream is null,
-        };
-        if (model.Upstream is { } upstream)
-        {
-            body["provider"]?["only"] = new JsonArray(upstream);
-            body["provider"]?["order"] = new JsonArray(upstream);
-        }
-    }
-
-    /// <inheritdoc />
-    protected override bool HasRequestProjection => true;
-
-    /// <inheritdoc />
-    protected override bool RequiresDoneMarker => true;
-
-    /// <inheritdoc />
-    protected override int DefaultOutputCeiling => _model.EffectiveRequestOutputTokenReserve;
-
-    /// <inheritdoc />
-    protected override bool SupportsStrictArguments => _model.StrictToolArguments;
-
-    /// <inheritdoc />
-    protected override string ProviderFamily => "openrouter";
-
-    /// <inheritdoc />
-    protected override string ReplayProtocol { get; }
-
-    /// <inheritdoc />
-    protected override bool SupportsReasoningReplay => _model.SupportsReasoningReplay;
-
-    /// <inheritdoc />
-    protected override ReasoningAccumulator CreateReasoningAccumulator() => new OpenRouterReasoningAccumulator();
-
-    /// <inheritdoc />
-    protected override void ProjectRequest(JsonObject body, ModelStreamRequest request)
-    {
-        body["max_tokens"] = body["max_completion_tokens"]?.DeepClone();
-        body.Remove("max_completion_tokens");
-        body.Remove("reasoning_effort");
-        body.Remove("prompt_cache_key");
-        ProjectControls(body, request, _model);
-        if (!_model.SeedSupported)
-        {
-            body.Remove("seed");
-        }
-
-        if (!_model.ParallelToolCalls)
-        {
-            body.Remove("parallel_tool_calls");
-        }
-
-        if (OpenRouterProviderRegistration.CachePlan(request, _model).Breakpoints.Count > 0
-            && body["messages"] is JsonArray messages && messages.LastOrDefault() is JsonObject tail)
-        {
-            if (tail["content"] is JsonValue text && text.TryGetValue<string>(out var content))
-            {
-                tail["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = content });
-            }
-
-            if (tail["content"] is JsonArray blocks && blocks.LastOrDefault() is JsonObject last)
-            {
-                last["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
-            }
-        }
-
-        if (request.ResponseFormat is { } format && request.Tools.Count == 0)
-        {
-            if (!_model.JsonSchemaResponses)
-            {
-                throw new ModelProviderException("This OpenRouter profile does not support JSON-schema responses.");
-            }
-
-            body["response_format"] = new JsonObject
-            {
-                ["type"] = "json_schema",
-                ["json_schema"] = new JsonObject { ["name"] = format.SchemaId, ["strict"] = true, ["schema"] = JsonNode.Parse(format.JsonSchema) },
-            };
-        }
-    }
-
-    /// <inheritdoc />
-    protected override void ProjectReplay(JsonObject response)
-    {
-        if (response["reasoning_details"] is null)
-        {
-            response["reasoning"] = response["reasoning_content"]?.DeepClone();
-        }
-
-        response.Remove("reasoning_content");
-    }
-
-    /// <inheritdoc />
-    protected override void ValidateResponseIdentity(string? model, string? provider)
-    {
-        if ((model is not null && model != _model.ModelId)
-            || (_model.ExpectedProviderName is not null && provider is not null && !string.Equals(provider, _model.ExpectedProviderName, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new MalformedModelOutputException("OpenRouter returned an unexpected model or upstream identity.");
-        }
-    }
-
-    /// <inheritdoc />
-    protected override ModelUsage NormalizeUsage(ModelUsage usage, JsonElement? charge)
-    {
-        usage = usage with { EstimatedCost = Math.Max(usage.EstimatedCost, _model.Cost.CalculateUsage(usage)) };
-        if (charge is null || charge.Value.ValueKind == JsonValueKind.Null)
-        {
-            return usage;
-        }
-
-        if (charge.Value.ValueKind != JsonValueKind.Number || !charge.Value.TryGetDecimal(out var cost) || cost < 0)
-        {
-            throw new MalformedModelOutputException("OpenRouter returned invalid charge metadata.");
-        }
-
-        return usage with { ReportedCost = cost, CostProvenance = "openrouter:usage.cost" };
-    }
-
-    /// <summary>Accumulates ordered detail blocks without exposing signatures or opaque data.</summary>
-    private sealed class OpenRouterReasoningAccumulator : ReasoningAccumulator
-    {
-        private readonly List<ReasoningBlock> _blocks = [];
-        private readonly System.Text.StringBuilder _plain = new();
-        private bool _hasDisplayDetails;
-        private bool _requiresPrivateReplay;
-        private int _plainOffset;
-        private long _bytes;
-
-        /// <inheritdoc />
-        public override bool RequiresPrivateReplay => _requiresPrivateReplay;
-
-        /// <inheritdoc />
-        public override string? Append(JsonElement? details, string? text)
-        {
-            if (details is null || (details.Value.ValueKind == JsonValueKind.Array && details.Value.GetArrayLength() == 0))
-            {
-                if (!_hasDisplayDetails)
-                {
-                    _plain.Append(text);
-                }
-
-                return _hasDisplayDetails ? null : text;
-            }
-
-            if (details.Value.ValueKind != JsonValueKind.Array)
-            {
-                throw new MalformedModelOutputException("OpenRouter reasoning details must be an array.");
-            }
-
-            _bytes += System.Text.Encoding.UTF8.GetByteCount(details.Value.GetRawText());
-            if (_bytes > 1024 * 1024)
-            {
-                throw new MalformedModelOutputException("OpenRouter reasoning details exceed the private replay bound.");
-            }
-
-            var display = new System.Text.StringBuilder();
-            foreach (var element in details.Value.EnumerateArray())
-            {
-                if (element.ValueKind != JsonValueKind.Object)
-                {
-                    throw new MalformedModelOutputException("OpenRouter reasoning details exceed the supported structure.");
-                }
-
-                foreach (var property in element.EnumerateObject())
-                {
-                    if (property.Name is "type" or "id" or "format" or "text" or "summary" or "signature" or "data"
-                        && property.Value.ValueKind is not (JsonValueKind.String or JsonValueKind.Null))
+                    if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 529)
                     {
-                        throw new MalformedModelOutputException("Invalid OpenRouter reasoning scalar.");
-                    }
-
-                    if (property.Name == "index" && property.Value.ValueKind != JsonValueKind.Null
-                        && (property.Value.ValueKind != JsonValueKind.Number || !property.Value.TryGetInt32(out _)))
-                    {
-                        throw new MalformedModelOutputException("Invalid OpenRouter reasoning index.");
-                    }
-                }
-
-                var fragment = JsonNode.Parse(element.GetRawText())?.AsObject()
-                    ?? throw new MalformedModelOutputException("Missing OpenRouter reasoning block.");
-                var type = fragment["type"]?.GetValue<string>();
-                if (type is not ("reasoning.text" or "reasoning.summary" or "reasoning.encrypted"))
-                {
-                    throw new MalformedModelOutputException("Unsupported OpenRouter reasoning block type.");
-                }
-
-                _requiresPrivateReplay |= type == "reasoning.encrypted" || fragment["signature"] is not null;
-                var index = fragment["index"]?.GetValue<int>();
-                if (index is < 0)
-                {
-                    throw new MalformedModelOutputException("Invalid OpenRouter reasoning block index.");
-                }
-
-                var id = fragment["id"]?.GetValue<string>();
-                var existing = index is not null
-                    ? _blocks.FirstOrDefault(block => block.Metadata["index"]?.GetValue<int>() == index)
-                    : id is not null ? _blocks.FirstOrDefault(block => block.Metadata["id"]?.GetValue<string>() == id) : null;
-                if (existing is null)
-                {
-                    if (_blocks.Count >= 128)
-                    {
-                        throw new MalformedModelOutputException("OpenRouter reasoning contains too many blocks.");
-                    }
-
-                    existing = new ReasoningBlock();
-                    _blocks.Add(existing);
-                }
-
-                existing.Append(fragment);
-
-                if (type == "reasoning.text")
-                {
-                    display.Append(fragment["text"]?.GetValue<string>());
-                }
-                else if (type == "reasoning.summary")
-                {
-                    display.Append(fragment["summary"]?.GetValue<string>());
-                }
-            }
-
-            if (display.Length == 0)
-            {
-                if (!_hasDisplayDetails)
-                {
-                    _plain.Append(text);
-                    return text;
-                }
-
-                return null;
-            }
-
-            _hasDisplayDetails = true;
-            var displayed = display.ToString();
-            var overlap = 0;
-            while (overlap < displayed.Length && _plainOffset < _plain.Length
-                && displayed[overlap] == _plain[_plainOffset])
-            {
-                overlap++;
-                _plainOffset++;
-            }
-
-            if (overlap < displayed.Length)
-            {
-                _plainOffset = _plain.Length;
-            }
-
-            return overlap < displayed.Length ? displayed[overlap..] : null;
-        }
-
-        /// <inheritdoc />
-        public override JsonElement? Complete() => _blocks.Count > 0
-            ? JsonSerializer.SerializeToElement(_blocks.Select(block => block.Complete())) : null;
-
-        /// <summary>Keeps block identity separate from incrementally buffered replay fields.</summary>
-        private sealed class ReasoningBlock
-        {
-            private readonly Dictionary<string, StringBuilder> _fields = new(StringComparer.Ordinal);
-
-            /// <summary>Preserves metadata and field presence in their original order.</summary>
-            public JsonObject Metadata { get; } = [];
-
-            /// <summary>Validates stable metadata and appends payload fragments without copying their prefixes.</summary>
-            public void Append(JsonObject fragment)
-            {
-                foreach (var pair in fragment)
-                {
-                    if (pair.Key is "text" or "summary" or "data" or "signature")
-                    {
-                        Metadata.TryAdd(pair.Key, null);
-                        if (pair.Value is not null)
+                        throw new TransientModelException($"OpenRouter remained unavailable after {attempt} attempts (HTTP {(int)response.StatusCode}).")
                         {
-                            if (!_fields.TryGetValue(pair.Key, out var buffer))
-                            {
-                                buffer = new StringBuilder();
-                                _fields.Add(pair.Key, buffer);
-                            }
+                            IsRateLimit = response.StatusCode == HttpStatusCode.TooManyRequests,
+                            RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
+                        };
+                    }
 
-                            buffer.Append(pair.Value.GetValue<string>());
-                        }
-                    }
-                    else if (Metadata[pair.Key] is null)
-                    {
-                        Metadata[pair.Key] = pair.Value?.DeepClone();
-                    }
-                    else if (!JsonNode.DeepEquals(Metadata[pair.Key], pair.Value))
-                    {
-                        throw new MalformedModelOutputException("OpenRouter reasoning block identity changed.");
-                    }
+                    throw new ModelProviderException($"OpenRouter rejected the request with HTTP {(int)response.StatusCode}.");
                 }
-            }
 
-            /// <summary>Materializes buffered fields only when replay is completed.</summary>
-            public JsonObject Complete()
-            {
-                foreach (var (field, buffer) in _fields)
+                await using var chunks = new OpenRouterResponsesStream(_profile, _model, _secret, _protocol).ReadAsync(response, request, names, maximum, token).GetAsyncEnumerator(token);
+                while (true)
                 {
-                    Metadata[field] = buffer.ToString();
-                }
+                    bool hasNext;
+                    try
+                    {
+                        hasNext = await chunks.MoveNextAsync();
+                    }
+                    catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        throw token.IsCancellationRequested ? TimeoutFailure(exception)
+                            : new TransientModelException("OpenRouter transport was cancelled while reading the response.", exception);
+                    }
+                    catch (Exception exception) when (exception is IOException || (exception is HttpRequestException http && IsTransient(http)))
+                    {
+                        token.ThrowIfCancellationRequested();
+                        throw new TransientModelException($"OpenRouter connection ended before completion ({TransportFailureKind(exception)}).", exception);
+                    }
 
-                return Metadata;
+                    if (!hasNext)
+                    {
+                        yield break;
+                    }
+
+                    var chunk = chunks.Current;
+                    if (chunk.Usage is { } usage)
+                    {
+                        var cumulative = ModelStreamRetry.CombineUsage(previousUsage, usage);
+                        interruptedUsage = cumulative;
+                        chunk = chunk with { Usage = cumulative };
+                    }
+
+                    yield return chunk;
+                }
             }
         }
     }
+
+    private static string TransportFailureKind(Exception exception)
+    {
+        for (var current = (Exception?)exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpIOException io)
+            {
+                return $"HTTP {io.HttpRequestError}";
+            }
+
+            if (current is HttpRequestException http)
+            {
+                return $"HTTP {http.HttpRequestError}";
+            }
+        }
+
+        return "I/O failure";
+    }
+
+    private static bool IsTransient(HttpRequestException exception) => exception.HttpRequestError is HttpRequestError.NameResolutionError
+        or HttpRequestError.ConnectionError or HttpRequestError.HttpProtocolError or HttpRequestError.ResponseEnded;
+
+    private ModelProviderTimeoutException TimeoutFailure(Exception exception) => new($"Model profile '{_profile.Name}' exceeded its {_profile.Timeout} request timeout.", exception);
 }

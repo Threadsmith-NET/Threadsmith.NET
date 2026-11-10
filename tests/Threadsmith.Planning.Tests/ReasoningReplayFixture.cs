@@ -47,8 +47,29 @@ internal static class ReasoningReplayFixture
             new ModelProviderRegistry([new OpenAiCodexProviderRegistration(), new OpenAiCompatibleProviderRegistration(), new OpenRouterProviderRegistration()]));
     }
 
-    internal static string Stream(bool codex, int round, string tool, string arguments, bool reasoning = true)
+    internal static string Stream(bool codex, int round, string tool, string arguments, bool reasoning = true, bool openRouter = false, bool orphanedArguments = false)
     {
+        if (openRouter)
+        {
+            var reasoningItem = new { type = "reasoning", id = $"reason-{round}", summary = new[] { new { type = "summary_text", text = "visible summary" } }, encrypted_content = $"opaque-{round}-state", status = "completed", provider_extension = "retained" };
+            var call = new { type = "function_call", id = $"item-{round}", call_id = $"wire-{round}", name = tool, arguments, status = "completed" };
+            object[] output = reasoning ? [reasoningItem, call] : [call];
+            if (orphanedArguments)
+            {
+                output = [.. output, new { type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "<parameter name=\"sequence\">999</parameter></function></tool_call>" } } }];
+            }
+
+            var callIndex = reasoning ? 1 : 0;
+            return (reasoning ? Data(new { type = "response.output_item.added", output_index = 0, item = new { type = "reasoning", encrypted_content = "incomplete-do-not-replay" } })
+                + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, summary_index = 0, delta = "visible summary" }) : string.Empty)
+                + Data(new { type = "response.function_call_arguments.delta", output_index = callIndex, delta = arguments[..1] })
+                + Data(new { type = "response.function_call_arguments.delta", output_index = callIndex, delta = arguments[1..] })
+                + Data(new { type = "response.output_item.done", output_index = callIndex, item = call })
+                + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem })
+                    + Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
+                + Data(new { type = "response.completed", response = new { status = "completed", output, usage = new { input_tokens = 100, output_tokens = 40 } } });
+        }
+
         if (!codex)
         {
             return (reasoning ? Data(new { choices = new[] { new { delta = new { reasoning_content = $"private-{round}-" } } } })
@@ -57,31 +78,42 @@ internal static class ReasoningReplayFixture
                 + Data(new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, function = new { arguments = arguments[1..] } } } }, finish_reason = "tool_calls" } } })
                 + "data: [DONE]\n\n";
         }
-
-        var reasoningItem = new { type = "reasoning", id = $"reason-{round}", summary = new[] { new { type = "summary_text", text = "visible summary" } }, encrypted_content = $"opaque-{round}-state", status = "completed", provider_extension = "retained" };
-        var call = new { type = "function_call", id = $"item-{round}", call_id = $"wire-{round}", name = tool, arguments, status = "completed" };
-        return (reasoning ? Data(new { type = "response.output_item.added", output_index = 0, item = new { type = "reasoning", id = $"reason-{round}", encrypted_content = "incomplete-do-not-replay" } })
-            + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, delta = "visible " })
-            + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, delta = "summary" }) : string.Empty)
-            + Data(new { type = "response.function_call_arguments.delta", output_index = 1, delta = arguments[..1] })
-            + Data(new { type = "response.function_call_arguments.delta", output_index = 1, delta = arguments[1..] })
-            + Data(new { type = "response.output_item.done", output_index = 1, item = call })
-            + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
-            + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
-            + (round == 0
-                ? Data(new { type = "response.completed", response = new { usage = new { input_tokens = 100, output_tokens = 40 } } })
-                : Data(new { type = "response.completed", response = new { output = reasoning ? new object[] { reasoningItem, call } : [call], usage = new { input_tokens = 100, output_tokens = 40 } } }));
+        else
+        {
+            var reasoningItem = new { type = "reasoning", id = $"reason-{round}", summary = new[] { new { type = "summary_text", text = "visible summary" } }, encrypted_content = $"opaque-{round}-state", status = "completed", provider_extension = "retained" };
+            var call = new { type = "function_call", id = $"item-{round}", call_id = $"wire-{round}", name = tool, arguments, status = "completed" };
+            return (reasoning ? Data(new { type = "response.output_item.added", output_index = 0, item = new { type = "reasoning", id = $"reason-{round}", encrypted_content = "incomplete-do-not-replay" } })
+                + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, delta = "visible " })
+                + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, delta = "summary" }) : string.Empty)
+                + Data(new { type = "response.function_call_arguments.delta", output_index = 1, delta = arguments[..1] })
+                + Data(new { type = "response.function_call_arguments.delta", output_index = 1, delta = arguments[1..] })
+                + Data(new { type = "response.output_item.done", output_index = 1, item = call })
+                + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
+                + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
+                + (round == 0
+                    ? Data(new { type = "response.completed", response = new { usage = new { input_tokens = 100, output_tokens = 40 } } })
+                    : Data(new { type = "response.completed", response = new { output = reasoning ? new object[] { reasoningItem, call } : [call], usage = new { input_tokens = 100, output_tokens = 40 } } }));
+        }
     }
 
-    internal static string Final(bool codex) => codex
+    internal static string Final(bool codex, bool openRouter = false) => openRouter
+        ? Data(new { type = "response.completed", response = new { status = "completed", output = new[] { new { type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "Inspection complete." } } } }, usage = new { input_tokens = 100, output_tokens = 20 } } })
+        : codex
         ? Data(new { type = "response.output_text.delta", delta = "Inspection complete." }) + Data(new { type = "response.completed", response = new { usage = new { input_tokens = 100, output_tokens = 20 } } })
         : Data(new { choices = new[] { new { delta = new { content = "Inspection complete." }, finish_reason = "stop" } } }) + "data: [DONE]\n\n";
 
-    internal static void AssertReplay(JsonElement request, bool codex, int rounds, bool reasoningAlias = false)
+    internal static void AssertReplay(JsonElement request, bool codex, int rounds, bool reasoningAlias = false, bool openRouter = false)
     {
-        if (codex)
+        if (codex || openRouter)
         {
-            var items = request.GetProperty("input").EnumerateArray().Where(item => item.TryGetProperty("type", out _)).ToArray();
+            if (openRouter)
+            {
+                Assert.False(request.TryGetProperty("messages", out _));
+                Assert.False(request.TryGetProperty("previous_response_id", out _));
+                Assert.False(request.GetProperty("store").GetBoolean());
+            }
+
+            var items = request.GetProperty("input").EnumerateArray().Where(item => item.TryGetProperty("type", out var type) && type.GetString() is "reasoning" or "function_call" or "function_call_output").ToArray();
             Assert.Equal(Enumerable.Range(0, rounds).SelectMany(_ => CodexRoundTypes), items.Select(item => item.GetProperty("type").GetString()));
             for (var round = 0; round < rounds; round++)
             {

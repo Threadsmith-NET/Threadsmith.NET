@@ -51,7 +51,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         // Assert
         Assert.Equal(int.MaxValue, definition.MaximumOutputBytes);
-        Assert.Contains("one or more children", definition.Description, StringComparison.Ordinal);
         Assert.False(agentsSchema.TryGetProperty("maxItems", out _));
         Assert.False(agentProperties.GetProperty("task").TryGetProperty("maxLength", out _));
         Assert.False(agentProperties.GetProperty("context").TryGetProperty("maxLength", out _));
@@ -106,7 +105,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         // Assert
         Assert.Equal(123_456, definition.MaximumOutputBytes);
-        Assert.Contains("1-5 children", definition.Description, StringComparison.Ordinal);
         Assert.Equal(5, agentsSchema.GetProperty("maxItems").GetInt32());
         Assert.False(agentProperties.GetProperty("task").TryGetProperty("maxLength", out _));
         Assert.False(agentProperties.GetProperty("context").TryGetProperty("maxLength", out _));

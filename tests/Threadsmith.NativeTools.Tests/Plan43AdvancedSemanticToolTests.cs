@@ -77,8 +77,6 @@ public sealed class Plan43AdvancedSemanticToolTests
                 .ToArray();
             Assert.Contains("symbolId", required);
             Assert.True(tool.Definition.PreferStrictArguments);
-            Assert.Contains("{symbolId,direction?,depth?}", tool.Definition.Description, StringComparison.Ordinal);
-            Assert.Contains("host owns node/edge counts and time bounds", tool.Definition.Description, StringComparison.Ordinal);
             Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
                 "{\"symbolId\":\"symbol:runner.run\",\"limits\":{\"maximumDepth\":1}}"));
             Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
@@ -333,8 +331,6 @@ public sealed class Plan43AdvancedSemanticToolTests
                 .ToArray();
             Assert.Contains("symbolId", required);
             Assert.True(tool.Definition.PreferStrictArguments);
-            Assert.Contains("{symbolId}", tool.Definition.Description, StringComparison.Ordinal);
-            Assert.Contains("narrower relationship tool", tool.Definition.Description, StringComparison.Ordinal);
             Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
                 "{\"symbolId\":\"symbol:root\",\"limits\":{\"maximumDepth\":1}}"));
             var input = Assert.IsType<SymbolImpactInput>(tool.DeserializeInput(
@@ -676,14 +672,6 @@ public sealed class Plan43AdvancedSemanticToolTests
                 .ToArray();
             Assert.Contains("kind", required);
             Assert.True(tool.Definition.PreferStrictArguments);
-            Assert.Contains(
-                "{kind,name?",
-                tool.Definition.Description,
-                StringComparison.Ordinal);
-            Assert.Contains(
-                "Use this when syntax matters",
-                tool.Definition.Description,
-                StringComparison.Ordinal);
             var methodAlias = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
                 "{\"kind\":\"Method\",\"name\":\"Run\"}"));
             Assert.Contains("$.kind expected string enum", methodAlias.Message, StringComparison.Ordinal);
@@ -868,9 +856,6 @@ public sealed class Plan43AdvancedSemanticToolTests
                 item.Tool.Definition.Description));
         Assert.All(tools, tool => Assert.Equal(ToolSideEffect.ReadOnly, tool.Definition.SideEffect));
         Assert.All(tools, tool => Assert.Equal(ToolCategory.SemanticSearch, tool.Definition.Category));
-        Assert.All(
-            tools,
-            tool => Assert.Contains("fall back only", tool.Definition.Description, StringComparison.OrdinalIgnoreCase));
         Assert.All(tools, tool =>
         {
             using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);

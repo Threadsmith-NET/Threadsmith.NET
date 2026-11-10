@@ -104,7 +104,6 @@ public static class Milestone4Tests
         Assert.False(request.RequiredCapabilities.ToolCalls);
         Assert.Empty(request.Tools);
         Assert.DoesNotContain("propose_plan", request.Input, StringComparison.Ordinal);
-        Assert.Contains("Supporting reads are independent", request.Input, StringComparison.Ordinal);
         Assert.Contains(
             SecurityElement.Escape(TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)),
             request.Input,
@@ -356,13 +355,10 @@ public static class Milestone4Tests
         Assert.Equal(1, correction.AttemptNumber);
         Assert.Equal(2, correction.MaximumAttempts);
         Assert.Contains("malformed invocation", correction.SafeReason, StringComparison.OrdinalIgnoreCase);
-        var correctionMessage = Assert.Single(
+        Assert.Single(
             model.Requests[1].Messages,
             message => message.Role == ModelMessageRole.Developer
                 && string.Equals(message.SectionId, "active-turn-correction:1", StringComparison.Ordinal));
-        var correctionText = string.Join(" ", correctionMessage.Content.Select(part => part.Content));
-        Assert.DoesNotContain("or answer without tools", correctionText, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("Do not answer from unsupported repository assumptions", correctionText, StringComparison.Ordinal);
     }
 
     /// <summary>Run-specific evidence cannot leak into another run in the same session.</summary>

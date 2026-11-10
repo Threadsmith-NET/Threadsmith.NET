@@ -167,8 +167,9 @@ public sealed partial class MultimodalTests
         if (toolResult)
         {
             using var wire = JsonDocument.Parse(handler.Body);
-            Assert.Equal("call_1", wire.RootElement.GetProperty("messages")[1].GetProperty("tool_call_id").GetString());
-            Assert.Equal("user", wire.RootElement.GetProperty("messages")[2].GetProperty("role").GetString());
+            var messages = wire.RootElement.GetProperty(openRouter ? "input" : "messages");
+            Assert.Equal("call_1", messages[1].GetProperty(openRouter ? "call_id" : "tool_call_id").GetString());
+            Assert.Equal("user", messages[2].GetProperty("role").GetString());
         }
 
         var estimate = ModelWireEstimator.Estimate(request.Messages, [], ToolTransportMode.Native, 0, 4096);
@@ -605,7 +606,10 @@ public sealed partial class MultimodalTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n", Encoding.UTF8, "text/event-stream") };
+            var body = request.RequestUri?.AbsolutePath.EndsWith("/responses", StringComparison.Ordinal) == true
+                ? "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"
+                : "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
         }
     }
 

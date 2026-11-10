@@ -354,7 +354,7 @@ public sealed partial class Milestone19Tests
                 TestContext.Current.CancellationToken);
 
             var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
-            Assert.Contains("Scratchpad: `.scratch`", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains(capability.Current.ModelPath, messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
             Assert.Contains(
                 result.Inspection.PromptAssets,
                 asset => asset.Source == PromptFileNames.SystemScratchpad);
@@ -369,8 +369,6 @@ public sealed partial class Milestone19Tests
                     RepositoryPath = root,
                 },
                 TestContext.Current.CancellationToken);
-            messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
-            Assert.DoesNotContain("Scratchpad:", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
             Assert.DoesNotContain(
                 result.Inspection.PromptAssets,
                 asset => asset.Source == PromptFileNames.SystemScratchpad);

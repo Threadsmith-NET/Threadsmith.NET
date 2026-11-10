@@ -180,19 +180,22 @@ public static class MemoriesToolTests
         var second = Path.Combine(Path.GetTempPath(), "memory-second");
         var empty = new ConfigurationBuilder().Build();
         var options = new RepositoryMemoryConfiguration(empty, empty, first);
-        var tool = new MemoriesTool(new MemoryService(), options, TestPromptLoader.Instance);
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.ToolMemoriesDescription,
+            "{{MaximumTextCharacters}}");
+        var tool = new MemoriesTool(new MemoryService(), options, prompts);
         var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions
         {
             Defaults = new ToolRuntimeOverride { TimeoutMilliseconds = 12345 },
         });
         var registered = registry.Get("memories");
-        Assert.Contains("2000 characters", registered.Definition.Description, StringComparison.Ordinal);
+        Assert.Equal("2000", registered.Definition.Description);
         options.BindRepository(second, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["tools:config:memories:MaximumTextCharacters"] = "4321",
         }).Build());
         Assert.Same(registered, registry.Get("memories"));
-        Assert.Contains("4321 characters", registered.Definition.Description, StringComparison.Ordinal);
+        Assert.Equal("4321", registered.Definition.Description);
         Assert.Equal(TimeSpan.FromMilliseconds(12345), registered.Definition.Timeout);
     }
 

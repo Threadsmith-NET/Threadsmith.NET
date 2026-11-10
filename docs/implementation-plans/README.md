@@ -146,7 +146,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 102 | `plan-102-code-explore-schema-help-and-tool-selection.md` | Code explore argument help and task-appropriate tool selection |
 | 103 | `plan-103-model-managed-repository-memories.md` | Model-managed repository memories with injectable local embeddings and hybrid retrieval |
 | 104 | `plan-104-anthropic-sdk-provider.md` | Native Anthropic SDK provider, API-key model discovery, thinking continuity and prompt caching |
-| 106 | `plan-106-shell-command-policy.md` | Configurable shell command allow/deny policy and governed web routing |
+| 106 | [plan-106-shell-command-policy.md](plan-106-shell-command-policy.md) | Shared action policies, composable matchers, scoped approvals, and default-deny shell control |
 | 107 | `plan-107-tui-mermaid-text-rendering.md` | Configurable Mermaid text diagrams in streaming TUIKit output |
 | 108 | `plan-108-focused-review-skills.md` | Public review workflow with private skill-bound specialist reviewers |
 | 109 | `plan-109-context-usage-inspector.md` | Ordered context usage inspection with native TUIKit charts and per-source accounting |

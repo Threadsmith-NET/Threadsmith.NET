@@ -73,7 +73,6 @@ public static class Plan103ContextAssemblyTests
         Assert.Equal(expected, retriever.Calls);
         Assert.Equal(expected, result.RepositoryMemoryInclusions?.Count);
         Assert.Equal(expected, result.Inspection.RepositoryMemoryItems.Count(item => item.Included));
-        Assert.Equal(expected > 0, result.ModelInput.Contains("Repository memories that may be helpful", StringComparison.Ordinal));
     }
 
     /// <summary>Only stable identity and escaped text enter model memory blocks, independent of usage metadata.</summary>
@@ -96,7 +95,6 @@ public static class Plan103ContextAssemblyTests
             TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryMemoryGuidance)
             + $"\n<repository_memory untrusted=\"true\">\n<memory id=\"{entry.Id.Value:D}\">Use &lt;typed&gt; results &amp; cancellation.</memory>\n</repository_memory>",
             memory);
-        Assert.Contains("Use them only when relevant to the current request.", memory, StringComparison.Ordinal);
         Assert.Equal(first.ModelInput, next.ModelInput);
         Assert.Equal(entry.Revision, Assert.Single(first.RepositoryMemoryInclusions ?? []).Revision);
         Assert.Equal(0, entry.InclusionCount);

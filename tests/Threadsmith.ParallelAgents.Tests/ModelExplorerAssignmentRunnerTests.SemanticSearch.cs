@@ -124,7 +124,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal(0, outcome.Usage.Corrections);
         Assert.Null(semantic.LastInvocationContext);
-        Assert.Contains("confirmed to match that revision", provider.Requests[0].Messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
     }
 }

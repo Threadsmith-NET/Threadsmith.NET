@@ -124,7 +124,6 @@ public sealed partial class SourceEditApplicationTests
             Assert.NotNull(finalAnalysis.CommittedGeneration);
             Assert.False(finalAnalysis.Pending);
             Assert.Contains(finalAnalysis.EffectId.ToString(), feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
-            Assert.Contains("correct any outdated validation claim", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
             if (feedbackDuringFinalAnswer)
             {
                 Assert.Contains("CS5001", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);

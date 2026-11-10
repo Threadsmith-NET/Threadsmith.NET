@@ -34,7 +34,10 @@ public sealed partial class DeployedPromptLoaderTests
     [Fact]
     public void TestPromptLoader_Render_DoesNotRecursivelyInterpretTokenValues()
     {
-        var rendered = TestPromptLoader.Instance.Render(
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.CorrectionToolBatchPreflightFailed,
+            "{{Ordinal}}|{{Tool}}|{{Reason}}");
+        var rendered = prompts.Render(
             PromptFileNames.CorrectionToolBatchPreflightFailed,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
@@ -43,7 +46,7 @@ public sealed partial class DeployedPromptLoaderTests
                 ["Reason"] = "safe",
             });
 
-        Assert.Equal("Call 1 ({{Reason}}) failed preflight: safe", rendered);
+        Assert.Equal("1|{{Reason}}|safe", rendered);
     }
 
     /// <summary>Platform rendering normalizes template framing without rewriting token content.</summary>

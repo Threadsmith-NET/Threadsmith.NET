@@ -951,7 +951,7 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 
 ## Scenario OPENROUTER — Governed manually configured provider
 
-1. Configure a manual model using the compiled OpenRouter provider and a separate secret reference.
+1. Configure a manual model using the compiled OpenRouter provider and a separate secret reference. Existing catalogs require no migration; requests use native stateless Responses input/output items.
 2. Select it explicitly and exercise ordinary MAIN and delegated requests, including declared reasoning and tool continuations.
 3. Hide reasoning display, cancel work, change model selection, and inspect normal logs and usage projections.
 

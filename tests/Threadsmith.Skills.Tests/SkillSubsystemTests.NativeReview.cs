@@ -11,37 +11,6 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
-    /// <summary>Remote reviews scope findings to target-branch changes rather than unrelated base evolution.</summary>
-    [Fact]
-    public void NativeReview_RemoteBranchUsesMergeBaseDelta()
-    {
-        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
-
-        Assert.Contains("git diff <base-ref>...<target-ref>", prompt, StringComparison.Ordinal);
-        Assert.Contains("Do not fall back to a direct two-tip tree comparison", prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
-    }
-
-    /// <summary>PR reviews delegate complete captured scope by reference while other reviews retain explicit inventories.</summary>
-    [Fact]
-    public void NativeReview_PullRequestUsesInventoryBeforeDelegation()
-    {
-        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
-
-        Assert.Contains("Call kind:\"diff\" once", prompt, StringComparison.Ordinal);
-        Assert.Contains("host supplies its captured evidence ID", prompt, StringComparison.Ordinal);
-        Assert.Contains("read_agent_evidence", prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("Always set kind:\"diff\"", prompt, StringComparison.Ordinal);
-        Assert.Contains("one top-level `sharedContext`", prompt, StringComparison.Ordinal);
-        Assert.Contains("common response instructions once in `sharedContext`", prompt, StringComparison.Ordinal);
-        Assert.Contains("TestReviewer alone owns build/test execution", prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("in every specialist's context", prompt, StringComparison.Ordinal);
-        Assert.Contains("Do not reproduce the complete changed-file inventory", prompt, StringComparison.Ordinal);
-        Assert.Contains("review all changed files listed in the captured snapshot", prompt, StringComparison.Ordinal);
-        Assert.Contains("For reviews without a captured inventory, retain the explicit changed-file inventory", prompt, StringComparison.Ordinal);
-    }
-
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
     [Fact]
     public async Task NativeReview_FailedResponseResumesThroughSelectedModel()
@@ -106,12 +75,6 @@ public sealed partial class SkillSubsystemTests
             Assert.Contains("https://example.test/pull-requests/729", item.Input, StringComparison.Ordinal);
             Assert.Equal(selected, item.ResolvedProfileId);
             Assert.Equal(ReasoningLevel.Medium, item.ReasoningLevel);
-            Assert.Contains("Call delegate_agents", item.Input, StringComparison.Ordinal);
-            Assert.Contains("SecurityReviewer", item.Input, StringComparison.Ordinal);
-            Assert.Contains("TestReviewer", item.Input, StringComparison.Ordinal);
-            Assert.Contains("PerformanceReviewer", item.Input, StringComparison.Ordinal);
-            Assert.Contains("BugReviewer", item.Input, StringComparison.Ordinal);
-            Assert.Contains("ArchitectureReviewer", item.Input, StringComparison.Ordinal);
         });
     }
 

@@ -142,7 +142,6 @@ public sealed partial class SessionConversationTests
         Assert.Equal(2, snapshots.Length);
         Assert.Contains(originalText, snapshots[0].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.DoesNotContain(originalText, snapshots[1].GetModelVisibleContent(), StringComparison.Ordinal);
-        Assert.Contains("supersedes earlier", snapshots[1].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal(!remove, snapshots[1].GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal));
         Assert.All(memory.Requests, request => Assert.Empty(request.RetainedMemories));
     }

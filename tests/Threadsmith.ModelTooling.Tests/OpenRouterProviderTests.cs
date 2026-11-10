@@ -4,13 +4,14 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCompatible.OpenRouter;
 using Xunit;
 
 /// <summary>Exercises compiled OpenRouter protocol behavior without remote credentials.</summary>
-public static class OpenRouterProviderTests
+public static partial class OpenRouterProviderTests
 {
     /// <summary>Batch responses follow host admission even when the upstream rejects the optional parallel-control parameter.</summary>
     [Theory]
@@ -31,9 +32,7 @@ public static class OpenRouterProviderTests
             ExpectedProviderName = "Fixture Provider",
         };
         var request = Request() with { AllowMultipleToolCalls = allowMultiple };
-        using var handler = new Handler(
-            Frame("""{"provider":"Fixture Provider","choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","index":0,"data":"opaque"}],"tool_calls":[{"index":0,"id":"first","function":{"name":"inspect","arguments":"{}"}},{"index":1,"id":"second","function":{"name":"inspect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}""")
-            + Trailer("tool_calls") + Frame("[DONE]"));
+        using var handler = new Handler(Completed(ReasoningItem("opaque"), FunctionCall("first"), FunctionCall("second")));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
@@ -74,10 +73,8 @@ public static class OpenRouterProviderTests
     public static async Task RepeatedTerminalTrailer_ReleasesOneBatchAfterUsageAndReplay()
     {
         var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstream = "test", ExpectedProviderName = "test" };
-        using var handler = new Handler(
-            Frame("""{"choices":[{"delta":{"reasoning":"thinking","reasoning_details":[{"type":"reasoning.text","index":0,"text":"thinking","signature":"sig"}]}}]}""")
-            + Frame("""{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":0,"signature":"nature"}],"tool_calls":[{"index":0,"id":"original-id","function":{"name":"inspect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}""")
-            + Trailer("tool_calls") + Frame("[DONE]"));
+        var terminal = Completed(ReasoningItem("opaque", "thinking"), FunctionCall("original-id"));
+        using var handler = new Handler(ReasoningDelta("thinking") + terminal + terminal + Frame("[DONE]"));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client, model).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         try
@@ -106,28 +103,20 @@ public static class OpenRouterProviderTests
 
     /// <summary>Rejects invalid protocol data without executing tools.</summary>
     [Theory]
-    [InlineData("length")]
-    [InlineData("stop")]
+    [InlineData("incomplete")]
+    [InlineData("failed")]
     public static async Task UnsuccessfulToolTermination_PreservesUsageButReleasesNoTools(string reason)
     {
-        using var handler = new Handler(Frame("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"id","function":{"name":"inspect","arguments":"{}"}}]}}]}""") + Trailer(reason) + Frame("[DONE]"));
+        using var handler = new Handler(Terminal("response." + reason, reason, new JsonArray(FunctionCall("id")), Usage()));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
-        var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(async () =>
+        await Assert.ThrowsAnyAsync<ModelProviderException>(async () =>
         {
             await foreach (var chunk in Provider(client, Model()).StreamAsync(Request(), TestContext.Current.CancellationToken))
             {
                 chunks.Add(chunk);
             }
         });
-        if (reason == "length")
-        {
-            Assert.Equal(MalformedInvocationFailureKind.TruncatedArguments, Assert.IsType<MalformedInvocationException>(exception).Diagnostic.Kind);
-        }
-        else
-        {
-            Assert.IsType<MalformedModelOutputException>(exception);
-        }
 
         Assert.Single(chunks, chunk => chunk.Usage is not null);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
@@ -137,8 +126,7 @@ public static class OpenRouterProviderTests
     [Fact]
     public static async Task LateError_ReleasesNoTools()
     {
-        using var handler = new Handler(Frame("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"id","function":{"name":"inspect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}""")
-            + Frame("""{"error":{"code":402,"message":"private"}}"""));
+        using var handler = new Handler(Completed(FunctionCall("id")) + Failed(402));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
@@ -162,27 +150,30 @@ public static class OpenRouterProviderTests
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
             EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.High] = "high" },
         };
-        using var handler = new Handler(Trailer("stop") + Frame("[DONE]"));
+        using var handler = new Handler(Completed());
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         await Provider(client, model).StreamAsync(Request() with { ReasoningLevel = ReasoningLevel.High }, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         using var json = JsonDocument.Parse(handler.Body!);
         var body = json.RootElement;
         Assert.Equal("high", body.GetProperty("reasoning").GetProperty("effort").GetString());
-        Assert.True(body.TryGetProperty("max_tokens", out _));
+        Assert.True(body.TryGetProperty("max_output_tokens", out _));
+        Assert.Equal(new Uri("https://openrouter.ai/api/v1/responses"), handler.RequestUri);
+        Assert.False(body.GetProperty("store").GetBoolean());
+        Assert.False(body.TryGetProperty("messages", out _));
         Assert.False(body.TryGetProperty("max_completion_tokens", out _));
         Assert.False(body.TryGetProperty("reasoning_effort", out _));
-        var function = body.GetProperty("tools")[0].GetProperty("function");
-        Assert.False(function.TryGetProperty("strict", out _));
+        var function = body.GetProperty("tools")[0];
+        Assert.False(function.GetProperty("strict").GetBoolean());
         Assert.False(function.GetProperty("parameters").TryGetProperty("required", out _));
     }
 
     /// <summary>Rejects invalid protocol data without executing tools.</summary>
     [Theory]
-    [InlineData("{\"type\":\"reasoning.text\",\"index\":\"bad\",\"text\":\"x\"}")]
-    [InlineData("{\"type\":\"reasoning.text\",\"text\":{}}")]
+    [InlineData("{\"type\":\"reasoning\",\"encrypted_content\":{},\"summary\":[]}")]
+    [InlineData("{\"type\":\"reasoning\",\"summary\":{}}")]
     public static async Task InvalidDetails_ProduceClassifiedFailure(string detail)
     {
-        using var handler = new Handler(Frame("{\"choices\":[{\"delta\":{\"reasoning_details\":[" + detail + "]}}]}"));
+        using var handler = new Handler(Completed(JsonNode.Parse(detail)!));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAsync<MalformedModelOutputException>(async () => await Provider(client, Model()).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
     }
@@ -240,9 +231,11 @@ public static class OpenRouterProviderTests
 
     /// <summary>Explicit markers share preparation with dispatch, including text-tool mode.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task CacheProjection_IsDeterministicAndSupportsTextTools(bool textTools)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public static async Task CacheProjection_IsDeterministicAndSupportsTextTools(bool textTools, bool toolTail)
     {
         var model = Model() with { MinimumCacheableTokens = 1, RequestOutputTokenReserve = 1000 };
         var config = Configuration(model);
@@ -257,17 +250,70 @@ public static class OpenRouterProviderTests
             Messages = [new ModelMessage { Role = ModelMessageRole.System, SectionId = "host-policy", Content = [new() { Content = new string('x', 100) }] },
                 new ModelMessage { Role = ModelMessageRole.User, SectionId = "user", Content = [new() { Content = "hello" }] }],
         };
+        if (toolTail)
+        {
+            request = request with
+            {
+                Messages = [.. request.Messages,
+                    Message(ModelMessageRole.Assistant, "{}") with { ToolCallId = "call", ToolName = "inspect" },
+                    Message(ModelMessageRole.Tool, "result") with { ToolCallId = "call" }],
+            };
+        }
+
         var context = new ModelRequestPreparationContext { Request = request, Profile = profile, ProviderConfiguration = config, ModelConfiguration = model };
         var prepared = registration.Prepare(context);
         Assert.Single(prepared.CachePlan!.Breakpoints);
         Assert.Equal(prepared.WireDigest, registration.Prepare(context with { Request = request with { WireEstimate = prepared.WireEstimate, Preparation = prepared } }).WireDigest);
-        using var handler = new Handler(Trailer("stop") + Frame("[DONE]"));
+        using var handler = new Handler(Completed());
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         await Provider(client, model).StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         using var json = JsonDocument.Parse(handler.Body!);
-        Assert.Equal("ephemeral", json.RootElement.GetProperty("messages")[1].GetProperty("content")[0].GetProperty("cache_control").GetProperty("type").GetString());
-        Assert.Equal(1000, json.RootElement.GetProperty("max_tokens").GetInt32());
+        var tail = json.RootElement.GetProperty("input")[toolTail ? 3 : 1];
+        var block = tail.GetProperty(toolTail ? "output" : "content")[0];
+        Assert.Equal("input_text", block.GetProperty("type").GetString());
+        Assert.Equal(toolTail ? "result" : "hello", block.GetProperty("text").GetString());
+        Assert.Equal("explicit", block.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
+        Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
+        Assert.Equal(1000, json.RootElement.GetProperty("max_output_tokens").GetInt32());
         Assert.Equal(request.RunId.Value.ToString("D"), json.RootElement.GetProperty("session_id").GetString());
+    }
+
+    /// <summary>Automatic caching and ineligible prefixes do not introduce explicit boundaries.</summary>
+    [Theory]
+    [InlineData("disabled")]
+    [InlineData("automatic-only")]
+    [InlineData("no-layout")]
+    [InlineData("short-prefix")]
+    [InlineData("no-boundary")]
+    public static async Task CacheProjection_OmitsUnplannedMarkers(string scenario)
+    {
+        var model = Model() with
+        {
+            MinimumCacheableTokens = scenario is "disabled" or "automatic-only" ? null : scenario == "short-prefix" ? 10000 : 1,
+            AutomaticPrefixCaching = scenario == "automatic-only",
+        };
+        var registration = new OpenRouterProviderRegistration();
+        var config = Configuration(model);
+        var profile = Assert.Single(registration.CreateProfiles(config));
+        var request = Request() with
+        {
+            Layout = scenario == "no-layout" ? null : new ModelRequestLayout
+            {
+                CacheFamily = "test",
+                StablePrefixDigest = "test",
+                StablePrefixMessageCount = scenario == "no-boundary" ? 0 : 1,
+            },
+            Messages = [Message(ModelMessageRole.System, new string('x', 100)), Message(ModelMessageRole.User, "hello")],
+        };
+        using var handler = new Handler(Completed());
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+
+        var prepared = registration.Prepare(new ModelRequestPreparationContext { Request = request, Profile = profile, ProviderConfiguration = config, ModelConfiguration = model });
+        await CollectAsync(Provider(client, model), request, []);
+
+        Assert.Empty(prepared.CachePlan!.Breakpoints);
+        Assert.DoesNotContain("prompt_cache_breakpoint", handler.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
     }
 
     /// <summary>Vision admission is independent of compressed transport size.</summary>
@@ -291,7 +337,8 @@ public static class OpenRouterProviderTests
     public static async Task UsageWithoutCharge_PreservesCacheWritePricing(bool error)
     {
         var model = Model() with { Cost = new ModelCostMetadata { InputPerMillionTokens = 1, OutputPerMillionTokens = 1, CachePricing = new ModelCachePricing { ReadPerMillionTokens = 0.1m, WritePerMillionTokens = 10, SourceDate = "2026-10-28" } } };
-        var body = Frame("{\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_write_tokens\":10}}," + (error ? "\"error\":{\"code\":402}" : "\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]") + "}") + Frame("[DONE]");
+        var wireUsage = JsonNode.Parse("""{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0,"cache_write_tokens":10}}""")!.AsObject();
+        var body = error ? Failed(402, wireUsage) : Terminal("response.completed", "completed", [], wireUsage);
         using var handler = new Handler(body);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
@@ -321,7 +368,7 @@ public static class OpenRouterProviderTests
     [Fact]
     public static async Task ReturnedProviderMismatch_IsRejected()
     {
-        using var handler = new Handler(Frame("{\"provider\":\"other\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}") + Frame("[DONE]"));
+        using var handler = new Handler(Terminal("response.completed", "completed", [], Usage(), "other"));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         await Assert.ThrowsAsync<MalformedModelOutputException>(async () => await Provider(client, Model() with { Upstream = "test/region", ExpectedProviderName = "Test" }).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
     }
@@ -353,8 +400,7 @@ public static class OpenRouterProviderTests
     [Fact]
     public static async Task ReplayDisabled_SignedToolsAreRejectedAfterAccounting()
     {
-        using var handler = new Handler(Frame("""{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","index":0,"data":"opaque"}],"tool_calls":[{"index":0,"id":"id","function":{"name":"inspect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}""")
-            + Trailer("tool_calls") + Frame("[DONE]"));
+        using var handler = new Handler(Completed(ReasoningItem("opaque"), FunctionCall("id")));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<ModelProviderException>(async () =>
@@ -372,8 +418,7 @@ public static class OpenRouterProviderTests
     [Fact]
     public static async Task EncryptedDetails_PreservePlainDisplay()
     {
-        using var handler = new Handler(Frame("""{"choices":[{"delta":{"reasoning":"summary","reasoning_details":[{"type":"reasoning.encrypted","index":0,"data":"opaque"}]}}]}""")
-            + Trailer("stop") + Frame("[DONE]"));
+        using var handler = new Handler(ReasoningDelta("summary") + Completed(ReasoningItem("opaque", "summary")));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = await Provider(client, Model()).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         Assert.Equal("summary", string.Concat(chunks.Select(chunk => chunk.Reasoning)));
@@ -385,11 +430,11 @@ public static class OpenRouterProviderTests
     public static async Task FragmentedReasoning_PreservesReplayAndDisplay()
     {
         var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstream = "test", ExpectedProviderName = "test" };
-        using var handler = new Handler(
-            Frame("""{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":2,"id":"text","text":null,"signature":null,"format":"test","extra":{"key":1}},{"type":"reasoning.summary","id":"summary","summary":""},{"type":"reasoning.encrypted","index":0,"data":"opaque-"}]}}]}""")
-            + Frame("""{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":2,"text":"think","signature":"sig"},{"type":"reasoning.summary","id":"summary","summary":"sum","text":null},{"type":"reasoning.encrypted","index":0,"data":null}]}}]}""")
-            + Frame("""{"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":2,"text":"ing","signature":"nature","format":"test","extra":{"key":1}},{"type":"reasoning.summary","id":"summary","summary":"mary","signature":""},{"type":"reasoning.encrypted","index":0,"data":"state"}],"tool_calls":[{"index":0,"id":"id","function":{"name":"inspect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}""")
-            + Trailer("tool_calls") + Frame("[DONE]"));
+        var reasoning = ReasoningItem("opaque-state", "thinking");
+        reasoning["signature"] = null;
+        reasoning["format"] = string.Empty;
+        reasoning["extra"] = new JsonObject { ["key"] = 1 };
+        using var handler = new Handler(ReasoningDelta("think") + ReasoningDelta("ing") + Completed(reasoning, FunctionCall("id")));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var display = new StringBuilder();
         JsonElement? replay = null;
@@ -401,25 +446,22 @@ public static class OpenRouterProviderTests
                 var copyPayload = typeof(ModelResponseReplayEnvelope).GetMethod("CopyProtocolPayload", BindingFlags.Instance | BindingFlags.NonPublic)!
                     .CreateDelegate<Func<byte[]>>(envelope);
                 using var payload = JsonDocument.Parse(copyPayload());
-                replay = payload.RootElement.GetProperty("response").GetProperty("reasoning_details").Clone();
+                replay = payload.RootElement.GetProperty("response").Clone();
             }
         }
 
-        Assert.Equal("thinksumingmary", display.ToString());
+        Assert.Equal("thinking", display.ToString());
         var blocks = replay!.Value;
-        Assert.Equal(3, blocks.GetArrayLength());
-        Assert.Equal(2, blocks[0].GetProperty("index").GetInt32());
-        Assert.Equal("text", blocks[0].GetProperty("id").GetString());
-        Assert.Equal("thinking", blocks[0].GetProperty("text").GetString());
-        Assert.Equal("signature", blocks[0].GetProperty("signature").GetString());
-        Assert.Equal("test", blocks[0].GetProperty("format").GetString());
+        Assert.Equal(2, blocks.GetArrayLength());
+        Assert.Equal("reasoning", blocks[0].GetProperty("type").GetString());
+        Assert.Equal("reasoning", blocks[0].GetProperty("id").GetString());
+        Assert.Equal("thinking", blocks[0].GetProperty("summary")[0].GetProperty("text").GetString());
+        Assert.Equal(JsonValueKind.Null, blocks[0].GetProperty("signature").ValueKind);
+        Assert.Equal(string.Empty, blocks[0].GetProperty("format").GetString());
         Assert.Equal(1, blocks[0].GetProperty("extra").GetProperty("key").GetInt32());
-        Assert.False(blocks[0].TryGetProperty("summary", out _));
-        Assert.Equal("summary", blocks[1].GetProperty("summary").GetString());
-        Assert.Equal(JsonValueKind.Null, blocks[1].GetProperty("text").ValueKind);
-        Assert.Equal(string.Empty, blocks[1].GetProperty("signature").GetString());
-        Assert.Equal(0, blocks[2].GetProperty("index").GetInt32());
-        Assert.Equal("opaque-state", blocks[2].GetProperty("data").GetString());
+        Assert.Equal("opaque-state", blocks[0].GetProperty("encrypted_content").GetString());
+        Assert.Equal("function_call", blocks[1].GetProperty("type").GetString());
+        Assert.Equal("id", blocks[1].GetProperty("call_id").GetString());
     }
 
     /// <summary>OpenRouter uses shared rate-limit recovery and its configured attempt limit.</summary>
@@ -429,7 +471,7 @@ public static class OpenRouterProviderTests
     [InlineData(4)]
     public static async Task RateLimitStream_UsesSharedRetriesAndOneBusyNotice(int maximumAttempts)
     {
-        using var handler = new Handler(Frame("""{"error":{"code":429,"message":"private"}}"""));
+        using var handler = new Handler(Failed(429));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var model = Model() with { RetryMaxAttempts = maximumAttempts, RetryDelayMilliseconds = 0 };
         var chunks = new List<ModelChunk>();
@@ -449,7 +491,7 @@ public static class OpenRouterProviderTests
     [Fact]
     public static async Task RateLimit_PreservesChargesAndCacheUsage()
     {
-        using var handler = new Handler(Frame("""{"error":{"code":429},"usage":{"prompt_tokens":10,"completion_tokens":2,"cost":0.2,"prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":1}}}"""));
+        using var handler = new Handler(Failed(429, JsonNode.Parse("""{"input_tokens":10,"output_tokens":2,"cost":0.2,"input_tokens_details":{"cached_tokens":3,"cache_write_tokens":1}}""")!.AsObject()));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var model = Model() with { RetryMaxAttempts = 3, RetryDelayMilliseconds = 0 };
         var usages = new List<ModelUsage>();
@@ -470,7 +512,55 @@ public static class OpenRouterProviderTests
 
     private static string Frame(string value) => "data: " + value + "\n\n";
 
-    private static string Trailer(string reason) => Frame("{\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"" + reason + "\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":8,\"cost\":0.2,\"prompt_tokens_details\":{\"cached_tokens\":2,\"cache_write_tokens\":3}}}");
+    private static string Completed(params JsonNode[] items) => Terminal("response.completed", "completed", [.. items], Usage());
+
+    private static string Terminal(string type, string status, JsonArray output, JsonObject? usage, string? provider = null)
+        => Frame(new JsonObject
+        {
+            ["type"] = type,
+            ["response"] = new JsonObject { ["id"] = "response", ["status"] = status, ["model"] = "vendor/model", ["provider"] = provider, ["output"] = output, ["usage"] = usage },
+        }.ToJsonString());
+
+    private static string Failed(int code, JsonObject? usage = null) => Frame(new JsonObject
+    {
+        ["type"] = "response.failed",
+        ["response"] = new JsonObject { ["status"] = "failed", ["usage"] = usage, ["error"] = new JsonObject { ["code"] = code, ["message"] = "private" } },
+    }.ToJsonString());
+
+    private static string ReasoningDelta(string delta) => Frame(new JsonObject
+    {
+        ["type"] = "response.reasoning_summary_text.delta",
+        ["item_id"] = "reasoning",
+        ["output_index"] = 0,
+        ["summary_index"] = 0,
+        ["delta"] = delta,
+    }.ToJsonString());
+
+    private static JsonObject Usage() => new()
+    {
+        ["input_tokens"] = 10,
+        ["output_tokens"] = 8,
+        ["cost"] = 0.2m,
+        ["input_tokens_details"] = new JsonObject { ["cached_tokens"] = 2, ["cache_write_tokens"] = 3 },
+    };
+
+    private static JsonObject FunctionCall(string id) => new()
+    {
+        ["type"] = "function_call",
+        ["id"] = "item-" + id,
+        ["call_id"] = id,
+        ["status"] = "completed",
+        ["name"] = "inspect",
+        ["arguments"] = "{}",
+    };
+
+    private static JsonObject ReasoningItem(string encrypted, string? summary = null) => new()
+    {
+        ["type"] = "reasoning",
+        ["id"] = "reasoning",
+        ["encrypted_content"] = encrypted,
+        ["summary"] = summary is null ? [] : new JsonArray(new JsonObject { ["type"] = "summary_text", ["text"] = summary }),
+    };
 
     private static OpenRouterModelConfiguration Model() => new()
     {
@@ -516,19 +606,28 @@ public static class OpenRouterProviderTests
 
     private sealed class Handler : HttpMessageHandler
     {
-        private readonly string _body;
+        private readonly string[] _responses;
 
-        public Handler(string body) => _body = body;
+        public Handler(params string[] responses) => _responses = responses;
+
+        public List<string> Bodies { get; } = [];
 
         public int Calls { get; private set; }
 
         public string? Body { get; private set; }
 
+        public Uri? RequestUri { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Calls++;
+            RequestUri = request.RequestUri;
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            Assert.Equal("test-key", request.Headers.Authorization?.Parameter);
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_body, Encoding.UTF8, "text/event-stream") };
+            Bodies.Add(Body);
+            var body = _responses[Math.Min(Calls - 1, _responses.Length - 1)];
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
         }
     }
 }

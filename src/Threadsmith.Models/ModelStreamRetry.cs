@@ -2,6 +2,7 @@ namespace Threadsmith.Models;
 
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 /// <summary>Shared delivery boundary for retries of interrupted provider streams.</summary>
 public static class ModelStreamRetry
@@ -82,6 +83,28 @@ public static class ModelStreamRetry
                     && property.Value.TryGetInt32(out var status) && status == 429)
                 || (property.Value.ValueKind == JsonValueKind.String
                     && property.Value.GetString() is "429" or "rate_limit_exceeded" or "rate_limit_error"))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Recognizes structured rate limits in an already parsed mutable JSON tree without re-encoding it.</summary>
+    public static bool IsRateLimitError(JsonObject error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        error = error["error"] as JsonObject ?? error;
+        foreach (var property in error)
+        {
+            if (property.Key is not ("code" or "type" or "status" or "status_code") || property.Value is not JsonValue value)
+            {
+                continue;
+            }
+
+            if ((value.TryGetValue<int>(out var status) && status == 429)
+                || (value.TryGetValue<string>(out var text) && text is "429" or "rate_limit_exceeded" or "rate_limit_error"))
             {
                 return true;
             }

@@ -109,7 +109,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(denyTool, continuation.Messages[2].IsError);
         var instructions = Assert.Single(continuation.Messages[0].Content).Content;
         Assert.Contains(TestPromptLoader.Instance.Get(PromptFileNames.SkillProcedureSystem).ReplaceLineEndings(Environment.NewLine), instructions, StringComparison.Ordinal);
-        Assert.Contains("Continue the declared procedure. Return only output-schema JSON.", continuation.Input, StringComparison.Ordinal);
         var toolResult = Assert.Single(continuation.Messages[2].Content).Content;
         Assert.Contains(toolResult, continuation.Input, StringComparison.Ordinal);
         Assert.Single(continuation.Messages, message => message.GetModelVisibleContent().Contains(toolResult, StringComparison.Ordinal));

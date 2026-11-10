@@ -26,6 +26,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(false, true, false, true, true)]
     [InlineData(false, false, false, false, false, true)]
     [InlineData(true, false, false, false, false, true)]
+    [InlineData(false, false, true, false, true)]
+    [InlineData(false, false, false, false, true, true)]
     public async Task RunAsync_OpenAiReasoning_PreservesAndReleasesReplay(bool codex, bool cancelAfterTool, bool exceedCapacity, bool reasoningAlias = false, bool openRouter = false, bool compact = false)
     {
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -46,7 +48,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var registry = new ToolRegistry([tool]);
         var catalog = ReasoningReplayFixture.Catalog(codex, contextWindow: exceedCapacity ? 9000 : 200000, reasoningAlias: reasoningAlias, openRouter: openRouter);
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
-        using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id) { ExceedCapacity = exceedCapacity, ReasoningAlias = reasoningAlias };
+        using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id) { ExceedCapacity = exceedCapacity, ReasoningAlias = reasoningAlias, OpenRouter = openRouter };
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new ReplayTrackingProvider(new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))) { Summarize = compact };
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
@@ -97,18 +99,18 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal("Inspection complete.", outcome.Response);
         Assert.Equal(2, outcome.Usage.ToolCalls);
         Assert.Equal(3, handler.Requests.Count);
-        ReasoningReplayFixture.AssertReplay(handler.Requests[1], codex, 1, reasoningAlias);
+        ReasoningReplayFixture.AssertReplay(handler.Requests[1], codex, 1, reasoningAlias, openRouter);
         if (compact)
         {
             Assert.Equal(1, provider.Summaries);
             Assert.Equal(1, provider.Requests[2].HistoryRewriteGeneration);
             var body = handler.Requests[2].GetRawText();
-            Assert.DoesNotContain(codex ? "opaque-0-state" : "private-0-state", body, StringComparison.Ordinal);
-            Assert.Contains(codex ? "opaque-1-state" : "private-1-state", body, StringComparison.Ordinal);
+            Assert.DoesNotContain(codex || openRouter ? "opaque-0-state" : "private-0-state", body, StringComparison.Ordinal);
+            Assert.Contains(codex || openRouter ? "opaque-1-state" : "private-1-state", body, StringComparison.Ordinal);
         }
         else
         {
-            ReasoningReplayFixture.AssertReplay(handler.Requests[2], codex, 2, reasoningAlias);
+            ReasoningReplayFixture.AssertReplay(handler.Requests[2], codex, 2, reasoningAlias, openRouter);
         }
 
         Assert.All(provider.Requests.Skip(1), request =>
@@ -132,7 +134,13 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(true, 1, "duplicate")]
     [InlineData(false, 1, "malformed")]
     [InlineData(true, 1, "malformed")]
-    public async Task RunAsync_MixedReplayRounds_PreserveHistoryAndCorrections(bool codex, int ordinaryRound, string outcome)
+    [InlineData(false, 0, "success", true)]
+    [InlineData(false, 1, "success", true)]
+    [InlineData(false, 1, "duplicate", true)]
+    [InlineData(false, 1, "malformed", true)]
+    [InlineData(false, 0, "orphaned", true)]
+    [InlineData(false, 1, "orphaned", true)]
+    public async Task RunAsync_MixedReplayRounds_PreserveHistoryAndCorrections(bool codex, int ordinaryRound, string outcome, bool openRouter = false)
     {
         // Arrange: three tool rounds, including one without private reasoning, then a final answer.
         await using var events = new DomainEventStream();
@@ -140,10 +148,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var evidence = new EvidenceStore(events, sanitizer);
         var tool = new InspectMetadataTool();
         var registry = new ToolRegistry([tool]);
-        var catalog = ReasoningReplayFixture.Catalog(codex);
+        var catalog = ReasoningReplayFixture.Catalog(codex, openRouter: openRouter);
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
         using var handler = new OpenAiReplayHandler(codex, tool.Definition.Id)
         {
+            OpenRouter = openRouter,
             ToolRounds = 3,
             OrdinaryRound = ordinaryRound,
             OrdinaryOutcome = outcome,
@@ -170,16 +179,21 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         // Act.
         var result = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
 
-        // Assert: retained rounds still use original wire IDs, ordinary rounds use host IDs.
+        // Assert: retained rounds use original wire IDs; other protocols project unsigned rounds with host IDs.
         Assert.Equal("Inspection complete.", result.Response);
         Assert.Equal(outcome == "success" ? 0 : 1, result.Usage.Corrections);
         Assert.Equal(4, handler.Requests.Count);
         var messages = provider.Requests[^1].Messages;
         var calls = messages.Where(message => message.Role == ModelMessageRole.Assistant && message.ToolCallId is not null).ToArray();
-        Assert.Equal(outcome == "malformed" ? 2 : 3, calls.Length);
-        var expectedIds = calls.Select(message => message.ModelRound == ordinaryRound ? message.ToolCallId : $"wire-{message.ModelRound}").ToArray();
+        Assert.Equal(outcome is "malformed" or "orphaned" ? 2 : 3, calls.Length);
+        if (outcome == "orphaned")
+        {
+            Assert.DoesNotContain("private-path", JsonSerializer.Serialize(provider.Requests.Select(request => request.Messages)), StringComparison.Ordinal);
+        }
+
+        var expectedIds = calls.Select(message => !openRouter && message.ModelRound == ordinaryRound ? message.ToolCallId : $"wire-{message.ModelRound}").ToArray();
         var wire = handler.Requests[^1];
-        if (codex)
+        if (codex || openRouter)
         {
             var items = wire.GetProperty("input").EnumerateArray().Where(item => item.TryGetProperty("type", out _)).ToArray();
             Assert.Equal(expectedIds, items.Where(item => item.GetProperty("type").GetString() == "function_call").Select(item => item.GetProperty("call_id").GetString()));
@@ -261,6 +275,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         internal bool ReasoningAlias { get; init; }
 
+        internal bool OpenRouter { get; init; }
+
         internal int ToolRounds { get; init; } = 2;
 
         internal int OrdinaryRound { get; init; } = -1;
@@ -277,12 +293,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 ? "{invalid"
                 : JsonSerializer.Serialize(new { path = $"src/round-{(round == OrdinaryRound && OrdinaryOutcome == "duplicate" ? 0 : round)}.cs" });
             var stream = round < ToolRounds
-                ? ReasoningReplayFixture.Stream(_codex, round, _tool, arguments, reasoning: round != OrdinaryRound)
-                : ReasoningReplayFixture.Final(_codex);
+                ? ReasoningReplayFixture.Stream(_codex, round, _tool, arguments, reasoning: round != OrdinaryRound, openRouter: OpenRouter, orphanedArguments: round == OrdinaryRound && OrdinaryOutcome == "orphaned")
+                : ReasoningReplayFixture.Final(_codex, OpenRouter);
             stream = stream.Replace("reasoning_content", ReasoningAlias ? "reasoning" : "reasoning_content", StringComparison.Ordinal);
             if (ExceedCapacity)
             {
-                stream = _codex
+                stream = OpenRouter
+                    ? stream.Replace("opaque-0-state", new string('r', 16000), StringComparison.Ordinal)
+                    : _codex
                     ? stream.Replace("\"output_tokens\":40", "\"output_tokens\":4000", StringComparison.Ordinal)
                     : stream.Replace("private-0-", new string('r', 16000), StringComparison.Ordinal);
             }

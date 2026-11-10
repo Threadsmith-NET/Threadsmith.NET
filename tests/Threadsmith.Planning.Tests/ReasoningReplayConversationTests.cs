@@ -28,7 +28,7 @@ public static class ReasoningReplayConversationTests
             responses.Add(ReasoningReplayFixture.Stream(codex, 2, "deterministic_output", "{\"sequence\":3}"));
         }
 
-        responses.Add(ReasoningReplayFixture.Final(codex));
+        responses.Add(ReasoningReplayFixture.Final(codex, openRouter));
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
             ReasoningReplayFixture.Catalog(codex, openRouter: openRouter), [.. responses]);
         harness.ToolEvidence = new string('e', 4096);
@@ -60,17 +60,12 @@ public static class ReasoningReplayConversationTests
     public static async Task OpenRouter_TwoSignedToolRoundsUseMainLoopAndRemainPrivate()
     {
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
-            ReasoningReplayFixture.Catalog(false, openRouter: true), RouterStream(0), RouterStream(1), ReasoningReplayFixture.Final(false));
+            ReasoningReplayFixture.Catalog(false, openRouter: true), RouterStream(0), RouterStream(1), ReasoningReplayFixture.Final(false, openRouter: true));
         harness.Handler.FragmentResponses = true;
         await harness.RunToCompletionAsync();
         Assert.Equal(3, harness.Handler.Requests.Count);
-        var messages = harness.Handler.Requests[2].GetProperty("messages").EnumerateArray().Where(message => message.TryGetProperty("reasoning_details", out _)).ToArray();
-        Assert.Equal(2, messages.Length);
-        for (var round = 0; round < 2; round++)
-        {
-            Assert.Equal($"opaque-{round}-state", messages[round].GetProperty("reasoning_details")[0].GetProperty("data").GetString());
-            Assert.Equal($"wire-{round}", messages[round].GetProperty("tool_calls")[0].GetProperty("id").GetString());
-        }
+        ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[1], false, 1, openRouter: true);
+        ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[2], false, 2, openRouter: true);
 
         Assert.Equal(2, harness.Observed.OfType<ToolInvocationCompleted>().Count());
         Assert.DoesNotContain("opaque-", JsonSerializer.Serialize(harness.Observed), StringComparison.Ordinal);
@@ -125,11 +120,12 @@ public static class ReasoningReplayConversationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task Cancellation_ReleasesAcceptedReplay(bool codex)
+    [InlineData(false, true)]
+    public static async Task Cancellation_ReleasesAcceptedReplay(bool codex, bool openRouter = false)
     {
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
-            ReasoningReplayFixture.Catalog(codex),
-            ReasoningReplayFixture.Stream(codex, 0, "deterministic_output", "{\"sequence\":1}"));
+            ReasoningReplayFixture.Catalog(codex, openRouter: openRouter),
+            ReasoningReplayFixture.Stream(codex, 0, "deterministic_output", "{\"sequence\":1}", openRouter: openRouter));
         await harness.RunToCompletionAsync(cancelAfterTool: true);
         Assert.Single(harness.Handler.Requests);
         Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState?.HasResponses));
@@ -184,9 +180,76 @@ public static class ReasoningReplayConversationTests
         Assert.DoesNotContain("encrypted_content\":", harness.Handler.Requests[1].GetRawText(), StringComparison.Ordinal);
     }
 
-    private static string RouterStream(int round) => ReasoningReplayFixture.Stream(false, round, "deterministic_output", "{\"sequence\":" + (round + 1) + "}")
-            .Replace("\"reasoning_content\":\"private-" + round + "-\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"opaque-" + round + "-\"}]", StringComparison.Ordinal)
-            .Replace("\"reasoning_content\":\"state\"", "\"reasoning_details\":[{\"type\":\"reasoning.encrypted\",\"index\":0,\"data\":\"state\"}]", StringComparison.Ordinal);
+    /// <summary>Rejected batches recover in MAIN without executing siblings or repeating previous work.</summary>
+    [Fact]
+    public static async Task OpenRouter_OutputExhaustionCorrectsSmallerCallsWithoutRepeatingSuccessfulWork()
+    {
+        await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
+            ReasoningReplayFixture.Catalog(false, openRouter: true),
+            RouterStream(0),
+            ExhaustedRouterBatch(),
+            RouterStream(1),
+            RouterStream(2),
+            ReasoningReplayFixture.Final(false, openRouter: true));
+        harness.Limits = new() { MaxModelRounds = 6, MaxCorrectiveTurns = 2 };
+
+        await harness.RunToCompletionAsync();
+
+        Assert.Equal(5, harness.Handler.Requests.Count);
+        int[] expectedSequences = [1, 2, 3];
+        Assert.Equal(expectedSequences, harness.ExecutedSequences);
+        Assert.Equal(3, harness.Observed.OfType<ToolInvocationCompleted>().Count());
+        var correctionEvent = Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(ModelCorrectionCategory.ProviderInvocation, correctionEvent.Category);
+        Assert.Equal(1, correctionEvent.AttemptNumber);
+        Assert.Equal(2, correctionEvent.MaximumAttempts);
+        Assert.Equal(ModelOutputValidator.TruncatedInvocationMessage, correctionEvent.SafeReason);
+        var correction = harness.Model.Requests[2].Messages[^1];
+        Assert.Equal(ModelMessageRole.Developer, correction.Role);
+        Assert.Contains("Split the work into smaller tool calls", correction.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.Contains(correction, harness.Model.Requests[4].Messages);
+        ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[2], false, 1, openRouter: true);
+        ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[4], false, 3, openRouter: true);
+        Assert.All(harness.Handler.Requests.Skip(2), request => Assert.DoesNotContain("rejected-", request.GetRawText(), StringComparison.Ordinal));
+        Assert.DoesNotContain("opaque-", JsonSerializer.Serialize(harness.Observed), StringComparison.Ordinal);
+        Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState?.HasResponses));
+    }
+
+    /// <summary>Repeated output exhaustion uses the existing bounded correction policy.</summary>
+    [Fact]
+    public static async Task OpenRouter_OutputExhaustionStopsAtCorrectionLimitWithoutExecutingRejectedTools()
+    {
+        var rejected = ExhaustedRouterBatch();
+        await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
+            ReasoningReplayFixture.Catalog(false, openRouter: true), rejected, rejected, rejected);
+
+        var error = await Assert.ThrowsAsync<MalformedInvocationException>(() => harness.RunToCompletionAsync());
+        Assert.Equal(MalformedInvocationFailureKind.TruncatedArguments, error.Diagnostic.Kind);
+
+        Assert.Equal(3, harness.Handler.Requests.Count);
+        Assert.Equal(2, harness.Observed.OfType<ModelCorrectionAttempted>().Count());
+        Assert.Empty(harness.ExecutedSequences);
+        Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
+        Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState?.HasResponses));
+    }
+
+    private static string ExhaustedRouterBatch() => "data: " + JsonSerializer.Serialize(new
+    {
+        type = "response.incomplete",
+        response = new
+        {
+            status = "incomplete",
+            incomplete_details = new { reason = "max_output_tokens" },
+            output = new[]
+            {
+                new { type = "function_call", call_id = "rejected-valid", name = "deterministic_output", arguments = "{\"sequence\":2}" },
+                new { type = "function_call", call_id = "rejected-truncated", name = "deterministic_output", arguments = "{\"sequence\":" },
+            },
+            usage = new { input_tokens = 100, output_tokens = 4096 },
+        },
+    }) + "\n\n";
+
+    private static string RouterStream(int round) => ReasoningReplayFixture.Stream(false, round, "deterministic_output", "{\"sequence\":" + (round + 1) + "}", openRouter: true);
 
     internal sealed class ReplayCompactor : IActiveTurnCompactor
     {

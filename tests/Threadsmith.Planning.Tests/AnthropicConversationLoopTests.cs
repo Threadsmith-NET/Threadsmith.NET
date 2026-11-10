@@ -1,5 +1,6 @@
 namespace Threadsmith.Planning.Tests;
 
+using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -390,6 +391,10 @@ public static class AnthropicConversationLoopTests
 
         internal string ToolEvidence { get; set; } = "Tool evidence collected.";
 
+        internal ConcurrentQueue<int> ExecutedSequences { get; } = new();
+
+        internal ExecutionLimits Limits { get; set; } = new() { MaxModelRounds = 4, MaxCorrectiveTurns = 2 };
+
         internal SessionId SessionId { get; private set; }
 
         internal RunId RunId { get; private set; }
@@ -410,7 +415,7 @@ public static class AnthropicConversationLoopTests
                 return Task.CompletedTask;
             });
             var sanitizer = new SecretOutputSanitizer();
-            var registry = new ToolRegistry([new TestDeterministicOutputTool(ToolEvidence)]);
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(ToolEvidence, onExecute: ExecutedSequences.Enqueue)]);
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
             var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
@@ -429,7 +434,7 @@ public static class AnthropicConversationLoopTests
                 Evidence,
                 registry,
                 _catalog.DefaultModelId,
-                new ExecutionLimits { MaxModelRounds = 4, MaxCorrectiveTurns = 2 },
+                Limits,
                 sessionUsage: Usage,
                 activeTurnCompactor: Compactor,
                 activeTurnCompactionPolicy: CompactionPolicy,

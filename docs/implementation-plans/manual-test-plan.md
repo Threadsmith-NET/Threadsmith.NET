@@ -2310,7 +2310,7 @@ Rate-limit regression (all four provider integrations): with a controlled provid
 
 **Prerequisites:** An explicitly selected manual OpenRouter profile, verified endpoint metadata, a bounded API key in the existing user secret store, and a disposable repository. Record the exact model slug, upstream routing slug and expected response provider name.
 
-1. Select the profile with `/models`; inspect `/reasoning` and choose each declared level, including off where supported.
+1. Keep the existing catalog unchanged. Select the profile with `/models`; inspect `/reasoning` and choose each declared level, including off where supported. Verify the request targets `/api/v1/responses` with native input items, `store: false`, no `previous_response_id`, and no Chat Completions envelope. Inspect only safe request metadata, never credentials or private reasoning.
 2. Ask for plain text, then request two successive repository inspections through ordinary host tools and a genuine follow-up. Verify one execution per tool, visible progress, and successful continuation.
 3. Repeat with reasoning display hidden. Verify the same tool behavior without reasoning text in presentation or raw logs.
 4. Cancel during response reading and after a tool completes. Start a fresh turn; verify no prior tool is repeated to recover an interrupted exchange.

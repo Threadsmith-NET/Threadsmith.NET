@@ -26,13 +26,15 @@ internal sealed class TestDeterministicOutputTool : Tool<TestDeterministicOutput
     };
 
     private readonly string _content;
+    private readonly Action<int>? _onExecute;
 
     /// <summary>Initializes a new instance of the <see cref="TestDeterministicOutputTool"/> class.</summary>
-    internal TestDeterministicOutputTool(string content, int maximumOutputBytes = 8192)
+    internal TestDeterministicOutputTool(string content, int maximumOutputBytes = 8192, Action<int>? onExecute = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
         _content = content;
+        _onExecute = onExecute;
         _definition = _definition with { MaximumOutputBytes = maximumOutputBytes };
     }
 
@@ -46,6 +48,7 @@ internal sealed class TestDeterministicOutputTool : Tool<TestDeterministicOutput
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        _onExecute?.Invoke(input.Sequence);
         return Task.FromResult(new ToolExecution<TestDeterministicOutput>(
             new TestDeterministicOutput(_content),
             []));

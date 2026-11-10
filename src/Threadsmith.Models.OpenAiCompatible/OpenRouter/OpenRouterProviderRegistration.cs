@@ -51,11 +51,11 @@ public sealed record OpenRouterModelConfiguration : ModelConfiguration
     public bool JsonSchemaResponses { get; init; }
 }
 
-/// <summary>Registers manually configured OpenRouter models on the shared chat-completions lifecycle.</summary>
+/// <summary>Registers manually configured OpenRouter models on the shared host lifecycle using Responses.</summary>
 public sealed class OpenRouterProviderRegistration : IModelProviderRegistration, IModelRequestPreparation
 {
     /// <summary>Compiled OpenRouter API authority.</summary>
-    internal static readonly Uri Endpoint = new("https://openrouter.ai/api/v1/chat/completions");
+    internal static readonly Uri Endpoint = new("https://openrouter.ai/api/v1/responses");
 
     /// <inheritdoc />
     public string TypeDiscriminator => "openrouter";

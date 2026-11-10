@@ -9,6 +9,65 @@ using Xunit;
 
 public static partial class OpenRouterProviderTests
 {
+    /// <summary>Optional arguments stay optional unless both opt-ins produce a supported strict schema.</summary>
+    [Theory]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, true, false)]
+    [InlineData(true, false, true, false)]
+    [InlineData(true, true, false, false)]
+    [InlineData(true, true, true, true)]
+    public static async Task ToolSchemas_ExplicitlyPreserveStrictOptOut(
+        bool supportsStrict,
+        bool prefersStrict,
+        bool supportedSchema,
+        bool expectedStrict)
+    {
+        var model = Model() with { StrictToolArguments = supportsStrict };
+        var schema = JsonNode.Parse("""{"type":"object","additionalProperties":false,"required":[],"properties":{"query":{"type":"string"},"selector":{"type":"string"}}}""")!.AsObject();
+        if (!supportedSchema)
+        {
+            schema["not"] = new JsonObject { ["required"] = new JsonArray("query", "selector") };
+        }
+
+        var request = Request() with
+        {
+            Tools =
+            [
+                new ModelToolDefinition
+                {
+                    Name = "inspect_skill",
+                    Description = "Search by query or inspect by selector; omit the unused field.",
+                    ArgumentsJsonSchema = schema.ToJsonString(),
+                    PreferStrictArguments = prefersStrict,
+                },
+            ],
+        };
+        using var handler = new Handler(Completed());
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+
+        await CollectAsync(Provider(client, model), request, []);
+
+        using var body = JsonDocument.Parse(handler.Body!);
+        var function = body.RootElement.GetProperty("tools")[0];
+        Assert.Equal("inspect_skill", function.GetProperty("name").GetString());
+        Assert.Equal(expectedStrict, function.GetProperty("strict").GetBoolean());
+        var parameters = function.GetProperty("parameters");
+        if (expectedStrict)
+        {
+            Assert.Equal(["query", "selector"], parameters.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+            foreach (var property in parameters.GetProperty("properties").EnumerateObject())
+            {
+                Assert.Equal(["string", "null"], property.Value.GetProperty("type").EnumerateArray().Select(value => value.GetString()));
+            }
+        }
+        else
+        {
+            using var original = JsonDocument.Parse(request.Tools[0].ArgumentsJsonSchema);
+            Assert.True(JsonElement.DeepEquals(original.RootElement, parameters));
+            Assert.Empty(parameters.GetProperty("required").EnumerateArray());
+        }
+    }
+
     /// <summary>Previously accepted effort values and controls retain their exact projection.</summary>
     [Theory]
     [InlineData("minimal")]
@@ -210,6 +269,67 @@ public static partial class OpenRouterProviderTests
         Assert.Single(chunks, chunk => chunk.FinishReason is not null);
     }
 
+    /// <summary>Ordinary output exhaustion preserves final-only text and streamed suffixes, even with tools advertised.</summary>
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public static async Task LengthLimitedText_ReconcilesAndFinishesWithLength(bool delta, bool tools, bool reportedUsage)
+    {
+        var message = OutputMessage("partial answer");
+        message["status"] = "incomplete";
+        var report = reportedUsage ? new JsonObject { ["input_tokens"] = 10, ["output_tokens"] = 1000 } : null;
+
+        var response = new JsonObject
+        {
+            ["status"] = "incomplete",
+            ["incomplete_details"] = new JsonObject { ["reason"] = "max_output_tokens" },
+            ["output"] = new JsonArray(message),
+            ["usage"] = report,
+        };
+        var prefix = delta ? Frame("""{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"partial"}""") : string.Empty;
+        using var handler = new Handler(prefix + Frame(new JsonObject { ["type"] = "response.incomplete", ["response"] = response }.ToJsonString()) + Frame("[DONE]"));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = new List<ModelChunk>();
+
+        await CollectAsync(Provider(client, ReplayModel()), Request() with { Tools = tools ? Request().Tools : [], MaximumOutputTokens = 1000 }, chunks);
+
+        Assert.Equal("partial answer", string.Concat(chunks.Select(chunk => chunk.Text)));
+        Assert.Equal(ModelFinishReason.Length, Assert.Single(chunks, chunk => chunk.FinishReason is not null).FinishReason);
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(!reportedUsage, usage.IsEstimate);
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>Orphaned XML uses the same sanitized corrective diagnostic as the inherited adapter.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task OrphanedArguments_UseCorrectableDiagnosticWithoutReleasingBatch(bool delta)
+    {
+        const string orphaned = "<parameter name=\"value\">private-argument</parameter></function></tool_call>";
+        var prefix = delta ? Frame(new JsonObject { ["type"] = "response.output_text.delta", ["output_index"] = 0, ["content_index"] = 0, ["delta"] = orphaned }.ToJsonString()) : string.Empty;
+        using var handler = new Handler(prefix + Completed(OutputMessage(orphaned), FunctionCall("call"), FunctionCall("sibling")));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = new List<ModelChunk>();
+
+        var error = await Assert.ThrowsAsync<MalformedInvocationException>(() => CollectAsync(Provider(client, ReplayModel()), Request(), chunks));
+
+        Assert.Equal(MalformedInvocationFailureKind.ArgumentSchemaMismatch, error.Diagnostic.Kind);
+        Assert.Equal("openrouter", error.Diagnostic.ProviderFamily);
+        Assert.Equal(2, error.Diagnostic.ToolCallCount);
+        Assert.DoesNotContain("private-argument", JsonSerializer.Serialize(error.Diagnostic), StringComparison.Ordinal);
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null || chunk.Text is not null);
+        Assert.Single(chunks, chunk => chunk.Usage is not null);
+        Assert.Equal(1, handler.Calls);
+    }
+
     /// <summary>Public stream-limit overrides are independent of private replay bounds.</summary>
     [Theory]
     [InlineData(0)]
@@ -282,8 +402,25 @@ public static partial class OpenRouterProviderTests
             request = request with { Messages = history, ToolContinuationRound = round + 1 };
         }
 
+        // Admission and dispatch may project the same retained history repeatedly.
+        var registration = new OpenRouterProviderRegistration();
+        var profile = Assert.Single(registration.CreateProfiles(Configuration(model)));
+        var envelopes = state.Responses.ToArray();
+        var prepared = OpenRouterResponsesProjection.Create(request, profile, model);
+        Assert.Equal(prepared, OpenRouterResponsesProjection.Create(request, profile, model));
+
         var chunks = new List<ModelChunk>();
         await CollectAsync(provider, request, chunks);
+        for (var index = 0; index < envelopes.Length; index++)
+        {
+            Assert.Same(envelopes[index], state.Responses[index]);
+        }
+
+        Assert.Equal(prepared, OpenRouterResponsesProjection.Create(request, profile, model));
+
+        using var projected = JsonDocument.Parse(prepared);
+        using var dispatched = JsonDocument.Parse(handler.Bodies[2]);
+        Assert.True(JsonElement.DeepEquals(projected.RootElement, dispatched.RootElement));
         Assert.Equal("done", string.Concat(chunks.Select(chunk => chunk.Text)));
         using var second = JsonDocument.Parse(handler.Bodies[1]);
         using var third = JsonDocument.Parse(handler.Bodies[2]);
@@ -304,7 +441,9 @@ public static partial class OpenRouterProviderTests
     [InlineData("tool")]
     [InlineData("unsupported")]
     [InlineData("capacity")]
-    public static async Task Images_UseNativeContentAfterAdmission(string scenario)
+    [InlineData("user", true)]
+    [InlineData("tool", true)]
+    public static async Task Images_UseNativeContentAfterAdmission(string scenario, bool explicitCache = false)
     {
         var image = new ImageArtifact { Id = "image", Source = "fixture", MediaType = "image/png", ByteLength = 3, Width = 1, Height = 1, ContentHash = new string('a', 64) };
         var reads = 0;
@@ -314,8 +453,14 @@ public static partial class OpenRouterProviderTests
             ToolCallId = role == ModelMessageRole.Tool ? "call" : null,
             Content = [new() { Content = "before" }, new() { Kind = ModelContentPartKind.Image, Image = image }, new() { Content = "after" }],
         };
+        if (explicitCache)
+        {
+            message = message with { Content = [message.Content[0], message.Content[1]] };
+        }
+
         var request = Request() with
         {
+            Layout = explicitCache ? new ModelRequestLayout { CacheFamily = "test", StablePrefixDigest = "test", StablePrefixMessageCount = 1 } : null,
             Messages = role == ModelMessageRole.Tool ? [Message(ModelMessageRole.Assistant, "{}") with { ToolCallId = "call", ToolName = "inspect" }, message] : [message],
             ResolveImageAsync = (_, token) =>
             {
@@ -326,6 +471,7 @@ public static partial class OpenRouterProviderTests
         };
         var model = Model() with
         {
+            MinimumCacheableTokens = explicitCache ? 1 : null,
             SupportedInputContentTypes = scenario == "unsupported" ? ModelContentTypes.Text : ModelContentTypes.Text | ModelContentTypes.Image,
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
             ContextWindow = scenario == "capacity" ? 5000 : 32000,
@@ -349,18 +495,35 @@ public static partial class OpenRouterProviderTests
         Assert.Equal("input_image", content[1].GetProperty("type").GetString());
         Assert.Equal("data:image/png;base64,AQID", content[1].GetProperty("image_url").GetString());
         Assert.Equal("high", content[1].GetProperty("detail").GetString());
+        Assert.False(content[1].TryGetProperty("prompt_cache_breakpoint", out _));
+        if (explicitCache)
+        {
+            var boundary = content[2];
+            Assert.Equal("input_text", boundary.GetProperty("type").GetString());
+            Assert.Equal(string.Empty, boundary.GetProperty("text").GetString());
+            Assert.Equal("explicit", boundary.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
+            Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
+        }
+
         if (role == ModelMessageRole.Tool)
         {
             Assert.Equal("function_call_output", input[1].GetProperty("type").GetString());
             Assert.Contains("before", input[1].GetProperty("output").GetString(), StringComparison.Ordinal);
-            Assert.Contains("after", input[1].GetProperty("output").GetString(), StringComparison.Ordinal);
+            if (!explicitCache)
+            {
+                Assert.Contains("after", input[1].GetProperty("output").GetString(), StringComparison.Ordinal);
+            }
+
             Assert.Contains("tool_evidence", content[0].GetProperty("text").GetString(), StringComparison.Ordinal);
-            Assert.Equal(2, content.GetArrayLength());
+            Assert.Equal(explicitCache ? 3 : 2, content.GetArrayLength());
         }
         else
         {
             Assert.Equal("before", content[0].GetProperty("text").GetString());
-            Assert.Equal("after", content[2].GetProperty("text").GetString());
+            if (!explicitCache)
+            {
+                Assert.Equal("after", content[2].GetProperty("text").GetString());
+            }
         }
     }
 
@@ -408,6 +571,88 @@ public static partial class OpenRouterProviderTests
 
         Assert.Contains(chunks, chunk => chunk.Usage is not null);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);
+    }
+
+    /// <summary>Refusal signals remain private while terminal accounting is delivered without answer or tool release.</summary>
+    [Theory]
+    [InlineData("response.refusal.delta", true)]
+    [InlineData("response.refusal.done", true)]
+    [InlineData("response.output_item.done", true)]
+    [InlineData("terminal", true)]
+    [InlineData("response.refusal.delta", false)]
+    public static async Task Refusal_PreservesTerminalUsageAndWithholdsOutput(string signal, bool reportedUsage)
+    {
+        // Arrange: include valid siblings and later text to catch premature answer or tool release.
+        var refusal = OutputMessage(string.Empty);
+        refusal["content"] = new JsonArray(new JsonObject { ["type"] = "refusal", ["refusal"] = "private-refusal" });
+        var prefix = signal switch
+        {
+            "terminal" => string.Empty,
+            "response.output_item.done" => Frame(new JsonObject { ["type"] = signal, ["output_index"] = 2, ["item"] = refusal.DeepClone() }.ToJsonString()),
+            _ => Frame(new JsonObject { ["type"] = signal, ["output_index"] = 2, ["content_index"] = 0, ["delta"] = "private-refusal", ["refusal"] = "private-refusal" }.ToJsonString()),
+        };
+        var textDelta = signal == "terminal" ? string.Empty : Frame("""{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"withheld"}""");
+        using var handler = new Handler(prefix + textDelta + Terminal("response.completed", "completed", new JsonArray(OutputMessage("withheld answer"), FunctionCall("call"), refusal), reportedUsage ? Usage() : null) + Frame("[DONE]"));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = new List<ModelChunk>();
+
+        // Act
+        var error = await Assert.ThrowsAsync<ModelProviderException>(() => CollectAsync(Provider(client, ReplayModel()), Request(), chunks));
+
+        // Assert
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(!reportedUsage, usage.IsEstimate);
+        Assert.Equal(reportedUsage ? 0.2m : null, usage.ReportedCost);
+        if (reportedUsage)
+        {
+            Assert.Equal(10, usage.InputTokens);
+            Assert.Equal(8, usage.OutputTokens);
+            Assert.Equal(2, usage.Cache?.CacheReadTokens);
+            Assert.Equal(3, usage.Cache?.CacheWriteTokens);
+        }
+
+        Assert.Equal("OpenRouter refused the response.", error.Message);
+        Assert.DoesNotContain("private-refusal", JsonSerializer.Serialize(chunks), StringComparison.Ordinal);
+        Assert.DoesNotContain(chunks, chunk => chunk.Text is not null || chunk.Reasoning is not null || chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);
+        Assert.Equal(1, handler.Calls);
+    }
+
+    /// <summary>Field prefixes, comments, empty data lines, and line endings share the bounded SSE parser.</summary>
+    [Theory]
+    [InlineData("\n", "data:")]
+    [InlineData("\r", "data: ")]
+    [InlineData("\r\n", "data:  ")]
+    public static async Task SseFraming_PreservesFieldsAndEmptyDataLines(string newline, string field)
+    {
+        var terminal = Completed(OutputMessage("hello"))[6..^2];
+        var body = ": comment" + newline + "database: ignored" + newline + "event: response.completed" + newline
+            + field + newline + field + terminal + newline + "id: ignored" + newline + field + newline + newline
+            + "data:[DONE]" + newline + newline;
+        using var handler = new Handler(body);
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = new List<ModelChunk>();
+
+        await CollectAsync(Provider(client, Model()), Request(), chunks);
+
+        Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
+        Assert.Single(chunks, chunk => chunk.Usage is not null);
+        Assert.Single(chunks, chunk => chunk.FinishReason is not null);
+    }
+
+    /// <summary>Both data and ignored lines remain bounded before any terminal output can be released.</summary>
+    [Theory]
+    [InlineData("data:")]
+    [InlineData(":")]
+    public static async Task SseFraming_RejectsOversizedLines(string field)
+    {
+        using var handler = new Handler(field + new string('x', (int)ModelProfile.DefaultMaximumStreamedBytes) + "\n\n");
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var chunks = new List<ModelChunk>();
+
+        var error = await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(Provider(client, Model() with { MaximumStreamedBytes = 1 }), Request(), chunks));
+
+        Assert.Equal("OpenRouter exceeded the SSE frame limit.", error.Message);
+        Assert.Empty(chunks);
     }
 
     /// <summary>Reported output limits apply even when unrelated input usage needs estimation.</summary>

@@ -9,7 +9,7 @@ Use explicitly configured OpenRouter models through the existing governed MAIN, 
 ## Deliverables
 
 - Typed manual catalogs, secrets authentication and a compiled fixed authority.
-- A subclass of the OpenAI-compatible adapter with one shared transport lifecycle.
+- A native OpenRouter Responses adapter using shared host resilience and transient-replay components through the existing governed model lifecycle.
 - Capability-aware reasoning controls, private structured replay, tools, images, caching and usage accounting.
 - Deterministic regression evidence and representative bounded live checks.
 

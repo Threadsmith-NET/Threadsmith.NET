@@ -42,61 +42,6 @@ public static partial class OpenRouterProviderTests
             var model = configuredModel with { TimeoutSeconds = 0 };
             var isolated = configuration with { Models = [model] };
             var profile = Assert.Single(registration.CreateProfiles(isolated));
-            // Separate release-blocker reproduction; ordinary configured checks must not imply seed compatibility.
-            if (Environment.GetEnvironmentVariable("THREADSMITH_OPENROUTER_SEED_PROBE") == "1")
-            {
-                using var probe = new HttpRequestMessage(HttpMethod.Post, profile.Endpoint);
-                probe.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", resolution.Value.Reveal());
-                var probeBody = new JsonObject
-                {
-                    ["model"] = model.ModelId,
-                    ["input"] = "Reply OK.",
-                    ["max_output_tokens"] = 512,
-                    ["stream"] = true,
-                    ["seed"] = 42,
-                    ["store"] = false,
-                    ["debug"] = new JsonObject { ["echo_upstream_body"] = true },
-                };
-                probe.Content = new StringContent(probeBody.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-                using var probeResponse = await client.SendAsync(probe, cancellationToken);
-                var data = await probeResponse.Content.ReadAsStringAsync(cancellationToken);
-                if (!probeResponse.IsSuccessStatusCode)
-                {
-                    var error = JsonNode.Parse(data)?["error"]?["message"]?.GetValue<string>() ?? string.Empty;
-                    TestContext.Current.TestOutputHelper!.WriteLine($"Debug probe status={(int)probeResponse.StatusCode}, mentionsDebug={error.Contains("debug", StringComparison.OrdinalIgnoreCase)}, mentionsSeed={error.Contains("seed", StringComparison.OrdinalIgnoreCase)}");
-                    probeBody.Remove("debug");
-                    using var seedProbe = new HttpRequestMessage(HttpMethod.Post, profile.Endpoint);
-                    seedProbe.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", resolution.Value.Reveal());
-                    seedProbe.Content = new StringContent(probeBody.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-                    using var seedResponse = await client.SendAsync(seedProbe, cancellationToken);
-                    TestContext.Current.TestOutputHelper.WriteLine($"Seed-only acceptance status={(int)seedResponse.StatusCode} (acceptance does not prove forwarding).");
-                    probeBody.Remove("seed");
-                    probeBody["max_output_tokens"] = model.EffectiveRequestOutputTokenReserve;
-                    using var baselineProbe = new HttpRequestMessage(HttpMethod.Post, profile.Endpoint);
-                    baselineProbe.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", resolution.Value.Reveal());
-                    baselineProbe.Content = new StringContent(probeBody.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-                    using var baselineResponse = await client.SendAsync(baselineProbe, cancellationToken);
-                    TestContext.Current.TestOutputHelper.WriteLine($"No-seed baseline with configured output reserve status={(int)baselineResponse.StatusCode}.");
-                    probeBody["seed"] = 42;
-                    using var matchedProbe = new HttpRequestMessage(HttpMethod.Post, profile.Endpoint);
-                    matchedProbe.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", resolution.Value.Reveal());
-                    matchedProbe.Content = new StringContent(probeBody.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
-                    using var matchedResponse = await client.SendAsync(matchedProbe, cancellationToken);
-                    TestContext.Current.TestOutputHelper.WriteLine($"Seed with configured output reserve status={(int)matchedResponse.StatusCode}.");
-                    Assert.Equal(System.Net.HttpStatusCode.OK, matchedResponse.StatusCode);
-                }
-
-                foreach (var line in data.Split('\n').Where(line => line.StartsWith("data: {", StringComparison.Ordinal)))
-                {
-                    var node = JsonNode.Parse(line[6..])!.AsObject();
-                    if (node.ContainsKey("debug") || node["type"]?.GetValue<string>()?.Contains("debug", StringComparison.Ordinal) == true)
-                    {
-                        TestContext.Current.TestOutputHelper!.WriteLine("Remote debug schema: " + string.Join(",", node.Select(pair => pair.Key)));
-                        TestContext.Current.TestOutputHelper.WriteLine("Remote debug payload: " + DescribeSeed(node));
-                    }
-                }
-            }
-
             var provider = registration.CreateProvider(new ModelProviderActivationContext
             {
                 HttpClient = client,
@@ -151,16 +96,5 @@ public static partial class OpenRouterProviderTests
             Assert.Contains("verified", string.Concat(chunks.Select(chunk => chunk.Text)), StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
         }
-    }
-
-    private static string DescribeSeed(JsonNode? node)
-    {
-        if (node is JsonObject obj)
-        {
-            return string.Join(";", obj.Select(pair => pair.Key == "seed" ? "seed=" + pair.Value?.ToJsonString()
-                : pair.Value is JsonObject or JsonArray ? pair.Key + "{" + DescribeSeed(pair.Value) + "}" : pair.Key));
-        }
-
-        return node is JsonArray array ? string.Join(";", array.Select(DescribeSeed)) : string.Empty;
     }
 }

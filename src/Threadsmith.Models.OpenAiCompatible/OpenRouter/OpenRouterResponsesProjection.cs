@@ -92,17 +92,15 @@ internal static class OpenRouterResponsesProjection
                     throw new ModelProviderException("Tool arguments require an object schema.");
                 }
 
+                // Responses may normalize omitted strict settings; preserve the host's opt-out explicitly.
                 var definition = new JsonObject
                 {
                     ["type"] = "function",
                     ["name"] = names.ToWireName(tool.Name),
                     ["description"] = tool.Description,
                     ["parameters"] = schema,
+                    ["strict"] = strict is not null,
                 };
-                if (strict is not null)
-                {
-                    definition["strict"] = true;
-                }
 
                 definitions.Add(definition);
             }
@@ -137,17 +135,45 @@ internal static class OpenRouterResponsesProjection
             body["text"] = new JsonObject { ["format"] = new JsonObject { ["type"] = "json_object" } };
         }
 
-        if (OpenRouterProviderRegistration.CachePlan(request, model).Breakpoints.Count > 0 && input.LastOrDefault() is JsonObject tail)
+        if (OpenRouterProviderRegistration.CachePlan(request, model).Breakpoints.Count > 0)
         {
-            var field = tail["type"]?.GetValue<string>() == "function_call_output" ? "output" : "content";
-            if (tail[field] is JsonValue value && value.TryGetValue<string>(out var text))
+            for (var index = input.Count - 1; index >= 0; index--)
             {
-                tail[field] = new JsonArray(new JsonObject { ["type"] = "input_text", ["text"] = text });
-            }
+                if (input[index] is not JsonObject tail)
+                {
+                    continue;
+                }
 
-            if (tail[field] is JsonArray blocks && blocks.LastOrDefault() is JsonObject last)
-            {
-                last["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+                var field = tail["type"]?.GetValue<string>() switch
+                {
+                    "function_call_output" => "output",
+                    "message" when tail["role"]?.GetValue<string>() != "assistant" => "content",
+                    _ => null,
+                };
+                if (field is null)
+                {
+                    continue;
+                }
+
+                if (tail[field] is JsonValue value && value.TryGetValue<string>(out var text))
+                {
+                    tail[field] = Text("input_text", text);
+                }
+
+                if (tail[field] is JsonArray blocks)
+                {
+                    // Responses accepts breakpoints only on input_text, not images or output_text.
+                    // An empty text block retains a boundary after the image without duplicating content.
+                    var last = blocks.LastOrDefault() as JsonObject;
+                    if (last?["type"]?.GetValue<string>() != "input_text")
+                    {
+                        last = new JsonObject { ["type"] = "input_text", ["text"] = string.Empty };
+                        blocks.Add(last);
+                    }
+
+                    last["prompt_cache_breakpoint"] = new JsonObject { ["mode"] = "explicit" };
+                    break;
+                }
             }
         }
 
@@ -182,9 +208,14 @@ internal static class OpenRouterResponsesProjection
             {
                 if (usedReplay.Add(round))
                 {
-                    foreach (var item in ProviderResponseReplay.Read(envelope, request, index).AsArray())
+                    var response = ProviderResponseReplay.Read(envelope, request, index).AsArray();
+                    var items = response.ToArray();
+
+                    // Read owns an independent tree; detach its children before reparenting.
+                    response.Clear();
+                    foreach (var item in items)
                     {
-                        input.Add(item?.DeepClone());
+                        input.Add(item);
                     }
                 }
 

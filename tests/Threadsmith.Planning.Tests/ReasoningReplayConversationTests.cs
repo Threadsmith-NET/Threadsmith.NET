@@ -181,13 +181,15 @@ public static class ReasoningReplayConversationTests
     }
 
     /// <summary>Rejected batches recover in MAIN without executing siblings or repeating previous work.</summary>
-    [Fact]
-    public static async Task OpenRouter_OutputExhaustionCorrectsSmallerCallsWithoutRepeatingSuccessfulWork()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task OpenRouter_RejectedBatchCorrectsWithoutRepeatingSuccessfulWork(bool orphanedArguments)
     {
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
             ReasoningReplayFixture.Catalog(false, openRouter: true),
             RouterStream(0),
-            ExhaustedRouterBatch(),
+            orphanedArguments ? ReasoningReplayFixture.Stream(false, 99, "deterministic_output", "{\"sequence\":999}", openRouter: true, orphanedArguments: true) : ExhaustedRouterBatch(),
             RouterStream(1),
             RouterStream(2),
             ReasoningReplayFixture.Final(false, openRouter: true));
@@ -203,10 +205,20 @@ public static class ReasoningReplayConversationTests
         Assert.Equal(ModelCorrectionCategory.ProviderInvocation, correctionEvent.Category);
         Assert.Equal(1, correctionEvent.AttemptNumber);
         Assert.Equal(2, correctionEvent.MaximumAttempts);
-        Assert.Equal(ModelOutputValidator.TruncatedInvocationMessage, correctionEvent.SafeReason);
+        if (orphanedArguments)
+        {
+            Assert.Contains("tool parameters as assistant text", correctionEvent.SafeReason, StringComparison.Ordinal);
+            Assert.DoesNotContain("999", correctionEvent.SafeReason, StringComparison.Ordinal);
+            Assert.All(harness.Handler.Requests.Skip(2), request => Assert.DoesNotContain("opaque-99", request.GetRawText(), StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Equal(ModelOutputValidator.TruncatedInvocationMessage, correctionEvent.SafeReason);
+        }
+
         var correction = harness.Model.Requests[2].Messages[^1];
         Assert.Equal(ModelMessageRole.Developer, correction.Role);
-        Assert.Contains("Split the work into smaller tool calls", correction.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.Contains(orphanedArguments ? "tool parameters as assistant text" : "Split the work into smaller tool calls", correction.GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains(correction, harness.Model.Requests[4].Messages);
         ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[2], false, 1, openRouter: true);
         ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[4], false, 3, openRouter: true);
@@ -215,16 +227,18 @@ public static class ReasoningReplayConversationTests
         Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState?.HasResponses));
     }
 
-    /// <summary>Repeated output exhaustion uses the existing bounded correction policy.</summary>
-    [Fact]
-    public static async Task OpenRouter_OutputExhaustionStopsAtCorrectionLimitWithoutExecutingRejectedTools()
+    /// <summary>Repeated malformed batches use the existing bounded correction policy.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task OpenRouter_RejectedBatchStopsAtCorrectionLimitWithoutExecutingTools(bool orphanedArguments)
     {
-        var rejected = ExhaustedRouterBatch();
+        var rejected = orphanedArguments ? ReasoningReplayFixture.Stream(false, 99, "deterministic_output", "{\"sequence\":999}", openRouter: true, orphanedArguments: true) : ExhaustedRouterBatch();
         await using var harness = new AnthropicConversationLoopTests.NativeLoopHarness(
             ReasoningReplayFixture.Catalog(false, openRouter: true), rejected, rejected, rejected);
 
         var error = await Assert.ThrowsAsync<MalformedInvocationException>(() => harness.RunToCompletionAsync());
-        Assert.Equal(MalformedInvocationFailureKind.TruncatedArguments, error.Diagnostic.Kind);
+        Assert.Equal(orphanedArguments ? MalformedInvocationFailureKind.ArgumentSchemaMismatch : MalformedInvocationFailureKind.TruncatedArguments, error.Diagnostic.Kind);
 
         Assert.Equal(3, harness.Handler.Requests.Count);
         Assert.Equal(2, harness.Observed.OfType<ModelCorrectionAttempted>().Count());

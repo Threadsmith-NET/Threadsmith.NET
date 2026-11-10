@@ -138,6 +138,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(false, 1, "success", true)]
     [InlineData(false, 1, "duplicate", true)]
     [InlineData(false, 1, "malformed", true)]
+    [InlineData(false, 0, "orphaned", true)]
+    [InlineData(false, 1, "orphaned", true)]
     public async Task RunAsync_MixedReplayRounds_PreserveHistoryAndCorrections(bool codex, int ordinaryRound, string outcome, bool openRouter = false)
     {
         // Arrange: three tool rounds, including one without private reasoning, then a final answer.
@@ -183,7 +185,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(4, handler.Requests.Count);
         var messages = provider.Requests[^1].Messages;
         var calls = messages.Where(message => message.Role == ModelMessageRole.Assistant && message.ToolCallId is not null).ToArray();
-        Assert.Equal(outcome == "malformed" ? 2 : 3, calls.Length);
+        Assert.Equal(outcome is "malformed" or "orphaned" ? 2 : 3, calls.Length);
+        if (outcome == "orphaned")
+        {
+            Assert.DoesNotContain("private-path", JsonSerializer.Serialize(provider.Requests.Select(request => request.Messages)), StringComparison.Ordinal);
+        }
+
         var expectedIds = calls.Select(message => !openRouter && message.ModelRound == ordinaryRound ? message.ToolCallId : $"wire-{message.ModelRound}").ToArray();
         var wire = handler.Requests[^1];
         if (codex || openRouter)
@@ -286,7 +293,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 ? "{invalid"
                 : JsonSerializer.Serialize(new { path = $"src/round-{(round == OrdinaryRound && OrdinaryOutcome == "duplicate" ? 0 : round)}.cs" });
             var stream = round < ToolRounds
-                ? ReasoningReplayFixture.Stream(_codex, round, _tool, arguments, reasoning: round != OrdinaryRound, openRouter: OpenRouter)
+                ? ReasoningReplayFixture.Stream(_codex, round, _tool, arguments, reasoning: round != OrdinaryRound, openRouter: OpenRouter, orphanedArguments: round == OrdinaryRound && OrdinaryOutcome == "orphaned")
                 : ReasoningReplayFixture.Final(_codex, OpenRouter);
             stream = stream.Replace("reasoning_content", ReasoningAlias ? "reasoning" : "reasoning_content", StringComparison.Ordinal);
             if (ExceedCapacity)

@@ -1240,6 +1240,14 @@ Use `/models status <provider-id>` to inspect discovered model IDs, profile GUID
 
 Anthropic thinking display defaults to off. `/thinking on|off` applies to the next model request, including a tool continuation, and headless requests accept `--thinking on|off`. The setting controls summarized display independently of `/reasoning` effort. It never restarts an in-flight request. Private signed blocks needed by the native protocol are retained only during the active loop and are never restored from logs or sessions. A continuation that cannot fit fails with capacity guidance instead of compacting required signed content.
 
+### OpenRouter API-key setup (manual catalog)
+
+The compiled `openrouter` provider uses `https://openrouter.ai/api/v1/responses`, not Chat Completions. Add a provider and manually verified model entries to the `providers` array in `~/.threadsmith/providers.json`, preserving existing providers and defaults. Both provider and model entries use `type: "openrouter"`. Keep the API key in `~/.threadsmith/secrets/config.json` under `secrets` → `models` → `openrouter`, referenced by `secretKeyReference: "secrets:models:openrouter"`. See the [complete OpenRouter configuration template](operations/model-providers.md#openrouter-manual-catalog).
+
+Existing `openrouter` catalogs, model GUIDs, secrets, defaults and capability declarations need no migration. The endpoint is compiled: do not add `baseUri`, `chatCompletionsPath`, or an API-mode setting. Generic `openai-compatible` entries still use Chat Completions; an OpenRouter hostname does not convert them to the native provider. OpenRouter does not discover models or choose a new default. Restart after catalog changes, then select the model with `/models`. Delegated role mappings use the existing trusted user catalog.
+
+Requests send the full authoritative history with `store: false`, without `previous_response_id`. Native tool calls and results remain governed by the normal host execution path. `/reasoning` uses the model's declared controls; `/thinking on|off` changes display independently and never removes private reasoning needed for tool continuation. Replay-capable profiles require a pinned `upstream` and `expectedProviderName`. Output limits use `max_output_tokens`; structured responses use `text.format`. Declare image, cache and reasoning capabilities only after checking the exact model/upstream's Responses support. Output remains text-only, and fixture tests do not establish live compatibility.
+
 ### Legacy model-profile migration
 
 Legacy `model:profiles[]` remains available for a bounded compatibility period when neither dedicated catalog exists. Threadsmith adapts those profiles only in memory, preserves each profile GUID and exact endpoint/request settings, writes no configuration, and emits one deprecation warning per startup. The removal milestone is not yet selected and requires a later announced decision.

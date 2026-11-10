@@ -47,12 +47,18 @@ internal static class ReasoningReplayFixture
             new ModelProviderRegistry([new OpenAiCodexProviderRegistration(), new OpenAiCompatibleProviderRegistration(), new OpenRouterProviderRegistration()]));
     }
 
-    internal static string Stream(bool codex, int round, string tool, string arguments, bool reasoning = true, bool openRouter = false)
+    internal static string Stream(bool codex, int round, string tool, string arguments, bool reasoning = true, bool openRouter = false, bool orphanedArguments = false)
     {
         if (openRouter)
         {
             var reasoningItem = new { type = "reasoning", id = $"reason-{round}", summary = new[] { new { type = "summary_text", text = "visible summary" } }, encrypted_content = $"opaque-{round}-state", status = "completed", provider_extension = "retained" };
             var call = new { type = "function_call", id = $"item-{round}", call_id = $"wire-{round}", name = tool, arguments, status = "completed" };
+            object[] output = reasoning ? [reasoningItem, call] : [call];
+            if (orphanedArguments)
+            {
+                output = [.. output, new { type = "message", role = "assistant", status = "completed", content = new[] { new { type = "output_text", text = "<parameter name=\"sequence\">999</parameter></function></tool_call>" } } }];
+            }
+
             var callIndex = reasoning ? 1 : 0;
             return (reasoning ? Data(new { type = "response.output_item.added", output_index = 0, item = new { type = "reasoning", encrypted_content = "incomplete-do-not-replay" } })
                 + Data(new { type = "response.reasoning_summary_text.delta", output_index = 0, summary_index = 0, delta = "visible summary" }) : string.Empty)
@@ -61,7 +67,7 @@ internal static class ReasoningReplayFixture
                 + Data(new { type = "response.output_item.done", output_index = callIndex, item = call })
                 + (reasoning ? Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem })
                     + Data(new { type = "response.output_item.done", output_index = 0, item = reasoningItem }) : string.Empty)
-                + Data(new { type = "response.completed", response = new { status = "completed", output = reasoning ? new object[] { reasoningItem, call } : [call], usage = new { input_tokens = 100, output_tokens = 40 } } });
+                + Data(new { type = "response.completed", response = new { status = "completed", output, usage = new { input_tokens = 100, output_tokens = 40 } } });
         }
 
         if (!codex)

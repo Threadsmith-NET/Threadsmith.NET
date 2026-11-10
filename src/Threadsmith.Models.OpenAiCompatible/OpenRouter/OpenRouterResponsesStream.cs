@@ -37,13 +37,15 @@ internal sealed class OpenRouterResponsesStream
         JsonObject? completed = null;
         ModelUsage? usage = null;
         var outputLimitReached = false;
+        var lengthLimited = false;
+        var refused = false;
         long streamedBytes = 0;
         long characters = 0;
         long retainedBytes = 0;
         var done = false;
-        await foreach (var payload in ReadFramesAsync(reader, cancellationToken))
+        await foreach (var root in ReadFramesAsync(reader, cancellationToken))
         {
-            if (payload == "[DONE]")
+            if (root is null)
             {
                 if (completed is null)
                 {
@@ -54,7 +56,6 @@ internal sealed class OpenRouterResponsesStream
                 continue;
             }
 
-            var root = Parse(payload);
             var type = String(root, "type");
             var result = root["response"] as JsonObject ?? root;
             var status = String(result, "status");
@@ -82,6 +83,7 @@ internal sealed class OpenRouterResponsesStream
             }
 
             ValidateIdentity(result);
+            var isLengthLimited = false;
             if (isError)
             {
                 if (rateLimited)
@@ -114,14 +116,18 @@ internal sealed class OpenRouterResponsesStream
                             SafeMessage = ModelOutputValidator.TruncatedInvocationMessage,
                         });
                     }
-                }
 
-                throw new ModelProviderException("OpenRouter Responses reported a failed or incomplete response.");
+                    isLengthLimited = true;
+                }
+                else
+                {
+                    throw new ModelProviderException("OpenRouter Responses reported a failed or incomplete response.");
+                }
             }
 
-            if (type == "response.completed")
+            if (type == "response.completed" || isLengthLimited)
             {
-                if (String(result, "status") != "completed" || result["output"] is not JsonArray)
+                if (status != (isLengthLimited ? "incomplete" : "completed") || result["output"] is not JsonArray)
                 {
                     throw new MalformedModelOutputException("OpenRouter returned an invalid terminal response.");
                 }
@@ -132,6 +138,7 @@ internal sealed class OpenRouterResponsesStream
                 }
 
                 completed = result;
+                lengthLimited = isLengthLimited;
                 continue;
             }
 
@@ -156,12 +163,12 @@ internal sealed class OpenRouterResponsesStream
                 buffer.Append(delta);
                 if (channel != 0)
                 {
-                    if (request.IncludeReasoningText != false)
+                    if (!refused && request.IncludeReasoningText != false)
                     {
                         yield return new ModelChunk { Reasoning = delta, IsDisplayOnlyReasoning = channel == 2 };
                     }
                 }
-                else
+                else if (!refused)
                 {
                     var visible = textGuard?.Append(delta) ?? delta;
                     if (visible.Length > 0)
@@ -180,6 +187,7 @@ internal sealed class OpenRouterResponsesStream
             else if (type == "response.output_item.done")
             {
                 var item = root["item"] as JsonObject ?? throw new MalformedModelOutputException("OpenRouter omitted a completed output item.");
+                refused |= ContainsRefusal(item);
                 var index = Index(root, "output_index");
                 if (items.TryGetValue(index, out var existing) && !JsonNode.DeepEquals(existing, item))
                 {
@@ -201,7 +209,9 @@ internal sealed class OpenRouterResponsesStream
             }
             else if (type is "response.refusal.delta" or "response.refusal.done")
             {
-                throw new ModelProviderException("OpenRouter refused the response.");
+                // Do not retain or expose refusal prose; read through terminal accounting.
+                refused = true;
+                AddBytes(String(root, type == "response.refusal.delta" ? "delta" : "refusal") ?? string.Empty);
             }
             else if (type == "response.function_call_arguments.delta")
             {
@@ -259,6 +269,11 @@ internal sealed class OpenRouterResponsesStream
             yield return new ModelChunk { Usage = usage };
         }
 
+        if (refused || finalItems.OfType<JsonObject>().Any(ContainsRefusal))
+        {
+            throw new ModelProviderException("OpenRouter refused the response.");
+        }
+
         var calls = new List<JsonObject>();
         var seenCallIds = new HashSet<string>(StringComparer.Ordinal);
         var requiresPrivate = false;
@@ -266,7 +281,8 @@ internal sealed class OpenRouterResponsesStream
         foreach (var (index, node) in items)
         {
             var item = node.AsObject();
-            if (String(item, "status") is { } itemStatus && itemStatus != "completed")
+            if (String(item, "status") is { } itemStatus && itemStatus != "completed"
+                && !(lengthLimited && itemStatus == "incomplete" && String(item, "type") is "message" or "reasoning"))
             {
                 throw new MalformedModelOutputException("OpenRouter returned an unfinished output item.");
             }
@@ -397,7 +413,14 @@ internal sealed class OpenRouterResponsesStream
         {
             if (textGuard.Complete(calls.Count > 0, out var remaining))
             {
-                throw new MalformedModelOutputException("OpenRouter returned orphaned native tool arguments.");
+                throw new MalformedInvocationException(new MalformedInvocationDiagnostic
+                {
+                    Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                    ProviderFamily = "openrouter",
+                    ToolCallCount = calls.Count,
+                    SafeMessage = "The provider emitted tool parameters as assistant text. "
+                        + "The tool batch was not executed because its arguments may be incomplete.",
+                });
             }
 
             if (remaining.Length > 0)
@@ -447,7 +470,7 @@ internal sealed class OpenRouterResponsesStream
             yield return new ModelChunk { Output = output };
         }
 
-        yield return new ModelChunk { FinishReason = calls.Count > 0 ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop };
+        yield return new ModelChunk { FinishReason = lengthLimited ? ModelFinishReason.Length : calls.Count > 0 ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop };
 
         string Reconcile((int Item, int Part, int Channel) key, string final)
         {
@@ -469,6 +492,10 @@ internal sealed class OpenRouterResponsesStream
             }
         }
     }
+
+    private static bool ContainsRefusal(JsonObject item)
+        => String(item, "type") == "message" && item["content"] is JsonArray content
+            && content.OfType<JsonObject>().Any(part => String(part, "type") == "refusal");
 
     private static long SerializedBytes(JsonNode value)
     {
@@ -518,8 +545,13 @@ internal sealed class OpenRouterResponsesStream
         }
     }
 
-    private static JsonObject Parse(string payload)
+    private static JsonObject? Parse(ReadOnlySpan<byte> payload)
     {
+        if (payload.SequenceEqual("[DONE]"u8))
+        {
+            return null;
+        }
+
         try
         {
             return JsonNode.Parse(payload) as JsonObject ?? throw new MalformedModelOutputException("OpenRouter returned a non-object event.");
@@ -548,18 +580,24 @@ internal sealed class OpenRouterResponsesStream
     private long FrameLimit => _profile.MaximumStreamedBytes == 0 ? int.MaxValue
         : Math.Max(ModelProfile.DefaultMaximumStreamedBytes, Math.Min(int.MaxValue, _profile.MaximumStreamedBytes > int.MaxValue / 6 ? int.MaxValue : (_profile.MaximumStreamedBytes * 6) + 65536));
 
-    private async IAsyncEnumerable<string> ReadFramesAsync(StreamReader reader, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<JsonObject?> ReadFramesAsync(StreamReader reader, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var buffer = new char[4096];
-        var line = new StringBuilder();
-        var data = new StringBuilder();
+
+        // Preserve the character-based budget while encoding directly into reusable UTF-8 storage.
+        using var data = new Utf8FrameBuffer();
+        long lineLength = 0;
+        long framedDataLength = 0;
+        var prefixMatches = true;
+        var dataLine = false;
+        var hasData = false;
         var carriageReturn = false;
         while (true)
         {
             var count = await reader.ReadAsync(buffer.AsMemory(), cancellationToken);
             if (count == 0)
             {
-                if (line.Length > 0 || data.Length > 0)
+                if (lineLength > 0 || hasData)
                 {
                     throw new MalformedModelOutputException("OpenRouter ended in a truncated SSE frame.");
                 }
@@ -579,35 +617,104 @@ internal sealed class OpenRouterResponsesStream
                 carriageReturn = character == '\r';
                 if (character is '\r' or '\n')
                 {
-                    if (line.Length == 0)
+                    if (lineLength == 0 && hasData)
                     {
-                        if (data.Length > 0)
-                        {
-                            yield return data.ToString(0, data.Length - 1);
-                            data.Clear();
-                        }
+                        var payload = data.Complete();
+                        hasData = false;
+                        framedDataLength = 0;
+                        yield return payload;
                     }
-                    else
+                    else if (dataLine)
                     {
-                        var value = line.ToString();
-                        if (value.StartsWith("data:", StringComparison.Ordinal))
-                        {
-                            var offset = value.Length > 5 && value[5] == ' ' ? 6 : 5;
-                            data.Append(value.AsSpan(offset)).Append('\n');
-                        }
+                        // Include the logical line separator in the existing framing budget.
+                        framedDataLength = data.Characters + 1;
+                    }
 
-                        line.Clear();
-                    }
+                    lineLength = 0;
+                    prefixMatches = true;
+                    dataLine = false;
                 }
                 else
                 {
-                    line.Append(character);
+                    lineLength++;
+                    if (lineLength <= 5)
+                    {
+                        prefixMatches &= character == "data:"[(int)lineLength - 1];
+                        if (lineLength == 5 && prefixMatches)
+                        {
+                            dataLine = true;
+                            if (hasData)
+                            {
+                                data.Append('\n');
+                            }
+
+                            hasData = true;
+                        }
+                    }
+                    else if (dataLine && !(lineLength == 6 && character == ' '))
+                    {
+                        data.Append(character);
+                    }
                 }
 
-                if ((long)line.Length + data.Length > FrameLimit)
+                if (lineLength + framedDataLength > FrameLimit)
                 {
                     throw new MalformedModelOutputException("OpenRouter exceeded the SSE frame limit.");
                 }
+            }
+        }
+    }
+
+    /// <summary>Owns memory-only encoding and resets framing storage after the DOM takes ownership.</summary>
+    private sealed class Utf8FrameBuffer : IDisposable
+    {
+        private readonly MemoryStream _data = new();
+        private readonly StreamWriter _writer;
+
+        /// <summary>Initializes a new instance of the <see cref="Utf8FrameBuffer"/> class.</summary>
+        internal Utf8FrameBuffer()
+        {
+            _writer = new StreamWriter(_data, new UTF8Encoding(false, true), 1024, leaveOpen: true);
+        }
+
+        /// <summary>Gets the payload length in the existing framing-budget units.</summary>
+        internal long Characters { get; private set; }
+
+        /// <inheritdoc/>
+        public void Dispose()
+        {
+            try
+            {
+                _writer.Dispose();
+            }
+            finally
+            {
+                _data.GetBuffer().AsSpan().Clear();
+                _data.Dispose();
+            }
+        }
+
+        /// <summary>Encodes a character without performing network I/O.</summary>
+        internal void Append(char value)
+        {
+            _writer.Write(value);
+            Characters++;
+        }
+
+        /// <summary>Parses a complete frame without materializing a UTF-16 payload.</summary>
+        internal JsonObject? Complete()
+        {
+            _writer.Flush();
+            try
+            {
+                return Parse(_data.GetBuffer().AsSpan(0, checked((int)_data.Length)));
+            }
+            finally
+            {
+                _data.GetBuffer().AsSpan(0, checked((int)_data.Length)).Clear();
+                _data.SetLength(0);
+                _data.Position = 0;
+                Characters = 0;
             }
         }
     }

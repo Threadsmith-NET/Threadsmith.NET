@@ -126,7 +126,7 @@ internal sealed class OpenRouterModelProvider : IModelProvider
             }
             catch (HttpRequestException exception) when (IsTransient(exception))
             {
-                throw new TransientModelException($"OpenRouter transport remained unavailable after {attempt} attempts.", exception);
+                throw new TransientModelException($"OpenRouter transport remained unavailable after {attempt} attempts ({TransportFailureKind(exception)}).", exception);
             }
 
             using (response)
@@ -161,7 +161,7 @@ internal sealed class OpenRouterModelProvider : IModelProvider
                     catch (Exception exception) when (exception is IOException || (exception is HttpRequestException http && IsTransient(http)))
                     {
                         token.ThrowIfCancellationRequested();
-                        throw new TransientModelException("OpenRouter connection ended before completion.", exception);
+                        throw new TransientModelException($"OpenRouter connection ended before completion ({TransportFailureKind(exception)}).", exception);
                     }
 
                     if (!hasNext)
@@ -181,6 +181,24 @@ internal sealed class OpenRouterModelProvider : IModelProvider
                 }
             }
         }
+    }
+
+    private static string TransportFailureKind(Exception exception)
+    {
+        for (var current = (Exception?)exception; current is not null; current = current.InnerException)
+        {
+            if (current is HttpIOException io)
+            {
+                return $"HTTP {io.HttpRequestError}";
+            }
+
+            if (current is HttpRequestException http)
+            {
+                return $"HTTP {http.HttpRequestError}";
+            }
+        }
+
+        return "I/O failure";
     }
 
     private static bool IsTransient(HttpRequestException exception) => exception.HttpRequestError is HttpRequestError.NameResolutionError

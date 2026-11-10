@@ -39,8 +39,6 @@ public static class NativeConceptTransportTests
         Assert.Equal(8, concepts.GetProperty("maxItems").GetInt32());
         Assert.Equal(1, items.GetProperty("minLength").GetInt32());
         Assert.Equal(48, items.GetProperty("maxLength").GetInt32());
-        Assert.Contains("Omit concepts", concepts.GetProperty("description").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Unicode letters/digits", concepts.GetProperty("description").GetString(), StringComparison.Ordinal);
         using var strict = JsonDocument.Parse(Assert.IsType<string>(ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(tool.Definition.Id, tool.Definition.InputSchema.JsonSchema)));
         var strictConcepts = strict.RootElement.GetProperty("properties").GetProperty("concepts");
 

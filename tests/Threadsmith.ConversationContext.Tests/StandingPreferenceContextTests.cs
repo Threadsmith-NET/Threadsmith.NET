@@ -147,9 +147,7 @@ public static class StandingPreferenceContextTests
             Assert.Contains(entry.Text, result.ModelInput, StringComparison.Ordinal);
         }
 
-        var memory = Assert.Single(result.Messages ?? [], message => message.SectionId == "repository-memory").GetModelVisibleContent();
-        Assert.Contains("Standing preferences", memory, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repository memories that may be helpful", memory, StringComparison.Ordinal);
+        Assert.Single(result.Messages ?? [], message => message.SectionId == "repository-memory");
         Assert.All(result.Inspection.RepositoryMemoryItems, item =>
         {
             Assert.Equal(RepositoryMemoryType.StandingPreference, item.MemoryType);

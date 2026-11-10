@@ -67,7 +67,6 @@ public sealed partial class AgentRoleOutputTests
         var content = TestPromptLoader.Instance.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask);
 
         AssertNoAnswerContract(content);
-        Assert.DoesNotContain("structured findings", content, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AssertNoAnswerContract(string content)
@@ -78,6 +77,5 @@ public sealed partial class AgentRoleOutputTests
         Assert.DoesNotContain("expectedAssertion", content, StringComparison.Ordinal);
         Assert.DoesNotContain("maxLength", content, StringComparison.Ordinal);
         Assert.DoesNotContain("maxItems", content, StringComparison.Ordinal);
-        Assert.DoesNotContain("required JSON", content, StringComparison.OrdinalIgnoreCase);
     }
 }

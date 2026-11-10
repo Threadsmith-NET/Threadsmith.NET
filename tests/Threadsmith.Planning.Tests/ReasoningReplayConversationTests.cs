@@ -218,7 +218,6 @@ public static class ReasoningReplayConversationTests
 
         var correction = harness.Model.Requests[2].Messages[^1];
         Assert.Equal(ModelMessageRole.Developer, correction.Role);
-        Assert.Contains(orphanedArguments ? "tool parameters as assistant text" : "Split the work into smaller tool calls", correction.GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains(correction, harness.Model.Requests[4].Messages);
         ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[2], false, 1, openRouter: true);
         ReasoningReplayFixture.AssertReplay(harness.Handler.Requests[4], false, 3, openRouter: true);

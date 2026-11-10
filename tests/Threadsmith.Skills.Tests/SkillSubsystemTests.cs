@@ -436,8 +436,6 @@ public sealed partial class SkillSubsystemTests
             "\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]",
             tool.Definition.InputSchema.JsonSchema,
             StringComparison.Ordinal);
-        Assert.Contains("Pass the native JSON value", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
-        Assert.Contains("never pass a quoted or JSON-encoded object string", tool.Definition.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("inputJson", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("invocationId", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("payloadJson", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);

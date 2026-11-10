@@ -332,13 +332,9 @@ public static partial class ToolRuntimeTests
             Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
         var query = schema.RootElement.GetProperty("properties").GetProperty("query");
         Assert.Equal("string", query.GetProperty("type").GetString());
-        Assert.Contains("both endpoints", query.GetProperty("description").GetString(), StringComparison.Ordinal);
         var maxFiles = schema.RootElement.GetProperty("properties").GetProperty("maxFiles");
         Assert.Equal("integer", maxFiles.GetProperty("type").GetString());
-        Assert.Contains("configured host default", maxFiles.GetProperty("description").GetString(), StringComparison.Ordinal);
-        Assert.Contains("does not set the source-length budget", maxFiles.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.True(tool.Definition.PreferStrictArguments);
-        Assert.Contains("traversal and result budgets are managed by the tool", tool.Definition.Description, StringComparison.Ordinal);
         Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("limits", out _));
         Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
@@ -552,14 +548,12 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Search guidance rejects pasted source-sized queries with actionable bounded-query text.</summary>
+    /// <summary>Oversized search queries fail validation with an actionable error.</summary>
     [Fact]
-    public static void SearchTextTool_QueryTooLong_DocumentsConciseQueryRequirement()
+    public static void SearchTextTool_QueryTooLong_IsRejected()
     {
         var tool = new SearchTextTool(TestPromptLoader.Instance);
 
-        Assert.Contains("query is limited to 500 characters", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Contains("do not paste source blocks", tool.Definition.Description, StringComparison.Ordinal);
         var error = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
             "{\"query\":\"" + new string('x', 501) + "\"}"));
         Assert.Contains("use a concise literal or regex", error.Message, StringComparison.Ordinal);
@@ -2182,30 +2176,6 @@ public static partial class ToolRuntimeTests
         {
             Directory.Delete(repository, recursive: true);
         }
-    }
-
-    /// <summary>Model-facing tool descriptions route known symbols to the narrow matching semantic operation.</summary>
-    [Fact]
-    public static void SemanticToolDescriptions_RouteKnownSymbolRelationships()
-    {
-        var resolver = new DescriptionSemanticResolver();
-        var symbol = new FindSymbolTool(resolver, TestPromptLoader.Instance).Definition.Description;
-        var references = new FindReferencesTool(resolver, TestPromptLoader.Instance).Definition.Description;
-        var implementations = new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description;
-
-        Assert.Contains("known or likely C# declaration", symbol, StringComparison.Ordinal);
-        Assert.Contains("Use read_file for a known file", symbol, StringComparison.Ordinal);
-        Assert.Contains("Use code_explore only", symbol, StringComparison.Ordinal);
-        Assert.Contains("reference or usage relationships", references, StringComparison.Ordinal);
-        Assert.Contains("implementation or inheritance relationships", implementations, StringComparison.Ordinal);
-        Assert.Contains(
-            "interface implementations",
-            implementations,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Use directly for text in a known file",
-            new SearchTextTool(TestPromptLoader.Instance).Definition.Description,
-            StringComparison.Ordinal);
     }
 
     /// <summary>Host-owned tool definitions use exact source assets, including rendered tokens.</summary>

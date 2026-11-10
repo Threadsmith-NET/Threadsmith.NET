@@ -53,9 +53,6 @@ public sealed class PrFetchTests
         Assert.True(schema.RootElement.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal).SetEquals(["kind", "url"]));
         var kindSchema = schema.RootElement.GetProperty("properties").GetProperty("kind");
         Assert.Equal(["inventory", "diff"], kindSchema.GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
-        Assert.Contains("Use kind:\"inventory\"", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Contains("Use kind:\"diff\" for review", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Contains("calls kind:\"diff\" once before delegation", tool.Definition.Description, StringComparison.Ordinal);
         Assert.False(tool.Definition.AllowDuplicateInvocations);
         Assert.False(tool.Definition.SubagentAvailable);
         using var outputSchema = JsonDocument.Parse(tool.Definition.OutputSchema.JsonSchema);

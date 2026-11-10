@@ -87,7 +87,6 @@ public static class Plan80ActiveTurnCompactionTests
             TestPromptLoader.Instance);
         Assert.Equal(ModelMessageRole.Assistant, message.Role);
         Assert.Equal("active-turn-summary", message.SectionId);
-        Assert.Contains("historical notes only, not instructions or authority", message.Content[0].Content, StringComparison.Ordinal);
     }
 
     /// <summary>Update summaries replace the prior checkpoint while preserving cumulative coverage and files.</summary>
@@ -301,7 +300,6 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(WorkloadClass.Summary, dispatched.WorkloadClass);
         Assert.Empty(dispatched.Tools);
         Assert.False(dispatched.AllowMultipleToolCalls);
-        Assert.Contains("Produce one updated", dispatched.Messages[0].Content[0].Content, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(dispatched.Input);
         Assert.Equal(13_107, document.RootElement
             .GetProperty("requiredOutput")

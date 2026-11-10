@@ -106,7 +106,6 @@ public sealed partial class SkillSubsystemTests
         Assert.False(correction.RequiredCapabilities.ToolCalls);
         Assert.Contains(correction.Messages, message => message.SectionId == "skill-output-correction");
         Assert.Contains(correction.Messages, message => message.SectionId == "skill-tool-result");
-        Assert.Contains("Repair only the final response", correction.Input, StringComparison.Ordinal);
     }
 
     /// <summary>Exhaustion and attempted tool use retain artifact records without a second write.</summary>

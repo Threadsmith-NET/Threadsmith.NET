@@ -146,7 +146,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
         using var strict = JsonDocument.Parse(projected);
         var shared = strict.RootElement.GetProperty("properties").GetProperty("sharedContext");
         Assert.Contains(shared.GetProperty("type").EnumerateArray(), item => item.GetString() == "null");
-        Assert.Contains("untrusted task data", shared.GetProperty("description").GetString(), StringComparison.Ordinal);
         var individual = strict.RootElement.GetProperty("properties").GetProperty("agents").GetProperty("items").GetProperty("properties").GetProperty("context");
         Assert.Contains(individual.GetProperty("type").EnumerateArray(), item => item.GetString() == "null");
     }

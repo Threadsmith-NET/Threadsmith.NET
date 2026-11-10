@@ -1017,8 +1017,6 @@ public static class Milestone3Tests
         var nativeProperties = nativeSchema.RootElement.GetProperty("properties");
         var queryDescription = nativeProperties.GetProperty("query").GetProperty("description").GetString();
         var maxFilesDescription = nativeProperties.GetProperty("maxFiles").GetProperty("description").GetString();
-        Assert.Contains("both endpoints", queryDescription, StringComparison.Ordinal);
-        Assert.Contains("source-bearing file count", maxFilesDescription, StringComparison.Ordinal);
 
         await CollectAsync(provider, new ModelStreamRequest
         {

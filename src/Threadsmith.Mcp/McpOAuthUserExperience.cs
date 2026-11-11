@@ -210,7 +210,7 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
         int maximumBytes,
         CancellationToken cancellationToken)
     {
-        using var buffer = new MemoryStream(Math.Min(maximumBytes, 256));
+        await using var buffer = new MemoryStream(Math.Min(maximumBytes, 256));
         var count = 0;
         var singleByte = new byte[1];
         while (true)

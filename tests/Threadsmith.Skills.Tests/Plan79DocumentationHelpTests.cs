@@ -233,7 +233,7 @@ public sealed class Plan79DocumentationHelpTests
             await File.WriteAllTextAsync(
                 Path.Combine(excludedDirectory, "guide.md"),
                 "# Guide\nUse /compact to compact the current conversation.\n");
-            var valid = """
+            const string valid = """
                 {"status":"answered","answer":"Use /compact.","citations":[{"path":"guide.md","heading":"# Guide","lineStart":1,"lineEnd":2,"snippet":"Use /compact"}],"gaps":[]}
                 """;
 
@@ -291,7 +291,7 @@ public sealed class Plan79DocumentationHelpTests
             await File.WriteAllTextAsync(
                 Path.Combine(root, "sections.md"),
                 "# Guide\nFirst section.\n# Other\nSecond section.\n");
-            var crossingSection =
+            const string crossingSection =
                 """
                 {"status":"answered","answer":"Second section.","citations":[{"path":"sections.md","heading":"# Guide","lineStart":2,"lineEnd":4,"snippet":"Second section."}],"gaps":[]}
                 """;

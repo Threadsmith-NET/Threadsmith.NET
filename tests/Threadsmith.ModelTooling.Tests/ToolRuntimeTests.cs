@@ -1136,7 +1136,7 @@ public static partial class ToolRuntimeTests
     [Fact]
     public static void CodeExploreContinuationCursor_CompactSourceCursor_RejectsCorruption()
     {
-        var path = "container/source/AI.Inference.Fusion/Pipelines/Common/Retrievers/ResearchReports/ResearchReportSemanticHybridRetriever.cs";
+        const string path = "container/source/AI.Inference.Fusion/Pipelines/Common/Retrievers/ResearchReports/ResearchReportSemanticHybridRetriever.cs";
         var target = new CodeExploreContinuationTarget(
             CodeExploreAnchorKind.Path,
             path,
@@ -1449,11 +1449,7 @@ public static partial class ToolRuntimeTests
                 RunId = RunId.New(),
                 ToolId = "run_process",
                 ArgumentsJson = "{\"command\":\"dotnet --version\",\"timeoutSeconds\":1}",
-                Context = CreateContext(repository) with
-                {
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    AllowedExecutables = [shell],
-                },
+                Context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell)),
             });
 
             Assert.False(result.Succeeded);
@@ -2252,7 +2248,7 @@ public static partial class ToolRuntimeTests
             await File.WriteAllTextAsync(Path.Combine(repository, "visible.txt"), "needle");
             var lockedPath = Path.Combine(repository, "locked.txt");
             await File.WriteAllTextAsync(lockedPath, "other content");
-            using var lockedFile = new FileStream(
+            await using var lockedFile = new FileStream(
                 lockedPath,
                 FileMode.Open,
                 FileAccess.ReadWrite,
@@ -2386,11 +2382,7 @@ public static partial class ToolRuntimeTests
                 RunId = RunId.New(),
                 ToolId = "run_process",
                 ArgumentsJson = "{\"command\":\"dotnet nuget locals all --list\"}",
-                Context = CreateContext(repository) with
-                {
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    AllowedExecutables = [shell],
-                },
+                Context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell)),
             });
 
             Assert.True(result.Succeeded, result.Error);
@@ -2400,13 +2392,10 @@ public static partial class ToolRuntimeTests
             Assert.Equal(0, processResult.ExitCode);
             Assert.Contains("global-packages:", processResult.StandardOutput, StringComparison.Ordinal);
             Assert.Contains(result.Sources, source => source.Kind == "process");
-            Assert.Contains(observed, item => item is ApprovalRequested requested
-                && requested.Kind == ApprovalRequestKind.ToolInvocation
-                && requested.SchemaVersion == 2);
-            Assert.Contains(observed, item => item is ApprovalGranted);
+            Assert.DoesNotContain(observed, item => item is ApprovalRequested or ApprovalGranted);
             Assert.Equal(1, manager.ExecutionCount);
-            Assert.Equal(shell, manager.LastRequest?.FileName);
-            Assert.Contains("dotnet nuget locals all --list", manager.LastRequest!.Arguments);
+            Assert.True(Path.IsPathFullyQualified(manager.LastRequest!.FileName));
+            Assert.Contains(manager.LastRequest.Arguments, argument => argument.Contains("nuget", StringComparison.Ordinal) && argument.Contains("--list", StringComparison.Ordinal));
             Assert.Empty(manager.ActiveProcesses);
         }
         finally
@@ -2496,12 +2485,11 @@ public static partial class ToolRuntimeTests
                 CreateContext(repository));
             var input = tool.DeserializeInput("{\"command\":\"pwd\",\"timeoutSeconds\":999}");
 
-            await tool.ExecuteAsync(input, context);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context));
 
-            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
-            Assert.Equal(repository, request.WorkingDirectory);
-            Assert.Equal(["-c", "pwd"], request.Arguments);
-            Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
+            Assert.Null(processManager.LastRequest);
+            var timeout = ((IInvocationTimeoutTool)tool).ResolveTimeout(input, context.Invocation, TimeSpan.FromSeconds(3));
+            Assert.Equal(TimeSpan.FromSeconds(7), timeout);
         }
         finally
         {

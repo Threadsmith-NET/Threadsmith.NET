@@ -1763,8 +1763,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .GroupBy(project => project.FilePath ?? string.Empty, pathComparer)
             .ToDictionary(
                 group => group.Key,
-                group => ReadProjectInfo(group.Key)
-                    .TargetFrameworks.FirstOrDefault() ?? string.Empty,
+                group => ReadProjectInfo(group.Key).TargetFrameworks is [var framework, ..] ? framework ?? string.Empty : string.Empty,
                 pathComparer);
         return new SemanticLocationContext(documentCounts, targetFrameworks);
     }

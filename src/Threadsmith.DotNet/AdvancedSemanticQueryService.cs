@@ -1456,7 +1456,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                                     projected.SourceCharacters,
                                     projected.Section.Source.Completeness,
                                     IsUsefulCodeExploreSection(projected.Section),
-                                    projected.Section.Source.OmittedRanges.FirstOrDefault()));
+                                    projected.Section.Source.OmittedRanges.Count > 0 ? projected.Section.Source.OmittedRanges[0] : default));
                                 foreach (var continuation in projected.ContinuationTargets)
                                 {
                                     AddOrMergeContinuation(continuations, continuation);
@@ -5365,7 +5365,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
             }
 
-            var symbol = selectedGroup?.Symbols.FirstOrDefault();
+            var symbol = selectedGroup is { Symbols.Count: > 0 } ? selectedGroup.Symbols[0] : default;
             if (symbol is null || selectedLocation is null || !seen.Add(selectedSymbol.Id))
             {
                 continue;
@@ -10813,8 +10813,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             QualifiedNameMatchesEntry(qualified, entry));
         var hasScopedMemberCollision = !matchesQualifiedFocus
             && nameSegmentMatch?.MatchedConcepts.Any(qualifiedMemberTerms.Contains) == true;
-        var isCompoundNameMatch = nameSegmentMatch is not null
-            && nameSegmentMatch.MatchedConcepts.Count >= 2;
+        var isCompoundNameMatch = nameSegmentMatch?.MatchedConcepts.Count >= 2;
         var coversDeclarationName = nameSegmentMatch?.MatchedConcepts.Count
             == nameSegmentMatch?.DeclarationSegmentCount;
         var coversQuerySubject = nameSegmentMatch is not null

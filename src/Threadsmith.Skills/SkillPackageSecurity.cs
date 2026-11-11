@@ -491,7 +491,7 @@ public sealed class SkillPackageInstaller
             FileShare.Read,
             bufferSize: 64 * 1024,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
-        using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read, leaveOpen: false);
+        await using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read, leaveOpen: false);
         if (archive.Entries.Count is < 1 || archive.Entries.Count > _options.MaximumFiles)
         {
             throw new InvalidDataException("Skill archive entry count is outside its bound.");

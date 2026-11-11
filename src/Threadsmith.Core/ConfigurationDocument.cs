@@ -24,9 +24,15 @@ public static class ConfigurationDocument
             return new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
         }
 
-        _ = ParseFile(content, path, validatePermissionParents: false);
+        return ParseObject(content, path);
+    }
+
+    /// <summary>Parses editable configuration bytes through the common validation and BOM handling.</summary>
+    public static JsonObject ParseObject(ReadOnlyMemory<byte> content, string? path = null)
+    {
+        _ = path is null ? Parse(content, validatePermissionParents: false) : ParseFile(content, path, validatePermissionParents: false);
         return JsonNode.Parse(
-            content.AsSpan().StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? content.AsSpan(3) : content.AsSpan(),
+            content.Span.StartsWith(new byte[] { 0xef, 0xbb, 0xbf }) ? content.Span[3..] : content.Span,
             new JsonNodeOptions { PropertyNameCaseInsensitive = true },
             RepositorySettingsCoordinator.DocumentOptions) as JsonObject
             ?? throw new InvalidDataException("Configuration must contain a JSON object.");
@@ -218,7 +224,7 @@ public static class ConfigurationDocument
         }
     }
 
-    private static ImmutableDictionary<string, JsonElement> ParseFile(byte[] content, string path, bool validatePermissionParents = true)
+    private static ImmutableDictionary<string, JsonElement> ParseFile(ReadOnlyMemory<byte> content, string path, bool validatePermissionParents = true)
     {
         try
         {

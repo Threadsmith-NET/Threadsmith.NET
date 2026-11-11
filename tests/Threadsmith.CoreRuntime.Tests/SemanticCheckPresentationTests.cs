@@ -10,6 +10,23 @@ using Xunit;
 /// <summary>Exercises advisory completion projection, incomplete evidence and durable replay.</summary>
 public static class SemanticCheckPresentationTests
 {
+    /// <summary>Replayed compiler and analyzer completions distinguish candidate and committed-source phases.</summary>
+    [Theory]
+    [InlineData("advisory edit analysis", "Compiler Checks", SemanticCheckPhase.PreMutation, "pre-mutation candidate analysis")]
+    [InlineData("advisory edit analysis", "Compiler Checks", SemanticCheckPhase.PostMutation, "post-mutation committed-source analysis")]
+    [InlineData("advisory edit analyzers", "Analyzer Checks", SemanticCheckPhase.PreMutation, "pre-mutation candidate analysis")]
+    [InlineData("advisory edit analyzers", "Analyzer Checks", SemanticCheckPhase.PostMutation, "post-mutation committed-source analysis")]
+    public static void ReplayedCompletionTitlesDistinguishPhases(string checkName, string caption, SemanticCheckPhase phase, string title)
+    {
+        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), phase, checkName, SemanticCheckOutcome.Completed);
+        var restored = DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(completed), 1, DomainEventJson.Serialize(completed));
+        var transcript = new ConversationTranscript(string.Empty);
+
+        Assert.True(transcript.Apply(restored));
+
+        Assert.Contains($"{caption}: {title} - completed", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Compiler and analyzer locations survive serialization and use the shared column display.</summary>
     [Theory]
     [InlineData("compiler")]

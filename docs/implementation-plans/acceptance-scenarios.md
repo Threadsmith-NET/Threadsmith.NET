@@ -4,6 +4,66 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario SC106-01 — Default-deny shell admission
+
+1. Use a disposable trusted repository and inert recording executables. Keep the ordinary outer executable ceiling and native-tool restrictions active.
+2. Request an unmatched static action, direct HTTP-client action and platform component-installation action. Verify no prompt, launcher call or alternative-command advice.
+3. Request normal Git and .NET operations with ordinary arguments, including Git remotes, implicit restore, package, tool and workload management. Verify command policy adds no prompt or mandatory no-restore flag. Other host gates still apply.
+
+**Verifies:** Explicit permission, no unmatched fallback, and the normal-workflow baseline without executing real network/install side effects.
+
+## Scenario SC106-02 — Rule resolution and approval choices
+
+1. Exercise each of the five outcomes with explicit command rules. Verify precisely the permitted choices, with one prompt after intersection with mandatory generic review.
+2. Change rule ordering, add an unresolved overlap, and test explicit overrides, cycles and unknown targets. Only deterministic validated overrides can resolve conflicts.
+3. Add machine-enforced denial and closed-set constraints. User replacement, disabling and remembered approval must not relax them.
+4. On an authorized command, omit or empty `denyArgumentsMatching` and verify no additional argument restriction. Add expressions and verify any match denies without approval, including on an outcome-overridden rule. Check literal argument values joined with single spaces excluding the command name, regex search, explicit anchors, default case sensitivity, inline `(?i)`, preserved whitespace within values and invalid-pattern rejection.
+
+5. Assign the same outcomes and argument-deny expressions to non-file shell commands, such as PowerShell `Write-Output`, CMD `echo` and POSIX `pwd`. Keep the outer command-name ceiling active. Verify quoted argument normalization, PowerShell named parameters, quoted parameter-looking values, and case-insensitive PowerShell names on every OS. Unmatched aliases remain denied; resolved-file path matchers do not match a shell-command action.
+
+**Verifies:** Shared command policies for external and shell commands, optional argument deny expressions, deterministic precedence and scope restrictions.
+
+## Scenario SC106-03 — Atomic compound admission
+
+1. Prepare a safe sequence and pipeline with inert executable markers. Include positive controls for supported literal quoting and argument preservation.
+2. Add one denied, unresolved, unsupported or dynamic stage at each position. Verify no stage reaches the launcher.
+3. Repeat through the existing manual, model-driven, eligible child and headless entry points. Retain ordinary trust, tool, hooks, activity, budget and cancellation gates; unattached/headless approval has no assumed consent.
+
+**Verifies:** One governed execution path and all-stage admission before effects.
+
+## Scenario SC106-04 — Native executable binding
+
+1. On each available native OS/shell pair, place different inert same-name executables in the approved PATH and repository cwd. Include Windows cmd with `git status` and a repository-local `git.exe`.
+2. Run a no-shadow positive control, then the shadow case. Verify the authorized absolute target, command kind, literal arguments and directory at launch.
+3. Exercise startup lookup and controlled PATH/PATHEXT changes between preparation and admission. Deny unbindable or stale forms before launch. Record real shell/OS versions and unavailable pairs separately; parser/fake-process results are not real-platform evidence.
+
+**Verifies:** Static analysis binds the actual native launch, without claiming file-replacement or descendant-process isolation.
+
+## Scenario SC106-05 — Exact grant lifecycle and revocation
+
+1. Approve Once and attempt replay. Approve Session, then reset while an invocation waits for admission. Stale responses and queued grants must not launch. Resume/clone/session changes must not restore live grants.
+2. Approve Always through real coordinated publication and refresh. Verify one current launch and exact future eligibility; stronger outcomes still win.
+3. Use explicit barriers to reset before the response, during save, after commit and before continuation, and to inject an unrelated authority invalidation. Only that save's own correlated refresh may preserve the pending launch. A response revoked before reservation must not start a save.
+4. If accepted persistence commits after live revocation, verify the invocation is denied, unrelated settings remain, and the exact saved approval remains visible for explicit persistent revocation. Reset-session is not disk rollback. Revoke the saved approval, refresh and restart; the removed grant must not return.
+
+**Verifies:** Atomic response reservation, operation correlation, one-use admission and distinct live/persistent revocation.
+
+## Scenario SC106-06 — Shared policy publication and invalid authority
+
+1. Update a first-time user policy through the shared typed service. Preserve unrelated settings and original-byte revision checks, including UTF-8 BOM input.
+2. Test conflict, cancellation, linked destination, write failure and successful disk replacement followed by failed activation. Never report execution authority from disk success alone.
+3. During Grant/reload, replace current policy with malformed data, explicit null or non-object parents. Apply startup-equivalent validation and leave authority unavailable after invalid-current-source detection. Reject repository/session policy and the unsupported outer machine enforcement envelope.
+
+**Verifies:** One validation/update/publication owner and fail-closed source semantics.
+
+## Scenario SC106-07 — Policy visibility boundary
+
+1. Put non-secret canary rule IDs and grant identities in disposable trusted configuration. Inspect effective rules and revoke grants through user-only management.
+2. Exercise success, denial, approval, cancellation and save failure. Inspect model requests, tool results, events, logs, restored context and retrieved agent evidence. No rule catalogs, grants, fingerprints, detailed decisions or workaround advice may enter those model-facing routes.
+3. Verify the model cannot choose approval duration, policy sources, overrides or publication correlation. User-visible approval/management information must not become a model tool result.
+
+**Verifies:** Host-owned authority and separate user/model projections.
+
 ## Scenario TOOL-STATS — Repository tool completion statistics
 
 1. Complete successful, rejected and failed central-pipeline tool requests. Open `/toolstats` and inspect its nine columns: Tool ID, Total, Success, Failure, Last invocation (UTC), Total duration, Average duration, Last-run duration, and Measured invocations. Average duration uses measured invocation count and rounds to the nearest whole millisecond with midpoint values rounded up; unavailable and measured-zero durations remain distinct.

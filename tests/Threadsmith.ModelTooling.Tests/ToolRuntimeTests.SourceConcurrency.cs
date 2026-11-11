@@ -24,8 +24,8 @@ public static partial class ToolRuntimeTests
                 events,
                 [new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: shell), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())],
                 runtimeOptions: new() { Defaults = new() { MaximumSourceConcurrency = 1 } });
-            var context = CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.TrustedBuild, AllowedExecutables = [shell] };
-            var process = pipeline.InvokeAsync(CreateBatchRequest(0, "process", "run_process", context, "{\"command\":\"test barrier\"}").Invocation, ct);
+            var context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell));
+            var process = pipeline.InvokeAsync(CreateBatchRequest(0, "process", "run_process", context, "{\"command\":\"dotnet --version\"}").Invocation, ct);
             try
             {
                 await Task.WhenAny(manager.Entered.Task, process).WaitAsync(ct);

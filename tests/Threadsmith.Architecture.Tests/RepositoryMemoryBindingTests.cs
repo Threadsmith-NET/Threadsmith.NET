@@ -126,7 +126,7 @@ public static partial class RepositoryMemoryBindingTests
 
         internal string InitialConnection { get; }
 
-        public ValueTask DisposeAsync()
+        public async ValueTask DisposeAsync()
         {
             var expectedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
             var normalized = Path.GetFullPath(Root);
@@ -136,7 +136,7 @@ public static partial class RepositoryMemoryBindingTests
                 throw new InvalidOperationException("Refusing to remove an unowned binding fixture.");
             }
 
-            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(TargetRoot, ".threadsmith", "threadsmith.db") }.ToString()))
+            await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = Path.Combine(TargetRoot, ".threadsmith", "threadsmith.db") }.ToString()))
             {
                 SqliteConnection.ClearPool(connection);
             }
@@ -147,7 +147,7 @@ public static partial class RepositoryMemoryBindingTests
             }
 
             Directory.Delete(normalized, recursive: true);
-            return ValueTask.CompletedTask;
+            await ValueTask.CompletedTask;
         }
 
         internal static async Task<BindingFixture> CreateAsync(bool legacy)

@@ -27,7 +27,7 @@ public sealed class ConfigurableResourceLimitsTests
     [Fact]
     public void ProcessTimeoutRejectsUnrepresentableTimerValues()
     {
-        var maximumSeconds = (int)((uint.MaxValue - 1L) / 1000);
+        const int maximumSeconds = (int)((uint.MaxValue - 1L) / 1000);
         new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds }.Validate();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(maximumSeconds), new FakeTimeProvider());
         var invalid = new ToolLimits { RunProcessMaxTimeoutSeconds = maximumSeconds + 1 };

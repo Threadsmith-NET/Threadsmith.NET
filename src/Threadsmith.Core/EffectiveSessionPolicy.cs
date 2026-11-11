@@ -71,6 +71,10 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets protected directory trees, including future descendants and containing-directory replacement.</summary>
     public ImmutableArray<string> ControlDirectories { get; init; } = [];
 
+    /// <summary>Gets validated host-owned shell authority, excluded from durable and model projections.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ImmutableDictionary<string, Threadsmith.Policies.Contracts.PolicySnapshot> CommandPolicies { get; init; } = [];
+
     /// <summary>Gets whether shell execution requires the existing user approval.</summary>
     public bool RequireShellApproval { get; init; } = true;
 
@@ -117,6 +121,9 @@ public sealed class SessionPolicyBinding
     private EffectiveSessionPolicy? _current;
     private int _maximumTrust = (int)RepositoryTrustLevel.FullyTrustedAutomation;
 
+    /// <summary>Signals revocation to memory-only authority holders, never to model projections.</summary>
+    public event Action<Guid?>? AuthorityInvalidated;
+
     /// <summary>Gets the currently executable policy, or rejects unavailable authority.</summary>
     public EffectiveSessionPolicy Current => Volatile.Read(ref _current)
         ?? throw new UnauthorizedAccessException("PolicyGenerationStale: policy is unavailable; reopen the repository after correcting configuration.");
@@ -142,7 +149,11 @@ public sealed class SessionPolicyBinding
     }
 
     /// <summary>Blocks new operations after a failed authority transition.</summary>
-    public void Invalidate() => Volatile.Write(ref _current, null);
+    public void Invalidate(Guid? authorityTransitionId = null)
+    {
+        Volatile.Write(ref _current, null);
+        AuthorityInvalidated?.Invoke(authorityTransitionId);
+    }
 
     /// <summary>Rejects retained or restored baselines without current host authority.</summary>
     public void ValidateBaseline(WorkspaceBaseline baseline, RepositoryTrustLevel minimumTrust)

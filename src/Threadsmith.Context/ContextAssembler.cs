@@ -230,7 +230,7 @@ public sealed class ContextAssembler : IContextAssembler
                 request.ProhibitedPaths,
                 request.TrustGeneration,
                 cancellationToken);
-        var conversationPromptFileName = PromptFileNames.SystemConversationGuidance;
+        const string conversationPromptFileName = PromptFileNames.SystemConversationGuidance;
         var conversationInstructions = _prompts.Get(conversationPromptFileName);
         var sanitizedTask = request.Task with
         {
@@ -343,7 +343,7 @@ public sealed class ContextAssembler : IContextAssembler
             .ThenByDescending(item => item.Relevance)
             .ThenBy(item => item.CollectedAt)
             .ThenBy(item => item.EvidenceId.Value)];
-        var workloadClass = WorkloadClass.General;
+        const WorkloadClass workloadClass = WorkloadClass.General;
         var tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
         var requiredFixedTokens = fixedTokens - optionalConversationTokens - optionalRecoveryTokens;
         if (requiredFixedTokens > tokenBudget)

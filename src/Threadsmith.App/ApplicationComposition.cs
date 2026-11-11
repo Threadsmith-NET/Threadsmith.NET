@@ -517,6 +517,7 @@ internal static class ApplicationComposition
             intelligenceOperations,
             host.PolicyBinding,
             promptLoader: host.PromptLoader as DeployedPromptLoader);
+        tools.ToolPipeline.CommandPolicies.AttachConfiguration(new Threadsmith.Policies.Configuration.PolicyConfigurationService(repositoryBindings), () => host.PolicyBinding.Current);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         var intelligenceQuery = new RepositoryIntelligenceQuery(memoryRetriever, memoryOptions, intelligence);
@@ -847,7 +848,11 @@ internal static class ApplicationComposition
                 modelExchangeLog: integration.Models.RawModelLog,
                 prepareNewSession: scratchpad.BeginNewSessionAsync,
                 executionCheckpoints: persistence.ExecutionCheckpoints,
-                sessionActivated: entry => intelligenceOperations.ActivateSession(entry.SessionId, entry.RepositoryIdentity));
+                sessionActivated: entry =>
+                {
+                    tools.ToolPipeline.CommandPolicies.Reset();
+                    intelligenceOperations.ActivateSession(entry.SessionId, entry.RepositoryIdentity);
+                });
             repositoryBindings.AttachSessionLifecycle(sessionLifecycle);
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>
@@ -1200,7 +1205,7 @@ internal sealed record IntegrationCompositionInputs
 }
 
 /// <summary>Atomically rebinds repository-scoped services and restores the prior repository after any failure.</summary>
-internal sealed class RepositoryScopedBindingCoordinator
+internal sealed partial class RepositoryScopedBindingCoordinator
 {
     private readonly DeployedPromptLoader? _promptLoader;
     private readonly SessionPolicyBinding? _policyBinding;

@@ -684,7 +684,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
             new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
             new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
             TestPromptLoader.Instance);
-        var query = "Explain how the semantic code exploration tools work, and specifically show me "
+        const string query = "Explain how the semantic code exploration tools work, and specifically show me "
             + "FindDispatchImplementationSymbolsAsync.";
         const int modelEffectiveInputBudgetTokens = 6_000;
         const int maximumSerializedResultBytes = modelEffectiveInputBudgetTokens * 3;
@@ -732,7 +732,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
         var previousEvidenceIndex = -1;
         foreach (var section in result.FileSections)
         {
-            var identity = section.SemanticIdentities.FirstOrDefault();
+            var identity = section.SemanticIdentities.Count > 0 ? section.SemanticIdentities[0] : default;
             if (identity is null)
             {
                 continue;

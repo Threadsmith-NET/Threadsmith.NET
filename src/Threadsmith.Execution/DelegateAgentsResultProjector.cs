@@ -323,10 +323,10 @@ internal sealed class DelegateAgentsResultProjector
         var omissionLimit = _options.EffectiveLimit(_options.MaximumProjectedOmissionCharacters);
         var title = ProjectText(finding.Summary, detailLimit);
         var location = ProjectOptionalText(
-            finding.Locations.FirstOrDefault(),
+            finding.Locations.Count > 0 ? finding.Locations[0] : default,
             detailLimit);
         var symbol = ProjectOptionalText(
-            finding.Symbols.FirstOrDefault(),
+            finding.Symbols.Count > 0 ? finding.Symbols[0] : default,
             detailLimit);
         var evidence = ProjectText(
             string.Join(',', finding.EvidenceIds.Select(id => id.Value.ToString("D"))),
@@ -389,7 +389,7 @@ internal sealed class DelegateAgentsResultProjector
         var summary = outcome.Findings?.Summary;
         if (string.IsNullOrWhiteSpace(summary))
         {
-            summary = outcome.Findings?.Findings.FirstOrDefault()?.Summary ?? outcome.Reason;
+            summary = outcome.Findings?.Findings is [var firstFinding, ..] ? firstFinding?.Summary ?? outcome.Reason : outcome.Reason;
         }
 
         if (_options.MaximumSummaryCharacters == 0)

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Threadsmith.Policies</RootNamespace>
+    <Description>Host-owned action policy contracts, matching, grants, and configuration transformations.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Defaults/command-policy.json" LogicalName="Threadsmith.Policies.command-policy.json" />
+  </ItemGroup>
+</Project>

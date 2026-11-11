@@ -69,6 +69,10 @@ public sealed record ProcessExecutionRequest
 
     /// <summary>Who or what requested execution.</summary>
     public ProcessRequestOrigin Origin { get; init; }
+
+    /// <summary>Gets the immutable host-prepared launch, never model-controlled.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal PreparedProcessLaunch? PreparedLaunch { get; init; }
 }
 
 /// <summary>Normalized, sanitized child-process exit data.</summary>
@@ -167,55 +171,17 @@ public sealed class ProcessManager : IProcessManager
                 "Tracked executable paths must be fully qualified.");
         }
 
-        if (isFullyQualifiedExecutable && request.Origin is not ProcessRequestOrigin.Host)
+        if (isFullyQualifiedExecutable && request.Origin is not ProcessRequestOrigin.Host && request.PreparedLaunch is null)
         {
             throw new InvalidOperationException(
                 "Only host-owned tracked processes may use a qualified executable path.");
         }
 
-        var resolvedExecutable = isFullyQualifiedExecutable
-            ? request.FileName
-            : null;
-        if (resolvedExecutable is not null && !File.Exists(resolvedExecutable))
+        var childEnvironment = request.PreparedLaunch?.Environment ?? ProcessLaunchResolver.EnvironmentFor(request.EnvironmentVariables);
+        var resolvedExecutable = ProcessLaunchResolver.Resolve(request.FileName, childEnvironment);
+        if (request.PreparedLaunch is { } binding && (request.FileName != binding.FileName || !request.Arguments.SequenceEqual(binding.Arguments)))
         {
-            resolvedExecutable = null;
-        }
-
-        if (!isFullyQualifiedExecutable)
-        {
-            var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            var pathExtensions = OperatingSystem.IsWindows()
-                ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
-                    .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-                : [string.Empty];
-            string[] candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(request.FileName)
-                ? [.. pathExtensions.Select(extension => request.FileName + extension)]
-                : [request.FileName];
-            foreach (var directory in pathValue.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                var normalizedDirectory = directory.Trim('"');
-                if (!Path.IsPathFullyQualified(normalizedDirectory))
-                {
-                    continue;
-                }
-
-                resolvedExecutable = candidateNames
-                    .Select(candidate => Path.Combine(normalizedDirectory, candidate))
-                    .FirstOrDefault(File.Exists);
-                if (resolvedExecutable is not null)
-                {
-                    break;
-                }
-            }
-        }
-
-        if (resolvedExecutable is null)
-        {
-            throw new FileNotFoundException(
-                $"Executable '{request.FileName}' was not found on the host PATH.",
-                request.FileName);
+            throw new UnauthorizedAccessException("Prepared launch changed.");
         }
 
         var startInfo = new ProcessStartInfo
@@ -228,24 +194,20 @@ public sealed class ProcessManager : IProcessManager
             RedirectStandardInput = request.StandardInput is not null,
             CreateNoWindow = true,
         };
-        foreach (var argument in request.Arguments)
+        if (request.PreparedLaunch?.CommandLine is { } commandLine)
         {
-            startInfo.ArgumentList.Add(argument);
+            startInfo.Arguments = commandLine;
         }
-
-        var allowedEnvironment = new HashSet<string>(
-            ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "DOTNET_ROOT",
-                "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramFiles"],
-            StringComparer.OrdinalIgnoreCase);
-        foreach (var key in startInfo.Environment.Keys.ToArray())
+        else
         {
-            if (!allowedEnvironment.Contains(key))
+            foreach (var argument in request.Arguments)
             {
-                startInfo.Environment.Remove(key);
+                startInfo.ArgumentList.Add(argument);
             }
         }
 
-        foreach ((var key, var value) in request.EnvironmentVariables)
+        startInfo.Environment.Clear();
+        foreach (var (key, value) in childEnvironment)
         {
             startInfo.Environment[key] = value;
         }

@@ -55,6 +55,7 @@ public static class DependencyDirectionTests
     private static readonly string[] _productProjects =
     [
         "Threadsmith.Core",
+        "Threadsmith.Policies",
         "Threadsmith.Telemetry",
         "Threadsmith.Embeddings.Local",
         "Threadsmith.Reranking.Local",
@@ -263,14 +264,20 @@ public static class DependencyDirectionTests
         Assert.Empty(violations);
     }
 
-    /// <summary>Core must reference no other Threadsmith.* project at all (§8.1).</summary>
+    /// <summary>Core references only the immutable policy-contract leaf.</summary>
     [Fact]
-    public static void CoreReferencesNoThreadsmithProjects()
+    public static void CoreReferencesOnlyPolicies()
     {
-        var referenced = GetProjectReferences("Threadsmith.Core")
-            .Where(n => n.StartsWith("Threadsmith.", StringComparison.Ordinal))
-            .ToHashSet();
-        Assert.Empty(referenced);
+        var referenced = GetProjectReferences("Threadsmith.Core").ToHashSet(StringComparer.Ordinal);
+        Assert.Single(referenced);
+        Assert.Contains("Threadsmith.Policies", referenced);
+    }
+
+    /// <summary>The policy library cannot reference any host implementation.</summary>
+    [Fact]
+    public static void PoliciesReferencesNoProjects()
+    {
+        Assert.Empty(GetProjectReferences("Threadsmith.Policies"));
     }
 
     /// <summary>Extensions.Abstractions must reference no other Threadsmith.* project (§8.1).</summary>
@@ -343,6 +350,7 @@ public static class DependencyDirectionTests
     {
         var graph = new Dictionary<string, HashSet<string>>
         {
+            ["Threadsmith.Core"] = ["Threadsmith.Policies"],
             ["Threadsmith.Telemetry"] = ["Threadsmith.Core"],
             ["Threadsmith.Embeddings.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Reranking.Local"] = ["Threadsmith.Core"],
@@ -353,7 +361,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Models.OpenAiCodex"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Models.Anthropic"] = ["Threadsmith.Models"],
             ["Threadsmith.Context"] = ["Threadsmith.Core", "Threadsmith.Models"],
-            ["Threadsmith.Tools"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
+            ["Threadsmith.Tools"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context", "Threadsmith.Policies"],
             // Worker shares host-owned file DTOs and validation without importing host implementation or UI.
             ["Threadsmith.Scripting.Worker"] = ["Threadsmith.Core"],
             ["Threadsmith.DotNet"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
@@ -363,7 +371,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Skills"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Models", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Hooks"] = ["Threadsmith.Core", "Threadsmith.Tools"],
             ["Threadsmith.Extensions.Runtime"] = ["Threadsmith.Core", "Threadsmith.Extensions.Abstractions", "Threadsmith.Telemetry", "Threadsmith.Tools"],
-            ["Threadsmith.Interaction"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution"],
+            ["Threadsmith.Interaction"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution", "Threadsmith.Policies"],
             ["Threadsmith.Tui.TuiKit"] = ["Threadsmith.Interaction"],
             ["Threadsmith.Cli"] = ["Threadsmith.Core", "Threadsmith.Execution"],
             ["Threadsmith.Mcp"] = ["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Extensions.Abstractions"],
@@ -372,7 +380,7 @@ public static class DependencyDirectionTests
         // App is the composition root and may reference everything.
         graph["Threadsmith.App"] =
         [
-            "Threadsmith.Core", "Threadsmith.Telemetry", "Threadsmith.Persistence",
+            "Threadsmith.Core", "Threadsmith.Policies", "Threadsmith.Telemetry", "Threadsmith.Persistence",
             "Threadsmith.Models", "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCodex",
             "Threadsmith.Models.Anthropic",
             "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local",

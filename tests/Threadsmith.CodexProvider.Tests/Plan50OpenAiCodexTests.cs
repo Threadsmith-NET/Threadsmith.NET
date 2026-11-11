@@ -48,7 +48,7 @@ public sealed class Plan50OpenAiCodexTests
     public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
     {
         var token = TestContext.Current.CancellationToken;
-        using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
+        await using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
         var provider = await CreateProviderAsync(handler, "token");
         using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -1058,7 +1058,7 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData(504)]
     public async Task Provider_TransientHeaders_RetryWithoutReadingErrorBody(int status)
     {
-        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        await using var body = new WaitingResponseStream { SimulateTimeout = true };
         var calls = 0;
         var handler = new RecordingHandler(_ => ++calls == 1
             ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) }
@@ -1079,7 +1079,7 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData(503)]
     public async Task Provider_TransientHeaders_PreserveRetryAfter(int status)
     {
-        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        await using var body = new WaitingResponseStream { SimulateTimeout = true };
         var handler = new RecordingHandler(_ =>
         {
             var response = new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) };

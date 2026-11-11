@@ -15,6 +15,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Policies\Threadsmith.Policies.csproj" />
     <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
   </ItemGroup>
 

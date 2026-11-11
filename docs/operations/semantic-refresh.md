@@ -57,6 +57,8 @@ Semantic model updated (3 files, 240 ms).
 
 Watcher-recovery cycles instead begin with `External changes require semantic recovery; updating semantic model...` and use the same single completion or actionable failure projection. Duration uses the ordinary operation-duration format. Reduced-confidence completion also names the resulting confidence. The serialized console owner writes these messages without clearing, submitting, or losing an active composer draft. Threadsmith-owned mutation echoes use the same coordinator but are not mislabeled as external and do not create duplicate mutation noise.
 
+Once a refresh has started, failures during preparation, no-op watcher restart, publication or final completion produce a terminal failure event through the same worker owner. Failure reporting does not repeat path-policy evaluation, so a path-matching exception cannot leave the activity running after the worker exits. The failure preserves recovery state and directs the user to `/semantic_refresh`.
+
 Semantic work does not wait for Threadsmith to regain focus or for the composer to submit. External/recovery refresh events remain in MAIN and are also echoed by short-lived toasts below the agent header. Toasts neither take focus nor alter drafts or freshness admission. Focusing the window alone is not a semantic trigger. If the user submits while refresh is active, request admission still waits for the current semantic generation before creating a model run.
 
 ## Request admission

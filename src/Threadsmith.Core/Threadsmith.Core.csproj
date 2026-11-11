@@ -11,6 +11,9 @@
     <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
   </ItemGroup>
 
-  <!-- Threadsmith.Core intentionally has NO project or package references. -->
+  <!-- The immutable policy contract leaf is Core's only product dependency. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Threadsmith.Policies\Threadsmith.Policies.csproj" />
+  </ItemGroup>
 
 </Project>

@@ -736,7 +736,7 @@ public static class OperationDurationFormatterTests
     [Fact]
     public static void InteractionPresentationFormatter_DiffDisplay_AddsBlankLineAfterHunkHeader()
     {
-        var raw = "diff --git a/file.txt b/file.txt\n"
+        const string raw = "diff --git a/file.txt b/file.txt\n"
             + "@@ -1 +1 @@\n"
             + "-old\n"
             + "+new\n";
@@ -751,7 +751,7 @@ public static class OperationDurationFormatterTests
     [Fact]
     public static void InteractionPresentationFormatter_DiffDisplay_CollapsesUnchangedHunkContext()
     {
-        var raw = "diff --git a/file.txt b/file.txt\n"
+        const string raw = "diff --git a/file.txt b/file.txt\n"
             + "--- a/file.txt\n"
             + "+++ b/file.txt\n"
             + "@@ -1,10 +1,10 @@\n"
@@ -788,7 +788,7 @@ public static class OperationDurationFormatterTests
     [Fact]
     public static void InteractionPresentationFormatter_DiffDisplay_StopsCompactionAtNextFileHeader()
     {
-        var raw = "--- a/One.cs\n"
+        const string raw = "--- a/One.cs\n"
             + "+++ b/One.cs\n"
             + "@@ -1,8 +1,8 @@\n"
             + " one 1\n"

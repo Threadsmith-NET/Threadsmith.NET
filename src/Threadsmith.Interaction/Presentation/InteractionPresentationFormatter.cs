@@ -7,7 +7,7 @@ using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
-internal static class InteractionPresentationFormatter
+internal static partial class InteractionPresentationFormatter
 {
     private const string BlockOuterIndent = " ";
     private const int MaximumToolDetailLength = 240;
@@ -325,7 +325,7 @@ internal static class InteractionPresentationFormatter
     internal static string GetSemanticCheckTitle(SemanticCheckPhase phase, string checkName)
     {
         var sanitizedCheckName = TruncateForDisplay(checkName);
-        if (string.Equals(checkName, "advisory edit analysis", StringComparison.Ordinal))
+        if (checkName is "advisory edit analysis" or "advisory edit analyzers")
         {
             return phase switch
             {

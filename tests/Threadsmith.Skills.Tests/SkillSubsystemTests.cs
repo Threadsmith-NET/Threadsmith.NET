@@ -794,7 +794,7 @@ public sealed partial class SkillSubsystemTests
                 FileShare.None,
                 bufferSize: 16 * 1024,
                 FileOptions.Asynchronous))
-            using (var archive = new ZipArchive(archiveStream, ZipArchiveMode.Create, leaveOpen: false))
+            await using (var archive = new ZipArchive(archiveStream, ZipArchiveMode.Create, leaveOpen: false))
             {
                 var entry = archive.CreateEntry("../escape.txt");
                 await using var stream = await entry.OpenAsync();

@@ -417,7 +417,7 @@ public static class Milestone3Tests
         var confidence = await confidenceObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
         var completion = await completionObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.PartialCompilation, confidence);
-        Assert.Equal(SemanticConfidenceLevel.PartialCompilation.ToString(), completion.Confidence);
+        Assert.Equal(nameof(SemanticConfidenceLevel.PartialCompilation), completion.Confidence);
         await engines.GetEngine(workspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, engines.GetConfidence(workspaceId));
     }
@@ -468,7 +468,7 @@ public static class Milestone3Tests
                 workspaceId));
 
             var completion = await completionObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(SemanticConfidenceLevel.None.ToString(), completion.Confidence);
+            Assert.Equal(nameof(SemanticConfidenceLevel.None), completion.Confidence);
             Assert.Equal(SemanticConfidenceLevel.None, engines.GetConfidence(workspaceId));
         }
         finally
@@ -546,7 +546,7 @@ public static class Milestone3Tests
             "Debug",
             "net10.0",
             "Contracts.GeneratedMSBuildEditorConfig.editorconfig");
-        using var lockedOutput = new FileStream(generatedConfiguration, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        await using var lockedOutput = new FileStream(generatedConfiguration, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         await using var secondEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var secondLoad = await secondEngine.LoadAsync(TestSemanticSolution.CreateLoadRequest(secondFixture.Root), cancellationToken);
         await secondEngine.WaitForWarmAsync(cancellationToken);
@@ -859,7 +859,7 @@ public static class Milestone3Tests
             Assert.Equal(1, messageSummary.GetProperty("PartCount").GetInt32());
             Assert.Equal(visibleContent.Length, messageSummary.GetProperty("ContentCharacters").GetInt32());
             var summaryKind = Assert.Single(messageSummary.GetProperty("ContentKinds").EnumerateArray());
-            Assert.Equal(ModelContentPartKind.Text.ToString(), summaryKind.GetString());
+            Assert.Equal(nameof(ModelContentPartKind.Text), summaryKind.GetString());
 
             using var requestDocument = JsonDocument.Parse(lines[1]);
             var rawMessage = Assert.Single(requestDocument.RootElement

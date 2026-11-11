@@ -89,7 +89,7 @@ public sealed class AnthropicModelCatalogCache
         {
             ValidatePath();
             await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-            using var memory = new MemoryStream();
+            await using var memory = new MemoryStream();
             var buffer = new byte[4096];
             int read;
             while ((read = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, _limits.MaximumMetadataBytes + 1L - memory.Length)), cancellationToken).ConfigureAwait(false)) > 0)

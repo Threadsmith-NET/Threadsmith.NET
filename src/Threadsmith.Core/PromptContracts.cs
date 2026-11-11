@@ -489,6 +489,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the CorrectionRunProcessUnsupportedShell prompt asset.</summary>
     public const string CorrectionRunProcessUnsupportedShell = "Correction-run_process-UnsupportedShell.md";
 
+    /// <summary>Gets the stable filename for generic command denial feedback.</summary>
+    public const string CorrectionRunProcessDenied = "Correction-run_process-Denied.md";
+
     /// <summary>Gets the stable filename for the CorrectionProviderInvocationInvalid prompt asset.</summary>
     public const string CorrectionProviderInvocationInvalid = "Correction-ProviderInvocation-Invalid.md";
 
@@ -1163,6 +1166,7 @@ public static class PromptFileNames
         CorrectionGitBlameInvalidRevision,
         CorrectionSearchBounds,
         CorrectionRunProcessUnsupportedShell,
+        CorrectionRunProcessDenied,
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1682,6 +1686,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ToolPrFetchDescription] = Set("Providers"),
                     [PromptFileNames.ToolJiraDescription] = Set("Providers"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
+                    [PromptFileNames.CorrectionRunProcessDenied] = Set(),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",
                         "Path",

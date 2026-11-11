@@ -860,7 +860,7 @@ public static class MemoriesToolTests
         var registry = new ToolRegistry([tool]);
         await using var events = new DomainEventStream();
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var persisted = "{\"action\":\"search\",\"query\":\"architecture\",\"ownership\":\"intelligence\"}";
+        const string persisted = "{\"action\":\"search\",\"query\":\"architecture\",\"ownership\":\"intelligence\"}";
         var request = new ToolInvocationRequest
         {
             SessionId = SessionId.New(),

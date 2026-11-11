@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Markdig" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Policies\Threadsmith.Policies.csproj" />
     <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\Threadsmith.Execution\Threadsmith.Execution.csproj" />

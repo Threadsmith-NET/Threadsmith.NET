@@ -341,7 +341,7 @@ public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
 
         return new(
             result,
-            [new ToolProvenanceSource("git-object", input.Revision, input.Paths.FirstOrDefault())],
+            [new ToolProvenanceSource("git-object", input.Revision, input.Paths.Count > 0 ? input.Paths[0] : default)],
             result.IsTruncated);
     }
 

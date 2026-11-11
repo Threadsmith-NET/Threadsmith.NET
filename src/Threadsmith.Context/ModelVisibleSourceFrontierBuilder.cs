@@ -233,8 +233,7 @@ public static class ModelVisibleSourceFrontierBuilder
     {
         return result.ResolvedAnchors is not null
             && fileSections is not null
-            && result.Coverage is not null
-            && result.Coverage.Omissions is not null
+            && result.Coverage?.Omissions is not null
             && result.Omissions is not null
             && result.ContinuationTargets is not null;
     }

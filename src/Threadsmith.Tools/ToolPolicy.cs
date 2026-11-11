@@ -6,7 +6,20 @@ using Threadsmith.Core;
 public sealed record ToolPolicyDecision(
     bool IsAllowed,
     ApprovalLevel RequiredApproval,
-    string Reason);
+    string Reason)
+{
+    /// <summary>Gets the exact host-prepared process input, never projected to the model.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal RunProcessInput? PreparedRun { get; init; }
+
+    /// <summary>Gets the host-only compound action decision.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Threadsmith.Policies.Contracts.PolicyDecision? CommandDecision { get; init; }
+
+    /// <summary>Gets the selected immutable command snapshot.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Threadsmith.Policies.Contracts.PolicySnapshot? CommandSnapshot { get; init; }
+}
 
 /// <summary>Evaluates repository, path, command, and network policy plus secret-reference validity.</summary>
 public interface IPolicyEngine
@@ -66,7 +79,6 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         var requiredApproval = (tool.Definition.RequiredApproval == ApprovalLevel.User
                 && !(tool.Definition.Id == "run_process" && context.SecurityPolicy is not null))
             || (context.SecurityPolicy?.ReviewTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase) ?? false)
-            || (tool.Definition.Id == "run_process" && context.SecurityPolicy?.RequireShellApproval == true)
             || context.RequireApprovalToolIds.Contains(
                 tool.Definition.Id,
                 StringComparer.OrdinalIgnoreCase)
@@ -199,10 +211,37 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        return new ToolPolicyDecision(
-            true,
-            requiredApproval,
-            "Allowed by repository trust and tool policy.");
+        if (ConfiguredTool.Unwrap(tool) is RunProcessTool process && input is RunProcessInput processInput)
+        {
+            try
+            {
+                var preparedInput = process.Prepare(processInput, context);
+                var prepared = preparedInput.PreparedCommand ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
+                var snapshot = context.SecurityPolicy?.CommandPolicies.GetValueOrDefault(prepared.Shell)
+                    ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
+                var decisions = prepared.Actions.Select(action => Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action)).ToArray();
+                if (decisions.Length == 0 || decisions.Any(decision => !decision.IsAllowed)
+                    || prepared.Actions.Any(action => !context.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)
+                        || !context.SecurityPolicy.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)))
+                {
+                    return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+                }
+
+                var combined = CommandPolicyCoordinator.Combine(decisions, requiredApproval != ApprovalLevel.None);
+                return new ToolPolicyDecision(true, combined.RequiresApproval ? ApprovalLevel.User : requiredApproval, "Command admitted.")
+                {
+                    PreparedRun = preparedInput,
+                    CommandDecision = combined,
+                    CommandSnapshot = snapshot,
+                };
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+            }
+        }
+
+        return new ToolPolicyDecision(true, requiredApproval, "Allowed by repository trust and tool policy.");
     }
 
     private static bool IsEligibleScratchpadAccess(ITool tool, object input, ToolInvocationContext context)

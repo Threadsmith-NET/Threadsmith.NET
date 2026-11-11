@@ -286,7 +286,7 @@ public static class TuiMarkdownRenderingTests
     [Fact]
     public static void TerminalEncoder_ControlsAndMalformedUnicode_UsesDeterministicEscapes()
     {
-        var input = "a\tb\n\r\u001b\u0085\ud800";
+        const string input = "a\tb\n\r\u001b\u0085\ud800";
 
         var encoded = TerminalControlEncoder.Encode(input);
 

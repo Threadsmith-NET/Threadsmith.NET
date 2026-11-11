@@ -492,7 +492,7 @@ public sealed partial class SourceEditApplicationTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
         Assert.SkipWhen(!RepositoryPathPolicy.GetPathComparer(fixture.Repository).Equals("Example.cs", "example.cs"), "Requires case-insensitive repository paths.");
-        var destination = "example.cs";
+        const string destination = "example.cs";
         var command = fixture.Replace("Example", "Changed", false);
         command = command with
         {

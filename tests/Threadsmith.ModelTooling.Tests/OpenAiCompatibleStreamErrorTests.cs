@@ -18,7 +18,7 @@ public static class OpenAiCompatibleStreamErrorTests
     {
         var prefix = afterText ? "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" : string.Empty;
         var failure = prefix + "data: {\"error\":{\"code\":429},\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n";
-        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
+        const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failure, failure, success);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
@@ -76,7 +76,7 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task RateLimit_RetriesWithOneBusyNotice(string error, bool exhaust)
     {
         var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
-        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failed, failed, exhaust ? failed : success);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();

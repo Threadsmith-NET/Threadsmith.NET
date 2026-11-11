@@ -108,8 +108,8 @@ public sealed class DiagnosticBundleGenerator
         var entries = new List<DiagnosticBundleEntry>();
         var redactions = 0;
         long totalBytes = 0;
-        using (var archiveStream = new FileStream(bundlePath, FileMode.CreateNew, FileAccess.Write))
-        using (var archive = new ZipArchive(archiveStream, ZipArchiveMode.Create))
+        await using (var archiveStream = new FileStream(bundlePath, FileMode.CreateNew, FileAccess.Write))
+        await using (var archive = new ZipArchive(archiveStream, ZipArchiveMode.Create))
         {
             void AddText(string relativePath, string kind, string content)
             {
@@ -194,12 +194,12 @@ public sealed class DiagnosticBundleGenerator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(bundlePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(canarySecret);
-        using var archiveStream = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
-        using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
+        await using var archiveStream = new FileStream(bundlePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 4096, useAsync: true);
+        await using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
         foreach (var entry in archive.Entries)
         {
 #pragma warning disable VSTHRD103 // ZipArchiveEntry offers no async Open; reading uses ReadToEndAsync below.
-            using var entryStream = entry.Open();
+            await using var entryStream = entry.Open();
 #pragma warning restore VSTHRD103
             using var reader = new StreamReader(entryStream);
             var content = await reader.ReadToEndAsync(cancellationToken);

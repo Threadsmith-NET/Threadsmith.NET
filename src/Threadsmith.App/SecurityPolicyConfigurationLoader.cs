@@ -12,6 +12,9 @@ using Threadsmith.Tools;
 /// <summary>Reads authority before ordinary merging loses presence and source identity.</summary>
 internal static class SecurityPolicyConfigurationLoader
 {
+    /// <summary>Trusted machine and user settings use the shared reader's addressable byte ceiling.</summary>
+    internal const long TrustedConfigurationMaximumBytes = int.MaxValue;
+
     /// <summary>Builds a detached trusted adapter view with whole-array replacement.</summary>
     internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths)
     {
@@ -157,6 +160,11 @@ internal static class SecurityPolicyConfigurationLoader
         if (machine.Values.TryGetValue("enforced", out var enforcement))
         {
             var values = ConfigurationDocument.Parse(Encoding.UTF8.GetBytes(enforcement.GetRawText()));
+            if (values.ContainsKey("tools:runProcess:commandPolicy"))
+            {
+                throw new InvalidDataException("Command policy cannot use the outer enforced envelope; put machine constraints in tools.runProcess.commandPolicy platform/shell enforced lists.");
+            }
+
             if (values.Any(pair => !ConfigurationPermissionCatalog.Allows(pair.Key, PermissionConfigurationSources.Machine)
                 || (!ConfigurationPermissionCatalog.IsPermission(pair.Key)
                 && !(pair.Value.ValueKind == JsonValueKind.Object && ConfigurationPermissionCatalog.Paths.Any(key => key.StartsWith(pair.Key + ":", StringComparison.OrdinalIgnoreCase))))))
@@ -377,6 +385,21 @@ internal static class SecurityPolicyConfigurationLoader
             mutationCeiling = MutationApprovalPolicy.ReviewAll;
         }
 
+        const string commandKey = "tools:runProcess:commandPolicy";
+        if (projectSources.Any(source => source.Values.ContainsKey(commandKey))
+            || trusted.Any(source => source.Kind is not ("Machine" or "User") && source.Values.ContainsKey(commandKey)))
+        {
+            throw new InvalidDataException("Command policy accepts machine and user sources only.");
+        }
+
+        var commandDefaults = Threadsmith.Policies.Commands.ShippedCommandPolicy.CreateDefaults();
+        var commandMachine = ReadCommandDocument(trusted.Single(source => source.Kind == "Machine"));
+        var commandUser = ReadCommandDocument(trusted.Single(source => source.Kind == "User"));
+        var platform = OperatingSystem.IsWindows() ? Threadsmith.Policies.Contracts.CommandPolicyNames.Windows
+            : OperatingSystem.IsMacOS() ? Threadsmith.Policies.Contracts.CommandPolicyNames.MacOS : Threadsmith.Policies.Contracts.CommandPolicyNames.Linux;
+        var commandPolicies = Threadsmith.Policies.Evaluation.PolicyCompiler.CompileAll(commandDefaults, commandMachine, commandUser)
+            .Values.Where(snapshot => snapshot.Platform == platform).ToImmutableDictionary(snapshot => snapshot.Shell, StringComparer.Ordinal);
+
         var policy = new EffectiveSessionPolicy
         {
             BindingId = bindingId,
@@ -384,6 +407,7 @@ internal static class SecurityPolicyConfigurationLoader
             RepositoryPath = repository,
             Fingerprint = string.Empty,
             StartupAuthorityFingerprint = CaptureStartupAuthority(paths, projectSources),
+            CommandPolicies = commandPolicies,
             AllowedExecutables = executables,
             AllowedTools = ResolveList("tools:allow", null),
             DeniedTools = Union("tools:deny", StringComparer.OrdinalIgnoreCase),
@@ -427,6 +451,7 @@ internal static class SecurityPolicyConfigurationLoader
         {
             repository, string.Join('|', policy.AllowedExecutables),
             policy.StartupAuthorityFingerprint,
+            string.Join('|', policy.CommandPolicies.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair => pair.Value.Fingerprint + Threadsmith.Policies.Configuration.PolicyJson.Fingerprint(pair.Value.AlwaysAllow))),
             policy.AllowedTools.IsDefault ? "unrestricted" : string.Join('|', policy.AllowedTools),
             string.Join('|', policy.DeniedTools), string.Join('|', policy.ReviewTools),
             string.Join('|', policy.ReadFolders), string.Join('|', policy.WriteFolders), string.Join('|', policy.EditableRoots), string.Join('|', policy.MutationRoots),
@@ -446,6 +471,12 @@ internal static class SecurityPolicyConfigurationLoader
         });
         _ = WebFetchOptions.FromPolicy(policy);
         return policy with { Fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))) };
+    }
+
+    private static Threadsmith.Policies.Contracts.PolicyDocument? ReadCommandDocument(Source source)
+    {
+        return source.Values.TryGetValue("tools:runProcess:commandPolicy", out var document)
+            ? Threadsmith.Policies.Configuration.PolicyJson.Parse(document.GetRawText()) : null;
     }
 
     private static string CaptureStartupAuthority(ConfigurationPaths paths, Source[] restrictions)
@@ -473,7 +504,7 @@ internal static class SecurityPolicyConfigurationLoader
         };
     }
 
-    private static Source ReadFile(string path, string kind, List<PolicyInputSource> provenance, long maximumBytes = int.MaxValue)
+    private static Source ReadFile(string path, string kind, List<PolicyInputSource> provenance, long maximumBytes = TrustedConfigurationMaximumBytes)
     {
         var values = ConfigurationDocument.Read(path, maximumBytes).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         var allowedSource = kind == "Machine" ? PermissionConfigurationSources.Machine : PermissionConfigurationSources.User;

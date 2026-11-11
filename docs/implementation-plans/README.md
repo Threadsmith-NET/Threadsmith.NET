@@ -238,6 +238,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-startup-parallelization.md](maintenance-startup-parallelization.md) | Run independent startup operations in parallel |
 | Maintenance | [maintenance-deterministic-tests.md](maintenance-deterministic-tests.md) | Deterministic test synchronization |
 | Maintenance | [maintenance-pre-edit-check-wait.md](maintenance-pre-edit-check-wait.md) | Bounded pre-edit compiler checks with asynchronous timeout fallback |
+| Maintenance | [maintenance-exact-tool-invocation-limits.md](maintenance-exact-tool-invocation-limits.md) | Configurable limits for repeated exact tool invocations |
+| Maintenance | [maintenance-openrouter-fallbacks-and-provider-errors.md](maintenance-openrouter-fallbacks-and-provider-errors.md) | Ordered OpenRouter fallbacks and useful failure details from all model providers |
 
 ## Update discipline
 

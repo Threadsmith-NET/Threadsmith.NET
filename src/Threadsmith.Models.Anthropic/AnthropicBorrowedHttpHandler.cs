@@ -41,7 +41,7 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri;
-        if (uri is null || !uri.IsAbsoluteUri || uri.Scheme != Uri.UriSchemeHttps
+        if (uri?.IsAbsoluteUri != true || uri.Scheme != Uri.UriSchemeHttps
             || !string.Equals(uri.Host, AnthropicSdkClientFactory.ApiBaseUri.Host, StringComparison.OrdinalIgnoreCase)
             || uri.Port != 443 || uri.UserInfo.Length != 0
             || (request.Method == HttpMethod.Post

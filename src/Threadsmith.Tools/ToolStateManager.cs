@@ -481,7 +481,7 @@ public sealed class ToolStateManager : IToolStateManager
     {
         try
         {
-            return _policyBinding is not null && !_policyBinding.Current.AllowsTool(toolId)
+            return _policyBinding?.Current.AllowsTool(toolId) == false
                 ? "Security policy denies this tool (tools.allow/tools.deny). The checkbox saves a preference; it cannot grant permission." : null;
         }
         catch (UnauthorizedAccessException)

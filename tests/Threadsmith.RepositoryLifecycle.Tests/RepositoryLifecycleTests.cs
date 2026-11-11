@@ -500,7 +500,7 @@ public static class RepositoryLifecycleTests
     public static async Task RepositoryLifecycle_PathEscape_IsRejected()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
-        var escapedConfig = """
+        const string escapedConfig = """
             {
               "solution": { "path": "../outside.sln" },
               "editableRoots": [ "src" ]
@@ -583,7 +583,7 @@ public static class RepositoryLifecycleTests
         await File.WriteAllTextAsync(Path.Combine(repository.RootPath, "src", "App", "Secret.cs"), "blocked");
         await File.WriteAllTextAsync(Path.Combine(nestedDirectory, "Secret.cs"), "allowed");
         await File.WriteAllTextAsync(Path.Combine(generatedDirectory, "Blocked.cs"), "blocked");
-        var configuration = """
+        const string configuration = """
             {
               "solution": { "path": "Sample.sln" },
               "editableRoots": [ "src" ],
@@ -813,7 +813,7 @@ public static class RepositoryLifecycleTests
         Assert.NotNull(remembered.Solution);
         Assert.Equal(repository.SolutionPath, remembered.Solution.SolutionPath);
 
-        using var output = new StringWriter();
+        await using var output = new StringWriter();
         var exitCode = await new HeadlessShell(dispatcher, harness.Projections, output)
             .InspectRepositoryAsync(
                 "Remembered CLI solution",
@@ -831,7 +831,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        using var output = new StringWriter();
+        await using var output = new StringWriter();
 
         var exitCode = await new HeadlessShell(
             dispatcher,
@@ -868,7 +868,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        using var output = new StringWriter();
+        await using var output = new StringWriter();
 
         var exitCode = await new HeadlessShell(
             dispatcher,
@@ -1740,7 +1740,7 @@ public static class RepositoryLifecycleTests
             Directory.CreateDirectory(Path.Combine(appDirectory, "obj"));
             var solutionPath = Path.Combine(rootPath, "Sample.sln");
             var configurationPath = Path.Combine(configDirectory, "config.json");
-            var solutionContent = """
+            const string solutionContent = """
                 Microsoft Visual Studio Solution File, Format Version 12.00
                 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", "src\App\App.csproj", "{11111111-1111-1111-1111-111111111111}"
                 EndProject
@@ -1749,17 +1749,17 @@ public static class RepositoryLifecycleTests
                 Global
                 EndGlobal
                 """;
-            var appProjectContent = """
+            const string appProjectContent = """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFrameworks>net10.0;net9.0</TargetFrameworks></PropertyGroup>
                 </Project>
                 """;
-            var libProjectContent = """
+            const string libProjectContent = """
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
                 </Project>
                 """;
-            var configurationContent = """
+            const string configurationContent = """
                 {
                   "solution": { "path": "Sample.sln" },
                   "editableRoots": [ "src" ],

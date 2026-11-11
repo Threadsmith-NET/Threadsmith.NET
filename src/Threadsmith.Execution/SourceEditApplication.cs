@@ -278,7 +278,7 @@ public sealed class SourceEditApplication :
             return null;
         }
 
-        if (latest is null || latest.Obsolete)
+        if (latest?.Obsolete != false)
         {
             return TakeUnavailableFeedback(delivered);
         }

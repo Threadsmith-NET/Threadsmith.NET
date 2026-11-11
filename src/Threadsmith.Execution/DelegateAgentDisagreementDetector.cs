@@ -110,7 +110,7 @@ internal static class DelegateAgentDisagreementDetector
 
     private static string? ResolveSubject(AgentFinding finding, int maximumCharacters)
     {
-        var subject = finding.Symbols.FirstOrDefault() ?? finding.Locations.FirstOrDefault();
+        var subject = (finding.Symbols.Count > 0 ? finding.Symbols[0] : default) ?? (finding.Locations.Count > 0 ? finding.Locations[0] : default);
         return string.IsNullOrWhiteSpace(subject)
             ? null
             : maximumCharacters > 0 ? BoundedText.Truncate(subject.Trim(), maximumCharacters, out _) : subject.Trim();

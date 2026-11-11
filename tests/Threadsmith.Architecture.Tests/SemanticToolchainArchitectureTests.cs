@@ -58,7 +58,7 @@ public static class SemanticToolchainArchitectureTests
             foreach (var reference in XDocument.Load(projectPath).Descendants("PackageReference"))
             {
                 var id = reference.Attribute("Include")?.Value;
-                if (id is null || !id.StartsWith("Microsoft.Build", StringComparison.Ordinal))
+                if (id?.StartsWith("Microsoft.Build", StringComparison.Ordinal) != true)
                 {
                     continue;
                 }

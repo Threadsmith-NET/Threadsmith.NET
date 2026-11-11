@@ -208,7 +208,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                 invocation => Assert.Equal(HookPoint.AfterModelRequest, invocation.Point));
             Assert.Equal(compactionHooks[0].OperationId, compactionHooks[1].OperationId);
             Assert.Equal(
-                WorkloadClass.Summary.ToString(),
+                nameof(WorkloadClass.Summary),
                 compactionHooks[0].Payload?["workload"]);
             Assert.Equal(5, hooks.Invocations.Count(invocation =>
                 invocation.Point == HookPoint.BeforeModelRequest));

@@ -16,6 +16,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Policies\Threadsmith.Policies.csproj" />
     <ProjectReference Include="..\Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj" />
     <ProjectReference Include="..\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
     <ProjectReference Include="..\Threadsmith.Reranking.Local\Threadsmith.Reranking.Local.csproj" />

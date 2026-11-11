@@ -247,7 +247,7 @@ public sealed class AgentFindingAdmission
                 Provenance = new EvidenceProvenance
                 {
                     Source = $"agent:{frozenAssignment.Role}:{frozenAssignment.AssignmentId.Value:D}",
-                    SourcePath = finding.Locations.FirstOrDefault(),
+                    SourcePath = finding.Locations.Count > 0 ? finding.Locations[0] : default,
                     RepositoryRevision = plan.Provenance.BaselineIdentity,
                     ChildRunId = frozenAssignment.ChildRunId,
                     AgentAssignmentId = frozenAssignment.AssignmentId,

@@ -28,7 +28,8 @@ Native validation's explicit `limits.validation.timeoutMilliseconds` remains an 
 | --- | --- | --- |
 | `tools:allowedExecutables` | Narrow; OS shell (`powershell`/`bash`), `dotnet`, `git`; exact bare names | `DefaultPolicyEngine`, process invocation |
 | `tools:runProcess:shellExecutable` | Ordinary selector; platform shell; cannot grant an executable | `RunProcessTool`, existing supported-shell validation |
-| `tools:runProcess:requireApproval` | Narrow; true; explicit enforcement cannot be relaxed | `DefaultPolicyEngine`, existing approval pipeline |
+| `tools:runProcess:requireApproval` | Legacy compatibility input; does not authorize commands or force review over an explicit command Allow | Command outcomes replace this coarse switch; independent `tools:requireApproval` remains mandatory |
+| `tools:runProcess:commandPolicy` | Machine/user only; unmatched command denial; no repository, session, environment or CLI authority | Shared policy library, existing tool pipeline and process manager; [reference](command-policy.md) |
 | `tools:allow` | Narrow; absent unrestricted, explicit empty deny-all | Advertisement, `DefaultPolicyEngine`, child policy |
 | `tools:deny`, `tools:requireApproval` | Union restrictions; empty | Advertisement and invocation |
 | `tools:allowedNetworkHosts` | Trusted static grants default empty; explicit machine exact-host mandatory filters default unrestricted | `DefaultPolicyEngine`, fetch transport/redirect checks, manual MCP reads |

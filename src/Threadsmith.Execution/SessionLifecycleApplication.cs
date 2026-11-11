@@ -306,6 +306,7 @@ public sealed class SessionLifecycleApplication :
                 && source is { IsWritable: true } current
                 && current.SessionId == requestedSessionId)
             {
+                _sessionActivated?.Invoke(current);
                 return CreateResult(
                     kind,
                     current,

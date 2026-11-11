@@ -73,7 +73,7 @@ public sealed class ExtensionManagerTests
         Assert.True(unloaded);
         var summary = ((IExtensionManager)host).Summaries
             .FirstOrDefault(s => s.ExtensionId == "threadsmith.tests.clean-unload");
-        Assert.True(summary is null || !summary.IsLoaded);
+        Assert.True(summary?.IsLoaded != true);
     }
 
     /// <summary>Loading an unknown extension id returns no summary.</summary>

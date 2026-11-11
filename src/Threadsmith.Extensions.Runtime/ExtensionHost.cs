@@ -698,7 +698,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 
     private static bool IsContractVersionCompatible(string requested)
     {
-        var current = ExtensionContractVersion.Current;
+        const string current = ExtensionContractVersion.Current;
         return requested.Split('.')[0] == current.Split('.')[0];
     }
 
@@ -815,8 +815,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         {
             var reference = reader.GetAssemblyReference(handle);
             var name = reader.GetString(reference.Name);
-            if (name is not null
-                && name.StartsWith("Threadsmith.Extensions.Abstractions", StringComparison.Ordinal))
+            if (name?.StartsWith("Threadsmith.Extensions.Abstractions", StringComparison.Ordinal) == true)
             {
                 return true;
             }

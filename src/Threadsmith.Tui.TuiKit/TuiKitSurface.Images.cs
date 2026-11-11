@@ -52,7 +52,7 @@ internal sealed partial class TuiKitSurface
             return;
         }
 
-        using var stream = new MemoryStream(bytes, writable: false);
+        await using var stream = new MemoryStream(bytes, writable: false);
         var artifact = await _imageArtifacts.StoreImageAsync(stream, session.Value, "clipboard", cancellationToken: cancellationToken);
         var retained = false;
         try

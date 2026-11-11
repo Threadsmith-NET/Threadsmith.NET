@@ -2144,6 +2144,7 @@ public static partial class Milestone1Tests
             "/clone",
             "/code_explore_inspect {on|off}",
             "/code_explore_output {structured|markdown}",
+            "/command-policy <shell> [inspect|revoke <id>|reload|reset-session]",
             "/context [mode|inspect|map|compact]",
             "/extensions",
             "/fetch-authorize <url> [redirect ...]",
@@ -4560,7 +4561,7 @@ public static partial class Milestone1Tests
     {
         var sanitizer = new SecretOutputSanitizer();
         const string secret = "sk-abcdefghijklmnopqrstuvwxyz";
-        var input = """
+        const string input = """
             public Task RunAsync(CancellationToken cancellationToken, string accessToken)
             {
                 return UseAsync(accessToken: accessToken, cancellationToken: cancellationToken);
@@ -4592,7 +4593,7 @@ public static partial class Milestone1Tests
     public static void SecretOutputSanitizer_RedactsNonSourceCredentialEchoes()
     {
         var sanitizer = new SecretOutputSanitizer();
-        var input = """
+        const string input = """
             THREAD_TOKEN=token
             thread_token=secret
             github_token=secret

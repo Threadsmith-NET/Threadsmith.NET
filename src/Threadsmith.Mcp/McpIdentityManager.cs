@@ -425,7 +425,7 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
         var buffer = new byte[Math.Min(maximumBytes, 4096)];
-        using var captured = new MemoryStream();
+        await using var captured = new MemoryStream();
         while (true)
         {
             var remainingWithSentinel = (long)maximumBytes - captured.Length + 1;

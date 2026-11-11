@@ -500,6 +500,7 @@ public static class Program
                 CodeExploreOutputOptions = foundation.CodeExploreOutputOptions,
                 WebFetchAuthorization = foundation.WebFetchAuthorization,
                 DirectFetchApprovalPrompt = foundation.DirectFetchApprovalPrompt,
+                CommandPolicies = foundation.ToolPipeline.CommandPolicies,
             },
             processCancellation);
 

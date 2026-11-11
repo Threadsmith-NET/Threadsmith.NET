@@ -123,7 +123,7 @@ public static class ExtensionAutoloadPolicyTests
             var loadContext = new AssemblyLoadContext("marker-positive-control", isCollectible: true);
             try
             {
-                using var assemblyBytes = new MemoryStream(await File.ReadAllBytesAsync(assemblyPath, TestContext.Current.CancellationToken));
+                await using var assemblyBytes = new MemoryStream(await File.ReadAllBytesAsync(assemblyPath, TestContext.Current.CancellationToken));
                 var assembly = loadContext.LoadFromStream(assemblyBytes);
                 _ = Activator.CreateInstance(Assert.IsAssignableFrom<Type>(assembly.GetType("MarkerExtension")));
                 Assert.True(File.Exists(marker));

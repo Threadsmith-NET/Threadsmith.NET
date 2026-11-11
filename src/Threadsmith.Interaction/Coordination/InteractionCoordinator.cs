@@ -70,6 +70,7 @@ public sealed partial class InteractionCoordinator
     private readonly IGitQueryService? _gitQueries;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
+    private readonly CommandPolicyCoordinator? _commandPolicies;
     private readonly SemaphoreSlim _modalGate = new(1, 1);
     private readonly IFrontendCommandContribution? _frontendCommands;
     private readonly SemanticStartupProgress? _semanticStartupProgress;
@@ -102,6 +103,7 @@ public sealed partial class InteractionCoordinator
     /// <param name="agentDisplay">Bounded transient child display stream.</param>
     /// <param name="agentNames">Validated immutable child name catalog.</param>
     /// <param name="semanticStartupProgress">Transient startup timings owned by semantic operations.</param>
+    /// <param name="commandPolicies">Host-owned scoped command approval adapter.</param>
     public InteractionCoordinator(
         InteractionPresenter presenter,
         IDomainEventStream events,
@@ -129,7 +131,8 @@ public sealed partial class InteractionCoordinator
         Func<string, int>? standingPreferenceWarningThresholdProvider = null,
         AgentDisplayStream? agentDisplay = null,
         AgentNameCatalog? agentNames = null,
-        SemanticStartupProgress? semanticStartupProgress = null)
+        SemanticStartupProgress? semanticStartupProgress = null,
+        CommandPolicyCoordinator? commandPolicies = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
@@ -157,6 +160,7 @@ public sealed partial class InteractionCoordinator
         _gitQueries = gitQueries;
         _webFetchAuthorization = webFetchAuthorization;
         _directFetchApprovalPrompt = directFetchApprovalPrompt;
+        _commandPolicies = commandPolicies;
         _frontendCommands = frontendCommands;
         _semanticStartupProgress = semanticStartupProgress;
         _standingPreferenceWarningThreshold = standingPreferenceWarningThreshold;
@@ -212,6 +216,7 @@ public sealed partial class InteractionCoordinator
         }
 
         _agentDisplay?.IncludeReasoningText = _sessionPreferences?.IncludeReasoningText ?? false;
+        using var commandApprovalLease = _commandPolicies?.Attach(PromptForCommandApprovalAsync, ReportCommandApprovalCompletionAsync);
         using var directFetchApprovalLease = _directFetchApprovalPrompt?.Attach(
             PromptForDirectFetchApprovalAsync,
             dispatcher.QueueAsync);
@@ -1309,6 +1314,13 @@ public sealed partial class InteractionCoordinator
                     && (commandText.Length == 4 || char.IsWhiteSpace(commandText[4])))
                 {
                     await HandleMcpCommandAsync(controller, commandText, lifetime.Token);
+                    continue;
+                }
+
+                if (commandText.StartsWith("/command-policy", StringComparison.OrdinalIgnoreCase)
+                    && (commandText.Length == 15 || char.IsWhiteSpace(commandText[15])))
+                {
+                    await HandleCommandPolicyAsync(commandText[15..].Trim(), lifetime.Token);
                     continue;
                 }
 

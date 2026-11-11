@@ -147,7 +147,7 @@ public static class OpenAiCompatibleTimeoutTests
     public static async Task TransportCancellation_MidStream_DoesNotReplay(int timeoutSeconds)
     {
         var attempts = 0;
-        using var stream = new ControlledStream(
+        await using var stream = new ControlledStream(
             "data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n",
             (_, _) => throw new TaskCanceledException("Transport stopped."));
         using var client = new HttpClient(new RecordingHandler((_, _) =>
@@ -177,7 +177,7 @@ public static class OpenAiCompatibleTimeoutTests
         var readEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseToken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var read = false;
-        using var stream = new ControlledStream(string.Empty, async (buffer, token) =>
+        await using var stream = new ControlledStream(string.Empty, async (buffer, token) =>
         {
             if (read)
             {

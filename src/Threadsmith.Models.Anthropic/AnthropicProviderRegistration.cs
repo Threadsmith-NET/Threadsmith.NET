@@ -34,8 +34,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
 
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Id);
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Name);
-        if (configured.SecretKeyReference is null
-            || !configured.SecretKeyReference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase))
+        if (configured.SecretKeyReference?.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase) != true)
         {
             throw new InvalidOperationException(
                 $"Anthropic provider '{configured.Id}' requires a secrets: key reference.");

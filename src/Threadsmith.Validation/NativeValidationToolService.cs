@@ -827,8 +827,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
             var latestVersion = ReadString(element, "latestVersion");
             if (id.Length > 0
-                && latestVersion is not null
-                && !latestVersion.Equals(version, StringComparison.OrdinalIgnoreCase))
+                && latestVersion?.Equals(version, StringComparison.OrdinalIgnoreCase) == false)
             {
                 results.Add(new PackageAdvisory(
                     id,

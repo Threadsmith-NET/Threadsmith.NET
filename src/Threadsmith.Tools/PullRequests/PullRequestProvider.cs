@@ -190,7 +190,7 @@ public abstract class PullRequestProvider : IPullRequestProvider
     {
         using var response = await SendAsync(target, path, "application/json", options, cancellationToken);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var buffer = new MemoryStream();
+        await using var buffer = new MemoryStream();
         var bytes = new byte[8192];
         int count;
         while ((count = await stream.ReadAsync(bytes, cancellationToken)) > 0)

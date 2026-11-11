@@ -549,7 +549,7 @@ public static class Milestone4Tests
         await events.PublishAsync(new SemanticConfidenceChanged(
             sessionId,
             DateTimeOffset.UtcNow,
-            SemanticConfidenceLevel.TextOnly.ToString()));
+            nameof(SemanticConfidenceLevel.TextOnly)));
         await observedSemantic.Task.WaitAsync(TestContext.Current.CancellationToken);
         Assert.All(evidence.Snapshot(sessionId), item => Assert.False(item.IsStale));
 

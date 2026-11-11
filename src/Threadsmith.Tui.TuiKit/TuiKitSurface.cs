@@ -793,7 +793,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         if (key.Code == KeyCode.F9 && CanEdit && CurrentPurpose == ComposerPurpose.Conversation && !_app.Modals.IsActive)
         {
-            if (_clipboardRead is null || _clipboardRead.IsCompleted)
+            if (_clipboardRead?.IsCompleted != false)
             {
                 _clipboardRead = InspectAttachmentsAsync(_stop.Token);
             }
@@ -1200,7 +1200,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private string StatusText()
     {
-        if (_status is null || !_status.FooterEnabled)
+        if (_status?.FooterEnabled != true)
         {
             return string.Empty;
         }
@@ -1346,7 +1346,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                 {
                     _notice = "Clipboard unavailable; use your terminal's paste shortcut";
                 }
-                else if (modal is not null && !modal.IsClosed && ReferenceEquals(_app.Modals.Top, modal) && filterText?.Invoke() == filter)
+                else if (modal?.IsClosed == false && ReferenceEquals(_app.Modals.Top, modal) && filterText?.Invoke() == filter)
                 {
                     modal.HandlePaste(text);
                 }

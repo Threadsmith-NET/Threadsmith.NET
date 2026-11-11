@@ -81,7 +81,7 @@ public sealed class JiraCloudClient
         }
 
         await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var buffer = new MemoryStream();
+        await using var buffer = new MemoryStream();
         var bytes = new byte[8192];
         int count;
         while ((count = await content.ReadAsync(bytes, cancellationToken)) > 0)

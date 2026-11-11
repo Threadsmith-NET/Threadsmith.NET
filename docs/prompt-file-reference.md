@@ -47,12 +47,12 @@ Common editing rules:
 |---|---:|---|
 | System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
+| Correction prompts | 26 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **294** | Complete deployed catalog. |
+| **Total** | **295** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -239,6 +239,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Correction-run_process-Denied.md` | Generic `run_process` denial rendered at the pipeline feedback boundary, including unsupported shells; reason codes and authorization remain code-owned. | `None` |
 | `Correction-run_process-UnsupportedShell.md` | Corrective guidance for an unsupported `run_process` shell. | [`ShellExecutable`](#placeholder-shellexecutable) |
 
 #### `search` family

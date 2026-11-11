@@ -258,6 +258,15 @@ public interface IBudget
 /// <summary>Checks whether a side effect has authorization.</summary>
 public interface IApprovalPolicy
 {
+    /// <summary>Requests only the exact host-permitted command approval choices; unavailable interaction denies.</summary>
+    Task<Threadsmith.Policies.Contracts.PolicyApprovalResponse> RequestApprovalAsync(
+        Threadsmith.Policies.Contracts.PolicyApprovalRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new Threadsmith.Policies.Contracts.PolicyApprovalResponse(request.RequestId, Threadsmith.Policies.Contracts.PolicyApprovalChoice.Deny));
+    }
+
     /// <summary>Evaluates an action.</summary>
     Task<bool> IsApprovedAsync(
         string action,

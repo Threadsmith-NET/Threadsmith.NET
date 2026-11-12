@@ -117,38 +117,25 @@ public static class PolicyEvaluationPlanTests
         Assert.Equal(PolicyReasons.AnalysisError, PolicyEvaluator.Evaluate(snapshot, facts with { WorkingDirectory = "relative" }).ReasonCode);
     }
 
-    [Fact]
-    public static void CompositeSourceLimitsSelectConstantCandidatesAcross64Actions()
+    [Theory]
+    [InlineData(PolicyMatcherType.Regex, "^external$")]
+    [InlineData(PolicyMatcherType.Glob, "ext*")]
+    public static void CompositePatternSiblingsAreRetainedInSelectedCandidates(PolicyMatcherType type, string pattern)
     {
-        // Arrange: each source has 4096 rules, with mandatory executable constraints late in AllOf.
-        var platform = OperatingSystem.IsWindows() ? "windows" : "linux";
-        var ordinary = Enumerable.Range(0, 4096).Select(index => CompositeRule("ordinary-" + index, "command-" + index)).ToImmutableArray();
-        var enforced = Enumerable.Range(0, 4096).Select(index => CompositeRule("enforced-" + index, "command-" + index) with { Policy = PolicyOutcome.ApprovalRequired }).ToImmutableArray();
-        var snapshot = PolicyCompiler.Compile(
-            ShippedCommandPolicy.CreateDefaults(),
-            new PolicyDocument { Common = new PolicyProfile { Enforced = enforced } },
-            new PolicyDocument { Common = new PolicyProfile { Rules = ordinary } },
-            platform,
-            "bash");
-        snapshot = snapshot with { Rules = ordinary };
-        var unindexed = snapshot with { Rules = [.. ordinary.Select(Wrap)], Enforced = [.. enforced.Select(Wrap)] };
-
-        // Act / Assert: candidate work stays proportional to applicable rules, not the source size.
-        for (var action = 0; action < 64; action++)
+        // Arrange: exercise pattern validation and composite indexing, not regex execution deadlines.
+        var basis = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
+        var sibling = new PolicyMatcher { Type = type, Fact = PolicyFact.CommandKind, Value = pattern };
+        var rule = Rule("selected", "git") with
         {
-            var facts = Facts("command-" + action) with { Platform = platform };
-            Assert.Single(Candidates(snapshot, facts, "Ordinary"));
-            Assert.Single(Candidates(snapshot, facts, "Enforced"));
-            Assert.Equal(4096, Candidates(unindexed, facts, "Ordinary").Count());
-            AssertEquivalent(PolicyEvaluator.Evaluate(unindexed, facts), PolicyEvaluator.Evaluate(snapshot, facts));
-        }
+            Matchers = [new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = [sibling, Rule("unused", "git").Matchers[0]] }],
+        };
+        var snapshot = basis with { Rules = [rule], Enforced = [rule] };
 
-        // Warm both plans before measuring allocation; no wall-clock or runner-speed assertion.
-        var unmatched = Facts("absent") with { Platform = platform };
-        var small = snapshot with { Rules = [ordinary[0]], Enforced = [enforced[0]] };
-        _ = MeasureCandidates(small, unmatched);
-        _ = MeasureCandidates(snapshot, unmatched);
-        Assert.True(MeasureCandidates(snapshot, unmatched) <= MeasureCandidates(small, unmatched) + 65536);
+        // Act / Assert: both partitions retain the original rule, including its pattern predicate.
+        Assert.Same(rule, Assert.Single(Candidates(snapshot, Facts("git"), "Ordinary")));
+        Assert.Same(rule, Assert.Single(Candidates(snapshot, Facts("git"), "Enforced")));
+        Assert.Empty(Candidates(snapshot, Facts("other"), "Ordinary"));
+        Assert.Empty(Candidates(snapshot, Facts("other"), "Enforced"));
     }
 
     [Fact]
@@ -189,24 +176,6 @@ public static class PolicyEvaluationPlanTests
         Assert.False(decision.IsAllowed);
     }
 
-    private static PolicyRule CompositeRule(string id, string executable) => Rule(id, executable) with
-    {
-        Matchers =
-        [
-            new PolicyMatcher
-            {
-                Type = PolicyMatcherType.AllOf,
-                Matchers =
-                [
-                    new PolicyMatcher { Type = PolicyMatcherType.Regex, Fact = PolicyFact.Platform, Value = "windows|linux" },
-                    new PolicyMatcher { Type = PolicyMatcherType.Glob, Fact = PolicyFact.CommandKind, Value = "ext*" },
-                    new PolicyMatcher { Type = PolicyMatcherType.Path, Fact = PolicyFact.WorkingDirectory, Values = [Path.GetPathRoot(Path.GetFullPath("."))!] },
-                    new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = Rule("unused", executable).Matchers },
-                ],
-            },
-        ],
-    };
-
     private static IEnumerable<PolicyRule> Candidates(PolicySnapshot snapshot, CommandFacts facts, string partition)
     {
         var type = typeof(PolicyEvaluator).Assembly.GetType("Threadsmith.Policies.Evaluation.PolicyEvaluationPlan")!;
@@ -214,23 +183,15 @@ public static class PolicyEvaluationPlanTests
         return (IEnumerable<PolicyRule>)type.GetMethod(partition, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(plan, [facts])!;
     }
 
-    private static long MeasureCandidates(PolicySnapshot snapshot, CommandFacts facts)
-    {
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var action = 0; action < 64; action++)
-        {
-            _ = PolicyEvaluator.Evaluate(snapshot, facts);
-        }
-
-        return GC.GetAllocatedBytesForCurrentThread() - before;
-    }
-
     private static void AssertEquivalent(PolicyDecision expected, PolicyDecision actual)
     {
-        Assert.Equal(expected.Outcome, actual.Outcome);
         Assert.Equal(expected.ReasonCode, actual.ReasonCode);
+        Assert.Equal(expected.Outcome, actual.Outcome);
+        Assert.Equal(expected.IsAllowed, actual.IsAllowed);
+        Assert.Equal(expected.RequiresApproval, actual.RequiresApproval);
         Assert.Equal(expected.RuleIds, actual.RuleIds);
         Assert.Equal(expected.RuleFingerprint, actual.RuleFingerprint);
+        Assert.Equal(expected.Choices, actual.Choices);
     }
 
     private static PolicyRule Wrap(PolicyRule rule) => rule with

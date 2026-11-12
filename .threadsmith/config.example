@@ -382,7 +382,15 @@
     // ask_user defaults off. Enable deliberately through /tools; normal tool policy still applies.
     // Optional outer tool overrides. byTool entries carry toolId, including colon-qualified MCP IDs.
     // timeoutMilliseconds: positive, or -1 for no outer deadline.
-    "runtime": { "defaults": {}, "byTool": [] },
+    "runtime": {
+      "defaults": {},
+      // Trusted, startup-bound per-tool limits. Zero permits one exact call.
+      "byTool": [
+        { "toolId": "run_process", "NumberOfExactToolInvocationsPerTurn": 3 },
+        { "toolId": "list_files", "NumberOfExactToolInvocationsPerTurn": 2 },
+        { "toolId": "server:search", "NumberOfExactToolInvocationsPerTurn": 0 }
+      ]
+    },
     // Plan-27 availability state. When enabled is present, non-essential tools must
     // be listed explicitly; disabled wins over enabled. Essential tools remain on.
     "enabled": [ "list_files", "read_file", "write_file", "memories", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
@@ -591,6 +599,9 @@
       }
     },
     "runProcess": {
+      // Trusted, startup-bound total exact calls per turn. byTool takes precedence.
+      // Zero permits one call. All values must be nonnegative Int32 integers.
+      "NumberOfExactToolInvocationsPerTurn": 3,
       "defaultTimeoutSeconds": 30,
       // Maximum 4294967 seconds, imposed by the .NET 10 cancellation timer range.
       "maxTimeoutSeconds": 60,

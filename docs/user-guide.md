@@ -18,6 +18,7 @@ This guide documents the currently implemented user-facing behavior. Features de
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
+   - [Repeated identical tool invocations](#repeated-identical-tool-invocations)
    - [Hosted pull-request retrieval](#hosted-pull-request-retrieval)
    - [Jira Cloud issue reads](#jira-cloud-issue-reads)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
@@ -768,6 +769,46 @@ Independent sibling tool calls may run concurrently after the complete model res
 Use `/tools` to view enabled state, stable ID, category, source, and essential status. Selecting a non-essential entry persists the change immediately while preserving unrelated configuration. Persistence errors are reported in the terminal without ending the shell.
 
 Loaded extension tools appear in the same catalog. Unloading an extension removes its active tools without deleting their saved preferences.
+
+### Repeated identical tool invocations
+
+You can configure how many times an enabled tool may be invoked with identical arguments during a single turn. This permits explicit repeats in later model responses within that turn; it does not automatically retry a tool or enable a disabled tool. Normal trust, policy, approval, cancellation, and other limits still apply to every admitted invocation.
+
+Merge per-tool settings into your **user** `~/.threadsmith/config.json` (normally `%USERPROFILE%\.threadsmith\config.json` on Windows), then **restart Threadsmith**:
+
+```json
+{
+  "tools": {
+    "runtime": {
+      "byTool": [
+        { "toolId": "run_process", "NumberOfExactToolInvocationsPerTurn": 5 },
+        { "toolId": "list_files", "NumberOfExactToolInvocationsPerTurn": 2 }
+      ]
+    }
+  }
+}
+```
+
+Preserve any existing `byTool` entries when merging this example. Use the stable tool ID shown by `/tools`; matching is case-insensitive. Built-in, MCP, and extension tools use the same per-tool setting, including colon-qualified IDs for external tools. Place it under `tools.runtime.byTool`, **not** `tools.runtime.defaults` or `tools.config`.
+
+| Value | Meaning |
+|---|---|
+| Omitted | Keep the tool's declared allowance. Most tools permit one exact invocation; `run_process` defaults to three. |
+| `0` or `1` | Permit one exact invocation, not unlimited repeats. |
+| Positive integer | Permit that many total accepted invocations, **including the first**. For example, `5` allows the first call plus four repeats. |
+
+Values must be integers from `0` through `2147483647` (`Int32.MaxValue`). Negative, fractional, Boolean, empty, null, and out-of-range values are invalid. Tools that previously allowed repeats, including file reads, native validation, memories, skill invocation, and repository archeology, retain a compatibility allowance of `Int32.MaxValue` unless overridden; skill lifecycle deduplication still applies.
+
+For `run_process` alone, you can alternatively set `tools.runProcess.NumberOfExactToolInvocationsPerTurn` (default `3`). A `tools.runtime.byTool` entry for `run_process` takes precedence. Mandatory machine ceilings still constrain the result, and repository configuration cannot increase the allowance.
+
+The allowance is **per tool and tracked argument string**, not a total across all calls to that tool. Concept hints do not distinguish calls where the tool treats them as hints. Threadsmith retains its existing argument normalization; this is not a general semantic comparison of equivalent JSON.
+
+- **Identical calls in the same model response remain invalid**, regardless of the allowance. They reject the whole batch before any sibling executes or consumes allowance.
+- Calls admitted before dispatch consume allowance even if execution later fails, is denied by policy, times out, or is cancelled. Rejected calls and rejected batches do not consume it.
+- Once the allowance is exhausted, the model receives a rejection reporting the accepted invocation count; Threadsmith does not execute another repeat.
+- Model continuations, context compaction, and steering within the active turn do not reset the count. A new execution starts fresh; child executions and skill procedures have independent histories.
+
+See [tool runtime overrides](operations/resource-limits.md#tool-runtime-overrides) for configuration sources and related limits, and [exact tool invocation admission](operations/conversation-loop.md#exact-tool-invocation-admission) for the execution rules.
 
 ### Invocation policy
 

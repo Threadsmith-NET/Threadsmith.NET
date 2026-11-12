@@ -158,6 +158,17 @@ public sealed partial class DeployedPromptLoaderTests
         }
     }
 
+    /// <summary>Old custom duplicate prompts fail the new count-token contract.</summary>
+    [Fact]
+    public async Task Overrides_LegacyDuplicateCorrectionRequiresInvocationCount()
+    {
+        using var fixture = await OverrideFixture.CreateAsync();
+        await fixture.WriteAsync(true, null, PromptFileNames.CorrectionToolDuplicateInvocation, "Tool '{{ToolName}}' was already called.");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.ReloadAsync());
+        Assert.Contains("token-contract", error.Message, StringComparison.Ordinal);
+        Assert.Contains(PromptFileNames.CorrectionToolDuplicateInvocation, error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Invalid selected text fails with its path and never publishes a partial catalog.</summary>
     [Theory]
     [InlineData("missing token", "token-contract")]

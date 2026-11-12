@@ -629,7 +629,7 @@ internal static class NativeValidationToolDefinitions
             1024 * 1024) with
         {
             // Source changes can require the same validation request again.
-            AllowDuplicateInvocations = true,
+            NumberOfExactToolInvocationsPerTurn = int.MaxValue,
         };
     }
 }

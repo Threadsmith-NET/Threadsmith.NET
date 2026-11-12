@@ -112,10 +112,13 @@ public sealed partial class SemanticEngine
 
     private void SetAnalyzerOmission(EditCandidate candidate, string status, string omission)
     {
-        UpdateEditResult(candidate, result => result with
-        {
-            Analyzers = result.Analyzers with { Status = status, Omissions = [BoundEditText(omission, _editOptions.MaximumDiagnosticMessageCharacters)] },
-        });
+        UpdateEditResult(
+            candidate,
+            result => result with
+            {
+                Analyzers = result.Analyzers with { Status = status, Omissions = [BoundEditText(omission, _editOptions.MaximumDiagnosticMessageCharacters)] },
+            },
+            terminal: true);
     }
 
     // Caller holds _gate; publish only complete, current comparison evidence into the existing revision stream.

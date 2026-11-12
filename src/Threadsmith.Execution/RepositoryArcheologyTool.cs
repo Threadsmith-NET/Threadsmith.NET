@@ -81,7 +81,10 @@ public sealed class RepositoryArcheologyTool : Tool<RepositoryArcheologyInput, R
             ToolCalls = Math.Min(24, budget.ToolCalls),
             WallTime = inherited.WallTime > TimeSpan.Zero && inherited.WallTime < TimeSpan.FromSeconds(120)
                 ? inherited.WallTime : TimeSpan.FromSeconds(120),
-            Mutations = 0, Processes = 0, Builds = 0, Tests = 0,
+            Mutations = 0,
+            Processes = 0,
+            Builds = 0,
+            Tests = 0,
         };
         _options = options with
         {
@@ -115,7 +118,7 @@ public sealed class RepositoryArcheologyTool : Tool<RepositoryArcheologyInput, R
             SubagentAvailable = false,
             RequiresWorkspace = true,
             AdmissionTimeout = _budget.WallTime,
-            AllowDuplicateInvocations = true,
+            NumberOfExactToolInvocationsPerTurn = int.MaxValue,
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """{"type":"object","properties":{"question":{"type":"string","minLength":1,"maxLength":2048}},"required":["question"],"additionalProperties":false}""",
@@ -214,8 +217,11 @@ public sealed class RepositoryArcheologyTool : Tool<RepositoryArcheologyInput, R
                 Policy = assignment.Policy with
                 {
                     AllowedToolIds = registrations.Select(registration => registration.Tool.Definition.Id).ToArray(),
-                    AllowedNetworkToolIds = [], AllowNetwork = false, AllowProcesses = false,
-                    IncludeParentEvidence = false, ResultLimits = _options.ResultLimits,
+                    AllowedNetworkToolIds = [],
+                    AllowNetwork = false,
+                    AllowProcesses = false,
+                    IncludeParentEvidence = false,
+                    ResultLimits = _options.ResultLimits,
                 },
             };
             plan = plan with { Assignments = [assignment], ParentBudget = assignment.Budget };

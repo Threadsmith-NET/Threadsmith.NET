@@ -271,14 +271,14 @@ public sealed class SourceEditApplication :
             return TakeUnavailableFeedback(delivered);
         }
 
-        if (latest is { Obsolete: true, Pending: true })
+        if (HasPendingReplacement(delivered, latest))
         {
-            // A graph refresh temporarily retires the old snapshot before installing
-            // replacement analysis for the same applied effect.
+            // Refresh may still be publishing a completed candidate or installing
+            // replacement analysis for a retired snapshot of the same applied effect.
             return null;
         }
 
-        if (latest?.Obsolete != false)
+        if (latest?.Obsolete != false || (latest.CommittedGeneration is null && !latest.Pending && latest.Analyzers.Status != "pending"))
         {
             return TakeUnavailableFeedback(delivered);
         }
@@ -330,6 +330,12 @@ public sealed class SourceEditApplication :
         {
             while (HasPendingFeedback(delivery, runId))
             {
+                if (HasPendingReplacement(delivery, GetLatestFeedback(delivery)) && _semanticRefresh is not null)
+                {
+                    await _semanticRefresh.EnsureCurrentAsync(sessionId, SemanticRefreshReason.HostMutation, waiting.Token);
+                    continue;
+                }
+
                 // Observe the existing semantic owner, including replacement snapshots and retirement.
                 // Polling also handles promotion after the compiler completion event has already fired.
                 await Task.Delay(TimeSpan.FromMilliseconds(100), waiting.Token);
@@ -346,6 +352,14 @@ public sealed class SourceEditApplication :
                 new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Validation incomplete: semantic checks did not finish before the final-feedback deadline. Still-current results may reach a future turn."),
                 cancellationToken);
             return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? GetLatestFeedback(delivery) ?? feedback);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            await _events.PublishAsync(
+                new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Validation incomplete: replacement semantic analysis is unavailable; the edit's recorded disk outcome is unchanged."),
+                cancellationToken);
+            var current = _feedback.GetValueOrDefault(sessionId) ?? delivery;
+            return RequireFinalFeedbackReview(sessionId, TakeUnavailableFeedback(current) ?? feedback);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -809,7 +823,14 @@ public sealed class SourceEditApplication :
     private bool HasPendingFeedback(FeedbackDelivery delivery, RunId runId)
     {
         return delivery.RunId == runId && GetLatestFeedback(delivery) is { } latest
-            && (latest.Pending || latest.Analyzers.Status == "pending");
+            && (HasPendingReplacement(delivery, latest) || (!latest.Obsolete && (latest.Pending || latest.Analyzers.Status == "pending")));
+    }
+
+    private bool HasPendingReplacement(FeedbackDelivery delivery, SourceEditAnalysis? latest)
+    {
+        return latest is { Obsolete: true } or { CommittedGeneration: null } && _semanticRefresh is not null
+            && _semanticRefresh.TryGetWorkspaceId(delivery.SessionId, out var workspaceId)
+            && workspaceId == delivery.WorkspaceId && !_semanticRefresh.IsCurrent(delivery.SessionId);
     }
 
     private async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, CancellationToken cancellationToken)

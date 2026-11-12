@@ -127,6 +127,11 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 3. Apply valid source instructions producing compiler errors and confirm these findings consume no malformed-call correction budget.
 4. Verify trust/path policy denial remains authoritative and exhausted correction limits are reported honestly.
 
+5. Request the same `run_process` call in successive responses. Confirm the default permits three accepted calls and the fourth reports count `3` through the shared bounded correction path.
+6. Configure a registered tool to allow two exact calls, then to zero. Confirm total accepted counts of two and one respectively. Confirm invalid values fail before execution and repository configuration cannot increase the allowance.
+7. Submit identical sibling requests, then a corrected response. Confirm no sibling executes or consumes quota and the corrected batch retains its unused allowance. Confirm failures after admission consume allowance and summaries do not reset counts.
+8. Repeat in parent, child, and model-based skill executions. Confirm independent execution histories and ordinary policy, approval, cancellation, and activity for each admitted repeat.
+
 **Verifies:** ordinary provider/tool correction preserves replay and authority while compiler feedback stays advisory.
 
 ## Scenario C3 — Streaming Output Redaction

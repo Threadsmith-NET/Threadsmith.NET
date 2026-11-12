@@ -13,6 +13,70 @@ using Xunit;
 
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>Retired work without a replacement produces terminal unavailable feedback.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RetiredOrUncommittedTerminalAnalysisReportsUnavailableWithoutWaiting(bool obsolete)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]);
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        analyzer.Publish(analyzer.Latest! with { Obsolete = obsolete, Pending = false, CommittedGeneration = null, Analyzers = new() { Status = "cancelled" }, Revision = analyzer.Latest!.Revision + 1 });
+        var notices = new List<DiagnosticObserved>();
+        await using var subscription = fixture.Events.Subscribe((item, _) =>
+        {
+            if (item is DiagnosticObserved notice)
+            {
+                notices.Add(notice);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        var feedback = await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, ct);
+
+        Assert.NotNull(feedback);
+        Assert.False(feedback.Pending);
+        Assert.Contains(feedback.Omissions, item => item.Contains("validation is incomplete", StringComparison.Ordinal));
+        Assert.DoesNotContain(notices, notice => notice.PendingSemanticEffectId is not null);
+        Assert.Null(await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, ct));
+    }
+
+    /// <summary>Final feedback joins the existing replacement owner and reports failed refresh honestly.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FinalFeedbackObservesReplacementRefresh(bool fail)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]);
+        await using var refresh = new StubEditRefresh(fixture.WorkspaceId);
+        var edits = fixture.CreateApplication(analyzer: analyzer, refresh: refresh);
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        analyzer.Publish(analyzer.Latest! with { Obsolete = true, Pending = false, CommittedGeneration = null });
+        refresh.Current = false;
+        refresh.OnEnsure = () =>
+        {
+            if (fail)
+            {
+                throw new IOException("Replacement unavailable");
+            }
+
+            analyzer.Publish(analyzer.Latest! with { Obsolete = false, CommittedGeneration = 2, Revision = analyzer.Latest!.Revision + 1 });
+        };
+
+        var feedback = await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, ct);
+
+        Assert.NotNull(feedback);
+        Assert.False(feedback.Pending);
+        Assert.Equal(fail ? null : (long?)2, feedback.CommittedGeneration);
+        Assert.Equal(fail, feedback.Omissions.Any(item => item.Contains("validation is incomplete", StringComparison.Ordinal)));
+    }
+
     /// <summary>Enabled analyzer work extends the final wait even when compiler work has completed.</summary>
     [Fact]
     public async Task FinalWaitIncludesEnabledAnalyzers()
@@ -271,5 +335,44 @@ public sealed partial class SourceEditApplicationTests
         Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
         var notice = Assert.Single(observed);
         Assert.Equal(analyzerOnly ? "Waiting for analyzers to finish." : "Waiting for compiler analysis to finish.", notice.Message);
+    }
+
+    private sealed class StubEditRefresh : ISemanticRefreshCoordinator
+    {
+        private readonly WorkspaceId _workspaceId;
+
+        public StubEditRefresh(WorkspaceId workspaceId) => _workspaceId = workspaceId;
+
+        public bool Current { get; set; } = true;
+
+        public Action? OnEnsure { get; set; }
+
+        public bool IsCurrent(SessionId sessionId) => Current;
+
+        public bool TryGetWorkspaceId(SessionId sessionId, out WorkspaceId workspaceId)
+        {
+            workspaceId = _workspaceId;
+            return true;
+        }
+
+        public bool TryAdmitCurrent(SessionId sessionId, WorkspaceId expectedWorkspaceId, Func<bool> admit) => Current && admit();
+
+        public Task BindAsync(SemanticLoadRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task UnbindAsync(SessionId sessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public ValueTask ObserveChangeAsync(SemanticFileChange change, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+
+        public Task<SemanticRefreshResult> EnsureCurrentAsync(SessionId sessionId, SemanticRefreshReason reason, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            OnEnsure?.Invoke();
+            Current = true;
+            return Task.FromResult(new SemanticRefreshResult(SemanticRefreshId.New(), _workspaceId, reason, default, 0, 1, 1, default, TimeSpan.Zero, true));
+        }
+
+        public Task<SemanticRefreshResult> ForceRefreshAsync(SessionId sessionId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

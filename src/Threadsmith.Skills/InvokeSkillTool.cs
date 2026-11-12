@@ -378,7 +378,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             RequiredApproval = ApprovalLevel.None,
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.NonIdempotent,
-            AllowDuplicateInvocations = true,
+            NumberOfExactToolInvocationsPerTurn = int.MaxValue,
             SubagentAvailable = false,
             SupportsCancellation = true,
             Scheduling = new ToolSchedulingDescriptor

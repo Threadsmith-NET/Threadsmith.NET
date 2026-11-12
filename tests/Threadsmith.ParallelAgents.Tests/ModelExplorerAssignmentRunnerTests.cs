@@ -1549,7 +1549,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         {
             _modelResultContent = modelResultContent;
             _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
-            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable, AllowDuplicateInvocations = allowDuplicates };
+            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable, NumberOfExactToolInvocationsPerTurn = allowDuplicates ? int.MaxValue : 0 };
         }
 
         public ToolInvocationContext? LastInvocationContext { get; private set; }

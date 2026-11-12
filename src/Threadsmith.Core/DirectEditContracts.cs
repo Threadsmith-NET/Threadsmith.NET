@@ -57,6 +57,12 @@ public sealed record SourceEditReceipt(
 
     /// <summary>Versioned advisory analysis; compiler findings never change the disk outcome.</summary>
     public SourceEditAnalysis? Analysis { get; init; }
+
+    /// <summary>Whether transport omitted details; never changes the disk outcome.</summary>
+    public bool OutputTruncated { get; init; }
+
+    /// <summary>Original changed-file count when transport omits paths.</summary>
+    public int? OriginalChangedFileCount { get; init; }
 }
 
 /// <summary>Exact byte identities owned by the writer for one touched endpoint.</summary>

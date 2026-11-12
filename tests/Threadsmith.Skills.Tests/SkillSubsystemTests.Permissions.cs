@@ -52,6 +52,8 @@ public sealed partial class SkillSubsystemTests
 
         Assert.Equal(0, tool.Executions);
         Assert.Equal(2, model.Requests.Count);
+        Assert.Contains(model.Requests[^1].Messages, message => message.IsError == true
+            && message.GetModelVisibleContent().Contains("occurs more than once", StringComparison.Ordinal));
         Assert.Contains(model.Requests[1].Messages, message => message.IsError == true);
     }
 
@@ -71,6 +73,25 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(allowDuplicates ? 2 : 1, tool.Executions);
         Assert.Equal(3, model.Requests.Count);
         Assert.Equal(!allowDuplicates, model.Requests[2].Messages.Any(message => message.IsError == true));
+    }
+
+    /// <summary>Skill corrections report only accepted exact calls at the configured limit.</summary>
+    [Theory]
+    [InlineData(0, 1)]
+    [InlineData(1, 1)]
+    [InlineData(2, 2)]
+    [InlineData(3, 3)]
+    public async Task SkillProcedure_ExactQuotaReportsAcceptedCount(int limit, int expected)
+    {
+        var tool = new PermissionProbeTool(exactLimit: limit);
+        var model = new PermissionModelProvider { ToolCallRounds = expected + 1 };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
+        var plan = PermissionPlan() with { EffectiveBudget = new SkillBudget { ModelTurns = expected + 2, ToolCalls = expected + 1 } };
+        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}", TestContext.Current.CancellationToken);
+        Assert.Equal(expected, tool.Executions);
+        Assert.Contains(model.Requests[^1].Messages, message => message.IsError == true
+            && message.GetModelVisibleContent().Contains($"already has {expected} accepted invocations", StringComparison.Ordinal));
     }
 
     /// <summary>Redaction preserves the schema-valid framing of a native skill answer.</summary>
@@ -387,6 +408,8 @@ public sealed partial class SkillSubsystemTests
 
         public bool RepeatToolCallNextRound { get; init; }
 
+        public int ToolCallRounds { get; init; } = 1;
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public Action? BeforeToolRequest { get; init; }
@@ -398,7 +421,7 @@ public sealed partial class SkillSubsystemTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (Requests.Count == 1 || (Requests.Count == 2 && RepeatToolCallNextRound))
+            if (Requests.Count <= ToolCallRounds || (Requests.Count == 2 && RepeatToolCallNextRound))
             {
                 if (Requests.Count == 1)
                 {
@@ -424,9 +447,9 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class PermissionProbeTool : Tool<PermissionProbeInput, PermissionProbeOutput>
     {
-        public PermissionProbeTool(bool allowDuplicates = false)
+        public PermissionProbeTool(bool allowDuplicates = false, int? exactLimit = null)
         {
-            Definition = Definition with { AllowDuplicateInvocations = allowDuplicates };
+            Definition = Definition with { NumberOfExactToolInvocationsPerTurn = exactLimit ?? (allowDuplicates ? int.MaxValue : 0) };
         }
 
         public string? ModelResultContent { get; init; }
@@ -445,7 +468,7 @@ public sealed partial class SkillSubsystemTests
             Description = "Counts permitted calls.",
             InputSchema = new ToolSchema(nameof(PermissionProbeInput), 1, "{\"type\":\"object\"}"),
             OutputSchema = new ToolSchema(nameof(PermissionProbeOutput), 1, "{\"type\":\"object\"}"),
-            Timeout = TimeSpan.FromSeconds(1),
+            Timeout = Timeout.InfiniteTimeSpan,
             MaximumOutputBytes = 1024,
         };
 

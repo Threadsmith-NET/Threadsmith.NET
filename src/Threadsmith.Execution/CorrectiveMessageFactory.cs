@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Models;
+using Threadsmith.Tools;
 
 /// <summary>Creates bounded model-visible messages for active-turn corrective retries.</summary>
 public sealed class CorrectiveMessageFactory
@@ -159,9 +160,9 @@ public sealed class CorrectiveMessageFactory
     }
 
     /// <summary>Creates the correction reason for a duplicate tool invocation.</summary>
-    public string CreateDuplicateToolInvocationReason(string toolName)
+    public string CreateDuplicateToolInvocationReason(string toolName, ToolCallRejection rejection)
     {
-        return RenderToolName(PromptFileNames.CorrectionToolDuplicateInvocation, toolName);
+        return rejection.Render(_prompts, toolName);
     }
 
     /// <summary>Creates sanitized diagnostic metadata for a rejected tool batch.</summary>

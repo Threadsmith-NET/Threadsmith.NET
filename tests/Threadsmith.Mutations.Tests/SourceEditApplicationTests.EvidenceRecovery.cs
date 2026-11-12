@@ -28,7 +28,8 @@ public sealed partial class SourceEditApplicationTests
     [InlineData(true, ConversationContextMode.Stateless, false, false)]
     [InlineData(true, ConversationContextMode.GovernedMemoryOnly, false, false)]
     [InlineData(true, ConversationContextMode.ConversationAware, false, true)]
-    public async Task HistoricalCheckRecoveryUsesAdmittedReceiptAcrossTurns(bool restart, ConversationContextMode mode, bool disableRecovery, bool edit)
+    [InlineData(true, ConversationContextMode.ConversationAware, false, true, true)]
+    public async Task HistoricalCheckRecoveryUsesAdmittedReceiptAcrossTurns(bool restart, ConversationContextMode mode, bool disableRecovery, bool edit, bool recoverReceipt = false)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
@@ -51,12 +52,13 @@ public sealed partial class SourceEditApplicationTests
         var artifacts = new ArtifactStore(connection, artifactPath, sanitizer);
         var history = new SqliteConversationStore(connection, artifacts, sanitizer);
         var receipt = Assert.Single((await history.GetSnapshotAsync(fixture.SessionId, cancellationToken: ct)).Messages, message => message.Receipt is not null);
-        provider.EvidenceId = Assert.Single(receipt.Receipt!.Evidence).EvidenceId.Value;
+        var recoveredReference = Assert.Single(receipt.Receipt!.Evidence, item => item.Label == (recoverReceipt ? "edit_source" : edit ? "Applied diff" : "dotnet_build"));
+        provider.EvidenceId = recoveredReference.EvidenceId.Value;
         Assert.Contains(provider.EvidenceId.ToString("D"), receipt.Content, StringComparison.Ordinal);
         if (edit)
         {
-            original = Assert.IsType<string>(await artifacts.ReadAsync(receipt.Receipt.Evidence[0].ContentHash, ct));
-            Assert.Contains("class Changed", original, StringComparison.Ordinal);
+            original = Assert.IsType<string>(await artifacts.ReadAsync(recoveredReference.ContentHash, ct));
+            Assert.Contains(recoverReceipt ? "Example.cs" : "class Changed", original, StringComparison.Ordinal);
         }
 
         await File.WriteAllTextAsync(fixture.SourcePath, "class SubsequentlyChanged { }", ct);

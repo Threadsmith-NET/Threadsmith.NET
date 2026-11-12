@@ -10,6 +10,20 @@ using Xunit;
 /// <summary>Exercises advisory completion projection, incomplete evidence and durable replay.</summary>
 public static class SemanticCheckPresentationTests
 {
+    /// <summary>Cancelled analysis explains why no current evidence is available.</summary>
+    [Fact]
+    public static void CancelledObsoleteAnalysisExplainsUnavailableResults()
+    {
+        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Cancelled)
+        {
+            Analysis = new() { EffectId = Guid.NewGuid(), Obsolete = true, Analyzers = new() { Status = "cancelled", DocumentsInScope = 88 } },
+        };
+        var transcript = new ConversationTranscript(string.Empty);
+        transcript.Apply(DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(completed), 1, DomainEventJson.Serialize(completed)));
+        Assert.Contains("analysis cancelled; results unavailable", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Analyzers: cancelled; 0/88", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Replayed compiler and analyzer completions distinguish candidate and committed-source phases.</summary>
     [Theory]
     [InlineData("advisory edit analysis", "Compiler Checks", SemanticCheckPhase.PreMutation, "pre-mutation candidate analysis")]

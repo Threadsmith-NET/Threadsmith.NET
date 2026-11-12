@@ -1129,6 +1129,10 @@ internal sealed class HostFoundation : IAsyncDisposable
             promptLoader);
         var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
         var writeFileConfiguration = new WriteFileConfiguration(configuration, trustedConfiguration, paths.RepositoryRoot);
+
+        // Ordinary runtime preferences bind before captured machine ceilings are applied.
+        var runtimePreferences = SecurityPolicyConfigurationLoader.BuildTrusted(paths, includeEnforced: false);
+        using var runtimePreferencesLifetime = runtimePreferences as IDisposable;
         var requireRunProcessApproval = trustedConfiguration.GetValue(
             "tools:runProcess:requireApproval",
             true);
@@ -1172,7 +1176,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             new RunProcessTool(
                 processManager,
                 promptLoader,
-                limits,
+                limits with { RunProcessNumberOfExactToolInvocationsPerTurn = runtimePreferences.GetValue("tools:runProcess:NumberOfExactToolInvocationsPerTurn", 3) },
                 requireRunProcessApproval,
                 shellExecutable),
             new DateTimeTool(promptLoader),
@@ -1210,7 +1214,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 tools,
                 stateManager,
                 webFetchAuthorization,
-                trustedConfiguration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true),
+                runtimePreferences.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true),
                 CreateConfiguredToolTimeouts(configuration)),
             webFetchAuthorization,
             directFetchApprovalPrompt);

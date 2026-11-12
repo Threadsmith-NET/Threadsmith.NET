@@ -465,6 +465,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for direct source editing guidance.</summary>
     public const string ToolSourceEditDescription = "Tool-edit_source-Description.md";
 
+    /// <summary>Gets the stable filename for bounded edit receipt recovery guidance.</summary>
+    public const string ToolSourceEditReceiptTruncated = "Tool-edit_source-ReceiptTruncated.md";
+
     /// <summary>Gets the stable filename for the delegation tool guidance.</summary>
     public const string ToolDelegateAgentsDescription = "Tool-delegate_agents-Description.md";
 
@@ -524,6 +527,9 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the CorrectionToolDuplicateInvocation prompt asset.</summary>
     public const string CorrectionToolDuplicateInvocation = "Correction-Tool-DuplicateInvocation.md";
+
+    /// <summary>Gets the correction asset for identical siblings in one model response.</summary>
+    public const string CorrectionToolDuplicateSiblingInvocation = "Correction-Tool-DuplicateSiblingInvocation.md";
 
     /// <summary>Gets the stable filename for the CorrectionToolUnavailable prompt asset.</summary>
     public const string CorrectionToolUnavailable = "Correction-Tool-Unavailable.md";
@@ -1145,6 +1151,7 @@ public static class PromptFileNames
         ToolInspectSkillGuidance,
         ToolInspectSkillDiscoveryGuidance,
         ToolSourceEditDescription,
+        ToolSourceEditReceiptTruncated,
         ToolDelegateAgentsDescription,
         AdapterMcpExplicitReadPolicyDescription,
         AdapterMcpImportedToolFallbackDescription,
@@ -1158,6 +1165,7 @@ public static class PromptFileNames
         CorrectionToolBatchSourceEditFeedback,
         CorrectionToolBatchPreparationMissing,
         CorrectionToolDuplicateInvocation,
+        CorrectionToolDuplicateSiblingInvocation,
         CorrectionToolUnavailable,
         CorrectionToolPipelineUnavailable,
         CorrectionSemanticFirstSearchExactPath,
@@ -1385,6 +1393,7 @@ public static class PromptAssetCatalog
         var executionAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolSourceEditDescription,
+            PromptFileNames.ToolSourceEditReceiptTruncated,
             PromptFileNames.ToolDelegateAgentsDescription,
             PromptFileNames.CorrectionProviderInvocationInvalid,
             PromptFileNames.CorrectionEmptyResponse,
@@ -1396,6 +1405,7 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionToolBatchSourceEditFeedback,
             PromptFileNames.CorrectionToolBatchPreparationMissing,
             PromptFileNames.CorrectionToolDuplicateInvocation,
+            PromptFileNames.CorrectionToolDuplicateSiblingInvocation,
             PromptFileNames.CorrectionToolUnavailable,
             PromptFileNames.CorrectionToolPipelineUnavailable,
             PromptFileNames.CorrectionSemanticFirstSearchExactPath,
@@ -1665,7 +1675,8 @@ public static class PromptAssetCatalog
                         "MaximumAttempts",
                         "FailureSummary"),
                     [PromptFileNames.CorrectionToolBatchPreflightFailed] = Set("Ordinal", "Tool", "Reason"),
-                    [PromptFileNames.CorrectionToolDuplicateInvocation] = Set("ToolName"),
+                    [PromptFileNames.CorrectionToolDuplicateInvocation] = Set("ToolName", "InvocationCount"),
+                    [PromptFileNames.CorrectionToolDuplicateSiblingInvocation] = Set("ToolName"),
                     [PromptFileNames.CorrectionToolUnavailable] = Set("ToolName"),
                     [PromptFileNames.CorrectionMutationRenameSymbolOverlap] = Set("RelativePath"),
                     [PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText] = Set("RelativePath"),

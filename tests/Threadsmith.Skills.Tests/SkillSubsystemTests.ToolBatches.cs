@@ -218,7 +218,7 @@ public sealed partial class SkillSubsystemTests
             Assert.Null(error);
             Assert.Equal(2, model.Requests.Count);
             Assert.Contains(model.Requests[1].Messages, message => message.IsError == true
-                && message.GetModelVisibleContent().Contains("already called", StringComparison.Ordinal));
+                && message.GetModelVisibleContent().Contains("occurs more than once", StringComparison.Ordinal));
         }
         else
         {

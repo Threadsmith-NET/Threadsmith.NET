@@ -1761,6 +1761,28 @@ public sealed class SemanticRefreshCoordinator :
                 cancellationToken);
         }
 
+        if (mode == SemanticRefreshMode.Full)
+        {
+            var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
+                .GroupBy(pair => pair.Key, PathComparer)
+                .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.ByteIdentity : null, PathComparer);
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            Action? continueEdit;
+            lock (binding.Gate)
+            {
+                ThrowIfObsolete(binding);
+
+                // Capture generation-bound authority atomically with respect to binding retirement.
+                continueEdit = _backend.CaptureEditAfterGraphRefreshContinuation(binding.Request.WorkspaceId, verifiedInputs);
+            }
+
+            // The owned worker leaves refresh versions unsettled until replacement installation completes.
+            // Scope enumeration and analysis startup must not run under the coordinator gate.
+            continueEdit?.Invoke();
+        }
+
         var duration = _timeProvider.GetElapsedTime(startedAt);
         lock (binding.Gate)
         {
@@ -1802,10 +1824,6 @@ public sealed class SemanticRefreshCoordinator :
 
         if (mode == SemanticRefreshMode.Full)
         {
-            var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
-                .GroupBy(pair => pair.Key, PathComparer)
-                .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.ByteIdentity : null, PathComparer);
-            _backend.ContinueEditAfterGraphRefresh(binding.Request.WorkspaceId, verifiedInputs);
             try
             {
                 binding.RestartWatching(
@@ -3467,9 +3485,10 @@ internal sealed record SemanticBindingBeginResult(
 /// <summary>Test seam for semantic refresh execution without filesystem timing.</summary>
 internal interface ISemanticRefreshBackend
 {
-    /// <summary>Offers independently verified graph inputs to the existing advisory edit owner.</summary>
-    void ContinueEditAfterGraphRefresh(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
+    /// <summary>Captures generation-bound edit authority for invocation outside the coordinator gate.</summary>
+    Action? CaptureEditAfterGraphRefreshContinuation(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
     {
+        return null;
     }
 
     /// <summary>Stops preparation after the last workspace binding owner detaches.</summary>
@@ -3551,9 +3570,9 @@ internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend
     }
 
     /// <inheritdoc />
-    public void ContinueEditAfterGraphRefresh(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
+    public Action? CaptureEditAfterGraphRefreshContinuation(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
     {
-        _semanticEngines.GetEngine(workspaceId).ContinueEditAfterGraphRefresh(verifiedInputs);
+        return _semanticEngines.GetEngine(workspaceId).CaptureEditAfterGraphRefreshContinuation(verifiedInputs);
     }
 
     /// <inheritdoc />

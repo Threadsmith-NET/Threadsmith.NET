@@ -276,7 +276,9 @@ internal static partial class InteractionPresentationFormatter
 
         if (analysis.Obsolete)
         {
-            return "obsolete evidence";
+            return analysis.Analyzers.Status == "cancelled"
+                ? "analysis cancelled; results unavailable"
+                : "obsolete evidence";
         }
 
         var includeCompiler = checkName != "advisory edit analyzers";
@@ -1502,7 +1504,10 @@ internal static partial class InteractionPresentationFormatter
             return [new(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)];
         }
 
-        return GetEditAnalysisLines(analysis, completed.Phase, completed.Outcome == SemanticCheckOutcome.Completed, limits, completed.CheckName);
+        var lines = GetEditAnalysisLines(analysis, completed.Phase, completed.Outcome == SemanticCheckOutcome.Completed, limits, completed.CheckName);
+        return completed.Outcome == SemanticCheckOutcome.Cancelled && analysis.Obsolete
+            ? [new(TuiBlockLineKind.Item, "analysis cancelled; results unavailable", PresentationTextRole.Warning), .. lines]
+            : lines;
     }
 
     private static void AppendCompilerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis, SemanticCheckPhase phase, bool compilerCountsAvailable)
@@ -1556,7 +1561,7 @@ internal static partial class InteractionPresentationFormatter
     private static void AppendAnalyzerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis)
     {
         var analyzers = analysis.Analyzers;
-        var status = analysis.Obsolete ? "obsolete" : analyzers.Status;
+        var status = analysis.Obsolete && analyzers.Status != "cancelled" ? "obsolete" : analyzers.Status;
         var coverage = $"Analyzers: {status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} owned document instances checked";
         if (!analysis.Obsolete && analyzers.Status is "completed" or "partial" && analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope)
         {

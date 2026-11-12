@@ -1,6 +1,6 @@
 # Limits for repeated tool invocations
 
-**Status:** Planned
+**Status:** Complete
 **Delivery track:** Maintenance
 **Prerequisites:** The shared `ToolCallHistory`, tool runtime configuration, conversation correction paths, and deployed prompt catalog must remain available.
 
@@ -365,6 +365,59 @@ Use the platform-specific ripgrep environment setup from `CONTRIBUTING.md`.
 Run focused whitespace and informational analyzer checks for changed C# files.
 Record exact commands, failures, skips, and unavailable platform checks.
 Do not present a Windows result as Linux or macOS validation.
+
+### Implementation and validation record
+
+Implemented on Windows on 2026-11-12.
+The shared history now owns exact-call counts and rejection metadata.
+All three model loops use this admission path.
+Runtime overrides retain registration identity and wrapper values.
+The process declaration and application default are three.
+The old Boolean contract is removed.
+Prompt assets, reference documents, configuration examples, Scenario C2, and MTP-253 are updated.
+
+A fresh-context adversarial review found one configuration defect.
+Machine-enforced runtime entries could become ordinary overrides or replace unrelated user overrides.
+Bind ordinary runtime preferences before the captured machine ceiling is applied.
+Composition tests cover both triggers, lower ceilings, and zero.
+The second review found no remaining actionable findings in the assessed scope.
+The review also confirmed that the existing child attempt-budget ledger is separate from execution statistics.
+Rejected requests do not enter tool completion statistics or execution activity.
+Keep the existing attempt-budget boundary.
+
+Commands and results:
+
+| Command | Result |
+|---|---|
+| `dotnet restore src/Threadsmith.sln` | Passed. |
+| `pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot artifacts/test-ripgrep` | Passed. The pinned Windows executable was verified. |
+| `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` | Passed. Zero warnings and errors. |
+| `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-method '*ProcessRepeats*'` | Passed. Six process cases. |
+| `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj --configuration Debug --no-build --filter-method '*ExactInvocationLimits*'` | Passed. Sixteen configuration cases. |
+| `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` | Passed. 6,143 total; 6,059 passed; zero failed; 84 skipped. |
+| `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` | Passed. |
+| `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include $changedPaths` | Passed for all changed C# files. |
+| `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include $changedPaths` | Exit 1. All 48 informational diagnostics refer to unchanged source lines present in `HEAD`. No diagnostic points to a new or changed line. |
+| Planning-governance searches and `git diff --check` | Passed. No prohibited bookkeeping matches or whitespace errors. |
+
+For these commands, set `THREADSMITH_TEST_RIPGREP` to `artifacts/test-ripgrep/stage/tools/rg.exe` under the checkout.
+Set `$changedPaths` to the changed tracked and untracked C# paths:
+
+```powershell
+$changedPaths = @(@(git diff --name-only --diff-filter=ACM) + @(git ls-files --others --exclude-standard) | Where-Object { $_ -like '*.cs' })
+```
+
+Initial runs exposed stale message assertions, a lost skill denial fallback, and an incomplete parent-process test fixture.
+These defects were corrected.
+The fixture now supplies the context assembler needed for real conversation continuations.
+One build overlapped a running test process and failed on locked Windows DLLs.
+The final build ran after those processes exited.
+No timeout increases or retries were used to hide test failures.
+
+Linux, macOS, live-provider cases, unavailable optional shells, and unavailable symbolic-link cases were not validated here.
+The full test output records platform and opt-in skips.
+Scenario C2 and MTP-253 were updated but were not manually executed.
+No files were staged or committed. No push or pull request was made.
 
 ## 11 Security/Permissions
 

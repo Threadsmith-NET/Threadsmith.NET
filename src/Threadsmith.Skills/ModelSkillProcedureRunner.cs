@@ -425,14 +425,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             var arguments = SkillCanonicalJson.CanonicalizeValue(
                                 ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
                             var accepted = registrations.TryGetValue(toolRequest.ToolName, out var advertised)
-                                ? batchCalls.TryAdd(advertised.Tool.Definition, arguments)
-                                : batchCalls.TryAdd(toolRequest.ToolName, arguments);
-                            if (!accepted)
+                                ? batchCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(advertised.Tool, modelContext.SecurityPolicy).Definition, arguments, out var rejection)
+                                : batchCalls.TryAdd(toolRequest.ToolName, arguments, out rejection);
+                            if (!accepted && rejection is not null)
                             {
                                 corrections++;
-                                failureSummary = _prompts.Render(
-                                    PromptFileNames.CorrectionToolDuplicateInvocation,
-                                    new Dictionary<string, string>(StringComparer.Ordinal) { ["ToolName"] = toolRequest.ToolName });
+                                failureSummary = rejection.Render(_prompts, toolRequest.ToolName);
                                 break;
                             }
                         }
@@ -440,7 +438,19 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         // Only accepted batches enter duplicate tracking; rejected siblings can be resubmitted unchanged.
                         if (failureSummary is null)
                         {
-                            seenCalls = batchCalls;
+                            foreach (var toolRequest in toolRequests)
+                            {
+                                var arguments = SkillCanonicalJson.CanonicalizeValue(ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
+                                if (registrations.TryGetValue(toolRequest.ToolName, out var advertised))
+                                {
+                                    seenCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(advertised.Tool, modelContext.SecurityPolicy).Definition, arguments);
+                                }
+                                else
+                                {
+                                    seenCalls.TryAdd(toolRequest.ToolName, arguments);
+                                }
+                            }
+
                             try
                             {
                                 results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);

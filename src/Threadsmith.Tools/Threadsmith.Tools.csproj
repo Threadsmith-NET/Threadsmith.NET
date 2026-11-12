@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
     <InternalsVisibleTo Include="Threadsmith.Skills" />
     <InternalsVisibleTo Include="Threadsmith.Execution" />
     <PackageReference Include="PDFtoImage" />

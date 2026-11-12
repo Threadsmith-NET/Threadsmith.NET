@@ -80,6 +80,8 @@ public static partial class SourceEditAnalysisTests
         if (replaceEncodingAfterApply)
         {
             Assert.True(analysis.Obsolete);
+            Assert.False(analysis.Pending);
+            Assert.NotEqual("pending", analysis.Analyzers.Status);
             Assert.Null(analysis.CommittedGeneration);
             Assert.False(completed.Task.IsCompleted);
             return;

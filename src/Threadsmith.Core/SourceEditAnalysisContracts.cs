@@ -38,6 +38,15 @@ public sealed record SourceEditAnalyzerAnalysis
     /// <summary>Reportable, unsuppressed selected findings after shared exclusions.</summary>
     public int ReportableFindings { get; init; }
 
+    /// <summary>Reportable errors before retention limits, or null for older evidence without severity totals.</summary>
+    public int? Errors { get; init; }
+
+    /// <summary>Reportable warnings before retention limits, or null for older evidence without severity totals.</summary>
+    public int? Warnings { get; init; }
+
+    /// <summary>Reportable informational suggestions before retention limits, or null for older evidence without severity totals.</summary>
+    public int? Suggestions { get; init; }
+
     /// <summary>Introduced findings, or null when matching complete comparison is unavailable.</summary>
     public int? NewFindings { get; init; }
 

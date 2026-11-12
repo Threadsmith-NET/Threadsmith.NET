@@ -35,6 +35,314 @@ The approval modal shows command, directory, shell/targets, outcome, sources, re
 
 A pending Always response is reserved before saving. Only its own correlated authority refresh can preserve its launch continuation. A session reset or unrelated refresh denies that continuation, even if the save later succeeds. Resetting live approvals does not roll back an accepted persistent approval or unrelated settings: use saved-approval revocation to remove it. A disk-committed approval can therefore remain saved while the originating invocation is denied. The existing primary operation scope carries completed, correlated publications to later parent and child rounds. Each round retains its own captured restrictions. This does not upgrade queued requests or unrelated operations. The user-only completion surface reports the save/activation receipt separately from the current continuation. If a save throws or is cancelled without a completed receipt, it reports the uncertainty and asks the user to inspect saved approvals before retrying. Model-facing rejection stays generic.
 
+## Configuration examples
+
+These examples are configuration data to edit manually, not commands to run. Merge their `tools` members into the existing file; do not replace unrelated provider, MCP, memory, or permission settings.
+
+| Source | File | Use |
+| --- | --- | --- |
+| User | `~/.threadsmith/config.json` (`%USERPROFILE%\.threadsmith\config.json` on Windows) | Personal ordinary rules and saved exact approvals. |
+| Machine | `<CommonApplicationData>/Threadsmith/config.json` (`%ProgramData%\Threadsmith\config.json` on Windows) | Shared ordinary defaults and administrator-enforced constraints. |
+
+`CommonApplicationData` is the .NET platform folder used by the host. An isolated user profile changes these locations; see the [user guide](../user-guide.md#effective-configuration-preflight) for profile isolation. Command policy does not belong in the checkout's `.threadsmith/config.json` or the per-repository `permissions.json` file.
+
+The outer `tools.allowedExecutables` array must include **both the shell and each admitted executable or literal cmdlet/alias name**. Higher-precedence ordinary arrays replace lower arrays; extend your existing list deliberately. Adding a name here does not itself allow a command. Tool enablement, repository trust, mandatory tool approval, and enforced restrictions still apply.
+
+### User example: allow inspection, review changes, deny selected operations
+
+Merge this into user `config.json`. It selects PowerShell 7 (`pwsh`) and a host-owned 600-second default, bounded at 1,200 seconds. Adjust those operational settings to your environment; the model has no timeout argument.
+
+```json
+{
+  "tools": {
+    "allowedExecutables": [
+      "pwsh", "git", "dotnet", "Get-Process", "Get-ChildItem", "gci",
+      "New-Item", "Remove-Item", "Set-Location"
+    ],
+    "runProcess": {
+      "shellExecutable": "pwsh",
+      "defaultTimeoutSeconds": 600,
+      "maxTimeoutSeconds": 1200,
+      "commandPolicy": {
+        "schemaVersion": 1,
+        "common": {
+          "rules": [
+            {
+              "id": "git-review",
+              "policy": "ApprovalRequiredSession",
+              "overrides": ["git-standard"],
+              "matchers": [
+                { "type": "executable", "value": "git" },
+                { "type": "exact", "fact": "CommandKind", "value": "external" }
+              ],
+              "denyArgumentsMatching": ["(?i)(^| )(reset|clean|push)( |$)"]
+            }
+          ]
+        },
+        "platforms": {
+          "windows": {
+            "shells": {
+              "pwsh": {
+                "rules": [
+                  {
+                    "id": "inspect-processes-and-files",
+                    "policy": "Allow",
+                    "matchers": [
+                      { "type": "valueSet", "fact": "ExecutableName", "ignoreCase": true, "values": ["Get-Process", "Get-ChildItem", "gci"] },
+                      { "type": "exact", "fact": "CommandKind", "value": "shell-command" }
+                    ]
+                  },
+                  {
+                    "id": "create-with-review",
+                    "policy": "ApprovalRequired",
+                    "matchers": [{ "type": "executable", "value": "New-Item" }]
+                  },
+                  {
+                    "id": "delete-with-review-every-time",
+                    "policy": "ApprovalAlwaysRequired",
+                    "matchers": [{ "type": "executable", "value": "Remove-Item" }],
+                    "denyArgumentsMatching": ["(?i)(^| )-Recurse(:| |$)"]
+                  },
+                  {
+                    "id": "deny-directory-changes",
+                    "policy": "AlwaysDeny",
+                    "matchers": [{ "type": "executable", "value": "Set-Location" }]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Expected command-policy decisions, before independent host gates:
+
+| Request | Result |
+| --- | --- |
+| `dotnet --version` | Allowed by the shipped `dotnet-standard` rule. |
+| `Get-Process` | Allowed without command approval. |
+| `Get-ChildItem -LiteralPath src` or `gci -LiteralPath src` | Allowed; both spellings are explicitly configured. |
+| `git status` | Approval offers Once, this session, or deny. A remembered grant covers that exact context, not all Git commands. |
+| `git diff` | A different exact invocation; a saved `git status` grant does not cover it. |
+| `git reset --hard`, `git clean -fd`, or `git push` | Denied by the argument expression, without an approval option. |
+| `New-Item -ItemType File -Path .inbox/policy-demo.txt` | Approval can offer Once, this session, always going forward, or deny. Always requires the attached user publication flow. |
+| `Remove-Item -LiteralPath .inbox/policy-demo.txt` | Fresh Once/deny approval every time; session and permanent grants are not offered. |
+| `Remove-Item -Recurse .inbox/policy-demo` | Denied by the argument expression even if deletion would otherwise be approvable. |
+| `Set-Location src` | Explicitly denied without prompting. |
+| `Get-Service` | Denied: neither the outer list nor the example's ordinary rules permit it. |
+| `Get-Process \| Get-ChildItem` | Denied by preparation: unresolved shell commands cannot participate in compounds. |
+| `git status; dotnet --version` | An external-only compound can be admitted, with combined exact approval. Every action must pass before either starts. |
+
+The examples assume the named cmdlets/aliases are unresolved external names. If PATH contains a native executable of the same name, native binding takes precedence and the `shell-command` inspection rule does not authorize it. A permitted but nonexistent alias fails in the shell; permission does not create an alias.
+
+The deny expressions are literal joined-argument text filters, **not** Git or PowerShell parameter parsers. The `-Recurse` example does not recognize every abbreviation or equivalent operation. The Git expression can also match the same words in harmless argument text. Admitted commands retain ambient account authority; these examples do not confine file access to the repository or prevent a permitted build from deleting files.
+
+### Change or disable a shipped rule
+
+Adding a second matching rule with a different outcome is not an implicit priority rule. It creates a conflict unless `overrides` explicitly resolves it. The `git-review` example overrides the outcome of the shipped `git-standard` rule while retaining its applicable argument-deny expressions.
+
+To require approval for .NET CLI commands too, add this complete rule to the user example's `common.rules` array:
+
+```json
+{
+  "id": "dotnet-review",
+  "policy": "ApprovalAlwaysRequired",
+  "overrides": ["dotnet-standard"],
+  "matchers": [
+    { "type": "executable", "value": "dotnet" },
+    { "type": "exact", "fact": "CommandKind", "value": "external" }
+  ]
+}
+```
+
+A same-ID ordinary rule is a **complete replacement**, not a patch: replacing `git-standard` without copying its argument-deny expressions removes those ordinary restrictions. `disabledRuleIds` removes an inherited ordinary rule entirely. To remove the shipped .NET permission instead of reviewing it, add `"disabledRuleIds": ["dotnet-standard"]` to `common` and do not add `dotnet-review`. Leaving `dotnet` in the outer executable list does not restore the missing command permission. Remove rules that override a disabled ID as well; unresolved override IDs invalidate configuration.
+
+The user example's ordinary `common.rules` and platform/shell rules can also be placed in machine configuration as shared defaults. User ordinary rules can replace or disable ordinary machine rules. Use machine `enforced` constraints when users must not weaken a restriction.
+
+### Machine example: mandatory denial and per-invocation review
+
+Merge this into the **machine** configuration. It can be combined with the user example above. Machine constraints restrict otherwise authorized commands; they do not grant ordinary permission.
+
+```json
+{
+  "tools": {
+    "runProcess": {
+      "commandPolicy": {
+        "schemaVersion": 1,
+        "common": {
+          "enforced": [
+            {
+              "id": "organization-deny-remove-item",
+              "policy": "AlwaysDeny",
+              "matchers": [{ "type": "executable", "value": "Remove-Item" }]
+            },
+            {
+              "id": "organization-review-dotnet",
+              "policy": "ApprovalAlwaysRequired",
+              "matchers": [
+                { "type": "executable", "value": "dotnet" },
+                { "type": "exact", "fact": "CommandKind", "value": "external" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+With both examples loaded, `Remove-Item` is denied despite the user's approval rule, and `dotnet --version` requires fresh Once/deny approval despite the shipped Allow. The user's Git review and inspection rules continue to operate. A user Allow, saved approval, `disabledRuleIds`, or ordinary `overrides` cannot remove these machine constraints. The denial matches the configured literal name; it is not a sandbox against equivalent operations through other admitted commands.
+
+Put command constraints in `tools.runProcess.commandPolicy.common.enforced` (or the corresponding machine platform/shell profile). **Do not wrap a command-policy document in the top-level `enforced.tools.runProcess.commandPolicy` path**; that shape is rejected.
+
+To disable the entire model tool at the machine level, the separate top-level permission restriction is supported:
+
+```json
+{
+  "enforced": {
+    "tools": { "deny": ["run_process"] }
+  }
+}
+```
+
+### Machine example: require membership in a closed set
+
+As an alternative machine command-policy subtree, use:
+
+```json
+{
+  "schemaVersion": 1,
+  "common": {
+    "requireEnforcedMatch": true,
+    "enforced": [
+      {
+        "id": "organization-dotnet-member",
+        "policy": "Allow",
+        "matchers": [
+          { "type": "executable", "value": "dotnet" },
+          { "type": "exact", "fact": "CommandKind", "value": "external" }
+        ]
+      },
+      {
+        "id": "organization-process-inspection-member",
+        "policy": "Allow",
+        "matchers": [{ "type": "executable", "value": "Get-Process" }]
+      }
+    ]
+  }
+}
+```
+
+Place this object at machine `tools.runProcess.commandPolicy`, replacing the previous machine command-policy example. With the user example retained, `dotnet --version` and `Get-Process` have both ordinary permission and machine membership. `git status` and `Get-ChildItem` are denied for lacking membership. An enforced `Allow` is membership only: a name still needs ordinary permission and admission through the outer executable ceiling. This closed set also prevents user rules from expanding the admitted name set.
+
+### Limit a cmdlet rule by working directory
+
+To narrow the user example's deletion rule, replace that complete rule with:
+
+```json
+{
+  "id": "delete-with-review-every-time",
+  "policy": "ApprovalAlwaysRequired",
+  "matchers": [
+    { "type": "executable", "value": "Remove-Item" },
+    { "type": "path", "fact": "WorkingDirectory", "values": ["C:\\source\\repos\\Example"] }
+  ],
+  "denyArgumentsMatching": ["(?i)(^| )-Recurse(:| |$)"]
+}
+```
+
+The path matcher includes the named directory and its descendants. Replace the example root with the intended absolute path using the profile's platform syntax. This checks the **working directory**, not file paths in arguments: an absolute argument can still name a file elsewhere. Other ordinary rules must not independently allow the same operation if this restriction is intended to be exclusive.
+
+### CMD, Windows PowerShell, and Unix shells
+
+Rules under `windows.shells.pwsh` do not automatically apply to `powershell` or `cmd`. For Windows PowerShell, select `shellExecutable: "powershell"`, include `powershell` in the outer list, and place its cmdlet rules under `windows.shells.powershell`.
+
+For CMD, this standalone user command-policy subtree allows the literal `dir` builtin:
+
+```json
+{
+  "schemaVersion": 1,
+  "platforms": {
+    "windows": {
+      "shells": {
+        "cmd": {
+          "rules": [
+            {
+              "id": "cmd-directory-inspection",
+              "policy": "Allow",
+              "matchers": [
+                { "type": "executable", "value": "dir" },
+                { "type": "exact", "fact": "CommandKind", "value": "shell-command" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+Set `tools.runProcess.shellExecutable` to `cmd` and include `cmd` and `dir` in `tools.allowedExecutables`. `dir src` is eligible as a single action; `dir src & dir tests` is rejected as a compound containing unresolved shell commands. Redirection remains unsupported.
+
+For Bash/sh/zsh, use the actual `linux` or `macos` platform and matching shell key. Include the shell and each external executable or literal builtin spelling in the outer list. These JSON profiles do not establish that a shell is installed or that a dialect has been validated on your platform. The same literal-name, no-expansion, single-shell-command, and default-deny limits apply.
+
+### PowerShell and shell script files
+
+`run_process` supports existing `.ps1` and `.sh` files through the normal command-policy and approval pipeline. For example:
+
+```text
+./eng/release/Test-SourceDocumentation.ps1
+pwsh -NoProfile -File ./eng/release/Test-SourceDocumentation.ps1
+bash -- ./eng/check.sh
+```
+
+Use the selected outer shell's literal quoting rules; PowerShell needs `&` before a quoted direct script path. Relative script paths resolve against the admitted working directory, not PATH. Files must exist. Direct `.ps1` calls use the selected PowerShell engine, or `pwsh` when the outer shell is not PowerShell. Direct `.sh` calls use the selected Bash/sh/zsh engine, or `bash` otherwise. The script need not have executable permission; its interpreter reads it. Explicit interpreter calls select that engine instead of a shebang.
+
+Each call has **two independently authorized actions**: the absolute interpreter with its normalized complete argv, and the absolute script with `CommandKind: script`. The script's `ExecutableName` includes its extension, and its `Arguments` contain only the literal script arguments. The outer shell, interpreter name, and script filename must all appear in `tools.allowedExecutables`. Both actions need matching ordinary command rules. No interpreter or script is automatically allowed. Either action can use any normal outcome; the strictest applicable approval scope produces one prompt, and denial prevents the entire request from launching.
+
+For example, merge these rules into trusted user `tools.runProcess.commandPolicy.common.rules`, and add `pwsh` and `Test-SourceDocumentation.ps1` to the existing outer executable list:
+
+```json
+[
+  {
+    "id": "powershell-script-interpreter",
+    "policy": "Allow",
+    "matchers": [{ "type": "executable", "value": "pwsh" }]
+  },
+  {
+    "id": "review-documentation-script",
+    "policy": "ApprovalRequired",
+    "matchers": [
+      { "type": "executable", "value": "C:\\source\\repos\\Threadsmith\\eng\\release\\Test-SourceDocumentation.ps1" },
+      { "type": "exact", "fact": "CommandKind", "value": "script" }
+    ]
+  }
+]
+```
+
+Replace the absolute example path with your checkout. Choose `Allow`, `AlwaysDeny`, or another approval outcome deliberately. Bash/sh/zsh scripts use the same rule shape with their interpreter and `.sh` filename. An `executable` matcher can select either the complete script path or its filename. A filename rule applies to that name at **any explicitly supplied path**; use full paths, or a `ResolvedExecutable` path matcher combined with an `ExecutableName` glob such as `*.ps1`, to restrict a directory. List each admitted script filename in the outer executable ceiling. An explicitly absolute interpreter operand needs a rule matching its full path, as for other `explicit-external` commands.
+
+PowerShell wrappers admit exact `-File`, optionally preceded by `-NoLogo`, `-NoProfile`, or `-NonInteractive` (case-insensitive). Bash/sh/zsh wrappers admit a script operand, optional `--`, and the individual flags `-e`, `-u`, `-x`, `-v`, or `-f`; Bash also admits `--noprofile` and `--norc`. Preparation adds no-profile/noninteractive startup flags where supported and pins both targets in the frozen environment. Unknown flags, abbreviations, combined flags, stdin scripts, inline `-Command`/`-EncodedCommand`/`-c`, and other unanalyzed shell modes remain denied. Native argument quoting restrictions still apply.
+
+Script rules, machine constraints, argument-deny expressions, exact remembered approvals, cancellation, progress, and completion use the existing execution path. Script argument-deny expressions see only script arguments; interpreter expressions see the normalized interpreter argv, including startup flags and the absolute script operand. Scripts may participate in compounds, but every action must pass before any part starts.
+
+Permission approves the path and invocation, **not a content hash or the script's downstream operations**. Script contents, imports, subprocesses, filesystem access, and network access are not analyzed or confined. File replacement races and ambient account authority remain, just as for approved native programs.
+
+### Apply and diagnose changes
+
+1. Merge into the correct trusted file and preserve existing arrays/settings. Verify the selected shell and outer executable names.
+2. Restart after changing `shellExecutable`, runtime timeout settings, tool enablement, or the outer executable ceiling. For command-policy-only edits, wait for idle execution and use `/command-policy pwsh reload` (substitute the selected shell key).
+3. Run `/command-policy pwsh inspect` to check sources, revision, and rule IDs. Its bounded preview is not a full dump of every matcher.
+4. Try a harmless, permitted single action first. Then verify an approval case and a denied case. Headless execution cannot answer an interactive approval prompt.
+5. If a request is denied, distinguish missing tool/trust/outer-list authority, unmatched command rules, conflicting outcomes, machine constraints, argument-deny expressions, and unsupported shell grammar. Approval cannot repair these denials.
+6. To change remembered decisions, use `/command-policy pwsh reset-session` or `/command-policy pwsh revoke <id>`. Editing a rule can invalidate prior exact grants; granting one command does not authorize its aliases, other arguments, or a compound request.
+
 ## Matchers
 
 Top-level matchers are AND. `allOf` and `anyOf` have nonempty `matchers` arrays. Matchers select command facts, not command-specific argument grammars.
@@ -100,7 +408,7 @@ Shipped rules allow Git and .NET CLI commands without subcommand dispatch or opt
 
 Direct HTTP clients and OS component installation are denied by shipped rules or unresolved-action denial. The shipped HTTP-client name set is case-insensitive on every platform, including explicit external paths; this deliberately also denies distinct uppercase Unix names in that set. The Git rule uses a small configurable set of deny expressions for selected explicit execution text. They do not detect every abbreviation, short-option cluster or equivalent form and can reject harmless lookalikes, including option-looking message text. They do not inspect ambient Git hooks/helpers/configuration or prohibit normal network and package workflows. Review or replace the expressions deliberately when changing trusted policy.
 
-Preparation admits static literal external commands, single simple shell-command actions, quoted arguments, and validated external-only sequences/pipelines. Embedded literal tildes, including unquoted .NET filters such as `FullyQualifiedName~ShellCommandPolicy`, are preserved; unsupported home-expansion forms remain rejected. PowerShell quoted executable names require an invocation operator. Profiles/startup hooks are disabled where supported and environment inputs are frozen. PowerShell's `--%` stop-parsing token is rejected even when quoted. Windows Bash/sh/zsh launches freeze `MSYS2_ARG_CONV_EXCL=*` and `MSYS_NO_PATHCONV=1` so MSYS does not rewrite authorized native arguments. Dynamic names, expansion/substitution, script syntax, unanalyzed nested shell dialects, redirection and unverified native argument forms are denied rather than approximated. Literal evaluation or dispatch commands, like other commands, need explicit permission; their downstream behavior is not inspected. The current limits are 32,768 command characters, bounded static actions/tokens, 512 KiB policy documents, JSON depth 32, matcher nesting 12 and bounded live grant stores.
+Preparation admits static literal external commands, bound `.ps1`/`.sh` file invocations, single simple shell-command actions, quoted arguments, and validated sequences/pipelines of bound targets. Embedded literal tildes, including unquoted .NET filters such as `FullyQualifiedName~ShellCommandPolicy`, are preserved; unsupported home-expansion forms remain rejected. PowerShell quoted executable names require an invocation operator. Profiles/startup hooks are disabled where supported and environment inputs are frozen. PowerShell's `--%` stop-parsing token is rejected even when quoted. Windows Bash/sh/zsh launches freeze `MSYS2_ARG_CONV_EXCL=*` and `MSYS_NO_PATHCONV=1` so MSYS does not rewrite authorized native arguments. Dynamic names, expansion/substitution, inline script syntax, unanalyzed nested shell dialects, redirection and unverified native argument forms are denied rather than approximated. Literal evaluation or dispatch commands, like other commands, need explicit permission; their downstream behavior is not inspected. The current limits are 32,768 command characters, bounded static actions/tokens, 512 KiB policy documents, JSON depth 32, matcher nesting 12 and bounded live grant stores.
 
 Windows native `cmd`, Windows PowerShell, `pwsh`, native Git Bash and `sh` have local shadowing fixture evidence. `zsh` was unavailable locally. WSL `bash.exe` wrappers are rejected because they cannot bind Windows native target identities. Linux/macOS and unavailable dialects still require their own real-platform evidence before support is claimed. Parser/fake-process tests are not that evidence.
 

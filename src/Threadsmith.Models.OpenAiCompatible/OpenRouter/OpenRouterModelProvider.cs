@@ -133,16 +133,17 @@ internal sealed class OpenRouterModelProvider : IModelProvider
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 529)
+                    var details = await ProviderErrorDetails.ReadAsync(response, _secret, token, _timeProvider);
+                    if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 529)
                     {
-                        throw new TransientModelException($"OpenRouter remained unavailable after {attempt} attempts (HTTP {(int)response.StatusCode}).")
+                        throw new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"OpenRouter remained unavailable after {attempt} attempts (HTTP {(int)response.StatusCode})."))
                         {
                             IsRateLimit = response.StatusCode == HttpStatusCode.TooManyRequests,
                             RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
                         };
                     }
 
-                    throw new ModelProviderException($"OpenRouter rejected the request with HTTP {(int)response.StatusCode}.");
+                    throw new ModelProviderException(ProviderErrorDetails.PreferMessage(details, $"OpenRouter rejected the request with HTTP {(int)response.StatusCode}."));
                 }
 
                 await using var chunks = new OpenRouterResponsesStream(_profile, _model, _secret, _protocol).ReadAsync(response, request, names, maximum, token).GetAsyncEnumerator(token);

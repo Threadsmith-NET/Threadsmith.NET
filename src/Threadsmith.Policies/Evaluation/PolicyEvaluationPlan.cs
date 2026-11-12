@@ -75,7 +75,7 @@ internal sealed class PolicyEvaluationPlan
                 }
             }
 
-            if (facts.CommandKind is CommandPolicyNames.External or CommandPolicyNames.ShellCommand
+            if (facts.CommandKind is CommandPolicyNames.External or CommandPolicyNames.ShellCommand or CommandPolicyNames.Script
                 && !_executables.Comparer.Equals(facts.ExecutableName, facts.ResolvedExecutable)
                 && _executables.TryGetValue(facts.ExecutableName, out var named))
             {

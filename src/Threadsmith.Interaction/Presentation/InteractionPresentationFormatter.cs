@@ -294,7 +294,7 @@ internal static partial class InteractionPresentationFormatter
                 + $"analyzers {analyzers.Status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} documents";
             if (analyzers.Status is "completed" or "partial")
             {
-                summary += $"; {analyzers.ReportableFindings} analyzer findings";
+                summary += $"; {analyzers.ReportableFindings} analyzer findings" + FormatAnalyzerSeverityCounts(analyzers);
                 if (analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope)
                 {
                     summary += "; coverage incomplete";
@@ -1549,6 +1549,10 @@ internal static partial class InteractionPresentationFormatter
         }
     }
 
+    private static string FormatAnalyzerSeverityCounts(SourceEditAnalyzerAnalysis analyzers) =>
+        analyzers is { Errors: { } errors, Warnings: { } warnings, Suggestions: { } suggestions }
+            ? $" ({errors} errors, {warnings} warnings, {suggestions} suggestions)" : string.Empty;
+
     private static void AppendAnalyzerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis)
     {
         var analyzers = analysis.Analyzers;
@@ -1562,7 +1566,7 @@ internal static partial class InteractionPresentationFormatter
         lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
         if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
         {
-            var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}";
+            var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}" + FormatAnalyzerSeverityCounts(analyzers);
             counts += analyzers.NewFindings is { } introduced && analyzers.ResolvedFindings is { } resolved
                 ? $"; {introduced} new; {resolved} resolved" : "; before/after comparison unavailable";
             lines.Add(new(TuiBlockLineKind.Item, counts, PresentationTextRole.Muted));

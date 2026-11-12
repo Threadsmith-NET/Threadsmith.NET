@@ -680,11 +680,11 @@ public sealed record ToolExecutionContext(
     internal CancellationToken? CallerCancellation { get; init; }
 }
 
-/// <summary>Resolves supported invocation timeout hints and tool-specific hard limits.</summary>
-internal interface IInvocationTimeoutTool
+/// <summary>Applies tool-specific host limits to the configured execution timeout.</summary>
+internal interface IToolTimeoutPolicy
 {
-    /// <summary>Returns the requested or configured timeout, bounded by the tool's hard maximum.</summary>
-    TimeSpan ResolveTimeout(object input, ToolInvocationContext context, TimeSpan configuredTimeout);
+    /// <summary>Returns the configured timeout bounded by the tool's host-owned hard maximum.</summary>
+    TimeSpan ResolveTimeout(ToolInvocationContext context, TimeSpan configuredTimeout);
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>

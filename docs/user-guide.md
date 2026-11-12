@@ -778,7 +778,65 @@ These settings narrow runtime use independently of availability:
 - `tools:allowedExecutables`;
 - `tools:allowedNetworkHosts`.
 
-`run_process` exposes a general `command` plus optional `timeoutSeconds` and executes through `tools:runProcess:shellExecutable`. Enabled tools are advertised under current trust and tool allow/deny policy; execution side effects and required approval do not hide them. `timeoutSeconds` is a nonnegative hint: zero uses the host default and oversized positive values run at the configured ceiling. The shell uses a bounded static grammar: all actions are analyzed and bound to absolute targets before any pipeline or sequence starts. Unmatched or unsupported input is denied without an approval fallback. Machine/user command rules replace the old coarse `requireApproval` switch; independent mandatory tool review still applies. `tools:allowedExecutables` remains the outer-shell ceiling, not a grant for its contents. Cancellation terminates the tracked process tree and results retain bounded stdout/stderr. Approved binaries retain ambient account authority: this is not an OS or network sandbox. See the [command-policy reference](operations/command-policy.md) for configuration, exact approval scopes, support limits, migration, inspection and revocation.
+`run_process` exposes a general `command` and optional `workingDirectory` and executes through `tools:runProcess:shellExecutable`. Enabled tools are advertised under current trust and tool allow/deny policy; execution side effects and required approval do not hide them. Execution timeouts are host-owned: `tools:runProcess:defaultTimeoutSeconds` supplies the default, runtime configuration can override it, and `tools:runProcess:maxTimeoutSeconds` plus mandatory policy ceilings bound it. The model cannot select a timeout. The shell uses a bounded static grammar: all actions are analyzed and bound to absolute targets before any pipeline or sequence starts. Unmatched or unsupported input is denied without an approval fallback. Machine/user command rules replace the old coarse `requireApproval` switch; independent mandatory tool review still applies. The shell and each command must pass `tools:allowedExecutables` as well as command policy. Cancellation terminates the tracked process tree and results retain bounded stdout/stderr. Approved binaries retain ambient account authority: this is not an OS or network sandbox. See the [command-policy reference](operations/command-policy.md) for configuration, exact approval scopes, support limits, migration, inspection and revocation.
+
+### Configure `run_process`: allow, deny, and approval
+
+Configure command rules in **user** `~/.threadsmith/config.json` or **machine** `<CommonApplicationData>/Threadsmith/config.json` (`%ProgramData%\Threadsmith\config.json` on Windows). They are not repository-owned settings. On Windows the user file normally lives at `%USERPROFILE%\.threadsmith\config.json`.
+
+There are two permission checks: `tools.allowedExecutables` must contain the selected shell **and each admitted executable/cmdlet/alias name**; `tools.runProcess.commandPolicy` must then authorize each command. An unmatched command is denied, rather than offered for approval. Arrays replace inherited arrays, so preserve names needed by other configured tools when merging examples.
+
+For example, merge this into user `config.json` to allow a single `Get-Process` invocation through PowerShell 7 while retaining shipped Git/.NET command rules:
+
+```json
+{
+  "tools": {
+    "allowedExecutables": ["pwsh", "git", "dotnet", "Get-Process"],
+    "runProcess": {
+      "shellExecutable": "pwsh",
+      "commandPolicy": {
+        "schemaVersion": 1,
+        "platforms": {
+          "windows": {
+            "shells": {
+              "pwsh": {
+                "rules": [
+                  {
+                    "id": "allow-process-inspection",
+                    "policy": "Allow",
+                    "matchers": [
+                      { "type": "executable", "value": "Get-Process" },
+                      { "type": "exact", "fact": "CommandKind", "value": "shell-command" }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+This permits the literal cmdlet name when no external executable of that name was resolved. It does not permit other cmdlets, expand aliases, or allow a pipeline containing unresolved shell commands. Independent trust, tool approval, and machine restrictions still apply. An admitted cmdlet has your account's ambient authority; it is not confined by `read_file` or source-edit path permissions.
+
+The [command-policy examples](operations/command-policy.md#configuration-examples) provide complete user and machine recipes:
+
+| Scenario | Example |
+| --- | --- |
+| Allow inspection cmdlets and explicit aliases; review creation/deletion; deny selected Git arguments | [User policy and expected decisions](operations/command-policy.md#user-example-allow-inspection-review-changes-deny-selected-operations) |
+| Make shipped Git/.NET rules require approval, or remove ordinary permission | [Replace, override, or disable rules](operations/command-policy.md#change-or-disable-a-shipped-rule) |
+| Require approval every time, allow session-only decisions, or offer persistent exact approval | The user example exercises `ApprovalAlwaysRequired`, `ApprovalRequiredSession`, and `ApprovalRequired`; see [approval choices](operations/command-policy.md#outcomes-and-approval). |
+| Prevent users from weakening a denial or approval requirement; disable `run_process` entirely | [Machine enforcement](operations/command-policy.md#machine-example-mandatory-denial-and-per-invocation-review) |
+| Allow only commands belonging to an administrator-selected set | [Machine closed set](operations/command-policy.md#machine-example-require-membership-in-a-closed-set) |
+| Limit a cmdlet rule to a working directory | [Directory matcher and its limits](operations/command-policy.md#limit-a-cmdlet-rule-by-working-directory) |
+| Configure `cmd`, Windows PowerShell, Bash, sh, or zsh | [Shell-specific profiles](operations/command-policy.md#cmd-windows-powershell-and-unix-shells) |
+
+`Allow` removes command-policy approval only. `AlwaysDeny`, machine constraints, argument-deny matches, and unsupported syntax cannot be overridden by approving a prompt. Do not add a contradictory rule and expect its order in JSON to give it priority; use the documented rule IDs and `overrides` behavior.
+
+After changing startup settings such as the shell or executable ceiling, restart. For command-policy-only edits, wait until idle and run `/command-policy pwsh reload`, then `/command-policy pwsh inspect`. Replace `pwsh` with the actual shell key. Invalid reload fails closed; correct the file and reload again. See [apply and diagnose changes](operations/command-policy.md#apply-and-diagnose-changes) for the verification and saved-approval workflow.
 
 ### Built-in tools
 
@@ -1244,15 +1302,17 @@ Anthropic thinking display defaults to off. `/thinking on|off` applies to the ne
 
 The compiled `openrouter` provider uses `https://openrouter.ai/api/v1/responses`, not Chat Completions. Add a provider and manually verified model entries to the `providers` array in `~/.threadsmith/providers.json`, preserving existing providers and defaults. Both provider and model entries use `type: "openrouter"`. Keep the API key in `~/.threadsmith/secrets/config.json` under `secrets` → `models` → `openrouter`, referenced by `secretKeyReference: "secrets:models:openrouter"`. See the [complete OpenRouter configuration template](operations/model-providers.md#openrouter-manual-catalog).
 
-Existing `openrouter` catalogs, model GUIDs, secrets, defaults and capability declarations need no migration. The endpoint is compiled: do not add `baseUri`, `chatCompletionsPath`, or an API-mode setting. Generic `openai-compatible` entries still use Chat Completions; an OpenRouter hostname does not convert them to the native provider. OpenRouter does not discover models or choose a new default. Restart after catalog changes, then select the model with `/models`. Delegated role mappings use the existing trusted user catalog.
+Replace the former OpenRouter `upstream` and model-level `expectedProviderName` fields with `upstreams: [{ "provider": "azure", "expectedProviderName": "Azure" }, { "provider": "openai", "expectedProviderName": "OpenAI" }]`. Keep model GUIDs, secrets, defaults and capability declarations. Restart after the change. The endpoint is compiled: do not add `baseUri`, `chatCompletionsPath`, or an API-mode setting. Generic `openai-compatible` entries still use Chat Completions; an OpenRouter hostname does not convert them to the native provider. OpenRouter does not discover models or choose a new default. Restart after catalog changes, then select the model with `/models`. Delegated role mappings use the existing trusted user catalog.
 
-Requests send the full authoritative history with `store: false`, without `previous_response_id`. Native tool calls and results remain governed by the normal host execution path. `/reasoning` uses the model's declared controls; `/thinking on|off` changes display independently and never removes private reasoning needed for tool continuation. Replay-capable profiles require a pinned `upstream` and `expectedProviderName`. Output limits use `max_output_tokens`; structured responses use `text.format`. Declare image, cache and reasoning capabilities only after checking the exact model/upstream's Responses support. Output remains text-only, and fixture tests do not establish live compatibility.
+Requests send the full authoritative history with `store: false`, without `previous_response_id`. Native tool calls and results remain governed by the normal host execution path. `/reasoning` uses the model's declared controls; `/thinking on|off` changes display independently and never removes private reasoning needed for tool continuation. Replay-capable profiles require a nonempty `upstreams` array with an expected response name for each routing slug. OpenRouter can fall back within that ordered list; one entry disables fallback. Private replay remains unchanged across permitted upstreams. Live cross-upstream replay remains unverified. Output limits use `max_output_tokens`; structured responses use `text.format`. Declare image, cache and reasoning capabilities only after checking the exact model/upstream's Responses support. Output remains text-only, and fixture tests do not establish live compatibility.
 
 ### Legacy model-profile migration
 
 Legacy `model:profiles[]` remains available for a bounded compatibility period when neither dedicated catalog exists. Threadsmith adapts those profiles only in memory, preserves each profile GUID and exact endpoint/request settings, writes no configuration, and emits one deprecation warning per startup. The removal milestone is not yet selected and requires a later announced decision.
 
 If a dedicated provider catalog and any legacy profile are both present, startup fails with an ambiguity error. Migrate mechanically by moving the legacy endpoint's authority/base path to provider-level `baseUri`, keeping `chat/completions` as `chatCompletionsPath`, moving `secretKeyReference` to the provider, retaining the legacy profile GUID as the nested model `id`, and copying model ID, capability, cost, workload, sensitivity, reasoning, temperature, timeout, and retry settings to that model. Do not place the resolved credential or an authorization header in `providers.json`.
+
+Provider failures retain their diagnostic label, such as `[TransientProvider]`, followed by the provider's sanitized message. The default TUI role remains warning (yellow); protocol metadata is omitted. If the provider supplies no usable message, Threadsmith shows a short fallback explanation.
 
 ### Model HTTP transport
 
@@ -1528,7 +1588,7 @@ Tool activity also includes concise context when a built-in explicitly defines a
    └ dotnet test src/Threadsmith.sln
 ```
 
-Direct edits appear as ordinary `edit_source` tool activity, exact mutation preview/review, applied mutation notices and advisory semantic checks. Build/test activity appears only for explicitly invoked checks. Late advisory notifications use plain-text coverage/error summaries; serialized analysis is model context, not output-window text. Adjacent visible lifecycle blocks use one presentation-owned blank line. Historical sessions may display their original plan or proposal notices during replay.
+Direct edits appear as ordinary `edit_source` tool activity, exact mutation preview/review, applied mutation notices and advisory semantic checks. Build/test activity appears only for explicitly invoked checks. Analyzer feedback includes separate error, warning, and suggestion totals counted before diagnostic retention limits. Older feedback without severity totals keeps its aggregate count. Late advisory notifications use plain-text coverage/error summaries; serialized analysis is model context, not output-window text. Adjacent visible lifecycle blocks use one presentation-owned blank line. Historical sessions may display their original plan or proposal notices during replay.
 
 ```json
 {

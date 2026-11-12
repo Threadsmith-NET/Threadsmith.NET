@@ -1,6 +1,7 @@
 namespace Threadsmith.ParallelAgents.Tests;
 
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -9,6 +10,9 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
+using Threadsmith.Policies.Commands;
+using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Evaluation;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -37,8 +41,25 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             var evidence = new EvidenceStore(events, sanitizer);
             var processes = new InheritedProcessManager();
             var configuration = new ConfigurationBuilder().Build();
+            var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+            var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+            var policy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                Fingerprint = "inherited-tools-fixture",
+                RepositoryPath = repository,
+                MaximumTrust = RepositoryTrustLevel.FullyTrustedAutomation,
+                ReadFolders = [repository],
+                WriteFolders = [Path.Combine(repository, ".inbox")],
+                AllowedExecutables = [shell, "dotnet"],
+                AllowedNetworkHosts = ["example.test"],
+                RequireShellApproval = false,
+                ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:parallel:maximumConcurrency", 4),
+                CommandPolicies = ImmutableDictionary<string, PolicySnapshot>.Empty.Add(shell, PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, platform, shell)),
+            };
             var registry = new ToolRegistry([
-                new RunProcessTool(processes, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "bash"),
+                new RunProcessTool(processes, TestPromptLoader.Instance, requireApproval: false, shellExecutable: shell),
                 new WriteFileTool(new WriteFileConfiguration(configuration, configuration, repository), new UnusedInheritedConversationStore(), TestPromptLoader.Instance),
                 new InspectMetadataTool(),
                 new InspectMetadataTool(subagentAvailable: false, toolId: "parent_only_metadata"),
@@ -66,7 +87,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovedRoots = ["."],
                 AllowedToolIds = ["run_process", "write_file", "invoke_skill", "parent_only_metadata", DelegateAgentsContract.ToolId],
-                AllowedExecutables = ["bash"],
+                AllowedExecutables = policy.AllowedExecutables,
+                SecurityPolicy = policy,
                 AllowedNetworkHosts = ["example.test"],
                 RequestedBy = "model",
                 ModelProfileId = frozen.Id,
@@ -178,8 +200,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             var process = Assert.Single(processes.Requests);
             Assert.NotEqual(rootRunId, process.RunId);
             Assert.Equal(repository, Path.TrimEndingDirectorySeparator(process.WorkingDirectory));
-            Assert.Equal("bash", process.FileName);
-            Assert.Contains("dotnet test", process.Arguments);
+            Assert.True(Path.IsPathFullyQualified(process.FileName));
+            Assert.Equal(shell, Path.GetFileNameWithoutExtension(process.FileName));
+            Assert.Equal(shell == "pwsh" ? "-Command" : "-c", process.Arguments[^2]);
+            Assert.Contains(shell == "pwsh" ? "dotnet.exe'" : "/dotnet'", process.Arguments[^1], OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            Assert.EndsWith(" 'test'", process.Arguments[^1], StringComparison.Ordinal);
             var requests = provider.Requests.ToArray();
             Assert.Equal(3, requests.Length);
             Assert.Equal(0, usage.GetOwnerSnapshot(sessionId).InputTokens);
@@ -293,6 +318,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.Equal(_parentAuthority.TrustLevel, context.TrustLevel);
             Assert.Equal(_parentAuthority.ApprovedRoots, context.ApprovedRoots);
             Assert.Equal(_parentAuthority.AllowedExecutables, context.AllowedExecutables);
+            var policy = Assert.IsType<EffectiveSessionPolicy>(context.SecurityPolicy);
+            Assert.Equal(_parentAuthority.SecurityPolicy!.BindingId, policy.BindingId);
+            Assert.Equal(_parentAuthority.SecurityPolicy.Generation, policy.Generation);
+            Assert.Equal(_parentAuthority.SecurityPolicy.CommandPolicies, policy.CommandPolicies);
+            Assert.Equal(_parentAuthority.SecurityPolicy.AllowedExecutables, policy.AllowedExecutables);
             Assert.Equal(_parentAuthority.AllowedNetworkHosts, context.AllowedNetworkHosts);
             Assert.Equal("model", context.RequestedBy);
             Assert.Equal(request.ResolvedProfileId, context.ModelProfileId);

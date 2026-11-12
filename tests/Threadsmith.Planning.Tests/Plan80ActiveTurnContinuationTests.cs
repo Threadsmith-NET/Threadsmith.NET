@@ -1,5 +1,6 @@
 namespace Threadsmith.Planning.Tests;
 
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,6 +8,9 @@ using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Policies.Commands;
+using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Evaluation;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -874,6 +878,21 @@ public static partial class Plan80ActiveTurnContinuationTests
             const string hiddenValidationOutputPrefix = "hidden-native-validation-output:";
             var hiddenValidationOutput = hiddenValidationOutputPrefix + new string('v', 20_000);
             var opaqueOutput = new string('p', 2_000);
+            var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+            var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+            var policy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                Fingerprint = "baseline-projection-fixture",
+                RepositoryPath = root,
+                MaximumTrust = RepositoryTrustLevel.TrustedBuild,
+                ReadFolders = [root],
+                AllowedExecutables = [shell, "dotnet"],
+                RequireShellApproval = false,
+                ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:parallel:maximumConcurrency", 4),
+                CommandPolicies = ImmutableDictionary<string, PolicySnapshot>.Empty.Add(shell, PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, platform, shell)),
+            };
             await using var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
@@ -890,7 +909,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                     new BaselineProcessManager(opaqueOutput),
                     TestPromptLoader.Instance,
                     requireApproval: false,
-                    shellExecutable: "powershell"),
+                    shellExecutable: shell),
             ]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -916,7 +935,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                     RepositoryPath = root,
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
                     ApprovedRoots = ["."],
-                    AllowedExecutables = ["dotnet", "powershell"],
+                    AllowedExecutables = policy.AllowedExecutables,
+                    SecurityPolicy = policy,
                     RequestedBy = "plan-113-baseline",
                 }),
                 CreateAssembler(
@@ -951,6 +971,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             var projectedContent = projected.GetModelVisibleContent();
             var opaqueContent = opaque.GetModelVisibleContent();
             Assert.False(projected.IsError, projectedContent);
+            Assert.False(opaque.IsError, opaqueContent);
             Assert.DoesNotContain(hiddenValidationOutputPrefix, projectedContent, StringComparison.Ordinal);
             Assert.Contains("\"success\":true", projectedContent, StringComparison.Ordinal);
             Assert.Contains(opaqueOutput, opaqueContent, StringComparison.Ordinal);
@@ -1782,7 +1803,7 @@ public static partial class Plan80ActiveTurnContinuationTests
                 {
                     Output = new ToolRequestModelOutput(
                         "run_process",
-                        "{\"command\":\"Write-Output baseline\"}"),
+                        "{\"command\":\"dotnet --version\"}"),
                     Usage = new ModelUsage(10, 5),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };

@@ -180,7 +180,7 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
             return true;
         }
 
-        if (facts.CommandKind is not (CommandPolicyNames.External or CommandPolicyNames.ShellCommand))
+        if (facts.CommandKind is not (CommandPolicyNames.External or CommandPolicyNames.ShellCommand or CommandPolicyNames.Script))
         {
             return false;
         }

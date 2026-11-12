@@ -2,13 +2,25 @@ namespace Threadsmith.Models.OpenAiCompatible.OpenRouter;
 
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Explicit secrets-authenticated OpenRouter connection, with a compiled HTTPS authority.</summary>
 public sealed record OpenRouterProviderConfiguration : ModelProviderConfiguration;
 
+/// <summary>One permitted upstream and its response identity.</summary>
+public sealed record OpenRouterUpstreamConfiguration
+{
+    /// <summary>OpenRouter routing slug.</summary>
+    public required string Provider { get; init; }
+
+    /// <summary>Provider display name returned in Responses events.</summary>
+    public required string ExpectedProviderName { get; init; }
+}
+
 /// <summary>Manually verified capabilities for one exact OpenRouter model and upstream.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record OpenRouterModelConfiguration : ModelConfiguration
 {
     /// <summary>Exact vendor/model slug; dynamic routers and model fallback lists are not supported.</summary>
@@ -23,14 +35,11 @@ public sealed record OpenRouterModelConfiguration : ModelConfiguration
     /// <summary>Maps enabled host levels to reasoning budgets, mutually exclusive with effort mappings.</summary>
     public IReadOnlyDictionary<ReasoningLevel, int> ReasoningBudgets { get; init; } = new Dictionary<ReasoningLevel, int>();
 
-    /// <summary>Whether complete reasoning details can be replayed to the pinned upstream.</summary>
+    /// <summary>Whether complete reasoning details can be replayed to the configured upstream list.</summary>
     public bool SupportsReasoningReplay { get; init; }
 
-    /// <summary>Optional exact upstream identifier; required for private reasoning replay.</summary>
-    public string? Upstream { get; init; }
-
-    /// <summary>Expected response provider display name, distinct from an endpoint routing slug; required for replay.</summary>
-    public string? ExpectedProviderName { get; init; }
+    /// <summary>Ordered permitted upstreams; null permits unrestricted routing when replay is disabled.</summary>
+    public IReadOnlyList<OpenRouterUpstreamConfiguration>? Upstreams { get; init; }
 
     /// <summary>Whether this exact model/upstream performs automatic prefix caching.</summary>
     public bool AutomaticPrefixCaching { get; init; }
@@ -70,7 +79,7 @@ public sealed class OpenRouterProviderRegistration : IModelProviderRegistration,
     public Type ModelConfigurationType => typeof(OpenRouterModelConfiguration);
 
     /// <inheritdoc />
-    public IReadOnlyList<string> RepositoryProtectedModelProperties { get; } = ["modelId", "upstream", "expectedProviderName", "reasoningControl", "supportsReasoningReplay", "effortMap", "reasoningBudgets"];
+    public IReadOnlyList<string> RepositoryProtectedModelProperties { get; } = ["modelId", "upstreams", "reasoningControl", "supportsReasoningReplay", "effortMap", "reasoningBudgets"];
 
     /// <inheritdoc />
     public void Validate(ModelProviderConfiguration provider)
@@ -112,13 +121,22 @@ public sealed class OpenRouterProviderRegistration : IModelProviderRegistration,
                 throw new InvalidOperationException("OpenRouter capability declarations do not match their protocol support metadata.");
             }
 
+            var upstreams = model.Upstreams ?? [];
+            if (model.Upstreams is { Count: 0 }
+                || upstreams.Any(entry => entry is null || string.IsNullOrWhiteSpace(entry.Provider)
+                    || entry.Provider.Length > 128 || entry.Provider.Any(char.IsWhiteSpace) || entry.Provider.Any(char.IsControl)
+                    || string.IsNullOrWhiteSpace(entry.ExpectedProviderName)
+                    || entry.ExpectedProviderName.Length > 128 || entry.ExpectedProviderName.Any(char.IsControl))
+                || upstreams.Select(entry => entry.Provider).Distinct(StringComparer.OrdinalIgnoreCase).Count() != upstreams.Count)
+            {
+                throw new InvalidOperationException("OpenRouter requires a nonempty upstream list with distinct routing slugs and response names, or no upstream restriction.");
+            }
+
             if (model.MinimumCacheableTokens is <= 0 || !Enum.IsDefined(model.ReasoningControl)
                 || model.ReasoningControl is not (ReasoningControllability.Selectable or ReasoningControllability.AlwaysOn or ReasoningControllability.Unsupported)
-                || (model.Upstream is { } upstream && (string.IsNullOrWhiteSpace(upstream) || upstream.Length > 128 || upstream.Any(char.IsControl)))
-                || (model.ExpectedProviderName is { } expected && (expected.Length > 128 || expected.Any(char.IsControl)))
-                || (model.SupportsReasoningReplay && (model.Upstream is null || string.IsNullOrWhiteSpace(model.ExpectedProviderName) || model.ReasoningControl == ReasoningControllability.Unsupported)))
+                || (model.SupportsReasoningReplay && (upstreams.Count == 0 || upstreams.Any(entry => string.IsNullOrWhiteSpace(entry.ExpectedProviderName)) || model.ReasoningControl == ReasoningControllability.Unsupported)))
             {
-                throw new InvalidOperationException("OpenRouter reasoning replay requires a supported mode and pinned upstream.");
+                throw new InvalidOperationException("OpenRouter reasoning replay requires a supported mode and configured upstream list.");
             }
 
             var enabled = model.SupportedReasoningLevels.Where(level => level != ReasoningLevel.None).ToArray();

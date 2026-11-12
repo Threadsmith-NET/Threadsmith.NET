@@ -44,4 +44,7 @@ public static class CommandPolicyNames
 
     /// <summary>A literal shell command name whose implementation is not pinned to a file.</summary>
     public const string ShellCommand = "shell-command";
+
+    /// <summary>A script file bound to an independently authorized interpreter.</summary>
+    public const string Script = "script";
 }

@@ -121,6 +121,92 @@ public static class ShellBuiltinPolicyTests
         Assert.Equal(launches * 2, manager.Launches);
     }
 
+    /// <summary>Denial at any compound position prevents prompting and execution; allowed decisions keep their grant fingerprint.</summary>
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public static async Task CompoundDenialsShortCircuitWithoutChangingAdmissionIdentity(int deniedIndex)
+    {
+        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+        const string name = "dotnet";
+        var root = Path.GetFullPath(".");
+        var policy = CreatePolicy(root, shell, name, PolicyOutcome.ApprovalRequired, ["^denied$"]);
+        var manager = new RecordingProcessManager();
+        var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: ResolveShell(shell));
+        var command = string.Join("; ", Enumerable.Range(0, 3).Select(index => name + (index == deniedIndex ? " denied" : " allowed")));
+        var context = ShellCommandPolicyTests.Context(root, policy);
+        var decision = new DefaultPolicyEngine().Evaluate(tool, new RunProcessInput { Command = command, WorkingDirectory = root }, context);
+        if (deniedIndex == -1)
+        {
+            var actions = tool.Prepare(new RunProcessInput { Command = command, WorkingDirectory = root }, context).PreparedCommand!.Actions;
+            var expected = CommandPolicyCoordinator.Combine([.. actions.Select(action => Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(policy.CommandPolicies[shell], action))], false);
+            var actual = Assert.IsType<PolicyDecision>(decision.CommandDecision);
+            Assert.Equal(expected.Outcome, actual.Outcome);
+            Assert.Equal(expected.RuleFingerprint, actual.RuleFingerprint);
+            Assert.Equal(expected.RuleIds.AsEnumerable(), actual.RuleIds.AsEnumerable());
+            Assert.Equal(expected.Choices.AsEnumerable(), actual.Choices.AsEnumerable());
+        }
+        else
+        {
+            Assert.False(decision.IsAllowed);
+            Assert.Equal(ApprovalLevel.None, decision.RequiredApproval);
+        }
+
+        var prompts = 0;
+        var coordinator = new CommandPolicyCoordinator();
+        using var handler = coordinator.Attach((approval, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            prompts++;
+            return Task.FromResult(new PolicyApprovalResponse(approval.RequestId, PolicyApprovalChoice.Once));
+        });
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+
+        var result = await pipeline.InvokeAsync(Request(root, command, context), TestContext.Current.CancellationToken);
+
+        Assert.Equal(deniedIndex == -1, result.Succeeded);
+        Assert.Equal(deniedIndex == -1 ? 1 : 0, prompts);
+        Assert.Equal(deniedIndex == -1 ? 1 : 0, manager.Launches);
+        if (deniedIndex != -1)
+        {
+            Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        }
+    }
+
+    /// <summary>Either executable ceiling denies the whole compound before any approval or launch.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task CompoundExecutableDenialPreventsApprovalAndLaunch(bool securityCeiling)
+    {
+        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+        const string name = "dotnet";
+        var root = Path.GetFullPath(".");
+        var policy = CreatePolicy(root, shell, name, PolicyOutcome.ApprovalRequired);
+        var context = ShellCommandPolicyTests.Context(root, policy) with
+        {
+            AllowedExecutables = securityCeiling ? policy.AllowedExecutables : [shell],
+            SecurityPolicy = securityCeiling ? policy with { AllowedExecutables = [shell] } : policy,
+        };
+        var manager = new RecordingProcessManager();
+        var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: ResolveShell(shell));
+        const string command = name + " first; " + name + " second";
+        Assert.Equal(2, tool.Prepare(new RunProcessInput { Command = command, WorkingDirectory = root }, context).PreparedCommand!.Actions.Length);
+        var coordinator = new CommandPolicyCoordinator();
+        using var handler = coordinator.Attach((_, _) => throw new InvalidOperationException("A denied compound must not request approval."));
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+
+        var result = await pipeline.InvokeAsync(Request(root, command, context), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        Assert.Equal(0, manager.Launches);
+    }
+
     /// <summary>Generic PowerShell syntax preserves parameters and literal argument values.</summary>
     [Theory]
     [InlineData("-InputObject 'fixture-value'", "fixture-value")]
@@ -195,7 +281,7 @@ public static class ShellBuiltinPolicyTests
     {
         var shell = ResolveShell("pwsh");
         var environment = new Dictionary<string, string> { ["PATH"] = string.Empty };
-        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare("Write-Output -- -NoEnumerate", shell, Path.GetFullPath("."), environment, 0));
+        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare("Write-Output -- -NoEnumerate", shell, Path.GetFullPath("."), environment));
     }
 
     /// <summary>Unsupported cmdlet arrays cannot silently become literal string arguments.</summary>
@@ -208,7 +294,7 @@ public static class ShellBuiltinPolicyTests
         var shell = ResolveShell("pwsh");
         var environment = new Dictionary<string, string> { ["PATH"] = string.Empty };
 
-        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare(command, shell, Path.GetFullPath("."), environment, 0));
+        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare(command, shell, Path.GetFullPath("."), environment));
     }
 
     /// <summary>A failed file binding never becomes permission for a shell name.</summary>
@@ -218,8 +304,8 @@ public static class ShellBuiltinPolicyTests
         var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
         var environment = new Dictionary<string, string>();
         var shellPath = ResolveShell(shell);
-        Assert.Throws<FileNotFoundException>(() => ShellCommandPreparation.Prepare(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), shellPath, Path.GetFullPath("."), environment, 0));
-        Assert.Throws<InvalidOperationException>(() => ShellCommandPreparation.Prepare("./missing-command", shellPath, Path.GetFullPath("."), environment, 0));
+        Assert.Throws<FileNotFoundException>(() => ShellCommandPreparation.Prepare(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")), shellPath, Path.GetFullPath("."), environment));
+        Assert.Throws<InvalidOperationException>(() => ShellCommandPreparation.Prepare("./missing-command", shellPath, Path.GetFullPath("."), environment));
     }
 
     /// <summary>Prompt overrides control denial wording without changing admission.</summary>

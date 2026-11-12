@@ -32,6 +32,10 @@ internal static class SourceEditAnalysisProjection
             if (!analysis.Obsolete && analysis.Analyzers.Status is "completed" or "partial")
             {
                 status += $" {analysis.Analyzers.ReportableFindings} reportable analyzer findings.";
+                if (analysis.Analyzers is { Errors: { } errors, Warnings: { } analyzerWarnings, Suggestions: { } suggestions })
+                {
+                    status += $" {errors} errors, {analyzerWarnings} warnings, {suggestions} suggestions.";
+                }
             }
         }
 
@@ -138,6 +142,9 @@ internal static class SourceEditAnalysisProjection
             if (analysis.Obsolete || analysis.Analyzers.Status is not ("completed" or "partial"))
             {
                 analyzers.Remove(nameof(analysis.Analyzers.ReportableFindings));
+                analyzers.Remove(nameof(analysis.Analyzers.Errors));
+                analyzers.Remove(nameof(analysis.Analyzers.Warnings));
+                analyzers.Remove(nameof(analysis.Analyzers.Suggestions));
                 analyzers.Remove(nameof(analysis.Analyzers.NewFindings));
                 analyzers.Remove(nameof(analysis.Analyzers.ResolvedFindings));
             }

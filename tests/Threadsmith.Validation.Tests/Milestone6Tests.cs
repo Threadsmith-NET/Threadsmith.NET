@@ -1210,7 +1210,14 @@ public sealed class Milestone6Tests
             try
             {
                 var completed = await Task.WhenAny(ready.Task, buildTask).WaitAsync(TestContext.Current.CancellationToken);
+                if (completed == buildTask)
+                {
+                    var result = await buildTask;
+                    Assert.Fail($"Build ended before child readiness (succeeded: {result.Succeeded}): {string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message))}");
+                }
+
                 Assert.Same(ready.Task, completed);
+                Assert.False(buildTask.IsCompleted, "The child must keep the build pending until cancellation.");
                 Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
                 var childPidText = await File.ReadAllTextAsync(childPidPath, TestContext.Current.CancellationToken);
                 Assert.True(int.TryParse(
@@ -1954,18 +1961,19 @@ public sealed class Milestone6Tests
         Directory.CreateDirectory(root);
         try
         {
-            var windowsDelayCommand = OperatingSystem.IsWindows() ? CreateWindowsDelayCommand() : string.Empty;
+            var delayCommand = !includeDelay ? string.Empty
+                : OperatingSystem.IsWindows() ? CreateWindowsDelayCommand()
+                : """sh -c 'set -eu; echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; mkfifo "$(MSBuildProjectDirectory)/child.gate"; read gate < "$(MSBuildProjectDirectory)/child.gate"'""";
             var delayProperties = includeDelay
                 ? """
                       <PropertyGroup>
-                        <DelayCommand Condition="'$(OS)' == 'Windows_NT'">{{WindowsDelayCommand}}</DelayCommand>
-                        <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; mkfifo "$(MSBuildProjectDirectory)/child.gate"; read gate &lt; "$(MSBuildProjectDirectory)/child.gate"'</DelayCommand>
+                        <DelayCommand>{{DelayCommand}}</DelayCommand>
                       </PropertyGroup>
                       <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
                         <Exec Command="$(DelayCommand)" />
                       </Target>
                   """
-                    .Replace("{{WindowsDelayCommand}}", SecurityElement.Escape(windowsDelayCommand), StringComparison.Ordinal)
+                    .Replace("{{DelayCommand}}", SecurityElement.Escape(delayCommand), StringComparison.Ordinal)
                 : string.Empty;
             var projectPath = Path.Combine(root, "ValidationTarget.csproj");
             await File.WriteAllTextAsync(
@@ -2029,28 +2037,14 @@ public sealed class Milestone6Tests
 
     private static string CreateWindowsDelayCommand()
     {
-        var shell = FindExecutablePath("pwsh.exe")
-            ?? FindExecutablePath("powershell.exe")
-            ?? throw new InvalidOperationException("PowerShell is required for the delayed build fixture.");
-        return $"\"{shell}\" -NoProfile -NonInteractive -Command \"[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\\child.pid.tmp', '$(MSBuildProjectDirectory)\\child.pid'); [System.Threading.Thread]::Sleep(-1)\"";
-    }
+        // Bind a known executable instead of depending on optional installations or PATH activation aliases.
+        var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (!File.Exists(shell))
+        {
+            throw new InvalidOperationException("Windows PowerShell is required for the delayed build fixture.");
+        }
 
-    private static string? FindExecutablePath(string fileName)
-    {
-        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var pathExtensions = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            : [string.Empty];
-        string[] candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(fileName)
-            ? [.. pathExtensions.Select(extension => fileName + extension)]
-            : [fileName];
-        return pathValue
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(directory => directory.Trim('"'))
-            .Where(Path.IsPathFullyQualified)
-            .SelectMany(directory => candidateNames.Select(candidate => Path.Combine(directory, candidate)))
-            .FirstOrDefault(File.Exists);
+        return $"\"{shell}\" -NoProfile -NonInteractive -Command \"[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\\child.pid.tmp', '$(MSBuildProjectDirectory)\\child.pid'); [System.Threading.Thread]::Sleep(-1)\"";
     }
 
     private sealed class TemporaryDirectoryLink : IAsyncDisposable

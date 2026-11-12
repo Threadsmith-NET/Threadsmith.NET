@@ -5,6 +5,9 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Policies.Commands;
+using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Evaluation;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -58,27 +61,27 @@ public sealed class ToolTimeoutTests
         Assert.Equal(TimeSpan.FromMinutes(10), tool.Context!.ExecutionTimeout);
     }
 
-    /// <summary>Process hints override preferences but cannot widen hard ceilings.</summary>
+    /// <summary>Host preferences and hard ceilings control process timeouts.</summary>
     [Theory]
-    [InlineData(0, 300, 600, null, 300)]
-    [InlineData(500, 300, 600, null, 500)]
-    [InlineData(900, 300, 600, null, 600)]
-    [InlineData(500, 300, 600, 200, 200)]
-    [InlineData(0, 300, 150, null, 150)]
-    public async Task ProcessUsesResolvedPreferenceOrHintSubjectToHardCeilings(int hint, int specific, int maximum, int? enforced, int expected)
+    [InlineData(300, 600, null, 300)]
+    [InlineData(600, 1200, null, 600)]
+    [InlineData(300, 600, 200, 200)]
+    [InlineData(300, 150, null, 150)]
+    public async Task ProcessUsesHostPreferenceSubjectToHardCeilings(int specific, int maximum, int? enforced, int expected)
     {
         var manager = new RecordingProcessManager();
         var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "pwsh");
         var registry = new ToolRegistry([tool], runtimeOptions: new() { Defaults = new() { TimeoutMilliseconds = 120000 } });
-        var request = Request("run_process", $$"""{"command":"echo test","timeoutSeconds":{{hint}}}""");
+        var request = Request("run_process", """{"command":"dotnet --version"}""");
         var policy = new EffectiveSessionPolicy
         {
             BindingId = Guid.NewGuid(),
             Generation = 1,
             RepositoryPath = request.Context.RepositoryPath,
             Fingerprint = "test",
-            AllowedExecutables = ["pwsh"],
+            AllowedExecutables = ["pwsh", "dotnet"],
             RequireShellApproval = false,
+            CommandPolicies = request.Context.SecurityPolicy!.CommandPolicies,
             ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:runProcess:maxTimeoutSeconds", maximum)
                 .Add("tools:runProcess:defaultTimeoutSeconds", 30).Add("tools:runtime:defaults:timeoutMilliseconds", 120000),
             ToolTimeouts = new()
@@ -98,6 +101,22 @@ public sealed class ToolTimeoutTests
         Assert.True(result.Succeeded, result.Error);
         Assert.NotNull(manager.Request);
         Assert.Equal(TimeSpan.FromSeconds(expected), manager.Request.Timeout);
+    }
+
+    /// <summary>Model-supplied timeout fields are rejected before process execution.</summary>
+    [Fact]
+    public async Task ProcessRejectsModelTimeout()
+    {
+        var manager = new RecordingProcessManager();
+        var registry = new ToolRegistry([new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "pwsh")]);
+        await using var events = new DomainEventStream();
+
+        var result = await CreatePipeline(registry, events).InvokeAsync(
+            Request("run_process", """{"command":"dotnet --version","timeoutSeconds":120}"""), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ToolErrorClassification.InvalidArguments, result.ErrorClassification);
+        Assert.Null(manager.Request);
     }
 
     /// <summary>Caller cancellation reaches an in-flight process and is not classified as a timeout.</summary>
@@ -127,13 +146,15 @@ public sealed class ToolTimeoutTests
             return Task.CompletedTask;
         });
         var pipeline = CreatePipeline(registry, events);
-        var request = Request("run_process", """{"command":"echo test"}""");
+        var request = Request("run_process", """{"command":"dotnet --version"}""");
 
         // Act: cancellation is requested only after the inner operation has started waiting.
         var invocation = pipeline.InvokeBatchAsync([new ToolBatchRequest(0, "cancel-process", request)], callerCancellation.Token);
         var cancellationOutcome = Assert.ThrowsAsync<ToolBatchCancelledException>(() => invocation.WaitAsync(testCancellation));
         try
         {
+            var first = await Task.WhenAny(manager.Started.Task, invocation).WaitAsync(testCancellation);
+            Assert.Same(manager.Started.Task, first);
             var processRequest = await manager.Started.Task.WaitAsync(testCancellation);
             Assert.Equal(TimeSpan.FromMinutes(5), processRequest.Timeout);
             Assert.False(invocation.IsCompleted);
@@ -190,11 +211,27 @@ public sealed class ToolTimeoutTests
         {
             RepositoryPath = Path.GetFullPath("."),
             TrustLevel = RepositoryTrustLevel.TrustedBuild,
-            AllowedExecutables = ["pwsh"],
+            AllowedExecutables = ["pwsh", "dotnet"],
             ApprovedRoots = ["."],
             RequestedBy = "timeout-tests",
+            SecurityPolicy = toolId == "run_process" ? CreateProcessPolicy() : null,
         },
     };
+
+    private static EffectiveSessionPolicy CreateProcessPolicy()
+    {
+        var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+        return new()
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = Path.GetFullPath("."),
+            Fingerprint = "timeout-tests",
+            AllowedExecutables = ["pwsh", "dotnet"],
+            ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:parallel:maximumConcurrency", 1),
+            CommandPolicies = ImmutableDictionary<string, PolicySnapshot>.Empty.Add("pwsh", PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, platform, "pwsh")),
+        };
+    }
 
     private sealed class ManualClock : TimeProvider
     {

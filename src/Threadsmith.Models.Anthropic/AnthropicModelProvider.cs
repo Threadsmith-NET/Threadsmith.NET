@@ -72,7 +72,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
             {
                 var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey, _limits);
                 Exception? failure = null;
-                using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, Timeout.InfiniteTimeSpan, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes))
+                using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, Timeout.InfiniteTimeSpan, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes, timeProvider: _timeProvider))
                 await using (var events = client.Messages.CreateStreaming(parameters, token).GetAsyncEnumerator(token))
                 {
                     while (true)
@@ -155,7 +155,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
         or MalformedModelOutputException or InvalidOperationException or ArgumentException or OverflowException or KeyNotFoundException;
     }
 
-    private static Exception Classify(Exception exception, CancellationTokenSource deadline, CancellationToken caller)
+    private Exception Classify(Exception exception, CancellationTokenSource deadline, CancellationToken caller)
     {
         if (caller.IsCancellationRequested)
         {
@@ -167,12 +167,32 @@ internal sealed class AnthropicModelProvider : IModelProvider
             return new ModelProviderTimeoutException("The Anthropic request exceeded its total deadline.");
         }
 
-        // Some SDK paths wrap transport exceptions. Inspect only type and status; never copy their messages.
+        // Some SDK paths wrap transport exceptions. Parse only structured SSE fields, never SDK ToString().
         for (var current = exception; current is not null; current = current.InnerException)
         {
-            if (current is AnthropicSseException { ErrorType: global::Anthropic.Models.ErrorType.RateLimitError })
+            if (current is AnthropicSseException sse)
             {
-                return new TransientModelException("Anthropic stream reported a rate limit (code 429).") { IsRateLimit = true };
+                try
+                {
+                    // The pinned SDK wraps the original SSE JSON in this fixed exception prefix.
+                    const string prefix = "SSE error returned from server: '";
+                    var payload = sse.Message;
+                    if (payload.StartsWith(prefix, StringComparison.Ordinal) && payload.EndsWith('\''))
+                    {
+                        payload = payload[prefix.Length..^1];
+                    }
+
+                    using var document = JsonDocument.Parse(payload);
+                    var details = ProviderErrorDetails.Format(document.RootElement, _apiKey);
+                    var rateLimit = sse.ErrorType == global::Anthropic.Models.ErrorType.RateLimitError;
+                    return rateLimit
+                        ? new TransientModelException(ProviderErrorDetails.PreferMessage(details, "Anthropic stream reported a rate limit (code 429).")) { IsRateLimit = true }
+                        : new ModelProviderException(ProviderErrorDetails.PreferMessage(details, "Anthropic returned an invalid or unsupported response."));
+                }
+                catch (JsonException)
+                {
+                    return new ModelProviderException("Anthropic returned an invalid or unsupported response.");
+                }
             }
 
             if (current is AnthropicHttpFailureException http)
@@ -180,8 +200,8 @@ internal sealed class AnthropicModelProvider : IModelProvider
                 var status = (int)http.StatusCode;
                 var retry = status is 408 or 409 or 429 or (>= 500 and <= 599);
                 Exception safe = retry
-                    ? new TransientModelException($"Anthropic request failed with retryable HTTP status {status}.") { IsRateLimit = status == 429, RetryAfter = http.RetryAfter }
-                    : new ModelProviderException($"Anthropic request was rejected with HTTP status {status}.");
+                    ? new TransientModelException(ProviderErrorDetails.PreferMessage(http.Details, $"Anthropic request failed with retryable HTTP status {status}. ")) { IsRateLimit = status == 429, RetryAfter = http.RetryAfter }
+                    : new ModelProviderException(ProviderErrorDetails.PreferMessage(http.Details, $"Anthropic request was rejected with HTTP status {status}. "));
                 return safe;
             }
 

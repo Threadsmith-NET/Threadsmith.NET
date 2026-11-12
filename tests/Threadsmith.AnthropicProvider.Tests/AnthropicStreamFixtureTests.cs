@@ -238,11 +238,11 @@ public sealed class AnthropicStreamFixtureTests
     public async Task StreamAsync_SseErrorAfterText_NoRetryAndNoLeak()
     {
         var fixture = TestAnthropic.Start() + TestAnthropic.Block(0, new { type = "text", text = "visible" })
-            + TestAnthropic.Event("error", new { type = "error", error = new { type = "overloaded_error", message = "SECRET_BODY_CANARY" } });
+            + TestAnthropic.Event("error", new { type = "error", error = new { type = "overloaded_error", message = "Capacity detail for test-key" } });
         var handler = new TestAnthropicHandler(fixture);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var error = await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
-        Assert.DoesNotContain("SECRET_BODY_CANARY", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Capacity detail for [REDACTED]", error.Message, StringComparison.Ordinal);
         Assert.Single(handler.Requests);
         Assert.Null(error.InnerException);
     }
@@ -307,6 +307,23 @@ public sealed class AnthropicStreamFixtureTests
         Assert.Equal(attempts, handler.Requests.Count);
         Assert.DoesNotContain("SECRET_ERROR_BODY", exception.ToString(), StringComparison.Ordinal);
         Assert.Null(exception.InnerException);
+    }
+
+    /// <summary>HTTP errors retain provider explanations and remove the active key.</summary>
+    [Theory]
+    [InlineData(400)]
+    [InlineData(503)]
+    public async Task StreamAsync_HttpFailure_PreservesSafeExplanation(int status)
+    {
+        var handler = new TestAnthropicHandler((_, _) => Task.FromResult(new HttpResponseMessage((HttpStatusCode)status)
+        {
+            Content = new StringContent("{\"request_id\":\"req-1\",\"error\":{\"type\":\"capacity_error\",\"message\":\"Capacity detail for test-key\"}}"),
+        }));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request(), TestContext.Current.CancellationToken));
+        Assert.Contains("Capacity detail for [REDACTED]", error.Message, StringComparison.Ordinal);
+        Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + $"HTTP {status} · Type: capacity_error · Request ID: req-1", error.Message);
+        Assert.DoesNotContain("test-key", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>The bridge bounds large content before native deserialization.</summary>

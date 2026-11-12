@@ -579,7 +579,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
             tool = ToolRuntimePolicy.ApplyCeiling(tool, request.Context.SecurityPolicy);
-            tool = ToolRuntimePolicy.ResolveInvocation(tool, input, request.Context);
+            tool = ToolRuntimePolicy.ResolveInvocation(tool, request.Context);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
             or ToolArgumentValidationException

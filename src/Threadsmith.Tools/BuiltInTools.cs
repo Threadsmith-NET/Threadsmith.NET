@@ -1821,12 +1821,6 @@ public sealed record RunProcessInput : IConceptToolInput
     /// <summary>Shell command to execute in the repository root.</summary>
     public required string Command { get; init; }
 
-    /// <summary>
-    /// Timeout in seconds. <c>0</c> means "use the host default"
-    /// (see <see cref="ToolLimits.RunProcessDefaultTimeoutSeconds"/>).
-    /// </summary>
-    public int TimeoutSeconds { get; init; } = 0;
-
     /// <summary>Optional repository-relative or absolute working directory; defaults to the repository root.</summary>
     public string? WorkingDirectory { get; init; }
 
@@ -1836,7 +1830,7 @@ public sealed record RunProcessInput : IConceptToolInput
 }
 
 /// <summary>Runs one bounded command through a configured allow-listed shell.</summary>
-public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecutionResult>, IInvocationTimeoutTool
+public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecutionResult>, IToolTimeoutPolicy
 {
     private readonly ToolDefinition _definition;
     private readonly IProcessManager _processManager;
@@ -1860,22 +1854,20 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         _shellExecutable = string.IsNullOrWhiteSpace(shellExecutable)
             ? OperatingSystem.IsWindows() ? "powershell" : "bash"
             : shellExecutable.Trim();
-        _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
-            ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
-                "run_process",
-                () => promptLoader.Render(
-                    PromptFileNames.ToolRunProcessDescription,
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
-                    }),
-                ToolCategory.ProcessExecution,
-                RepositoryTrustLevel.TrustedBuild,
-                requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
-                ToolSideEffect.ExecutesCode,
-                TimeSpan.FromSeconds(Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)),
-                256 * 1024),
-            "timeoutSeconds");
+        _definition = ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
+            "run_process",
+            () => promptLoader.Render(
+                PromptFileNames.ToolRunProcessDescription,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
+                }),
+            ToolCategory.ProcessExecution,
+            RepositoryTrustLevel.TrustedBuild,
+            requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
+            ToolSideEffect.ExecutesCode,
+            TimeSpan.FromSeconds(Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)),
+            256 * 1024);
     }
 
     /// <inheritdoc />
@@ -1897,7 +1889,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         var fallback = TimeSpan.FromSeconds(context.Invocation.SecurityPolicy?.ResourceLimits.GetValueOrDefault(
             "tools:runProcess:defaultTimeoutSeconds", _limits.RunProcessDefaultTimeoutSeconds) ?? _limits.RunProcessDefaultTimeoutSeconds);
         var timeout = context.ExecutionTimeout is null
-            ? ((IInvocationTimeoutTool)this).ResolveTimeout(input, context.Invocation, fallback)
+            ? ((IToolTimeoutPolicy)this).ResolveTimeout(context.Invocation, fallback)
             : context.GetRemainingExecutionTimeout(fallback);
 
         var result = await _processManager.RunAsync(
@@ -1928,13 +1920,11 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
     }
 
     /// <inheritdoc />
-    TimeSpan IInvocationTimeoutTool.ResolveTimeout(object input, ToolInvocationContext context, TimeSpan configuredTimeout)
+    TimeSpan IToolTimeoutPolicy.ResolveTimeout(ToolInvocationContext context, TimeSpan configuredTimeout)
     {
-        var requested = (RunProcessInput)input;
-        var selected = requested.TimeoutSeconds > 0 ? TimeSpan.FromSeconds(requested.TimeoutSeconds) : configuredTimeout;
         var maximum = TimeSpan.FromSeconds(context.SecurityPolicy?.ResourceLimits.GetValueOrDefault(
             "tools:runProcess:maxTimeoutSeconds", _limits.RunProcessMaxTimeoutSeconds) ?? _limits.RunProcessMaxTimeoutSeconds);
-        return selected == Timeout.InfiniteTimeSpan || selected > maximum ? maximum : selected;
+        return configuredTimeout == Timeout.InfiniteTimeSpan || configuredTimeout > maximum ? maximum : configuredTimeout;
     }
 
     /// <summary>Gets generic model feedback from the deployed prompt catalog.</summary>
@@ -1956,7 +1946,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         var directory = scratchpad ? ToolPathRules.NormalizeScratchpadPath(candidate, context) : ToolPathRules.NormalizeAndValidate(candidate, context);
         var additions = scratchpad ? ScriptFilePolicy.TemporaryEnvironment(context.Scratchpad.RootPath ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode), context.RepositoryPath) : new Dictionary<string, string>();
         var environment = PreparationEnvironment.Concat(additions).ToDictionary(pair => pair.Key, pair => pair.Value, OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-        return input with { PreparedCommand = ShellCommandPreparation.Prepare(input.Command, _shellExecutable, directory, environment, input.TimeoutSeconds) };
+        return input with { PreparedCommand = ShellCommandPreparation.Prepare(input.Command, _shellExecutable, directory, environment) };
     }
 
     /// <inheritdoc />
@@ -1970,11 +1960,10 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Command);
         if (input.Command.Length > 32 * 1024
-            || input.Command.Contains('\0', StringComparison.Ordinal)
-            || input.TimeoutSeconds < 0)
+            || input.Command.Contains('\0', StringComparison.Ordinal))
         {
             throw new ToolArgumentValidationException(
-                "command must be at most 32768 characters without nulls, and timeoutSeconds must be nonnegative; 0 uses the host default and larger values are clamped to the host maximum.");
+                "command must be at most 32768 characters without nulls.");
         }
     }
 

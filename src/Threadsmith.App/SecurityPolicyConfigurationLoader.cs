@@ -285,7 +285,9 @@ internal static class SecurityPolicyConfigurationLoader
         }
 
         var executables = ResolveList("tools:allowedExecutables", [OperatingSystem.IsWindows() ? "powershell" : "bash", "dotnet", "git"]);
-        if (executables.Any(name => name.IndexOfAny(['/', '\\', '*', '?', ':']) >= 0 || name.Any(char.IsWhiteSpace)))
+        if (executables.Any(name => name.IndexOfAny(['/', '\\', '*', '?', ':']) >= 0
+            || name.Any(char.IsControl)
+            || (name.Any(char.IsWhiteSpace) && Path.GetExtension(name).ToLowerInvariant() is not (".ps1" or ".sh"))))
         {
             throw new InvalidDataException("PolicyValueInvalid: tools:allowedExecutables requires exact bare executable names; correct the indicated policy input.");
         }

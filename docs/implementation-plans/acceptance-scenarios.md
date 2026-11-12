@@ -1015,6 +1015,9 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 2. Select it explicitly and exercise ordinary MAIN and delegated requests, including declared reasoning and tool continuations.
 3. Hide reasoning display, cancel work, change model selection, and inspect normal logs and usage projections.
 
+4. Configure ordered Azure and OpenAI entries in `upstreams`. Verify `order` and `only` contain that list, fallback is enabled, and reported identities from that list are accepted. One entry disables fallback. Reject invalid entries and repository changes to the permitted list. Verify replay items remain unchanged across a permitted identity change in fixtures; live failover is not required.
+5. Exercise a provider rejection before output and after visible output. Verify safe explanatory text, codes, HTTP status, and request IDs reach normal diagnostics; transient errors use bounded retries without repeating committed output or tool effects.
+
 **Verifies:** No automatic model discovery/default change; one governed execution lifecycle; exact private reasoning/tool continuation; no duplicated tool effects; private payloads excluded from diagnostics and persistence; reported charges distinguished from conservative estimates; declared capability, capacity and cancellation enforcement.
 
 ## Scenario CR-1 — Bounded completed-turn verification receipts
@@ -1026,3 +1029,12 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 5. Exceed receipt capacity and confirm complete-entry reduction, explicit omission counts and the hard history-token bound. Governed-memory-only and Stateless retain their existing exclusions.
 
 **Verifies:** truthful bounded historical verification, durable origin, idempotence and ordinary context governance.
+
+
+## Scenario PROVIDER-ERRORS — Safe provider rejection details
+
+1. Return a structured HTTP rejection and a native stream error from OpenAI-compatible, Anthropic, and Codex fixtures.
+2. Include an explanatory message, a code or type, a request ID, and an active credential canary. Verify the explanation survives and the canary does not.
+3. Inspect the existing parent, child, headless, and raw failure paths. Verify safe details remain visible. Check unreadable and oversized error bodies for a clear fallback and omission marker.
+
+**Verifies:** useful provider errors through existing diagnostics, bounded reads, credential redaction, and unchanged retry and cancellation ownership.

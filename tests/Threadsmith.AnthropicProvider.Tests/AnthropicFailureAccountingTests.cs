@@ -92,7 +92,11 @@ public sealed class AnthropicFailureAccountingTests
             }
         });
         Assert.True(error is ModelProviderException or MalformedModelOutputException or TransientModelException);
-        Assert.DoesNotContain("REMOTE_BODY_CANARY", error.ToString(), StringComparison.Ordinal);
+        if (failure == "error")
+        {
+            Assert.Contains("REMOTE_BODY_CANARY", error.Message, StringComparison.Ordinal);
+        }
+
         Assert.Null(error.InnerException);
         Assert.Equal(2000, string.Concat(chunks.Select(chunk => chunk.Text)).Length);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);

@@ -374,12 +374,17 @@ public static partial class OpenRouterProviderTests
     }
 
     /// <summary>The actual transient owner binds host IDs back to wire call IDs across two rounds.</summary>
-    [Fact]
-    public static async Task TwoToolRounds_PreserveOriginalIdsAndOrderedPrivateItems()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task TwoToolRounds_PreserveOriginalIdsAndOrderedPrivateItems(bool fallback)
     {
-        var model = ReplayModel();
+        var model = fallback ? ReplayModel() with
+        {
+            Upstreams = [new() { Provider = "azure", ExpectedProviderName = "Azure" }, new() { Provider = "openai", ExpectedProviderName = "OpenAI" }],
+        } : ReplayModel();
         using var state = new ModelRequestTransientState();
-        using var handler = new Handler(Completed(ReasoningItem("opaque-0"), FunctionCall("wire-0")), Completed(ReasoningItem("opaque-1"), FunctionCall("wire-1")), Completed(OutputMessage("done")));
+        using var handler = new Handler(Completed(ReasoningItem("opaque-0"), FunctionCall("wire-0")).Replace("\"provider\":null", fallback ? "\"provider\":\"Azure\"" : "\"provider\":null", StringComparison.Ordinal), Completed(ReasoningItem("opaque-1"), FunctionCall("wire-1")).Replace("\"provider\":null", fallback ? "\"provider\":\"OpenAI\"" : "\"provider\":null", StringComparison.Ordinal), Completed(OutputMessage("done")));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = Provider(client, model);
         var request = Request() with { ResolvedProfileId = model.Id, TransientState = state, IncludeReasoningText = false, Messages = [Message(ModelMessageRole.User, "test")] };
@@ -758,8 +763,7 @@ public static partial class OpenRouterProviderTests
     {
         ReasoningControl = ReasoningControllability.AlwaysOn,
         SupportsReasoningReplay = true,
-        Upstream = "fixture",
-        ExpectedProviderName = "Fixture Provider",
+        Upstreams = [new() { Provider = "fixture", ExpectedProviderName = "Fixture Provider" }],
     };
 
     private static ModelMessage Message(ModelMessageRole role, string text) => new() { Role = role, SectionId = "fixture", Content = [new() { Content = text }] };

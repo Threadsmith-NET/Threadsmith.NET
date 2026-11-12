@@ -17,7 +17,7 @@ internal static class ReasoningReplayFixture
     internal static EffectiveModelProviderCatalog Catalog(bool codex, bool replay = true, int contextWindow = 200000, bool reasoningAlias = false, bool openRouter = false)
     {
         ModelConfiguration model = openRouter
-            ? new OpenRouterModelConfiguration { Id = ModelProfileId.New(), Name = "fixture", ModelId = "vendor/fixture", JsonSchemaResponses = true, ReasoningControl = ReasoningControllability.Selectable, EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.Low] = "low" }, SupportsReasoningReplay = replay, Upstream = "test", ExpectedProviderName = "test" }
+            ? new OpenRouterModelConfiguration { Id = ModelProfileId.New(), Name = "fixture", ModelId = "vendor/fixture", JsonSchemaResponses = true, ReasoningControl = ReasoningControllability.Selectable, EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.Low] = "low" }, SupportsReasoningReplay = replay, Upstreams = [new() { Provider = "test", ExpectedProviderName = "test" }] }
             : codex
             ? new OpenAiCodexModelConfiguration { Id = ModelProfileId.New(), Name = "fixture", ModelId = "fixture" }
             : new OpenAiCompatibleModelConfiguration

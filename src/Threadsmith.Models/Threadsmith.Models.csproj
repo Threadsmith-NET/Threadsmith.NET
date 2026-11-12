@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="Microsoft.Extensions.Resilience" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
   </ItemGroup>
 
 </Project>

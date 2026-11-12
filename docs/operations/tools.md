@@ -30,7 +30,9 @@ The built-in tool registry includes:
 
 Exact source continuation cursors use configured source allowances without repository-tier reductions, while retaining per-file, total, output, and model-capacity limits. They skip relationship traversal and associated-artifact discovery and omit repeated selected-evidence presentation. Follow a continuation only when the missing evidence is needed. Digests are retained whenever the file has already been emitted; a target omitted before reading may not yet have a digest. Exact emitted ranges from partial results can become visible-source back-references; omitted lines never count as read.
 
-`list_files.maximumEntries`, `search.maximumMatches`, and `run_process.timeoutSeconds` are nonnegative hints. Zero uses the configured default. Positive values above the configured ceiling run at that ceiling without a corrective model turn; negative, noninteger, and overflowing values remain invalid arguments.
+`list_files.maximumEntries` and `search.maximumMatches` are nonnegative hints. Zero uses the configured default. Positive values above the configured ceiling run at that ceiling without a corrective model turn; negative, noninteger, and overflowing values remain invalid arguments.
+
+`run_process` has no model-supplied timeout argument. Its execution budget comes from host configuration and mandatory ceilings. Existing `.ps1`/`.sh` files use the same prepared execution and approval path as native commands; the interpreter and script must each be authorized. See [script command policies](command-policy.md#powershell-and-shell-script-files) for configuration, literal wrapper forms, and limits. This does not enable ad hoc inline scripting.
 
 Native model contracts keep host bookkeeping out of model input. `test_run_targeted.testId` is the string returned by discovery, and `diagnostic_query.runId` is an optional UUID string. `git_diff` and `git_show` expose only the optional `paths` array for path filtering; their adapters reuse the existing scalar internal request for one path. `csharp_script.kind` is the closed `expression` or `statement` string and defaults to `expression`.
 

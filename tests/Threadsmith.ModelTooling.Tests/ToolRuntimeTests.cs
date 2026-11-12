@@ -1448,7 +1448,7 @@ public static partial class ToolRuntimeTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "run_process",
-                ArgumentsJson = "{\"command\":\"dotnet --version\",\"timeoutSeconds\":1}",
+                ArgumentsJson = "{\"command\":\"dotnet --version\"}",
                 Context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell)),
             });
 
@@ -2417,11 +2417,10 @@ public static partial class ToolRuntimeTests
         var properties = schema.RootElement.GetProperty("properties");
 
         Assert.True(properties.TryGetProperty("command", out _));
-        Assert.True(properties.TryGetProperty("timeoutSeconds", out var timeoutSchema));
-        Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
+        Assert.False(properties.TryGetProperty("timeoutSeconds", out _));
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
         Assert.True(properties.TryGetProperty("workingDirectory", out _));
-        Assert.Equal(4, properties.EnumerateObject().Count());
+        Assert.Equal(3, properties.EnumerateObject().Count());
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }
 
@@ -2483,13 +2482,13 @@ public static partial class ToolRuntimeTests
                 SessionId.New(),
                 RunId.New(),
                 CreateContext(repository));
-            var input = tool.DeserializeInput("{\"command\":\"pwd\",\"timeoutSeconds\":999}");
+            var input = tool.DeserializeInput("{\"command\":\"pwd\"}");
 
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context));
 
             Assert.Null(processManager.LastRequest);
-            var timeout = ((IInvocationTimeoutTool)tool).ResolveTimeout(input, context.Invocation, TimeSpan.FromSeconds(3));
-            Assert.Equal(TimeSpan.FromSeconds(7), timeout);
+            var timeout = ((IToolTimeoutPolicy)tool).ResolveTimeout(context.Invocation, TimeSpan.FromSeconds(3));
+            Assert.Equal(TimeSpan.FromSeconds(3), timeout);
         }
         finally
         {

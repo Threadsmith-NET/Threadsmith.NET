@@ -1,6 +1,6 @@
 # OpenRouter fallbacks and provider failure details
 
-**Status:** Planned
+**Status:** Complete
 **Delivery track:** Maintenance
 **Prerequisites:** Use the existing provider adapters, Responses replay, retry policy, prompt catalog, and diagnostic display.
 
@@ -33,7 +33,7 @@ Follow these contracts:
 ## 3 Scope
 
 - Add an ordered OpenRouter upstream list.
-- Preserve existing single-upstream configuration.
+- Replace the singular routing fields with the upstream array.
 - Accept a response from any configured upstream.
 - Preserve failure details from OpenRouter, OpenAI-compatible, Anthropic, and Codex adapters.
 - Use the existing diagnostic display in interactive and headless operation.
@@ -84,9 +84,10 @@ Compare routing slugs without case.
 Permit different endpoint slugs with the same expected provider name.
 For example, regional Azure endpoints can return the same display name.
 
-Retain `upstream` and `expectedProviderName` for existing catalogs.
-Normalize that legacy pair to one entry inside the adapter.
-Reject configuration that supplies both forms.
+Remove the former `upstream` and model-level `expectedProviderName` fields.
+Use `upstreams` as the only routing form.
+Reject the former scalar fields when loading a catalog.
+The user removed the backward-compatibility requirement during implementation.
 Do not introduce a custom configuration language.
 
 ### 6.2 Request projection
@@ -210,7 +211,7 @@ Do not add a separate prompt loader or move existing unrelated messages.
 ## 7 Public Contracts
 
 The OpenRouter model gains one optional ordered `upstreams` array.
-The legacy scalar pair remains valid.
+The former scalar pair is not supported.
 Add the array to the existing repository-protected model properties.
 
 Keep existing exception types and diagnostic event contracts.
@@ -234,7 +235,7 @@ Do not turn a local correction into a subsystem rewrite.
 ## 9 Ordered Tasks
 
 1. Inspect the four adapter error paths and the existing display path.
-2. Add the upstream array and legacy normalization.
+2. Add the upstream array and remove the scalar pair.
 3. Update request projection and response identity validation.
 4. Preserve unchanged replay under the configured list.
 5. Preserve safe failure details in all four adapters.
@@ -252,7 +253,7 @@ Use a small set of focused checks:
 
 | Check | Required evidence |
 |---|---|
-| Configuration | Legacy input, ordered arrays, invalid entries, and protected-source handling. |
+| Configuration | Ordered arrays, rejected scalar input, invalid entries, and protected-source handling. |
 | Projection | Exact `order`, `only`, fallback, and parameter requirements. |
 | Identity and replay | Configured response names pass. Other names fail. Replay items remain unchanged. |
 | Provider failures | All four integrations preserve safe explanatory text and error codes. |
@@ -308,8 +309,8 @@ Do not add a new dashboard or renderer.
 
 ## 13 Migration/Compatibility
 
-Existing single-provider catalogs keep their behavior.
-Users opt into fallback through the new array.
+Change existing singular routing fields to a one-entry array to keep the same routing behavior.
+Use more entries to permit fallback.
 Keep existing provider and model IDs.
 Require the normal restart for catalog changes.
 
@@ -323,7 +324,7 @@ Change error text only to retain useful safe details or identify a missing expla
 2. OpenRouter receives that order and the same restricted provider list.
 3. The adapter accepts reported identities from the configured list.
 4. Private replay remains intact without a host route lock or repeated tool effects.
-5. Existing single-provider catalogs remain valid.
+5. A one-entry array disables fallback. The former scalar routing fields are rejected.
 6. All four provider integrations expose useful failure details to the user.
 7. Stream errors retain their explanation even when HTTP status is 200.
 8. Existing retry limits and output-commit rules remain effective.
@@ -353,7 +354,7 @@ Prefer local parsing changes and the existing exception and display paths.
 ## 16 Documentation
 
 Update provider examples and `docs/operations/model-providers.md` during implementation.
-Document ordering, restricted destinations, legacy compatibility, restart behavior, and stream limitations.
+Document ordering, restricted destinations, scalar-field removal, restart behavior, and stream limitations.
 Describe useful failure reporting for all four integrations.
 
 Update both prompt references if a filename, token contract, or model-facing wrapper changes.
@@ -368,3 +369,79 @@ OpenRouter owns fallback.
 The user accepts delivery without a forced failover demonstration.
 Failure reporting covers every model provider integration.
 Implementation must remain focused and reuse existing components.
+
+
+## 18 Implementation and Verification Record
+
+Implementation and review are complete on 2026-11-11.
+Repository-wide validation is not clean.
+The failures below remain outside this provider change.
+
+### Delivered behavior
+
+- Use `upstreams` as the only OpenRouter routing setting. Reject the former scalar fields.
+- Send the same ordered list in `order` and `only`. Enable fallback for multiple entries.
+- Accept configured response names. Keep exact model checks and the existing full-configuration replay binding.
+- Preserve private replay items and tool-call identities across an allowed provider change in fixtures.
+- Preserve safe explanatory error fields in all four adapters. Reuse the existing exceptions and diagnostic paths.
+- Bound HTTP error reads to 4096 bytes and one second of waiting within caller cancellation. Read chunked bodies. Keep status and header request IDs when the body is unavailable.
+- Retry OpenRouter HTTP 502 and known Responses availability errors through the existing policy.
+- Preserve Codex failed-event usage and cumulative retry accounting. Treat absent failure usage as unavailable.
+- Remove active credentials before formatting. Apply the existing output sanitizer at configured dispatch before raw failure logging.
+
+Existing wrapper sentences remain in place.
+New explanatory fields and omission markers are structured response data.
+No prompt filename, token contract, or wrapper prose was added.
+No prompt reference change was necessary.
+
+### Adversarial review
+
+A separate agent reviewed the change with a clean context.
+The review traced configuration ownership, routing, replay, retries, accounting, logging, and existing display paths.
+Four initial findings were valid: stalled body reads, omitted chunked details, missing HTTP 502 retries, and discarded Codex failure usage.
+A later review found that null Codex failure usage could hide the provider error.
+All five findings were corrected in the existing paths.
+The final review found no remaining actionable issue within scope.
+The reviewer did not run tests or live provider checks.
+
+### Commands and results
+
+Run all commands from the active checkout on Windows.
+
+| Command | Result |
+|---|---|
+| `dotnet restore src/Threadsmith.sln` | Passed. Packages were current. |
+| `pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot artifacts/test-ripgrep` | Passed for `win-x64`. |
+| `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` | Final build passed with zero warnings and zero errors. |
+| `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-class '*OpenRouterProviderTests' --filter-class '*OpenAiCompatibleStreamErrorTests'` | Focused check passed before review corrections: 179 passed, 7 skipped. The final broad run below also passed the complete ModelTooling module after those corrections. |
+| `dotnet test --project tests/Threadsmith.CodexProvider.Tests/Threadsmith.CodexProvider.Tests.csproj --configuration Debug --no-build` | Final focused check: 79 passed, 2 skipped. The final broad run also passed this module. |
+| `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` | Failed in Planning, Mutations, and NativeTools command-policy checks. NativeTools then stalled. Stopped the stalled validation process; no complete suite total is available. |
+| `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4 --filter-not-namespace 'Threadsmith.NativeTools.Tests*'` | Final broad run: 5625 passed, 8 failed, 79 skipped. The filtered NativeTools module also returned a zero-tests error. ModelTooling, CodexProvider, AnthropicProvider, Architecture, and the other completed modules passed except the three modules identified below. |
+| `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include $changedFiles` | Passed. `$changedFiles` contained changed and new C# files. |
+| `dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info --include $changedFiles` | Exit 2. It reported 27 suggestions in unchanged code within the selected files. Comparison with added and changed diff lines found zero suggestions on those lines. No suggestion was reported in the new files. |
+| `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` | Passed. |
+| `git diff --check` | Passed. |
+
+Set `THREADSMITH_TEST_RIPGREP` to the staged `rg.exe` for both solution test runs.
+
+The final broad failures were:
+
+- Planning: `Plan80ActiveTurnContinuationTests.Admission_baseline_replays_actual_pipeline_model_results` received `Command execution denied.` instead of process output.
+- Mutations: six `SourceEditApplicationTests.EditFeedbackPrecedesValidationDecisions` cases failed in command-policy validation paths.
+- ParallelAgents: `ModelExplorerAssignmentRunnerTests.InheritedTools_ProcessesAndWritesUseSharedPipelineWithoutParentOnlyOrWorkflowTools` could not read the expected `.inbox/child.md` artifact.
+
+The first full run also reported five `ToolTimeoutTests.ProcessUsesResolvedPreferenceOrHintSubjectToHardCeilings` failures with `Command execution denied.` before NativeTools stalled.
+These results do not establish a clean repository validation gate.
+Do not widen this provider task to repair those other paths without a user instruction.
+
+Diagnostic logs are local ignored artifacts under `artifacts/openrouter-*`.
+
+### Limits
+
+Live failover was not forced or observed.
+Cross-upstream private reasoning compatibility remains the accepted assumption in section 6.3.
+No live credentials were used for this implementation.
+No manual terminal display exercise was performed.
+Existing display paths were traced and their automated suites were exercised.
+Windows results do not validate macOS or Linux.
+No commit, push, or pull request was made for this implementation.

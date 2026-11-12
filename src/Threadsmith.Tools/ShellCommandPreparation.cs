@@ -23,7 +23,7 @@ internal static class ShellCommandPreparation
     internal const string DenialReasonCode = "CommandExecutionDenied";
 
     /// <summary>Analyzes and binds every command before any part can execute.</summary>
-    internal static PreparedShellCommand Prepare(string command, string shellName, string workingDirectory, IReadOnlyDictionary<string, string> additions, int requestedTimeout)
+    internal static PreparedShellCommand Prepare(string command, string shellName, string workingDirectory, IReadOnlyDictionary<string, string> additions)
     {
         var shell = Path.GetFileNameWithoutExtension(shellName).ToLowerInvariant();
         var platform = OperatingSystem.IsWindows() ? Windows : OperatingSystem.IsMacOS() ? MacOS : Linux;
@@ -42,13 +42,7 @@ internal static class ShellCommandPreparation
 
         var resolver = new ProcessLaunchResolver(environment);
         var shellPath = resolver.Resolve(shellName);
-        if (OperatingSystem.IsWindows() && shell is Bash or Sh or Zsh
-            && environment.TryGetValue("SYSTEMROOT", out var systemRoot)
-            && shellPath.StartsWith(Path.TrimEndingDirectorySeparator(systemRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-        {
-            // WSL wrappers do not bind Windows native executable identities.
-            throw Denied();
-        }
+        ValidateInterpreter(shell, shellPath, environment);
 
         var parsed = Parse(command, shell);
         var text = new StringBuilder();
@@ -56,13 +50,19 @@ internal static class ShellCommandPreparation
         foreach (var item in parsed)
         {
             var name = item.Tokens[0];
+            var directScript = IsScript(name);
             string target;
             var shellCommand = false;
             try
             {
-                target = resolver.Resolve(name);
+                var interpreter = directScript
+                    ? IsPowerShellScript(name)
+                        ? shell is WindowsPowerShell or PowerShell ? shell : PowerShell
+                        : shell is Bash or Sh or Zsh ? shell : Bash
+                    : null;
+                target = interpreter == shell ? shellPath : resolver.Resolve(interpreter ?? name);
             }
-            catch (FileNotFoundException) when (IsShellName(name))
+            catch (FileNotFoundException) when (!directScript && IsShellName(name))
             {
                 // Name permission, not a claim that a particular module or builtin implements it.
                 target = string.Empty;
@@ -80,10 +80,14 @@ internal static class ShellCommandPreparation
                 throw Denied();
             }
 
-            // Nested shell dialects need their own analysis; ordinary program permissions belong to policy data.
             var executableName = shellCommand ? name : OperatingSystem.IsWindows() ? Path.GetFileNameWithoutExtension(target) : Path.GetFileName(target);
-            if (executableName.ToLowerInvariant() is WindowsPowerShell or PowerShell or Cmd or Bash or Sh or Zsh)
+            var interpreterName = executableName.ToLowerInvariant();
+            var scriptCall = directScript || interpreterName is WindowsPowerShell or PowerShell or Bash or Sh or Zsh
+                ? BindScript(item, directScript, interpreterName, target, workingDirectory, environment)
+                : null;
+            if (interpreterName == Cmd)
             {
+                // Unanalyzed nested command text is still unsupported.
                 throw Denied();
             }
 
@@ -93,9 +97,14 @@ internal static class ShellCommandPreparation
                 throw Denied();
             }
 
-            ImmutableArray<string> arguments = [.. item.Tokens.Skip(1)];
-            var invocationKind = shellCommand ? ShellCommand : Path.IsPathFullyQualified(name) ? ExplicitExternal : External;
+            var arguments = scriptCall?.InterpreterArguments ?? [.. item.Tokens.Skip(1)];
+            var invocationKind = shellCommand ? ShellCommand : !directScript && Path.IsPathFullyQualified(name) ? ExplicitExternal : External;
             actions.Add(new CommandFacts(platform, shell, executableName, target, invocationKind, arguments, workingDirectory));
+            if (scriptCall is not null)
+            {
+                actions.Add(new CommandFacts(platform, shell, Path.GetFileName(scriptCall.Path), scriptCall.Path, Script, scriptCall.ScriptArguments, workingDirectory));
+            }
+
             if (shell is WindowsPowerShell or PowerShell)
             {
                 text.Append("& ");
@@ -133,7 +142,7 @@ internal static class ShellCommandPreparation
         };
         var rawCommandLine = shell == Cmd ? "/d /s /c \"" + preparedText + "\"" : null;
         var launch = new PreparedProcessLaunch(shellPath, startup, environment, rawCommandLine);
-        var identity = PolicyJson.Fingerprint(new { command, workingDirectory, shell, launch.FileName, launch.Arguments, launch.CommandLine, Environment = environment.OrderBy(pair => pair.Key, StringComparer.Ordinal), requestedTimeout, Actions = actions.ToImmutable() });
+        var identity = PolicyJson.Fingerprint(new { command, workingDirectory, shell, launch.FileName, launch.Arguments, launch.CommandLine, Environment = environment.OrderBy(pair => pair.Key, StringComparer.Ordinal), Actions = actions.ToImmutable() });
         return new PreparedShellCommand(command, workingDirectory, shell, identity, actions.ToImmutable(), launch);
     }
 
@@ -360,6 +369,109 @@ internal static class ShellCommandPreparation
             parameter = false;
         }
     }
+
+    private static bool IsPowerShellScript(string path) => Path.GetExtension(path).Equals(".ps1", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsScript(string path) => IsPowerShellScript(path) || Path.GetExtension(path).Equals(".sh", StringComparison.OrdinalIgnoreCase);
+
+    private static void ValidateInterpreter(string interpreter, string target, IReadOnlyDictionary<string, string> environment)
+    {
+        if ((!OperatingSystem.IsWindows() && interpreter is Cmd or WindowsPowerShell)
+            || (OperatingSystem.IsWindows() && !Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw Denied();
+        }
+
+        if (OperatingSystem.IsWindows() && interpreter is Bash or Sh or Zsh
+            && environment.TryGetValue("SYSTEMROOT", out var systemRoot)
+            && target.StartsWith(Path.TrimEndingDirectorySeparator(systemRoot) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            // WSL wrappers do not bind Windows native executable or script identities.
+            throw Denied();
+        }
+    }
+
+    private static ScriptInvocation BindScript(LiteralCommand item, bool direct, string interpreter, string target, string workingDirectory, IReadOnlyDictionary<string, string> environment)
+    {
+        ValidateInterpreter(interpreter, target, environment);
+        var powershell = interpreter is WindowsPowerShell or PowerShell;
+        var index = 1;
+        var options = ImmutableArray.CreateBuilder<string>();
+        if (!direct)
+        {
+            if (powershell)
+            {
+                while (index < item.Tokens.Length && !item.Tokens[index].Equals("-File", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (item.Tokens[index].ToLowerInvariant() is not ("-nologo" or "-noprofile" or "-noninteractive"))
+                    {
+                        throw Denied();
+                    }
+
+                    index++;
+                }
+
+                if (index == item.Tokens.Length)
+                {
+                    throw Denied();
+                }
+
+                index++;
+            }
+            else
+            {
+                while (index < item.Tokens.Length && item.Tokens[index].StartsWith('-'))
+                {
+                    var option = item.Tokens[index++];
+                    if (option == "--")
+                    {
+                        break;
+                    }
+
+                    if (option is "-e" or "-u" or "-x" or "-v" or "-f"
+                        || (interpreter == Bash && option is "--noprofile" or "--norc"))
+                    {
+                        options.Add(option);
+                    }
+                    else
+                    {
+                        throw Denied();
+                    }
+                }
+            }
+        }
+
+        if (!direct && index >= item.Tokens.Length)
+        {
+            throw Denied();
+        }
+
+        var operand = direct ? item.Tokens[0] : item.Tokens[index++];
+        if (!IsScript(operand) || powershell != IsPowerShellScript(operand))
+        {
+            throw Denied();
+        }
+
+        var path = Path.GetFullPath(operand, workingDirectory);
+        if (!File.Exists(path))
+        {
+            throw Denied();
+        }
+
+        ImmutableArray<string> arguments = [.. item.Tokens.Skip(index)];
+        var scriptOperand = OperatingSystem.IsWindows() && !powershell ? path.Replace('\\', '/') : path;
+        ImmutableArray<string> startup = interpreter switch
+        {
+            WindowsPowerShell or PowerShell => ["-NoLogo", "-NoProfile", "-NonInteractive", "-File", path, .. arguments],
+            Bash => ["--noprofile", "--norc", .. options, "--", scriptOperand, .. arguments],
+            Zsh => ["-f", .. options, "--", scriptOperand, .. arguments],
+            Sh => [.. options, "--", scriptOperand, .. arguments],
+            _ => throw Denied(),
+        };
+        return new ScriptInvocation(path, arguments, startup);
+    }
+
+    private sealed record ScriptInvocation(string Path, ImmutableArray<string> ScriptArguments, ImmutableArray<string> InterpreterArguments);
 
     private static bool IsShellName(string name) => name.Length > 0 && char.IsAsciiLetter(name[0])
         && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');

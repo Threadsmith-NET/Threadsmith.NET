@@ -219,12 +219,28 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 var prepared = preparedInput.PreparedCommand ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
                 var snapshot = context.SecurityPolicy?.CommandPolicies.GetValueOrDefault(prepared.Shell)
                     ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
-                var decisions = prepared.Actions.Select(action => Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action)).ToArray();
-                if (decisions.Length == 0 || decisions.Any(decision => !decision.IsAllowed)
-                    || prepared.Actions.Any(action => !context.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)
-                        || !context.SecurityPolicy.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)))
+                if (prepared.Actions.Length == 0)
                 {
                     return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+                }
+
+                var decisions = new Threadsmith.Policies.Contracts.PolicyDecision[prepared.Actions.Length];
+                for (var index = 0; index < prepared.Actions.Length; index++)
+                {
+                    var action = prepared.Actions[index];
+                    if (!context.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)
+                        || !context.SecurityPolicy.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+                    }
+
+                    var decision = Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action);
+                    if (!decision.IsAllowed)
+                    {
+                        return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+                    }
+
+                    decisions[index] = decision;
                 }
 
                 var combined = CommandPolicyCoordinator.Combine(decisions, requiredApproval != ApprovalLevel.None);

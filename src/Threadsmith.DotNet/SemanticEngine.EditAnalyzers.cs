@@ -253,6 +253,9 @@ public sealed partial class SemanticEngine
         return new(project.Name, identities.ToImmutableArray(), missing.ToImmutableArray(), retainedFindings.ToImmutableArray(), referenceFindings.Distinct().ToImmutableArray(), omissions.ToImmutableArray(), preparationMilliseconds, analysisMilliseconds)
         {
             ReportableCount = execution is null ? null : reportable.Length,
+            ReportableErrors = reportable.Count(finding => finding.Severity == "Error"),
+            ReportableWarnings = reportable.Count(finding => finding.Severity == "Warning"),
+            ReportableSuggestions = reportable.Count(finding => finding.Severity == "Info"),
             OutputFiltered = execution is not null && unique.Any(execution.IsExcluded),
             Truncated = reportable.Length > retainedFindings.Length,
         };
@@ -307,6 +310,15 @@ internal sealed record EditAnalyzerProjectResult(string Project, IReadOnlyList<E
 
     /// <summary>Gets the reportable count before bounded retention for automatic evidence.</summary>
     public int? ReportableCount { get; init; }
+
+    /// <summary>Gets reportable errors before bounded retention.</summary>
+    public int ReportableErrors { get; init; }
+
+    /// <summary>Gets reportable warnings before bounded retention.</summary>
+    public int ReportableWarnings { get; init; }
+
+    /// <summary>Gets reportable informational suggestions before bounded retention.</summary>
+    public int ReportableSuggestions { get; init; }
 
     /// <summary>Gets whether shared reporting exclusions removed findings.</summary>
     public bool OutputFiltered { get; init; }

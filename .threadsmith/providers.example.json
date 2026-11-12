@@ -62,6 +62,73 @@
         "retryMaxAttempts": 3,
         "retryDelayMilliseconds": 250
       }
+    },
+    {
+      "type": "openrouter",
+      "id": "router",
+      "name": "OpenRouter (verify capabilities and enable in user catalog)",
+      "secretKeyReference": "secrets:models:openrouter",
+      "models": [
+        {
+          "type": "openrouter",
+          "id": "c09555b1-7a77-47be-90f3-020587705959",
+          "name": "Reviewed upstream model",
+          "modelId": "vendor/exact-model",
+          "contextWindow": 128000,
+          "maximumOutputTokens": 8192,
+          "requestOutputTokenReserve": 4096,
+          "capabilities": {
+            "streaming": true,
+            "toolCalls": true,
+            "structuredOutput": false
+          },
+          "supportedInputContentTypes": "text",
+          "supportedOutputContentTypes": "text",
+          "cost": {
+            "inputPerMillionTokens": 3,
+            "outputPerMillionTokens": 15
+          },
+          "sensitiveDataPolicy": "prohibited",
+          "intendedWorkloadClasses": [
+            "general",
+            "planning",
+            "review"
+          ],
+          "reasoningControl": "selectable",
+          "supportedReasoningLevels": [
+            "none",
+            "low",
+            "high"
+          ],
+          "defaultReasoningLevel": "low",
+          "effortMap": {
+            "low": "low",
+            "high": "high"
+          },
+          "supportsReasoningReplay": true,
+          "upstreams": [
+            {
+              "provider": "azure",
+              "expectedProviderName": "Azure"
+            },
+            {
+              "provider": "openai",
+              "expectedProviderName": "OpenAI"
+            }
+          ],
+          "automaticPrefixCaching": false,
+          "strictToolArguments": false,
+          "jsonSchemaResponses": false,
+          "parallelToolCalls": false,
+          "seedSupported": false,
+          "timeoutSeconds": 120,
+          "maximumStreamedBytes": 16777216,
+          "maximumToolCalls": 32,
+          "retryMaxAttempts": 3,
+          "retryDelayMilliseconds": 250
+        }
+      ],
+      "enabled": false
     }
   ]
 }

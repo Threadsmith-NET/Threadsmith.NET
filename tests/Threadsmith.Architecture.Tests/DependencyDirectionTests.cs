@@ -308,6 +308,30 @@ public static class DependencyDirectionTests
         Assert.NotEmpty(forbidden); // proves the guard would catch it
     }
 
+    /// <summary>MSBuild project references retain their identity on every host platform.</summary>
+    [Theory]
+    [InlineData(@"..\Threadsmith.Policies\Threadsmith.Policies.csproj", "Threadsmith.Policies")]
+    [InlineData("../Threadsmith.Policies/Threadsmith.Policies.csproj", "Threadsmith.Policies")]
+    [InlineData(@"../Threadsmith.Policies\Threadsmith.Policies.csproj", "Threadsmith.Policies")]
+    [InlineData(@"..\Threadsmith.Tui\Threadsmith.Tui.csproj", "Threadsmith.Tui")]
+    [InlineData("../Threadsmith.Tui/Threadsmith.Tui.csproj", "Threadsmith.Tui")]
+    public static void ProjectReferenceNamesAreIndependentOfPathSeparators(string include, string expected)
+    {
+        // Arrange
+        var document = new XDocument(
+            new XElement(
+                "Project",
+                new XElement(
+                    "ItemGroup",
+                    new XElement("ProjectReference", new XAttribute("Include", include)))));
+
+        // Act
+        var referenced = GetProjectReferences(document).ToArray();
+
+        // Assert
+        Assert.Equal(expected, Assert.Single(referenced));
+    }
+
     /// <summary>Returns the .csproj path for a product project.</summary>
     private static string CsprojPath(string projectName)
     {
@@ -317,12 +341,17 @@ public static class DependencyDirectionTests
     /// <summary>Parses the &lt;ProjectReference Include="..." /&gt; entries for a project.</summary>
     private static IEnumerable<string> GetProjectReferences(string projectName)
     {
-        var doc = XDocument.Load(CsprojPath(projectName));
-        return doc.Descendants()
+        return GetProjectReferences(XDocument.Load(CsprojPath(projectName)));
+    }
+
+    /// <summary>Extracts project names from MSBuild paths using either directory separator.</summary>
+    private static IEnumerable<string> GetProjectReferences(XDocument document)
+    {
+        return document.Descendants()
             .Where(e => e.Name.LocalName == "ProjectReference")
             .Select(e => e.Attribute("Include")?.Value)
             .OfType<string>()
-            .Select(Path.GetFileNameWithoutExtension)
+            .Select(include => Path.GetFileNameWithoutExtension(include.Replace('\\', '/')))
             .OfType<string>();
     }
 

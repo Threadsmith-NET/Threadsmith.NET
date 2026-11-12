@@ -14,7 +14,7 @@ public static class MemoryToolActivityPresentationTests
     public static void Transcript_ShowsCompleteMultilineMemoryTextBeyondCompactDetailLimit()
     {
         const string firstLine = "For release reviews in this repository, record the exact validation command and its outcome beside the change description. Include the relevant target framework and mention any skipped integration checks, so the next maintainer can distinguish what was exercised locally from what still needs a deployment environment.";
-        var note = firstLine + "\nsecond line\u001b[31m";
+        const string note = firstLine + "\nsecond line\u001b[31m";
         var transcript = Render(
             succeeded: true,
             CreateResult("add", "added", [new { Id = "memory-1", Text = note }], 0));

@@ -42,8 +42,8 @@ public sealed class Plan68AllocationMeasurementTests
     public void Measure_SecretOutputSanitizer_Sanitize_Allocations()
     {
         var sanitizer = new SecretOutputSanitizer();
-        var small = "Operation completed in 12ms.";
-        var typical = "Loaded model gpt-4 with api_key=sk-AbCdEfGhIjKlMnOpQrStUv and token: Bearer abc123.\n"
+        const string small = "Operation completed in 12ms.";
+        const string typical = "Loaded model gpt-4 with api_key=sk-AbCdEfGhIjKlMnOpQrStUv and token: Bearer abc123.\n"
             + "Connection string: Server=db;Password=hunter2;Integrated Security=true.";
         var boundedLarge = BuildBoundedLargeSanitizerInput();
 

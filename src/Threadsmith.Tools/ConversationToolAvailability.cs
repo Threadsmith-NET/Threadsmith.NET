@@ -37,7 +37,7 @@ internal static class ConversationToolAvailability
     public static bool IsAdvertised(ToolDefinition definition, ToolInvocationContext? context)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        if (string.Equals(definition.Id, "ask_user", StringComparison.OrdinalIgnoreCase) && (context is null || context.IsChildAgent || context.UserQuestions?.IsAvailable != true))
+        if (string.Equals(definition.Id, "ask_user", StringComparison.OrdinalIgnoreCase) && (context?.IsChildAgent != false || context.UserQuestions?.IsAvailable != true))
         {
             return false;
         }

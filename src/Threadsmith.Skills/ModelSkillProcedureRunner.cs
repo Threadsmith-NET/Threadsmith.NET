@@ -130,7 +130,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             for (var round = 0; round < maximumRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var modelContext = (await CreateToolContextAsync(plan, cancellationToken)) with { OperationScope = operationScope };
+                var roundContext = (await CreateToolContextAsync(plan, cancellationToken)) with { OperationScope = operationScope };
+                var modelContext = operationScope.RefreshCommandPolicy(roundContext);
                 var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
                     ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
                     : null;
@@ -348,8 +349,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         return new SkillProcedureResult(output, round + 1, toolCalls, sideEffects.ToArray());
                     }
 
-                    var context = (await CreateToolContextAsync(plan, cancellationToken)) with
+                    var latestContext = await CreateToolContextAsync(plan, cancellationToken);
+                    var context = latestContext with
                     {
+                        // Adopt only the generation captured before this model response. Keep live
+                        // restriction changes, and never refresh queued calls after an Always save.
+                        SecurityPolicy = latestContext.SecurityPolicy == roundContext.SecurityPolicy
+                            ? modelContext.SecurityPolicy : latestContext.SecurityPolicy,
                         OperationScope = operationScope,
                         RequestedBy = "model",
                         ModelVisibleToolSnapshotId = snapshotId,
@@ -499,7 +505,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             ToolCallId = toolCallId,
                             ToolName = toolRequest.ToolName,
                             ModelRound = round,
-                            IsError = result is null || !result.Succeeded,
+                            IsError = result?.Succeeded != true,
                             Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
                         });
                         if (receivedEnvelope)

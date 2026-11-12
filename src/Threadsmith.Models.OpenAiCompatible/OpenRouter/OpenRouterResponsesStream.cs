@@ -14,6 +14,7 @@ internal sealed class OpenRouterResponsesStream
     private readonly OpenRouterModelConfiguration _model;
     private readonly string _secret;
     private readonly string _protocol;
+    private readonly IReadOnlyList<OpenRouterUpstreamConfiguration> _upstreams;
 
     /// <summary>Initializes a new instance of the <see cref="OpenRouterResponsesStream"/> class.</summary>
     internal OpenRouterResponsesStream(ModelProfile profile, OpenRouterModelConfiguration model, string secret, string protocol)
@@ -22,6 +23,7 @@ internal sealed class OpenRouterResponsesStream
         _model = model;
         _secret = secret;
         _protocol = protocol;
+        _upstreams = model.Upstreams ?? [];
     }
 
     /// <summary>Reports available usage before rejecting output or releasing tools.</summary>
@@ -61,6 +63,7 @@ internal sealed class OpenRouterResponsesStream
             var status = String(result, "status");
             var isError = type is "response.failed" or "response.incomplete" or "error" || status is "failed" or "incomplete" || result["error"] is not null;
             var rateLimited = ModelStreamRetry.IsRateLimitError(result);
+            var retryable = rateLimited || String(result, "error_type") is "provider_unavailable" or "provider_overloaded";
             if (result["usage"] is JsonObject report)
             {
                 var nextUsage = OpenRouterResponsesUsage.Read(report, request, _profile, Math.Max(characters, OutputCharacters(result)));
@@ -72,7 +75,7 @@ internal sealed class OpenRouterResponsesStream
                     }
 
                     usage = nextUsage;
-                    yield return new ModelChunk { Usage = usage, IsInterruptedUsage = rateLimited };
+                    yield return new ModelChunk { Usage = usage, IsInterruptedUsage = retryable };
                 }
 
                 outputLimitReached |= report["output_tokens"] is not null && nextUsage.OutputTokens == maximumOutputTokens;
@@ -86,9 +89,11 @@ internal sealed class OpenRouterResponsesStream
             var isLengthLimited = false;
             if (isError)
             {
-                if (rateLimited)
+                if (retryable)
                 {
-                    throw new TransientModelException("OpenRouter Responses reported a rate limit (code 429).") { IsRateLimit = true };
+                    throw new TransientModelException(ProviderErrorDetails.PreferMessage(
+                        ErrorDetails(result), "The provider could not complete the request."))
+                    { IsRateLimit = rateLimited };
                 }
 
                 if ((type == "response.incomplete" || status == "incomplete")
@@ -121,7 +126,7 @@ internal sealed class OpenRouterResponsesStream
                 }
                 else
                 {
-                    throw new ModelProviderException("OpenRouter Responses reported a failed or incomplete response.");
+                    throw new ModelProviderException(ProviderErrorDetails.PreferMessage(ErrorDetails(result), "The provider could not complete the request."));
                 }
             }
 
@@ -510,10 +515,16 @@ internal sealed class OpenRouterResponsesStream
     private void ValidateIdentity(JsonObject response)
     {
         if ((String(response, "model") is { } model && model != _model.ModelId)
-            || (_model.ExpectedProviderName is { } expected && String(response, "provider") is { } provider && !string.Equals(expected, provider, StringComparison.OrdinalIgnoreCase)))
+            || (String(response, "provider") is { } provider && _upstreams.Count > 0
+                && !_upstreams.Any(entry => string.Equals(entry.ExpectedProviderName, provider, StringComparison.OrdinalIgnoreCase))))
         {
             throw new MalformedModelOutputException("OpenRouter returned an unexpected model or upstream identity.");
         }
+    }
+
+    private ProviderErrorDetails.Detail ErrorDetails(JsonObject response)
+    {
+        return ProviderErrorDetails.Format(response, _secret);
     }
 
     private static long OutputCharacters(JsonObject response)

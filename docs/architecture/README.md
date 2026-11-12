@@ -4,6 +4,7 @@ Architecture decision records (ADRs) explain why Threadsmith owns trust, policy,
 
 Subsystem summaries:
 
+- [Shared command policy and shell binding](adr-63-shared-command-policy.md)
 - [Context policy](context-policy.md)
 - [Event catalog](event-catalog.md)
 - [Mutation model](mutation-model.md)

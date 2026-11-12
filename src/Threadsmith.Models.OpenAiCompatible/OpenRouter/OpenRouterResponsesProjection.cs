@@ -14,7 +14,8 @@ internal static class OpenRouterResponsesProjection
         var tools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var names = ModelToolWireNameMap.Create(tools);
         var input = CreateInput(request, names);
-        var routing = new JsonObject { ["require_parameters"] = true, ["allow_fallbacks"] = model.Upstream is null };
+        var upstreams = model.Upstreams ?? [];
+        var routing = new JsonObject { ["require_parameters"] = true, ["allow_fallbacks"] = upstreams.Count != 1 };
         var body = new JsonObject
         {
             ["model"] = model.ModelId,
@@ -25,10 +26,10 @@ internal static class OpenRouterResponsesProjection
             ["session_id"] = (request.CacheAffinityId ?? request.RunId.Value).ToString("D"),
             ["provider"] = routing,
         };
-        if (model.Upstream is { } upstream)
+        if (upstreams.Count > 0)
         {
-            routing["only"] = new JsonArray(upstream);
-            routing["order"] = new JsonArray(upstream);
+            routing["only"] = new JsonArray([.. upstreams.Select(entry => (JsonNode?)JsonValue.Create(entry.Provider))]);
+            routing["order"] = routing["only"]?.DeepClone();
         }
 
         if (profile.Temperature is { } temperature)

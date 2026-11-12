@@ -1006,7 +1006,7 @@ public sealed class DelegationCoordinator :
             throw new InvalidOperationException("The delegation is already active.");
         }
 
-        using var cancellationRegistration = cancellationToken.Register(active.Cancel);
+        await using var cancellationRegistration = cancellationToken.Register(active.Cancel);
         var revisions = new CheckpointRevisionSequence();
         AgentRunOutcome[] queuedOutcomes =
         [

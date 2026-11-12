@@ -101,9 +101,8 @@ public sealed class ToolRegistry : IToolRegistry
             {
                 return _tools.Values
                     .Select(tool => tool.Definition)
-                    .Where(definition => _stateManager is null || _stateManager.IsEnabled(definition.Id))
-                    .Where(definition => _activationPolicy is null
-                        || _activationPolicy.IsActive(definition.Id, default, default))
+                    .Where(definition => _stateManager?.IsEnabled(definition.Id) != false)
+                    .Where(definition => _activationPolicy?.IsActive(definition.Id, default, default) != false)
                     .OrderBy(definition => definition.Id, StringComparer.Ordinal)
                     .ToArray();
             }
@@ -117,8 +116,8 @@ public sealed class ToolRegistry : IToolRegistry
         {
             return _tools.Values
                 .Select(tool => tool.Definition)
-                .Where(definition => _stateManager is null || _stateManager.IsEnabled(definition.Id))
-                .Where(definition => _activationPolicy is null || _activationPolicy.IsActive(definition.Id, sessionId, runId))
+                .Where(definition => _stateManager?.IsEnabled(definition.Id) != false)
+                .Where(definition => _activationPolicy?.IsActive(definition.Id, sessionId, runId) != false)
                 .OrderBy(definition => definition.Id, StringComparer.Ordinal)
                 .ToArray();
         }
@@ -136,8 +135,8 @@ public sealed class ToolRegistry : IToolRegistry
         lock (_gate)
         {
             return _tools.Values
-                .Where(tool => (_stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
-                    && (_activationPolicy is null || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId)))
+                .Where(tool => (_stateManager?.IsEnabled(tool.Definition.Id) != false)
+                    && (_activationPolicy?.IsActive(tool.Definition.Id, sessionId, runId) != false))
                 .OrderBy(tool => tool.Definition.Id, StringComparer.Ordinal)
                 .Select(tool => new ToolRegistration(tool, GetSourceUnsafe(tool.Definition.Id)))
                 .ToArray();
@@ -316,7 +315,7 @@ public sealed class ToolRegistry : IToolRegistry
             throw new KeyNotFoundException($"Tool '{toolId}' is not registered.");
         }
 
-        return _stateManager is null || _stateManager.IsEnabled(toolId)
+        return _stateManager?.IsEnabled(toolId) != false
             ? resolved
             : throw new KeyNotFoundException($"Tool '{toolId}' is disabled.");
     }

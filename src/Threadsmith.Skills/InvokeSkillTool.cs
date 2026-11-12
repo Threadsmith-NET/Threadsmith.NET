@@ -282,12 +282,12 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
     {
         return new SkillInvocationResult
         {
-            Response = checkpoint.Steps.LastOrDefault()?.Response,
+            Response = (checkpoint.Steps.Count > 0 ? checkpoint.Steps[^1] : default)?.Response,
             InvocationId = checkpoint.InvocationId,
             Package = checkpoint.Package,
             Status = checkpoint.Status,
             OutputJson = checkpoint.Status is SkillInvocationStatus.Completed or SkillInvocationStatus.Failed
-                ? checkpoint.Steps.LastOrDefault()?.OutputJson
+                ? (checkpoint.Steps.Count > 0 ? checkpoint.Steps[^1] : default)?.OutputJson
                 : null,
             HostActions = checkpoint.Steps
                 .Where(item => item.HostAction is not null)

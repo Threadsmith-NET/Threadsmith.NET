@@ -8,7 +8,7 @@ using Threadsmith.Models.OpenAiCompatible;
 using Xunit;
 
 /// <summary>Separates handler cancellation, caller cancellation, and the total model-request deadline.</summary>
-public static class OpenAiCompatibleTimeoutTests
+public static partial class OpenAiCompatibleTimeoutTests
 {
     private const string CompletedResponse = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
@@ -147,7 +147,7 @@ public static class OpenAiCompatibleTimeoutTests
     public static async Task TransportCancellation_MidStream_DoesNotReplay(int timeoutSeconds)
     {
         var attempts = 0;
-        using var stream = new ControlledStream(
+        await using var stream = new ControlledStream(
             "data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n",
             (_, _) => throw new TaskCanceledException("Transport stopped."));
         using var client = new HttpClient(new RecordingHandler((_, _) =>
@@ -177,7 +177,7 @@ public static class OpenAiCompatibleTimeoutTests
         var readEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseToken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var read = false;
-        using var stream = new ControlledStream(string.Empty, async (buffer, token) =>
+        await using var stream = new ControlledStream(string.Empty, async (buffer, token) =>
         {
             if (read)
             {
@@ -317,6 +317,94 @@ public static class OpenAiCompatibleTimeoutTests
         Assert.Equal(1, attempts);
     }
 
+    /// <summary>Optional diagnostic waiting expires independently of retries and caller cancellation stays cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ErrorBody_DiagnosticBudgetAndCallerCancellationRemainDistinct(bool cancelCaller)
+    {
+        // Arrange
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var clock = new RetryClock();
+        await using var stream = new ControlledStream(string.Empty, async (_, token) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return 0;
+        });
+        var calls = 0;
+        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            calls++;
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = new StreamContent(stream) };
+            response.Headers.Add("x-request-id", "req-stalled");
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(2));
+            return Task.FromResult(response);
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var profile = Profile(0) with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero } };
+        var provider = new OpenAiCompatibleModelProvider(client, profile, timeProvider: clock);
+        var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
+        try
+        {
+            // Observe registration, not just read entry, before advancing the controllable clock.
+            await Task.WhenAny(clock.DiagnosticsEntered.Task, pending).WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(clock.DiagnosticsEntered.Task.IsCompletedSuccessfully);
+
+            // Act
+            if (cancelCaller)
+            {
+                await caller.CancelAsync();
+            }
+            else
+            {
+                clock.Advance(TimeSpan.FromMilliseconds(99));
+                Assert.False(pending.IsCompleted);
+                clock.Advance(TimeSpan.FromMilliseconds(1));
+            }
+
+            // Assert
+            if (cancelCaller)
+            {
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+            }
+            else
+            {
+                var error = await Assert.ThrowsAsync<TransientModelException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+                Assert.Contains("HTTP 429", error.Message, StringComparison.Ordinal);
+                Assert.Contains("Error body: unavailable · Request ID: req-stalled", error.Message, StringComparison.Ordinal);
+                Assert.True(error.IsRateLimit);
+                Assert.Equal(TimeSpan.FromSeconds(2), error.RetryAfter);
+            }
+
+            Assert.Equal(1, calls);
+            Assert.True(stream.IsDisposed);
+        }
+        finally
+        {
+            await caller.CancelAsync();
+            await Record.ExceptionAsync(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+        }
+    }
+
+    /// <summary>A failed diagnostic read discloses unreadability without publishing transport exception text.</summary>
+    [Fact]
+    public static async Task ErrorBody_ReadFailureRetainsStatusWithoutPrivateDetails()
+    {
+        await using var stream = new ControlledStream(string.Empty, (_, _) => throw new IOException("PRIVATE_TRANSPORT_CANARY"));
+        using var client = new HttpClient(new RecordingHandler((_, _) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StreamContent(stream) })))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(0), timeProvider: new FakeTimeProvider());
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("HTTP 400", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Error body: unreadable", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE_TRANSPORT_CANARY", error.Message, StringComparison.Ordinal);
+        Assert.True(stream.IsDisposed);
+    }
+
     private static ModelStreamRequest Request()
     {
         return new() { RunId = RunId.New(), Input = "Explain the design." };
@@ -355,6 +443,8 @@ public static class OpenAiCompatibleTimeoutTests
 
         public TaskCompletionSource BackoffEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource DiagnosticsEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public bool DeadlineRegistered { get; private set; }
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
@@ -365,6 +455,11 @@ public static class OpenAiCompatibleTimeoutTests
                 _timers.Add(timer);
                 timer.Change(dueTime, period);
                 DeadlineRegistered |= dueTime == TimeSpan.FromMilliseconds(50);
+                if (dueTime == TimeSpan.FromMilliseconds(100))
+                {
+                    DiagnosticsEntered.TrySetResult();
+                }
+
                 if (dueTime == TimeSpan.FromMinutes(1))
                 {
                     BackoffEntered.TrySetResult();
@@ -468,6 +563,8 @@ public static class OpenAiCompatibleTimeoutTests
 
         public bool IsDisposed { get; private set; }
 
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public override bool CanRead => true;
 
         public override bool CanSeek => false;
@@ -523,6 +620,7 @@ public static class OpenAiCompatibleTimeoutTests
         {
             IsDisposed = true;
             base.Dispose(disposing);
+            Disposed.TrySetResult();
         }
     }
 }

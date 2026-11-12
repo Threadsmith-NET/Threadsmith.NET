@@ -50,7 +50,7 @@ public sealed partial class ReadFileTool
             foreach (var page in rendered.Pages)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                using var image = new MemoryStream(page, writable: false);
+                await using var image = new MemoryStream(page, writable: false);
                 pages.Add(await artifacts.StoreImageAsync(
                     image,
                     context.SessionId,

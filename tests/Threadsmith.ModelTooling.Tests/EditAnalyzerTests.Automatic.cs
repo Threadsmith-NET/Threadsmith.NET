@@ -12,9 +12,13 @@ using Xunit;
 
 public static partial class EditAnalyzerTests
 {
-    /// <summary>Default feedback retains all findings beyond the former report and retention caps.</summary>
-    [Fact]
-    public static async Task AutomaticDefaultFeedbackRetainsAllAnalyzerFindings()
+    /// <summary>Analyzer severity totals include reportable findings omitted by retention limits.</summary>
+    [Theory]
+    [InlineData(0, DiagnosticSeverity.Info)]
+    [InlineData(5, DiagnosticSeverity.Info)]
+    [InlineData(5, DiagnosticSeverity.Warning)]
+    [InlineData(5, DiagnosticSeverity.Error)]
+    public static async Task AutomaticFeedbackCountsSeveritiesBeforeRetention(int retainedLimit, DiagnosticSeverity severity)
     {
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new TestSemanticSolution();
@@ -22,6 +26,8 @@ public static partial class EditAnalyzerTests
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
         var source = string.Join('\n', Enumerable.Range(0, 70).Select(index => $"namespace Probe{index} {{ public class AnalyzerProbe {{}} }}"));
         await File.WriteAllTextAsync(file, source, ct);
+        var configuredSeverity = severity == DiagnosticSeverity.Error ? "error" : severity == DiagnosticSeverity.Warning ? "warning" : "suggestion";
+        await File.AppendAllTextAsync(Path.Combine(fixture.Root, ".editorconfig"), $"\ndotnet_diagnostic.TS1170.severity = {configuredSeverity}\n", ct);
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         await using var events = new DomainEventStream();
@@ -29,17 +35,21 @@ public static partial class EditAnalyzerTests
             events,
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
+            resourceLimits: new() { EditAnalysis = new() { MaximumRetainedDiagnostics = retainedLimit, Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
 
         var result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, source, source + "\n// edit", null, ct);
 
-        Assert.Equal("completed", result.Analyzers.Status);
-        Assert.Equal(70, result.Diagnostics.Count(item => item.Code == "TS1170"));
-        Assert.Equal(result.Analyzers.ReportableFindings, result.Diagnostics.Count(item => item.Producer == "analyzer"));
-        Assert.False(result.Analyzers.Truncated);
-        Assert.False(result.DiagnosticsTruncated);
+        Assert.Equal(retainedLimit == 0 ? "completed" : "partial", result.Analyzers.Status);
+        Assert.Equal(retainedLimit == 0 ? 70 : retainedLimit, result.Diagnostics.Count(item => item.Code == "TS1170"));
+        Assert.Equal(70, result.Analyzers.ReportableFindings);
+        Assert.Equal(severity == DiagnosticSeverity.Error ? 70 : 0, result.Analyzers.Errors);
+        Assert.Equal(severity == DiagnosticSeverity.Warning ? 70 : 0, result.Analyzers.Warnings);
+        Assert.Equal(severity == DiagnosticSeverity.Info ? 70 : 0, result.Analyzers.Suggestions);
+        Assert.Equal(retainedLimit > 0, result.Analyzers.Truncated);
+        Assert.Equal(retainedLimit > 0, result.DiagnosticsTruncated);
     }
 
     /// <summary>Automatic scoped evidence preserves suggestions, shared exclusions and comparable repairs.</summary>
@@ -77,6 +87,9 @@ public static partial class EditAnalyzerTests
         var analyzerFindings = first.Diagnostics.Where(item => item.Producer == "analyzer").ToArray();
         Assert.Equal(exclude ? 4 : 5, analyzerFindings.Select(item => item.Code).Distinct().Count());
         Assert.Equal(analyzerFindings.Length, first.Analyzers.ReportableFindings);
+        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Error), first.Analyzers.Errors);
+        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Warning), first.Analyzers.Warnings);
+        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Info), first.Analyzers.Suggestions);
         Assert.Equal(exclude, first.Analyzers.OutputFiltered);
         Assert.Equal(0, first.Analyzers.NewFindings);
         Assert.All(first.Diagnostics.Where(item => item.Producer == "analyzer"), item =>

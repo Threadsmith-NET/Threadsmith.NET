@@ -70,6 +70,41 @@ public static class HeadlessMutationPollingTests
         Assert.Equal(0, host.Cancellations);
     }
 
+    /// <summary>Review publication waits for the dispatcher task observed by the shell, not just its inner signal.</summary>
+    [Theory]
+    [InlineData("earlier")]
+    [InlineData("unavailable")]
+    public static async Task ReviewWaitsForShellObservedRunCompletion(string scenario)
+    {
+        // Arrange: force the inner signal to complete while the dispatcher wrapper remains pending.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var host = new PollingHost(scenario, holdRunCompletion: true);
+        await using var writer = new StringWriter();
+        var shell = new HeadlessShell(host, host, writer);
+        var run = shell.RunAsync("polling", "request", cancellationToken);
+        int exitCode;
+        try
+        {
+            // Act: observe both dispatches before inspecting tasks, without relying on scheduling speed.
+            await host.ReviewDispatched.Task.WaitAsync(cancellationToken);
+            await host.RunCompletionBlocked.Task.WaitAsync(cancellationToken);
+
+            // Assert: neither review success nor review failure can be published before run completion.
+            Assert.False(host.RunCompletion.IsCompleted);
+            Assert.False(host.ReviewCompletion.IsCompleted);
+        }
+        finally
+        {
+            host.ReleaseRunCompletion.TrySetResult(true);
+            exitCode = await run;
+        }
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, host.Reviews);
+        Assert.Equal(1, host.FullReads);
+        Assert.True(host.RunCompletion.IsCompletedSuccessfully);
+    }
+
     private sealed class PollingHost : ICommandDispatcher, IProjectionStore
     {
         private readonly InMemoryProjectionStore _store = new();
@@ -80,10 +115,12 @@ public static class HeadlessMutationPollingTests
         private readonly string _scenario;
         private readonly ProjectionKey _key;
         private readonly MutationPreview _preview;
+        private readonly bool _holdRunCompletion;
 
-        public PollingHost(string scenario)
+        public PollingHost(string scenario, bool holdRunCompletion = false)
         {
             _scenario = scenario;
+            _holdRunCompletion = holdRunCompletion;
             _key = new ProjectionKey("session", _sessionId.Value.ToString("D"));
             _preview = new MutationPreview(_mutationSetId, "review diff", [], 1, 1);
             _store.ReplaceSession(new SessionProjection
@@ -114,6 +151,16 @@ public static class HeadlessMutationPollingTests
 
         public TaskCompletionSource<bool> StatusObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public TaskCompletionSource<bool> ReviewDispatched { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> RunCompletionBlocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<bool> ReleaseRunCompletion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task RunCompletion => RunCompletionTask ?? throw new InvalidOperationException("Run wait has not been dispatched.");
+
+        public Task ReviewCompletion => ReviewCompletionTask ?? throw new InvalidOperationException("Review has not been dispatched.");
+
         public int StatusReads { get; private set; }
 
         public int FullReads { get; private set; }
@@ -122,7 +169,57 @@ public static class HeadlessMutationPollingTests
 
         public int Cancellations { get; private set; }
 
-        public async Task<TResponse> DispatchAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
+        public Task<TResponse> DispatchAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
+        {
+            var task = DispatchCoreAsync(command, cancellationToken);
+            if (command is WaitForRunCommand)
+            {
+                RunCompletionTask = task;
+            }
+            else if (command is GetMutationReviewCommand)
+            {
+                ReviewCompletionTask = task;
+                ReviewDispatched.TrySetResult(true);
+            }
+
+            return task;
+        }
+
+        public Task ApplyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
+        {
+            return _store.ApplyAsync(domainEvent, cancellationToken);
+        }
+
+        public async Task<TProjection?> GetAsync<TProjection>(ProjectionKey key, CancellationToken cancellationToken = default)
+            where TProjection : class, IProjection
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(_key, key);
+            if (typeof(TProjection) == typeof(SessionProjection))
+            {
+                Assert.True(RunCompletion.IsCompleted, "A pending run must not poll full session snapshots.");
+                FullReads++;
+            }
+            else
+            {
+                Assert.Equal(typeof(MutationStatusProjection), typeof(TProjection));
+                StatusReads++;
+                StatusObserved.TrySetResult(true);
+                if (StatusReads >= 2 && _scenario is "none" or "auto" or "applied" or "rolledback")
+                {
+                    _completion.TrySetResult(true);
+                    await RunCompletion.WaitAsync(cancellationToken);
+                }
+            }
+
+            return await _store.GetAsync<TProjection>(key, cancellationToken);
+        }
+
+        private Task? RunCompletionTask { get; set; }
+
+        private Task? ReviewCompletionTask { get; set; }
+
+        private async Task<TResponse> DispatchCoreAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             object response;
@@ -138,6 +235,12 @@ public static class HeadlessMutationPollingTests
                 case WaitForRunCommand wait:
                     Assert.Equal(_runId, wait.RunId);
                     response = await _completion.Task.WaitAsync(cancellationToken);
+                    if (_holdRunCompletion)
+                    {
+                        RunCompletionBlocked.TrySetResult(true);
+                        await ReleaseRunCompletion.Task.WaitAsync(cancellationToken);
+                    }
+
                     break;
                 case GetMutationReviewCommand review:
                     Assert.Equal(_sessionId, review.SessionId);
@@ -146,6 +249,7 @@ public static class HeadlessMutationPollingTests
                     if (_scenario != "current")
                     {
                         _completion.TrySetResult(true);
+                        await RunCompletion.WaitAsync(cancellationToken);
                     }
 
                     if (_scenario == "unavailable")
@@ -173,6 +277,15 @@ public static class HeadlessMutationPollingTests
                     Assert.Equal(_runId, cancel.RunId);
                     Cancellations++;
                     _completion.TrySetCanceled(cancellationToken);
+                    try
+                    {
+                        await RunCompletion.WaitAsync(cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // The fixture owns this run cancellation, not the caller's cancellation.
+                    }
+
                     response = true;
                     break;
                 default:
@@ -180,35 +293,6 @@ public static class HeadlessMutationPollingTests
             }
 
             return (TResponse)response;
-        }
-
-        public Task ApplyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
-        {
-            return _store.ApplyAsync(domainEvent, cancellationToken);
-        }
-
-        public Task<TProjection?> GetAsync<TProjection>(ProjectionKey key, CancellationToken cancellationToken = default)
-            where TProjection : class, IProjection
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal(_key, key);
-            if (typeof(TProjection) == typeof(SessionProjection))
-            {
-                Assert.True(_completion.Task.IsCompleted, "A pending run must not poll full session snapshots.");
-                FullReads++;
-            }
-            else
-            {
-                Assert.Equal(typeof(MutationStatusProjection), typeof(TProjection));
-                StatusReads++;
-                StatusObserved.TrySetResult(true);
-                if (StatusReads >= 2 && _scenario is "none" or "auto" or "applied" or "rolledback")
-                {
-                    _completion.TrySetResult(true);
-                }
-            }
-
-            return _store.GetAsync<TProjection>(key, cancellationToken);
         }
     }
 }

@@ -9,9 +9,10 @@ public static partial class Milestone1Tests
 {
     /// <summary>The final wait restores the original semantic clock and ignores completed checks.</summary>
     [Theory]
-    [InlineData("compiler analysis", "Compiler Checks")]
-    [InlineData("advisory edit analyzers", "Analyzer Checks")]
-    public static async Task InteractionCoordinator_SemanticWait_RestoresOriginalElapsedTime(string checkName, string caption)
+    [InlineData("compiler analysis", "Compiler Checks", SemanticCheckPhase.PreMutation, "compiler analysis")]
+    [InlineData("advisory edit analyzers", "Analyzer Checks", SemanticCheckPhase.PreMutation, "pre-mutation candidate analysis")]
+    [InlineData("advisory edit analyzers", "Analyzer Checks", SemanticCheckPhase.PostMutation, "post-mutation committed-source analysis")]
+    public static async Task InteractionCoordinator_SemanticWait_RestoresOriginalElapsedTime(string checkName, string caption, SemanticCheckPhase phase, string title)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var provider = new GatedAnswerModelProvider();
@@ -24,9 +25,9 @@ public static partial class Milestone1Tests
         {
             await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(cancellationToken);
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
-            var started = new SemanticCheckStarted(sessionId, DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, checkName) { EffectId = Guid.NewGuid() };
+            var started = new SemanticCheckStarted(sessionId, DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), phase, checkName) { EffectId = Guid.NewGuid() };
             await harness.EventStream.PublishAsync(started, cancellationToken);
-            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith($"{caption}: {checkName}", StringComparison.Ordinal)), cancellationToken);
+            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith($"{caption}: {title}", StringComparison.Ordinal)), cancellationToken);
             clock.Advance(TimeSpan.FromSeconds(5));
             await harness.EventStream.PublishAsync(new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "answer before feedback"), cancellationToken);
             await harness.EventStream.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "TestBoundary", "flush answer"), cancellationToken);
@@ -34,9 +35,9 @@ public static partial class Milestone1Tests
 
             var wait = new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", $"Waiting for {checkName} to finish.") { PendingSemanticEffectId = started.EffectId };
             await harness.EventStream.PublishAsync(wait, cancellationToken);
-            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.Contains(checkName, StringComparison.Ordinal) && status.Contains("5.0s", StringComparison.Ordinal)), cancellationToken);
+            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.Contains(title, StringComparison.Ordinal) && status.Contains("5.0s", StringComparison.Ordinal)), cancellationToken);
             await harness.EventStream.PublishAsync(new SemanticCheckCompleted(sessionId, DateTimeOffset.UtcNow, started.RunId, started.SemanticCheckId, started.Phase, started.CheckName, SemanticCheckOutcome.Completed), cancellationToken);
-            await surface.WaitUntilAsync(() => surface.Output.Contains($"{checkName} - completed", StringComparison.Ordinal) && !surface.IsStatusActive, cancellationToken);
+            await surface.WaitUntilAsync(() => surface.Output.Contains($"{caption}: {title} - completed", StringComparison.Ordinal) && !surface.IsStatusActive, cancellationToken);
             var statusCount = surface.Statuses.Count;
             await harness.EventStream.PublishAsync(wait, cancellationToken);
             await harness.EventStream.PublishAsync(new ModelOutputObserved(sessionId, DateTimeOffset.UtcNow, "after stale wait"), cancellationToken);

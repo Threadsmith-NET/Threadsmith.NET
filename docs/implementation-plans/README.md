@@ -38,6 +38,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 
 | # | File | Capability |
 |---|---|---|
+| 121 | [Guided command policy authoring](plan-121-command-policy-authoring.md) | Sequential modal for shell policy JSON generation and review |
 | M36 | [Tool statistics](Threadsmith-tool-statistics-implementation-plan.md) | Persistent repository tool counts, durations and shared reset controls |
 | Maintenance | [maintenance-early-startup-modal.md](maintenance-early-startup-modal.md) | Early startup modal with timed operation states and bounded progress display |
 | Maintenance | [maintenance-strict-semantic-memory-recall.md](maintenance-strict-semantic-memory-recall.md) | Mandatory semantic admission for automatic ordinary and intelligence recall |
@@ -238,6 +239,9 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-startup-parallelization.md](maintenance-startup-parallelization.md) | Run independent startup operations in parallel |
 | Maintenance | [maintenance-deterministic-tests.md](maintenance-deterministic-tests.md) | Deterministic test synchronization |
 | Maintenance | [maintenance-pre-edit-check-wait.md](maintenance-pre-edit-check-wait.md) | Bounded pre-edit compiler checks with asynchronous timeout fallback |
+| Maintenance | [maintenance-exact-tool-invocation-limits.md](maintenance-exact-tool-invocation-limits.md) | Configurable limits for repeated exact tool invocations |
+| Maintenance | [maintenance-openrouter-fallbacks-and-provider-errors.md](maintenance-openrouter-fallbacks-and-provider-errors.md) | Ordered OpenRouter fallbacks and useful failure details from all model providers |
+| Maintenance | [plan-122-user-repository-policy-settings.md](plan-122-user-repository-policy-settings.md) | User-owned repository command rules, executable permissions, and file access grants |
 
 ## Update discipline
 

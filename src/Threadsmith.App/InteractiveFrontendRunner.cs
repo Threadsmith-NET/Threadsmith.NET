@@ -140,7 +140,8 @@ internal static class InteractiveFrontendRunner
                 .StandingPreferenceWarningThreshold,
             agentDisplay: context.Applications.AgentDisplay,
             agentNames: names.Catalog,
-            semanticStartupProgress: context.SemanticStartupProgress);
+            semanticStartupProgress: context.SemanticStartupProgress,
+            commandPolicies: context.CommandPolicies);
     }
 
     private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken)

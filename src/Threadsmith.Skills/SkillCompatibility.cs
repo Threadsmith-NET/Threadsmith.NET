@@ -187,7 +187,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
                     MinimumContextWindow = requirements.MinimumContextWindow,
                     ContainsSensitiveData = sensitivity == ConversationSensitivity.Sensitive,
                 },
-                PreferredProfileId = requirements.AllowedProfiles.FirstOrDefault() is { } preferred
+                PreferredProfileId = (requirements.AllowedProfiles.Count > 0 ? requirements.AllowedProfiles[0] : default) is { } preferred
                     && preferred != default
                         ? preferred
                         : null,

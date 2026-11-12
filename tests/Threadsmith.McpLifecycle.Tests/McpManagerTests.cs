@@ -1394,7 +1394,7 @@ public sealed class McpManagerTests
     {
         await using var manager = CreateManager([Profile("server")], new FakeAdapter());
         var dispatcher = new CommandDispatcher([manager]);
-        using var output = new StringWriter();
+        await using var output = new StringWriter();
         var shell = new HeadlessShell(dispatcher, new EmptyProjectionStore(), output);
 
         var exitCode = await shell.WriteMcpResultAsync(new McpManagementRequest

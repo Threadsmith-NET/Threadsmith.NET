@@ -322,7 +322,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
         try
         {
             var policy = _policyBinding?.Current ?? _fallbackPolicy;
-            return policy is not null && policy.AllowsTool("write_file")
+            return policy?.AllowsTool("write_file") == true
                 && !policy.ReviewTools.Contains("write_file", StringComparer.OrdinalIgnoreCase);
         }
         catch (UnauthorizedAccessException)

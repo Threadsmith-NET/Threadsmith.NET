@@ -80,6 +80,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     private readonly ToolParallelOptions _parallelOptions;
     private readonly ToolSourceConcurrencyLimiter _sourceConcurrencyLimiter = new();
 
+    /// <summary>Gets the host-only scoped command approval adapter.</summary>
+    public CommandPolicyCoordinator CommandPolicies { get; }
+
     /// <summary>Gets the registry used to resolve and identity-fence dynamic registrations.</summary>
     public IToolRegistry Registry => _registry;
 
@@ -143,7 +146,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             try
             {
                 await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: elapsedMilliseconds) { RunId = request.RunId }, CancellationToken.None);
-                await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
+                await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : nameof(ToolErrorClassification.Cancelled), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
                 status = succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed;
                 return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
             }
@@ -192,6 +195,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         _registry = registry;
         _policy = policy;
         _approvalPolicy = approvalPolicy;
+        CommandPolicies = approvalPolicy as CommandPolicyCoordinator ?? new();
         _events = events;
         _sanitizer = sanitizer;
         _logger = logger;
@@ -490,9 +494,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var completion = request.Completion ?? new ToolSuspensionCompletion(
             _toolTelemetry, request.StorageBinding, request.ToolId, _timeProvider);
         request = request with { Completion = completion };
+        var invocationId = ToolInvocationId.New();
         try
         {
-            return await InvokeCoreOwnedAsync(request, preparationError, preparedRegistration, returnCancellationResult, admittedAt, cancellationToken);
+            return await InvokeCoreOwnedAsync(request, invocationId, preparationError, preparedRegistration, returnCancellationResult, admittedAt, cancellationToken);
         }
         catch (Exception)
         {
@@ -500,17 +505,22 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             completion.Record(ToolTelemetryStatus.Failed, null);
             throw;
         }
+        finally
+        {
+            // Release unused one-use authority without removing remembered grants or replay protection.
+            CommandPolicies.Grants.Abandon(invocationId.Value);
+        }
     }
 
     private async Task<ToolInvocationResult> InvokeCoreOwnedAsync(
         ToolInvocationRequest request,
+        ToolInvocationId invocationId,
         string? preparationError,
         ToolRegistration? preparedRegistration,
         bool returnCancellationResult,
         DateTimeOffset admittedAt,
         CancellationToken cancellationToken)
     {
-        var invocationId = ToolInvocationId.New();
         using var promptScope = _prompts?.BeginModelScope(request.Context.ModelProfileId);
         var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
@@ -569,7 +579,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
             tool = ToolRuntimePolicy.ApplyCeiling(tool, request.Context.SecurityPolicy);
-            tool = ToolRuntimePolicy.ResolveInvocation(tool, input, request.Context);
+            tool = ToolRuntimePolicy.ResolveInvocation(tool, request.Context);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
             or ToolArgumentValidationException
@@ -631,6 +641,39 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         activity?.SetTag("threadsmith.tool.policy_allowed", true);
+        Threadsmith.Policies.Contracts.PolicyApprovalRequest? commandApproval = null;
+        long? rememberedCommandEpoch = null;
+        if (policyDecision.PreparedRun is { } preparedRun && policyDecision.CommandDecision is { } commandDecision
+            && policyDecision.CommandSnapshot is { } commandSnapshot && request.Context.SecurityPolicy is { } commandPolicy)
+        {
+            input = preparedRun;
+            CommandPolicies.EnsureScope(request.SessionId, commandPolicy);
+            var prepared = preparedRun.PreparedCommand ?? throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
+            if (CommandPolicies.Grants.HasRemembered(commandDecision, commandSnapshot, prepared.Identity, out var grantEpoch))
+            {
+                rememberedCommandEpoch = grantEpoch;
+                policyDecision = policyDecision with { RequiredApproval = ApprovalLevel.None };
+            }
+            else if (commandDecision.RequiresApproval)
+            {
+                var choices = CommandPolicies.Configuration is null
+                    ? commandDecision.Choices.Remove(Threadsmith.Policies.Contracts.PolicyApprovalChoice.Always) : commandDecision.Choices;
+                commandApproval = new Threadsmith.Policies.Contracts.PolicyApprovalRequest(
+                    invocationId.Value,
+                    request.Context.RequestedBy,
+                    _sanitizer.Sanitize(prepared.OriginalCommand + "\nWorking directory: " + prepared.WorkingDirectory + "\nShell: " + prepared.Launch.FileName
+                        + "\nTargets: " + string.Join(", ", prepared.Actions.Select(action => action.CommandKind == Threadsmith.Policies.Contracts.CommandPolicyNames.ShellCommand
+                            ? action.ExecutableName + " (shell command)" : action.ResolvedExecutable))
+                        + "\nOutcome: " + commandDecision.Outcome + "\nRevision: " + commandSnapshot.ConfigurationRevision
+                        + "\nSources: " + string.Join(", ", commandDecision.RuleIds.Select(id => commandSnapshot.Sources.GetValueOrDefault(id) ?? "Machine enforced"))),
+                    prepared.Identity,
+                    commandPolicy.Fingerprint,
+                    CommandPolicies.Grants.Epoch,
+                    commandDecision.RuleIds,
+                    choices);
+            }
+        }
+
         if (_hooks is not null && !suppressLifecycleHooks)
         {
             HookBoundaryDecision hookDecision;
@@ -712,13 +755,82 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     SchemaVersion = 2,
                 },
                 CancellationToken.None);
-            bool approved;
+            var approved = false;
+            var persistentApprovalSelected = false;
+            Threadsmith.Policies.Configuration.PolicyUpdateReceipt? commandSaveReceipt = null;
             try
             {
-                approved = await _approvalPolicy.IsApprovedAsync(
-                    action,
-                    policyDecision.RequiredApproval,
-                    cancellationToken);
+                if (commandApproval is not null && policyDecision.CommandDecision is { } approvalDecision)
+                {
+                    var response = await _approvalPolicy.RequestApprovalAsync(commandApproval, cancellationToken);
+                    persistentApprovalSelected = response.RequestId == commandApproval.RequestId
+                        && response.Choice == Threadsmith.Policies.Contracts.PolicyApprovalChoice.Always
+                        && commandApproval.Choices.Contains(response.Choice);
+                    if (request.Context.SecurityPolicy is { } captured)
+                    {
+                        request.Context.PolicyBinding?.Validate(captured);
+                    }
+
+                    if (response.RequestId == commandApproval.RequestId && response.Choice == Threadsmith.Policies.Contracts.PolicyApprovalChoice.Always
+                        && commandApproval.Choices.Contains(response.Choice) && CommandPolicies.Configuration is { } configuration
+                        && policyDecision.CommandSnapshot is { } savedSnapshot && request.Context.SecurityPolicy is { } priorPolicy)
+                    {
+                        approved = false;
+                        if (CommandPolicies.Grants.BeginPersistent(commandApproval, response, approvalDecision.RuleFingerprint) is { } operation)
+                        {
+                            try
+                            {
+                                var update = new Threadsmith.Policies.Configuration.PolicyUpdateRequest(
+                                    Threadsmith.Policies.Configuration.PolicyDestination.User,
+                                    savedSnapshot.Platform,
+                                    savedSnapshot.Shell,
+                                    savedSnapshot.ConfigurationRevision,
+                                    Threadsmith.Policies.Configuration.PolicyUpdateOperation.Grant,
+                                    commandApproval.ContextFingerprint,
+                                    Grant: new Threadsmith.Policies.Contracts.PolicyGrant(commandApproval.ContextFingerprint, commandApproval.ContextFingerprint, approvalDecision.RuleFingerprint),
+                                    AuthorityTransitionId: operation);
+                                var receipt = await configuration.UpdateAsync(update, cancellationToken);
+                                commandSaveReceipt = receipt;
+                                if (receipt.Activated && request.Context.PolicyBinding is { } binding)
+                                {
+                                    var current = binding.Current;
+
+                                    // A focused refresh changes only command policy. Keep all captured child ceilings.
+                                    var narrowed = priorPolicy with { Generation = current.Generation, CommandPolicies = current.CommandPolicies };
+                                    binding.Validate(narrowed);
+                                    request = request with { Context = request.Context with { SecurityPolicy = narrowed } };
+                                    executionContext = executionContext with { Invocation = request.Context };
+                                    var revalidated = _policy.Evaluate(tool, input, request.Context);
+                                    if (revalidated.IsAllowed && revalidated.CommandDecision?.RuleFingerprint == approvalDecision.RuleFingerprint)
+                                    {
+                                        approved = CommandPolicies.CompletePersistent(operation, request.SessionId, narrowed, commandApproval, approvalDecision.RuleFingerprint, out var admittedEpoch);
+                                        if (approved)
+                                        {
+                                            request.Context.OperationScope?.AcceptCommandPolicy(binding, priorPolicy, current, CommandPolicies.Grants, commandApproval.SessionEpoch, admittedEpoch);
+                                            commandApproval = commandApproval with { SessionEpoch = admittedEpoch, AuthorityFingerprint = current.Fingerprint };
+                                        }
+                                    }
+                                }
+                            }
+                            finally
+                            {
+                                CommandPolicies.Grants.CancelPersistent(operation);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        approved = CommandPolicies.Grants.Approve(commandApproval, response, approvalDecision.RuleFingerprint);
+                    }
+                }
+                else
+                {
+                    approved = await _approvalPolicy.IsApprovedAsync(action, policyDecision.RequiredApproval, cancellationToken);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or InvalidDataException or JsonException)
+            {
+                approved = false;
             }
             catch (OperationCanceledException)
             {
@@ -741,6 +853,22 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 }
 
                 throw;
+            }
+            finally
+            {
+                if (persistentApprovalSelected && commandApproval is not null)
+                {
+                    try
+                    {
+                        await CommandPolicies.ReportCompletionAsync(new CommandApprovalCompletion(commandApproval.RequestId, commandSaveReceipt, approved), CancellationToken.None);
+                    }
+                    catch (Exception exception) when (exception is IOException or InvalidOperationException or OperationCanceledException)
+                    {
+                        // Display failure cannot authorize a launch or expose persistence details to model events.
+                        approved = false;
+                        _logger.LogWarning("The command approval completion could not be displayed.");
+                    }
+                }
             }
 
             if (!approved)
@@ -814,6 +942,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             if (executionContext.Deadline <= _timeProvider.GetUtcNow())
             {
                 throw new TimeoutException("The tool invocation deadline expired while waiting.");
+            }
+
+            if ((rememberedCommandEpoch is { } epoch && epoch != CommandPolicies.Grants.Epoch)
+                || (commandApproval is not null && !CommandPolicies.Grants.Consume(commandApproval.RequestId, commandApproval.ContextFingerprint, commandApproval.SessionEpoch)))
+            {
+                throw new UnauthorizedAccessException(ShellCommandPreparation.DenialReasonCode);
             }
 
             observedConcepts = input is IConceptToolInput conceptInput && ConfiguredTool.Unwrap(tool).GetType().Assembly == typeof(MemoriesTool).Assembly
@@ -1251,6 +1385,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         IReadOnlyList<string>? concepts = null)
     {
         request.Completion?.Record(ToolTelemetryStatus.Failed, elapsedMilliseconds);
+        if (error == ShellCommandPreparation.DenialReasonCode
+            && ConfiguredTool.Unwrap(_registry.Get(request.ToolId)) is RunProcessTool process)
+        {
+            error = process.CommandDenialMessage;
+        }
+
         var sanitizedError = _sanitizer.Sanitize(error);
         var returnedError = transientError is null
             ? sanitizedError

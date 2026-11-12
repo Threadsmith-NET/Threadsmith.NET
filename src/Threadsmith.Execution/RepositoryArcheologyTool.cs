@@ -232,7 +232,7 @@ public sealed class RepositoryArcheologyTool : Tool<RepositoryArcheologyInput, R
                     .OfType<Evidence>()
                     .Select(item => new RepositoryArcheologyEvidence(
                         item.EvidenceId.Value.ToString("D"),
-                        BoundedText.Truncate(item.FileDependencies.FirstOrDefault()?.Path ?? string.Empty, 1024, out _),
+                        BoundedText.Truncate((item.FileDependencies.Count > 0 ? item.FileDependencies[0] : default)?.Path ?? string.Empty, 1024, out _),
                         BoundedText.Truncate(item.Provenance.RepositoryRevision ?? string.Empty, 256, out _),
                         BoundedText.Truncate(item.Provenance.Source, 256, out _),
                         BoundedText.Truncate(item.Provenance.SourcePath ?? string.Empty, 1024, out _)))

@@ -64,9 +64,9 @@ internal static class ToolEvidenceAdmission
     public static async Task<EvidenceId> AdmitEvidenceAsync(
         IEvidenceStore store, SessionId sessionId, RunId runId, string repositoryPath, ToolInvocationResult result, string content, CancellationToken cancellationToken)
     {
-        var source = result.Sources.FirstOrDefault();
+        var source = result.Sources.Count > 0 ? result.Sources[0] : default;
         var dependencies = GetFileDependencies(result, repositoryPath);
-        var range = dependencies.FirstOrDefault()?.Range;
+        var range = (dependencies.Count > 0 ? dependencies[0] : default)?.Range;
         var evidenceId = EvidenceId.New();
         await store.AddAsync(
             new Evidence

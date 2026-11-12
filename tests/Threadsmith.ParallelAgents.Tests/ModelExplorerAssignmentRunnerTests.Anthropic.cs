@@ -113,7 +113,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         Assert.Equal(new[] { "native_one", "native_two" }, blocks.Where(block => block.GetProperty("type").GetString() == "tool_use").Select(block => block.GetProperty("id").GetString()));
-        var results = secondRound.Last().GetProperty("content").EnumerateArray().ToArray();
+        var results = secondRound[^1].GetProperty("content").EnumerateArray().ToArray();
         Assert.Equal(new[] { "native_one", "native_two" }, results.Take(2).Select(block => block.GetProperty("tool_use_id").GetString()));
         Assert.All(results.Take(2), block => Assert.False(block.GetProperty("is_error").GetBoolean()));
         var lastRound = handler.Requests[2].GetProperty("messages").EnumerateArray()

@@ -109,6 +109,11 @@ public sealed partial class SessionApplication
                 boundarySteering,
                 cancellationToken);
             CheckRunWallClockBudget(registration);
+            if (invocationContext is not null)
+            {
+                invocationContext = operationScope.RefreshCommandPolicy(invocationContext);
+            }
+
             var round = await PrepareConversationRoundAsync(
                 runId,
                 registration,
@@ -1043,7 +1048,7 @@ public sealed partial class SessionApplication
                 {
                     foreach (var generated in streamState.GeneratedImages)
                     {
-                        using var imageStream = new MemoryStream(generated.Bytes.ToArray(), writable: false);
+                        await using var imageStream = new MemoryStream(generated.Bytes.ToArray(), writable: false);
                         published.Add(await artifacts.StoreImageAsync(imageStream, round.Registration.SessionId, "model-output", generated.ResponseItemId, cancellationToken: cancellationToken));
                     }
 
@@ -1175,7 +1180,7 @@ public sealed partial class SessionApplication
                 throw new MalformedModelOutputException("Generated image output exceeds host bounds.");
             }
 
-            if (previous is not null && !previous.Bytes.Span.SequenceEqual(generated.Bytes.Span))
+            if (previous?.Bytes.Span.SequenceEqual(generated.Bytes.Span) == false)
             {
                 throw new MalformedModelOutputException("Generated image identity changed within a response.");
             }

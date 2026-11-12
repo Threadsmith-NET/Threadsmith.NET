@@ -251,7 +251,7 @@ public sealed class RealEmbeddingQualityTests
         }).OrderBy(value => value.Loss).ThenBy(value => value.MissedRelevant).ThenByDescending(value => value.Threshold).ToArray();
         // Keep the already pinned threshold during the engine adaptation when it remains
         // calibration-optimal. Held-out examples evaluate it; they never choose a new value.
-        var selectedMinimum = RepositoryMemoryOptions.DefaultSemanticMinimum;
+        const double selectedMinimum = RepositoryMemoryOptions.DefaultSemanticMinimum;
         var retained = Assert.Single(calibration, candidate => candidate.Threshold == selectedMinimum);
         Assert.Equal(calibration[0].Loss, retained.Loss);
         Assert.Equal(calibration[0].MissedRelevant, retained.MissedRelevant);

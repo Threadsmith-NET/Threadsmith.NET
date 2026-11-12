@@ -40,9 +40,9 @@ public static partial class Milestone1Tests
             var external = await action(claude.Id, "verify", token);
             Assert.False(external.Enabled);
             Assert.Contains("Unverified", external.UpdatedOption!.Label, StringComparison.Ordinal);
-            Assert.DoesNotContain("+" + new string('0', 64), manager.Verifications.Last(), StringComparison.Ordinal);
+            Assert.DoesNotContain("+" + new string('0', 64), manager.Verifications[^1], StringComparison.Ordinal);
             Assert.True((await change(claude.Id, true, token)).Enabled);
-            Assert.EndsWith("+" + new string('d', 64), manager.Changes.Last().Selector, StringComparison.Ordinal);
+            Assert.EndsWith("+" + new string('d', 64), manager.Changes[^1].Selector, StringComparison.Ordinal);
         };
 
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);

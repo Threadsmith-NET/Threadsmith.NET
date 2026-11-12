@@ -1177,80 +1177,6 @@ public sealed class Milestone6Tests
         }
     }
 
-    /// <summary>Cancelling a non-cooperative build abandons its result and terminates its process tree.</summary>
-    [Fact]
-    public async Task BuildExecutor_CancelledBuild_ThrowsCancellation()
-    {
-        await using var events = new DomainEventStream();
-        var executor = new BuildExecutor(
-            events,
-            new DiagnosticNormalizer(),
-            NullLogger<BuildExecutor>.Instance,
-            TimeSpan.FromSeconds(5));
-        var baseline = await CreateBuildableBaselineAsync(includeDelay: true);
-        try
-        {
-            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            var childPidPath = Path.Combine(baseline.RepositoryPath, "child.pid");
-            var childPid = 0;
-            var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var watcher = new FileSystemWatcher(baseline.RepositoryPath, "child.pid");
-            watcher.Created += (_, _) => ready.TrySetResult();
-            watcher.Renamed += (_, _) => ready.TrySetResult();
-            watcher.EnableRaisingEvents = true;
-            var buildTask = executor.ExecuteAsync(
-                new BuildValidationRequest
-                {
-                    SessionId = new SessionId(Guid.NewGuid()),
-                    RunId = new RunId(Guid.NewGuid()),
-                    Baseline = baseline,
-                    Confidence = SemanticConfidenceLevel.FullSemantic,
-                },
-                cancellation.Token);
-            try
-            {
-                var completed = await Task.WhenAny(ready.Task, buildTask).WaitAsync(TestContext.Current.CancellationToken);
-                Assert.Same(ready.Task, completed);
-                Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
-                var childPidText = await File.ReadAllTextAsync(childPidPath, TestContext.Current.CancellationToken);
-                Assert.True(int.TryParse(
-                    childPidText.Trim(),
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out childPid));
-                await cancellation.CancelAsync();
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.WaitAsync(TestContext.Current.CancellationToken));
-            }
-            finally
-            {
-                await cancellation.CancelAsync();
-                try
-                {
-                    await buildTask;
-                }
-                catch (OperationCanceledException)
-                {
-                    // Observe cancellation even when the startup assertion failed.
-                }
-            }
-
-            try
-            {
-                using var child = Process.GetProcessById(childPid);
-                await child.WaitForExitAsync(TestContext.Current.CancellationToken);
-                Assert.True(child.HasExited, $"Build child process {childPid} survived cancellation.");
-            }
-            catch (ArgumentException)
-            {
-                // An already-reaped process has also completed termination.
-            }
-        }
-        finally
-        {
-            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
-        }
-    }
-
     /// <summary>A failed restore preserves diagnostics and removes the partially constructed fixture.</summary>
     [Fact]
     public async Task BuildFixture_FailedRestore_RemovesOwnedRoot()
@@ -1954,18 +1880,19 @@ public sealed class Milestone6Tests
         Directory.CreateDirectory(root);
         try
         {
-            var windowsDelayCommand = OperatingSystem.IsWindows() ? CreateWindowsDelayCommand() : string.Empty;
+            var delayCommand = !includeDelay ? string.Empty
+                : OperatingSystem.IsWindows() ? CreateWindowsDelayCommand()
+                : """sh -c 'set -eu; echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; mkfifo "$(MSBuildProjectDirectory)/child.gate"; read gate < "$(MSBuildProjectDirectory)/child.gate"'""";
             var delayProperties = includeDelay
                 ? """
                       <PropertyGroup>
-                        <DelayCommand Condition="'$(OS)' == 'Windows_NT'">{{WindowsDelayCommand}}</DelayCommand>
-                        <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; mkfifo "$(MSBuildProjectDirectory)/child.gate"; read gate &lt; "$(MSBuildProjectDirectory)/child.gate"'</DelayCommand>
+                        <DelayCommand>{{DelayCommand}}</DelayCommand>
                       </PropertyGroup>
                       <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
                         <Exec Command="$(DelayCommand)" />
                       </Target>
                   """
-                    .Replace("{{WindowsDelayCommand}}", SecurityElement.Escape(windowsDelayCommand), StringComparison.Ordinal)
+                    .Replace("{{DelayCommand}}", SecurityElement.Escape(delayCommand), StringComparison.Ordinal)
                 : string.Empty;
             var projectPath = Path.Combine(root, "ValidationTarget.csproj");
             await File.WriteAllTextAsync(
@@ -2029,28 +1956,14 @@ public sealed class Milestone6Tests
 
     private static string CreateWindowsDelayCommand()
     {
-        var shell = FindExecutablePath("pwsh.exe")
-            ?? FindExecutablePath("powershell.exe")
-            ?? throw new InvalidOperationException("PowerShell is required for the delayed build fixture.");
-        return $"\"{shell}\" -NoProfile -NonInteractive -Command \"[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\\child.pid.tmp', '$(MSBuildProjectDirectory)\\child.pid'); [System.Threading.Thread]::Sleep(-1)\"";
-    }
+        // Bind a known executable instead of depending on optional installations or PATH activation aliases.
+        var shell = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        if (!File.Exists(shell))
+        {
+            throw new InvalidOperationException("Windows PowerShell is required for the delayed build fixture.");
+        }
 
-    private static string? FindExecutablePath(string fileName)
-    {
-        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-        var pathExtensions = OperatingSystem.IsWindows()
-            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
-                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-            : [string.Empty];
-        string[] candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(fileName)
-            ? [.. pathExtensions.Select(extension => fileName + extension)]
-            : [fileName];
-        return pathValue
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(directory => directory.Trim('"'))
-            .Where(Path.IsPathFullyQualified)
-            .SelectMany(directory => candidateNames.Select(candidate => Path.Combine(directory, candidate)))
-            .FirstOrDefault(File.Exists);
+        return $"\"{shell}\" -NoProfile -NonInteractive -Command \"[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\\child.pid.tmp', '$(MSBuildProjectDirectory)\\child.pid'); [System.Threading.Thread]::Sleep(-1)\"";
     }
 
     private sealed class TemporaryDirectoryLink : IAsyncDisposable

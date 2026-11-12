@@ -45,14 +45,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
+| System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
+| Correction prompts | 26 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **294** | Complete deployed catalog. |
+| **Total** | **296** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -112,7 +112,8 @@ System policy, stable conversation instructions, request envelopes, and required
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, skill routing, artifact guidance, and native-tool concept hints. | `None` |
+| `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, artifact guidance, and native-tool concept hints. | `None` |
+| `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory. | `None` |
 | `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance; reuse of current background validation coverage, additional checks for concrete gaps or requirements, separate whitespace verification, and default durable-artifact output to repository-root `.inbox/` unless another location is specified (scratchpad remains temporary). | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
@@ -239,6 +240,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Correction-run_process-Denied.md` | Generic `run_process` denial rendered at the pipeline feedback boundary, including unsupported shells; reason codes and authorization remain code-owned. | `None` |
 | `Correction-run_process-UnsupportedShell.md` | Corrective guidance for an unsupported `run_process` shell. | [`ShellExecutable`](#placeholder-shellexecutable) |
 
 #### `search` family
@@ -620,7 +622,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Process execution guidance, clamped timeout-hint semantics, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, literal pipelines and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 

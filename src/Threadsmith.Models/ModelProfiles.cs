@@ -459,6 +459,7 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
     private readonly Func<string, string, CancellationToken, Task<string?>>? _refreshSecretAsync;
     private readonly Func<string, CancellationToken, Task<string?>> _resolveSecretAsync;
     private readonly IModelSelectionPolicy _selectionPolicy;
+    private readonly IOutputSanitizer? _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="ConfiguredModelProvider"/> class for compiled-provider dispatch.</summary>
     public ConfiguredModelProvider(
@@ -468,12 +469,14 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         ModelProfileId? preferredProfileId = null,
         Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
         IImageArtifactStore? images = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IOutputSanitizer? sanitizer = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(resolveSecretAsync);
         _httpClient = httpClient;
+        _sanitizer = sanitizer;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _images = images;
         _effectiveCatalog = catalog;
@@ -492,8 +495,9 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         Func<ModelProfileId?> preferredProfileResolver,
         Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
         IImageArtifactStore? images = null,
-        TimeProvider? timeProvider = null)
-        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync, images: images, timeProvider: timeProvider)
+        TimeProvider? timeProvider = null,
+        IOutputSanitizer? sanitizer = null)
+        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync, images: images, timeProvider: timeProvider, sanitizer: sanitizer)
     {
         ArgumentNullException.ThrowIfNull(preferredProfileResolver);
         _preferredProfileResolver = preferredProfileResolver;
@@ -584,9 +588,34 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
                     : null,
         });
 
-        await foreach (var chunk in provider.StreamAsync(request, cancellationToken))
+        await using var chunks = provider.StreamAsync(request, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        while (true)
         {
-            yield return chunk;
+            bool more;
+            try
+            {
+                more = await chunks.MoveNextAsync();
+            }
+            catch (Exception exception) when (exception is ModelProviderException or TransientModelException)
+            {
+                var message = exception.Message;
+                if (!string.IsNullOrEmpty(resolvedSecret))
+                {
+                    message = message.Replace(resolvedSecret, "[REDACTED]", StringComparison.Ordinal);
+                }
+
+                message = _sanitizer?.Sanitize(message) ?? message;
+                throw exception is TransientModelException transient
+                    ? new TransientModelException(message) { IsRateLimit = transient.IsRateLimit, RetryAfter = transient.RetryAfter }
+                    : new ModelProviderException(message);
+            }
+
+            if (!more)
+            {
+                yield break;
+            }
+
+            yield return chunks.Current;
         }
     }
 }

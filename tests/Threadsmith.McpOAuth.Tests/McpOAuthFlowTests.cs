@@ -582,7 +582,7 @@ public sealed class McpOAuthFlowTests
     [Fact]
     public async Task Headless_ux_prints_authorization_url_and_reads_callback()
     {
-        using var output = new StringWriter();
+        await using var output = new StringWriter();
         var launcher = new ConsoleBrowserLauncher(output);
         var callback = new ConsoleOAuthCallbackListener(
             new StringReader("http://localhost:8400/callback?code=x&state=y\n"),
@@ -1058,7 +1058,7 @@ public sealed class McpOAuthFlowTests
         string clientId,
         string clientSecret)
     {
-        var prefix = "mcp:oauth:remote:";
+        const string prefix = "mcp:oauth:remote:";
         var grantPrefix = $"{prefix}grant:";
         tokens.Values[grantPrefix + "accessToken"] = "access-secret";
         tokens.Values[grantPrefix + "refreshToken"] = "refresh-secret";

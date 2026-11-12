@@ -56,6 +56,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M34 | Complete | Multimodal model capabilities, image input and governed file artifacts. | [Details](milestones/milestone-34-multimodal-conversation-and-file-artifacts.md) |
 | M35 | Active | Manually configured OpenRouter models through the shared governed provider lifecycle. | [Details](milestones/milestone-35-openrouter-provider.md) |
 | M36 | Active | Repository-local tool completion counts, measured durations and shared reset controls. | [Details](milestones/milestone-36-repository-tool-statistics.md) |
+| M37 | Planned | Guided modal for checked shell policy JSON and manual configuration merge. | [Details](milestones/milestone-37-guided-command-policy-authoring.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

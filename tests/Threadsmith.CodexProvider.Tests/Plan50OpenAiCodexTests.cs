@@ -48,7 +48,7 @@ public sealed class Plan50OpenAiCodexTests
     public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
     {
         var token = TestContext.Current.CancellationToken;
-        using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
+        await using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
         var provider = await CreateProviderAsync(handler, "token");
         using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -657,42 +657,38 @@ public sealed class Plan50OpenAiCodexTests
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
         {
             Content = new StringContent(
-                "{\"error\":{\"code\":\"invalid_request\",\"param\":\"max_output_tokens\",\"message\":\"secret repository text\"}}",
+                "{\"error\":{\"code\":\"invalid_request\",\"param\":\"max_output_tokens\",\"message\":\"Capacity detail for credential-canary\"}}",
                 Encoding.UTF8,
                 "application/json"),
         });
-        var provider = await CreateProviderAsync(handler, "token");
+        var provider = await CreateProviderAsync(handler, "credential-canary");
 
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(
                 CreateStreamRequest(),
                 TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
 
-        Assert.Contains("HTTP 400", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Code: invalid_request.", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Parameter: max_output_tokens.", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + "HTTP 400 · Code: invalid_request · Parameter: max_output_tokens", exception.Message);
     }
 
     /// <summary>Streaming failures retain the same safe identifiers as HTTP rejections.</summary>
     [Theory]
     [InlineData("response.failed", true)]
     [InlineData("error", false)]
-    public async Task Provider_StreamFailure_PreservesOnlySafeIdentifiers(string type, bool nested)
+    [InlineData("response.incomplete", true)]
+    public async Task Provider_StreamFailure_PreservesSafeExplanation(string type, bool nested)
     {
-        const string error = "{\"code\":\"invalid_request\",\"param\":\"input\",\"message\":\"secret repository text\"}";
-        var body = nested ? "{\"response\":{\"error\":" + error + "},\"type\":\"" + type + "\"}" : "{\"error\":" + error + ",\"type\":\"" + type + "\"}";
+        const string error = "{\"code\":\"invalid_request\",\"param\":\"input\",\"message\":\"Capacity detail for credential-canary\"}";
+        var body = nested ? "{\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"input_tokens_details\":null},\"error\":" + error + "},\"type\":\"" + type + "\"}" : "{\"error\":" + error + ",\"type\":\"" + type + "\"}";
         var stream = "data: " + body + "\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
         });
-        var provider = await CreateProviderAsync(handler, "token");
+        var provider = await CreateProviderAsync(handler, "credential-canary");
         var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
             await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
-        Assert.Contains("Code: invalid_request.", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("Parameter: input.", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + "Code: invalid_request · Parameter: input", exception.Message);
     }
 
     /// <summary>A configured byte limit rejects oversized output independently of the model token ceiling.</summary>
@@ -1028,7 +1024,7 @@ public sealed class Plan50OpenAiCodexTests
     /// <summary>HTTP and stream rate limits share the configured retry policy and a single busy notification.</summary>
     [Theory]
     [InlineData("{\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}", false)]
-    [InlineData("{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":429}}}", false)]
+    [InlineData("{\"type\":\"response.failed\",\"response\":{\"usage\":null,\"error\":{\"code\":429}}}", false)]
     [InlineData("{}", true)]
     public async Task Provider_RateLimit_RetriesAndReportsBusyOnce(string frame, bool httpStatus)
     {
@@ -1049,26 +1045,164 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 
-    /// <summary>Retryable status headers permit recovery without reading an error body that would time out.</summary>
+    /// <summary>Unavailable optional usage details do not replace provider failures or prevent retry accounting.</summary>
+    [Theory]
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "null")]
+    [InlineData(true, "null")]
+    [InlineData(true, "{}")]
+    [InlineData(true, "[]")]
+    [InlineData(true, "0")]
+    [InlineData(true, "{\"cached_tokens\":null}")]
+    [InlineData(true, "{\"cached_tokens\":\"unavailable\"}")]
+    public async Task Provider_FailedTerminalUsageSurvivesRetries(bool retryable, string? inputDetails)
+    {
+        var details = inputDetails is null ? string.Empty : ",\"input_tokens_details\":" + inputDetails;
+        var failure = "data: {\"type\":\"" + (retryable ? "response.failed" : "response.incomplete")
+            + "\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":2" + details + "},\"error\":{\"code\":" + (retryable ? "429" : "400") + "}}}\n\n";
+        const string success = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":3}}}\n\n";
+        var calls = 0;
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(++calls < 3 ? failure : success, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        if (retryable)
+        {
+            await CollectAsync();
+        }
+        else
+        {
+            await Assert.ThrowsAsync<ModelProviderException>(CollectAsync);
+        }
+
+        var usage = chunks.Last(chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(retryable ? 40 : 10, usage.InputTokens);
+        Assert.Equal(retryable ? 7 : 2, usage.OutputTokens);
+        Assert.Equal(retryable ? 3 : 1, calls);
+        Assert.Equal(retryable ? 2 : 1, chunks.Count(chunk => chunk.IsInterruptedUsage));
+        Assert.All(chunks.Where(chunk => chunk.Usage is not null), chunk => Assert.Null(chunk.Usage!.Cache?.CacheReadTokens));
+    }
+
+    /// <summary>Malformed failed-attempt counters cannot replace the provider error or prevent retries.</summary>
+    [Theory]
+    [MemberData(nameof(InvalidFailureUsageCases))]
+    public async Task Provider_InvalidFailureUsage_PreservesClassificationAndExplanation(
+        string usage,
+        bool retryable,
+        bool recover)
+    {
+        // Arrange
+        var failure = "data: {\"type\":\"response.failed\",\"response\":{\"usage\":" + usage
+            + ",\"error\":{\"code\":" + (retryable ? "429" : "400")
+            + ",\"message\":\"Provider explanation for credential-canary\"}}}\n\n";
+        const string success = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":3}}}\n\n";
+        var calls = 0;
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(++calls < 3 || !recover ? failure : success, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "credential-canary", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        // Act / Assert
+        if (recover)
+        {
+            await CollectAsync();
+            Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
+            var finalUsage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+            Assert.Equal(20, finalUsage.InputTokens);
+            Assert.Equal(3, finalUsage.OutputTokens);
+        }
+        else
+        {
+            Exception exception = retryable
+                ? await Assert.ThrowsAsync<TransientModelException>(CollectAsync)
+                : await Assert.ThrowsAsync<ModelProviderException>(CollectAsync);
+            Assert.Equal(retryable, exception is TransientModelException { IsRateLimit: true });
+            Assert.Equal(
+                "Provider explanation for [REDACTED]" + Environment.NewLine + "Code: " + (retryable ? "429" : "400"),
+                exception.Message);
+            Assert.DoesNotContain(chunks, chunk => chunk.Usage is not null);
+        }
+
+        Assert.Equal(retryable ? 3 : 1, handler.RequestCount);
+        Assert.Equal(retryable ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.DoesNotContain(chunks, chunk => chunk.IsInterruptedUsage);
+    }
+
+    /// <summary>Unavailable counters are exercised through recovery, exhausted retries, and terminal rejection.</summary>
+    public static IEnumerable<TheoryDataRow<string, bool, bool>> InvalidFailureUsageCases()
+    {
+        string[] unavailableUsage =
+        [
+            "null",
+            "[]",
+            "{\"input_tokens\":null,\"output_tokens\":2}",
+            "{\"input_tokens\":10,\"output_tokens\":null}",
+            "{\"input_tokens\":null,\"output_tokens\":null}",
+            "{\"input_tokens\":\"unavailable\",\"output_tokens\":2}",
+            "{\"input_tokens\":10,\"output_tokens\":[]}",
+            "{\"input_tokens\":10,\"output_tokens\":{}}",
+            "{\"input_tokens\":10,\"output_tokens\":1.5}",
+            "{\"input_tokens\":10,\"output_tokens\":9223372036854775808}",
+            "{\"input_tokens\":-1,\"output_tokens\":2}",
+            "{\"input_tokens\":10,\"output_tokens\":-1}",
+            "{\"input_tokens\":10}",
+            "{\"output_tokens\":2}",
+            "{\"input_tokens\":10,\"output_tokens\":2,\"input_tokens_details\":{\"cached_tokens\":-1}}",
+        ];
+        foreach (var usage in unavailableUsage)
+        {
+            yield return new TheoryDataRow<string, bool, bool>(usage, true, true);
+            yield return new TheoryDataRow<string, bool, bool>(usage, true, false);
+            yield return new TheoryDataRow<string, bool, bool>(usage, false, false);
+        }
+    }
+
+    /// <summary>Retryable status headers permit recovery when the bounded diagnostic body read cannot complete.</summary>
     [Theory]
     [InlineData(408)]
     [InlineData(429)]
     [InlineData(502)]
     [InlineData(503)]
     [InlineData(504)]
-    public async Task Provider_TransientHeaders_RetryWithoutReadingErrorBody(int status)
+    public async Task Provider_TransientHeaders_RetryAfterBoundedErrorRead(int status)
     {
-        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        await using var body = new WaitingResponseStream();
         var calls = 0;
         var handler = new RecordingHandler(_ => ++calls == 1
-            ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) }
+            ? new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) { Headers = { ContentLength = 64 } } }
             : StreamingResponse());
         var provider = await CreateProviderAsync(handler, "token");
 
         var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(2, calls);
-        Assert.False(body.Started.Task.IsCompleted);
+        Assert.True(body.Started.Task.IsCompleted);
         Assert.Equal(status == 429 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
@@ -1079,10 +1213,10 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData(503)]
     public async Task Provider_TransientHeaders_PreserveRetryAfter(int status)
     {
-        using var body = new WaitingResponseStream { SimulateTimeout = true };
+        await using var body = new WaitingResponseStream();
         var handler = new RecordingHandler(_ =>
         {
-            var response = new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) };
+            var response = new HttpResponseMessage((HttpStatusCode)status) { Content = new StreamContent(body) { Headers = { ContentLength = 64 } } };
             response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(3));
             return response;
         });
@@ -1096,7 +1230,7 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal(TimeSpan.FromSeconds(3), error.RetryAfter);
         Assert.Equal(status == 429, error.IsRateLimit);
-        Assert.False(body.Started.Task.IsCompleted);
+        Assert.True(body.Started.Task.IsCompleted);
         Assert.Equal(1, handler.RequestCount);
     }
 

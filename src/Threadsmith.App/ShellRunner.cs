@@ -369,6 +369,9 @@ internal static class ShellRunner
 /// <summary>Collects immutable shell dependencies produced by earlier startup phases.</summary>
 internal sealed record ShellRunContext
 {
+    /// <summary>Gets the host-only command approval projection.</summary>
+    internal CommandPolicyCoordinator? CommandPolicies { get; init; }
+
     /// <summary>Gets the terminal already running since process startup.</summary>
     internal TuiKitSurface? EarlySurface { get; init; }
 

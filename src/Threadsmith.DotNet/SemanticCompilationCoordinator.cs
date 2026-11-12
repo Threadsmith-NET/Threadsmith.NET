@@ -159,7 +159,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         queryDeadline.ThrowIfCancellationRequested();
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
         var admissionState = 0;
-        using var deadlineRegistration = queryDeadline.Register(() =>
+        await using var deadlineRegistration = queryDeadline.Register(() =>
         {
             if (Interlocked.CompareExchange(ref admissionState, -1, 0) == 0)
             {
@@ -412,7 +412,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                         _running--;
                     }
 
-                    if (callbacks is null || callbacks.IsCompleted)
+                    if (callbacks?.IsCompleted != false)
                     {
                         interruption.Dispose();
                     }

@@ -482,7 +482,7 @@ public sealed class Plan43AdvancedSemanticToolTests
     [Fact]
     public async Task PatternSearch_UnicodeIdentifier_IsAcceptedByToolAdapterAndService()
     {
-        var decomposedName = "e\u0301";
+        const string decomposedName = "e\u0301";
         await using var fixture = await AdvancedSemanticFixture.CreateAsync();
         var result = await fixture.Service.SearchCSharpPatternAsync(
             fixture.WorkspaceId,
@@ -525,7 +525,7 @@ public sealed class Plan43AdvancedSemanticToolTests
         Directory.CreateDirectory(repositoryPath);
         try
         {
-            var projectName = "Library\n- injected";
+            const string projectName = "Library\n- injected";
             var location = new SemanticSourceLocation(
                 projectName,
                 "net10.0",
@@ -1011,7 +1011,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             Write(repositoryPath, "src/Library/Library.csproj", """
                 <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>
                 """);
-            var decomposedMethodName = "e\u0301";
+            const string decomposedMethodName = "e\u0301";
             Write(repositoryPath, "src/Library/Code.cs", $$"""
                 namespace Example;
                 [System.Obsolete]

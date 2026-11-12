@@ -748,7 +748,7 @@ public static class SemanticCompilationCoordinatorTests
         var mutationSnapshot = engine.CaptureMutationSnapshot();
         engine.EnsureMutationSnapshotCurrent(mutationSnapshot);
         var document = before.Solution.Projects.SelectMany(project => project.Documents)
-            .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+            .First(document => document.FilePath?.Contains("obj", StringComparison.Ordinal) == false);
         var updatedText = (await document.GetTextAsync(cancellationToken)) + "\npublic class RefreshAddedType { }\n";
 
         await engine.RefreshDocumentsAsync([new(document.FilePath!, updatedText, "updated")], cancellationToken);
@@ -780,7 +780,7 @@ public static class SemanticCompilationCoordinatorTests
         await engine.WaitForWarmAsync(cancellationToken);
         var snapshot = engine.CaptureMutationSnapshot();
         var document = snapshot.Solution.Projects.SelectMany(project => project.Documents)
-            .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+            .First(document => document.FilePath?.Contains("obj", StringComparison.Ordinal) == false);
         var text = (await document.GetTextAsync(cancellationToken)) + "\npublic class LateMutationFence { }\n";
         var started = Signal();
         var release = Signal();
@@ -956,7 +956,7 @@ public static class SemanticCompilationCoordinatorTests
             snapshot.Solution,
             async token =>
             {
-                using var registration = token.Register(() =>
+                await using var registration = token.Register(() =>
                 {
                     callbackEntered.TrySetResult();
                     release.Wait(ct);
@@ -1022,7 +1022,7 @@ public static class SemanticCompilationCoordinatorTests
             new HashSet<ProjectId>(),
             async (id, token) =>
             {
-                using var registration = token.Register(() => Interlocked.Increment(ref interruptions));
+                await using var registration = token.Register(() => Interlocked.Increment(ref interruptions));
                 started.TrySetResult();
                 await release.Task.WaitAsync(token);
                 return new(id, true);
@@ -1082,7 +1082,7 @@ public static class SemanticCompilationCoordinatorTests
             }
 
             var document = snapshot.Solution.Projects.SelectMany(project => project.Documents)
-                .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+                .First(document => document.FilePath?.Contains("obj", StringComparison.Ordinal) == false);
             var text = (await document.GetTextAsync(ct)) + "\npublic class AfterSaturation { }\n";
             await engine.RefreshDocumentsAsync([new(document.FilePath!, text, "saturated-refresh")], ct);
             var query = engine.FindSymbolsAsync("AfterSaturation", ct);

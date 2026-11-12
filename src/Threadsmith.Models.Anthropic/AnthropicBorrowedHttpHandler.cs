@@ -5,14 +5,17 @@ using Threadsmith.Models;
 
 /// <summary>Safe status metadata without provider bodies, headers, or credentials.</summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "RCS1194:Implement exception constructors", Justification = "Internal transport status carrier requires a status and deliberately excludes raw exception bodies.")]
-internal sealed class AnthropicHttpFailureException(HttpStatusCode statusCode, TimeSpan? retryAfter)
-    : Exception("Anthropic HTTP request failed.")
+internal sealed class AnthropicHttpFailureException(HttpStatusCode statusCode, TimeSpan? retryAfter, ProviderErrorDetails.Detail details)
+    : Exception(ProviderErrorDetails.PreferMessage(details, $"Anthropic request failed with HTTP {(int)statusCode}."))
 {
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal HttpStatusCode StatusCode { get; } = statusCode;
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal TimeSpan? RetryAfter { get; } = retryAfter;
+
+    /// <summary>Retains safe details for adapter classification and fallback selection.</summary>
+    internal ProviderErrorDetails.Detail Details { get; } = details;
 }
 
 /// <summary>Forwards direct API traffic without owning the host HTTP pool.</summary>
@@ -23,9 +26,10 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
     private readonly long _maximumSseFrameBytes;
     private readonly Action<long>? _responseBytesObserved;
     private readonly Action? _submissionObserver;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicBorrowedHttpHandler"/> class.</summary>
-    internal AnthropicBorrowedHttpHandler(HttpClient sharedHttpClient, long maximumResponseBytes = 1048576, Action<long>? responseBytesObserved = null, Action? submissionObserver = null, long maximumSseFrameBytes = 1024 * 1024)
+    internal AnthropicBorrowedHttpHandler(HttpClient sharedHttpClient, long maximumResponseBytes = 1048576, Action<long>? responseBytesObserved = null, Action? submissionObserver = null, long maximumSseFrameBytes = 1024 * 1024, TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(sharedHttpClient);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumResponseBytes);
@@ -35,13 +39,14 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
         _maximumResponseBytes = maximumResponseBytes;
         _responseBytesObserved = responseBytesObserved;
         _submissionObserver = submissionObserver;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var uri = request.RequestUri;
-        if (uri is null || !uri.IsAbsoluteUri || uri.Scheme != Uri.UriSchemeHttps
+        if (uri?.IsAbsoluteUri != true || uri.Scheme != Uri.UriSchemeHttps
             || !string.Equals(uri.Host, AnthropicSdkClientFactory.ApiBaseUri.Host, StringComparison.OrdinalIgnoreCase)
             || uri.Port != 443 || uri.UserInfo.Length != 0
             || (request.Method == HttpMethod.Post
@@ -79,8 +84,9 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
         {
             if (!response.IsSuccessStatusCode)
             {
-                // Error bodies are never read, parsed, or copied into an exception.
-                throw new AnthropicHttpFailureException(response.StatusCode, ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow));
+                var credential = request.Headers.TryGetValues("x-api-key", out var keys) ? keys.FirstOrDefault() : null;
+                var details = await ProviderErrorDetails.ReadAsync(response, credential, cancellationToken, _timeProvider);
+                throw new AnthropicHttpFailureException(response.StatusCode, ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow), details);
             }
 
             var original = response.Content;

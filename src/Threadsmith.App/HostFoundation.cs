@@ -644,7 +644,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             var toolPipeline = new ToolInvocationPipeline(
                 toolRegistry,
                 new DefaultPolicyEngine(),
-                new DenyApprovalPolicy(),
+                new CommandPolicyCoordinator(),
                 events,
                 sanitizer,
                 loggerFactory.CreateLogger<ToolInvocationPipeline>(),
@@ -656,6 +656,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 prompts: promptLoader,
                 toolTelemetry: toolStatistics,
                 storageBindings: persistence.RepositoryMemoryStore);
+            policyBinding?.AuthorityInvalidated += toolPipeline.CommandPolicies.InvalidateAuthority;
+
             composition?.Complete();
             return new HostFoundation(
                 events,
@@ -1130,7 +1132,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         var requireRunProcessApproval = trustedConfiguration.GetValue(
             "tools:runProcess:requireApproval",
             true);
-        var shellExecutable = configuration["tools:runProcess:shellExecutable"]
+        var shellExecutable = trustedConfiguration["tools:runProcess:shellExecutable"]
             ?? defaultShellExecutable;
         ITool[] tools =
         [

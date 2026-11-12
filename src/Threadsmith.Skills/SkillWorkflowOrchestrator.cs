@@ -125,7 +125,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             CatalogGeneration = _catalog.Snapshot.Generation,
             Verification = candidate.Verification,
             Compatibility = compatibility,
-            ModelProfileId = host.ModelProfileId ?? (compatibility.CompatibleModels.FirstOrDefault() is { } profile && profile != default
+            ModelProfileId = host.ModelProfileId ?? ((compatibility.CompatibleModels.Count > 0 ? compatibility.CompatibleModels[0] : default) is { } profile && profile != default
                 ? profile
                 : null),
             ReasoningLevel = host.ReasoningLevel,
@@ -1064,12 +1064,12 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     {
         return new SkillInvocationResult
         {
-            Response = checkpoint.Steps.LastOrDefault()?.Response,
+            Response = (checkpoint.Steps.Count > 0 ? checkpoint.Steps[^1] : default)?.Response,
             InvocationId = checkpoint.InvocationId,
             Package = checkpoint.Package,
             Status = checkpoint.Status,
             OutputJson = checkpoint.Status is SkillInvocationStatus.Completed or SkillInvocationStatus.Failed
-                ? checkpoint.Steps.LastOrDefault()?.OutputJson
+                ? (checkpoint.Steps.Count > 0 ? checkpoint.Steps[^1] : default)?.OutputJson
                 : null,
             HostActions = checkpoint.Steps
                 .Where(item => item.HostAction is not null)

@@ -12,7 +12,7 @@ Machine and user values are defaults, followed by user-owned repository choices 
 
 ## Tool timeout precedence
 
-A general runtime timeout is a fallback, not a ceiling. Selection uses a supported positive invocation hint first, then `tools.runtime.byTool`, explicit tool-specific settings (such as `tools.runProcess.defaultTimeoutSeconds`), `tools.runtime.defaults.timeoutMilliseconds`, and finally the tool's built-in default. Shorter and longer tool-specific values both override the general fallback.
+A general runtime timeout is a fallback, not a ceiling. Selection uses `tools.runtime.byTool`, explicit tool-specific settings (such as `tools.runProcess.defaultTimeoutSeconds`), `tools.runtime.defaults.timeoutMilliseconds`, and finally the tool's built-in default. Shorter and longer tool-specific values both override the general fallback.
 
 Explicit machine-enforced global and per-tool ceilings still restrict the selected timeout. `run_process` also remains bounded by `tools.runProcess.maxTimeoutSeconds`; that maximum does not select its default. `-1` means unlimited where supported, but cannot bypass a finite enforced ceiling or caller cancellation.
 
@@ -26,9 +26,10 @@ Native validation's explicit `limits.validation.timeoutMilliseconds` remains an 
 
 | Key | Class and default | Production consumer |
 | --- | --- | --- |
-| `tools:allowedExecutables` | Narrow; OS shell (`powershell`/`bash`), `dotnet`, `git`; exact bare names | `DefaultPolicyEngine`, process invocation |
+| `tools:allowedExecutables` | Narrow; OS shell (`powershell`/`bash`), `dotnet`, `git`; exact bare names, no paths, patterns, or controls. For `run_process`, admits the outer shell only; contained commands and scripts use command policy. Other tools retain their executable checks. | `DefaultPolicyEngine`, process invocation |
 | `tools:runProcess:shellExecutable` | Ordinary selector; platform shell; cannot grant an executable | `RunProcessTool`, existing supported-shell validation |
-| `tools:runProcess:requireApproval` | Narrow; true; explicit enforcement cannot be relaxed | `DefaultPolicyEngine`, existing approval pipeline |
+| `tools:runProcess:requireApproval` | Legacy compatibility input; does not authorize commands or force review over an explicit command Allow | Command outcomes replace this coarse switch; independent `tools:requireApproval` remains mandatory |
+| `tools:runProcess:commandPolicy` | Machine/user only; unmatched command denial; no repository, session, environment or CLI authority | Shared policy library, existing tool pipeline and process manager; [reference](command-policy.md) |
 | `tools:allow` | Narrow; absent unrestricted, explicit empty deny-all | Advertisement, `DefaultPolicyEngine`, child policy |
 | `tools:deny`, `tools:requireApproval` | Union restrictions; empty | Advertisement and invocation |
 | `tools:allowedNetworkHosts` | Trusted static grants default empty; explicit machine exact-host mandatory filters default unrestricted | `DefaultPolicyEngine`, fetch transport/redirect checks, manual MCP reads |

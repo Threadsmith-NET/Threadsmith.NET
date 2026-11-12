@@ -411,7 +411,7 @@ public sealed class SecretResolver : ISecretResolver
             foreach (var provider in _providers)
             {
                 if (provider.Trust < request.MinimumTrust
-                    || (request.AllowedProviderIds is not null && !request.AllowedProviderIds.Contains(provider.Id))
+                    || (request.AllowedProviderIds?.Contains(provider.Id) == false)
                     || !provider.SupportedPrefixes.Any(prefix => request.Reference.CanonicalName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
                 {
                     diagnostics.Add(provider.Id + ":policy-skipped");
@@ -1023,7 +1023,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         }
 
         var buffer = new byte[4096];
-        using var content = new MemoryStream();
+        await using var content = new MemoryStream();
         while (true)
         {
             var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);

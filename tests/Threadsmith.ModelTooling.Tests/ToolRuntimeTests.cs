@@ -1136,7 +1136,7 @@ public static partial class ToolRuntimeTests
     [Fact]
     public static void CodeExploreContinuationCursor_CompactSourceCursor_RejectsCorruption()
     {
-        var path = "container/source/AI.Inference.Fusion/Pipelines/Common/Retrievers/ResearchReports/ResearchReportSemanticHybridRetriever.cs";
+        const string path = "container/source/AI.Inference.Fusion/Pipelines/Common/Retrievers/ResearchReports/ResearchReportSemanticHybridRetriever.cs";
         var target = new CodeExploreContinuationTarget(
             CodeExploreAnchorKind.Path,
             path,
@@ -1448,12 +1448,8 @@ public static partial class ToolRuntimeTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "run_process",
-                ArgumentsJson = "{\"command\":\"dotnet --version\",\"timeoutSeconds\":1}",
-                Context = CreateContext(repository) with
-                {
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    AllowedExecutables = [shell],
-                },
+                ArgumentsJson = "{\"command\":\"dotnet --version\"}",
+                Context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell)),
             });
 
             Assert.False(result.Succeeded);
@@ -2252,7 +2248,7 @@ public static partial class ToolRuntimeTests
             await File.WriteAllTextAsync(Path.Combine(repository, "visible.txt"), "needle");
             var lockedPath = Path.Combine(repository, "locked.txt");
             await File.WriteAllTextAsync(lockedPath, "other content");
-            using var lockedFile = new FileStream(
+            await using var lockedFile = new FileStream(
                 lockedPath,
                 FileMode.Open,
                 FileAccess.ReadWrite,
@@ -2386,11 +2382,7 @@ public static partial class ToolRuntimeTests
                 RunId = RunId.New(),
                 ToolId = "run_process",
                 ArgumentsJson = "{\"command\":\"dotnet nuget locals all --list\"}",
-                Context = CreateContext(repository) with
-                {
-                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                    AllowedExecutables = [shell],
-                },
+                Context = ShellCommandPolicyTests.Context(repository, ShellCommandPolicyTests.Policy(repository, shell)),
             });
 
             Assert.True(result.Succeeded, result.Error);
@@ -2400,13 +2392,10 @@ public static partial class ToolRuntimeTests
             Assert.Equal(0, processResult.ExitCode);
             Assert.Contains("global-packages:", processResult.StandardOutput, StringComparison.Ordinal);
             Assert.Contains(result.Sources, source => source.Kind == "process");
-            Assert.Contains(observed, item => item is ApprovalRequested requested
-                && requested.Kind == ApprovalRequestKind.ToolInvocation
-                && requested.SchemaVersion == 2);
-            Assert.Contains(observed, item => item is ApprovalGranted);
+            Assert.DoesNotContain(observed, item => item is ApprovalRequested or ApprovalGranted);
             Assert.Equal(1, manager.ExecutionCount);
-            Assert.Equal(shell, manager.LastRequest?.FileName);
-            Assert.Contains("dotnet nuget locals all --list", manager.LastRequest!.Arguments);
+            Assert.True(Path.IsPathFullyQualified(manager.LastRequest!.FileName));
+            Assert.Contains(manager.LastRequest.Arguments, argument => argument.Contains("nuget", StringComparison.Ordinal) && argument.Contains("--list", StringComparison.Ordinal));
             Assert.Empty(manager.ActiveProcesses);
         }
         finally
@@ -2428,11 +2417,10 @@ public static partial class ToolRuntimeTests
         var properties = schema.RootElement.GetProperty("properties");
 
         Assert.True(properties.TryGetProperty("command", out _));
-        Assert.True(properties.TryGetProperty("timeoutSeconds", out var timeoutSchema));
-        Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
+        Assert.False(properties.TryGetProperty("timeoutSeconds", out _));
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
         Assert.True(properties.TryGetProperty("workingDirectory", out _));
-        Assert.Equal(4, properties.EnumerateObject().Count());
+        Assert.Equal(3, properties.EnumerateObject().Count());
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }
 
@@ -2494,14 +2482,13 @@ public static partial class ToolRuntimeTests
                 SessionId.New(),
                 RunId.New(),
                 CreateContext(repository));
-            var input = tool.DeserializeInput("{\"command\":\"pwd\",\"timeoutSeconds\":999}");
+            var input = tool.DeserializeInput("{\"command\":\"pwd\"}");
 
-            await tool.ExecuteAsync(input, context);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context));
 
-            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
-            Assert.Equal(repository, request.WorkingDirectory);
-            Assert.Equal(["-c", "pwd"], request.Arguments);
-            Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
+            Assert.Null(processManager.LastRequest);
+            var timeout = ((IToolTimeoutPolicy)tool).ResolveTimeout(context.Invocation, TimeSpan.FromSeconds(3));
+            Assert.Equal(TimeSpan.FromSeconds(3), timeout);
         }
         finally
         {
@@ -2970,7 +2957,7 @@ public static partial class ToolRuntimeTests
                 })
                 .Build();
             var timeoutEngine = new CSharpScriptEngine(
-                processManager,
+                new HostDeadlineProcessManager(processManager),
                 new ToolConfig(timeoutConfiguration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
             var timingOut = timeoutEngine.ExecuteAsync(
@@ -4462,6 +4449,34 @@ public static partial class ToolRuntimeTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(new CSharpScriptOutput(true, "stub", null, 0, false));
+        }
+    }
+
+    // Isolate host termination from the worker's real-clock deadline without changing the host request.
+    private sealed class HostDeadlineProcessManager : IProcessManager
+    {
+        private readonly ProcessManager _inner;
+
+        public HostDeadlineProcessManager(ProcessManager inner)
+        {
+            _inner = inner;
+        }
+
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => _inner.ActiveProcesses;
+
+        public Task<ProcessExecutionResult> RunAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            // Preserve coverage of the engine's deadline forwarding before isolating the worker clock.
+            Assert.Equal(TimeSpan.FromMilliseconds(500), request.Timeout);
+            var payload = System.Text.Json.Nodes.JsonNode.Parse(request.StandardInput!)!.AsObject();
+            Assert.Equal(500, payload["TimeoutMilliseconds"]!.GetValue<int>());
+            payload["TimeoutMilliseconds"] = -1;
+
+            return _inner.RunAsync(
+                request with { StandardInput = payload.ToJsonString() },
+                cancellationToken);
         }
     }
 

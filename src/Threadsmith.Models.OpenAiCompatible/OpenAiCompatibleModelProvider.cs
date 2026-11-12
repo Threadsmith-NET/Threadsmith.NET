@@ -265,16 +265,17 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 if (!response.IsSuccessStatusCode)
                 {
                     var statusCode = response.StatusCode;
+                    var details = await ProviderErrorDetails.ReadAsync(response, _apiKey, token, _timeProvider);
                     if (statusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable || (int)statusCode == 529)
                     {
-                        throw new TransientModelException($"Model endpoint remained unavailable after {attempt} attempts (HTTP {(int)statusCode}).")
+                        throw new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"Model endpoint remained unavailable after {attempt} attempts (HTTP {(int)statusCode})."))
                         {
                             IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
                             RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
                         };
                     }
 
-                    throw new ModelProviderException($"Model endpoint rejected the request with HTTP {(int)statusCode}.");
+                    throw new ModelProviderException(ProviderErrorDetails.PreferMessage(details, $"Model endpoint rejected the request with HTTP {(int)statusCode}."));
                 }
 
                 await using var chunks = ReadResponseAsync(
@@ -451,7 +452,8 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
                 if (rateLimited)
                 {
-                    throw new TransientModelException("The model endpoint reported a rate limit inside the response stream (code 429).") { IsRateLimit = true };
+                    throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(envelope.Error ?? default, _apiKey, envelope.Provider, envelope.RequestId, envelope.Id), "The model endpoint reported a rate limit inside the response stream (code 429)."))
+                    { IsRateLimit = true };
                 }
 
                 if (envelope.Error is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } error)
@@ -464,11 +466,8 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                             ? $" (code {status})"
                             : string.Empty;
 
-                    // Providers may echo request content in their error message. Report only the
-                    // bounded status, and do not turn an upstream failure into an empty-answer retry.
                     throw new ModelProviderException(
-                        $"The model endpoint reported an error inside the response stream{code}. "
-                        + "Check the provider server logs for details.");
+                        ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(error, _apiKey, envelope.Provider, envelope.RequestId, envelope.Id), $"The model endpoint reported an error inside the response stream{code}. "));
                 }
 
                 foreach (var choice in envelope.Choices)
@@ -1466,6 +1465,12 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiStreamEnvelope
     {
+        [JsonPropertyName("id")]
+        public JsonElement Id { get; init; }
+
+        [JsonPropertyName("request_id")]
+        public JsonElement RequestId { get; init; }
+
         [JsonPropertyName("model")]
         public string? Model { get; init; }
 

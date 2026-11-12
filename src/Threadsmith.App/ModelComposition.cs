@@ -222,7 +222,8 @@ internal static class ModelComposition
                                     rejectedSecret,
                                     cancellationToken).ConfigureAwait(false)
                                 : null,
-                        images);
+                        images,
+                        sanitizer: new Threadsmith.Telemetry.SecretOutputSanitizer());
 
                 var provider = CreateOptionalLoggingProvider(
                     CreateConfiguredProvider(

@@ -1463,6 +1463,19 @@ public sealed class SemanticRefreshCoordinator :
                 }
             }
         }
+        catch (OperationCanceledException) when (binding.LifetimeCancellation.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            if (sequence.HasStarted)
+            {
+                await PublishRefreshFailureAsync(binding, sequence, exception, CancellationToken.None);
+            }
+
+            throw;
+        }
         finally
         {
             lock (binding.Gate)
@@ -1613,27 +1626,7 @@ public sealed class SemanticRefreshCoordinator :
                 prepared.Changes,
                 batch.TargetDirtyVersion);
             await EnsureRefreshStartedAsync(binding, sequence, cancellationToken);
-            foreach (var sessionId in GetBindingSessionIds(binding))
-            {
-                await PublishSafelyAsync(
-                    new SemanticRefreshFailed(
-                        sessionId,
-                        _timeProvider.GetUtcNow(),
-                        sequence.RefreshId,
-                        binding.Request.WorkspaceId,
-                        sequence.Reason,
-                        sequence.Mode,
-                        sequence.ChangedPaths.Count,
-                        sequence.DirtyVersion,
-                        binding.AppliedVersion,
-                        SemanticRefreshFailureKind.UnstableSnapshot,
-                        "Repository files did not remain stable long enough to refresh.",
-                        ElapsedMilliseconds: 0),
-                    CancellationToken.None);
-            }
-
-            RecordCycle(SemanticRefreshMode.Full, "unstable", TimeSpan.Zero);
-            throw new InvalidOperationException(
+            throw new InvalidDataException(
                 "Semantic refresh preparation observed an unstable filesystem snapshot.");
         }
 
@@ -1684,208 +1677,156 @@ public sealed class SemanticRefreshCoordinator :
         sequence.RecordAttempt(reason, mode, prepared.Changes, batch.TargetDirtyVersion);
         var startedAt = _timeProvider.GetTimestamp();
 
-        try
+        AuthoritativeInputSnapshot? preRefreshInputs = null;
+        async Task<SemanticLoadResult> PublishAsync(CancellationToken publicationToken)
         {
-            AuthoritativeInputSnapshot? preRefreshInputs = null;
-            async Task<SemanticLoadResult> PublishAsync(CancellationToken publicationToken)
+            // Waiting for an active run is queued work, not compiler refresh time.
+            startedAt = _timeProvider.GetTimestamp();
+            await EnsureRefreshStartedAsync(binding, sequence, publicationToken);
+            if (batch.RestartWatcher)
             {
-                // Waiting for an active run is queued work, not compiler refresh time.
-                startedAt = _timeProvider.GetTimestamp();
-                await EnsureRefreshStartedAsync(binding, sequence, publicationToken);
-                if (batch.RestartWatcher)
-                {
-                    binding.RestartWatching(
-                        change => QueueChange(binding, change),
-                        () => QueueRecovery(binding, restartWatcher: true));
-                }
+                binding.RestartWatching(
+                    change => QueueChange(binding, change),
+                    () => QueueRecovery(binding, restartWatcher: true));
+            }
 
-                if (mode == SemanticRefreshMode.Full)
-                {
-                    // An active run can change inputs while publication is waiting for admission.
-                    preRefreshInputs = await CaptureAuthoritativeInputSnapshotAsync(
-                        binding,
-                        _backend.GetRefreshInventory(binding.Request.WorkspaceId),
-                        additionalPaths: [],
-                        binaryAdditionalPaths: [],
-                        includePotentialBinaryInputs: false,
-                        publicationToken);
-                    EnsureCompleteAuthoritativeSnapshot(
-                        preRefreshInputs,
-                        "Semantic refresh inputs could not be captured as stable, accessible files.");
-                    return await _backend.RefreshFullAsync(
-                        binding.Request.WorkspaceId,
-                        publicationToken);
-                }
-
-                var documents = prepared.Changes.Select(change =>
-                {
-                    var text = change.Content.Text
-                        ?? throw new InvalidOperationException(
-                            "Incremental semantic refresh requires current document text.");
-                    return new SemanticDocumentRefresh(
-                        change.Path,
-                        text,
-                        change.Content.Identity);
-                }).ToArray();
-                return await _backend.RefreshIncrementalAsync(
+            if (mode == SemanticRefreshMode.Full)
+            {
+                // An active run can change inputs while publication is waiting for admission.
+                preRefreshInputs = await CaptureAuthoritativeInputSnapshotAsync(
+                    binding,
+                    _backend.GetRefreshInventory(binding.Request.WorkspaceId),
+                    additionalPaths: [],
+                    binaryAdditionalPaths: [],
+                    includePotentialBinaryInputs: false,
+                    publicationToken);
+                EnsureCompleteAuthoritativeSnapshot(
+                    preRefreshInputs,
+                    "Semantic refresh inputs could not be captured as stable, accessible files.");
+                return await _backend.RefreshFullAsync(
                     binding.Request.WorkspaceId,
-                    documents,
                     publicationToken);
             }
 
-            var loadResult = _publicationGate is null
-                ? await PublishAsync(cancellationToken)
-                : await _publicationGate.PublishAsync(
-                    binding.Request.SessionId,
-                    binding.Request.WorkspaceId,
-                    PublishAsync,
-                    cancellationToken);
-            IReadOnlyList<SemanticDocumentRefresh> refreshedDocuments = [];
-            SemanticRefreshInventory? refreshedInventory = null;
-            IReadOnlyDictionary<string, StableFileContent> confirmedCurrentInputs =
-                new Dictionary<string, StableFileContent>(PathComparer);
-            IReadOnlyDictionary<string, StableFileContent> confirmedPreparedInputs =
-                new Dictionary<string, StableFileContent>(PathComparer);
-            if (mode == SemanticRefreshMode.Full)
+            var documents = prepared.Changes.Select(change =>
             {
-                refreshedDocuments = (await _backend.GetLoadedDocumentsAsync(
-                    binding.Request.WorkspaceId,
-                    cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(binding.Request.RepositoryPath, document.Path)).ToArray();
-                refreshedInventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
-                var capturedInputs = preRefreshInputs
+                var text = change.Content.Text
                     ?? throw new InvalidOperationException(
-                        "A full refresh started without an input snapshot.");
-                confirmedCurrentInputs = await ReconcileFullRefreshSnapshotAsync(
-                    binding,
-                    refreshedDocuments,
-                    refreshedInventory,
-                    capturedInputs,
-                    cancellationToken);
-                confirmedPreparedInputs = await ConfirmPreparedInputIdentitiesAsync(
-                    binding,
-                    prepared.Changes,
-                    refreshedDocuments,
-                    refreshedInventory,
-                    confirmedCurrentInputs,
-                    cancellationToken);
-            }
+                        "Incremental semantic refresh requires current document text.");
+                return new SemanticDocumentRefresh(
+                    change.Path,
+                    text,
+                    change.Content.Identity);
+            }).ToArray();
+            return await _backend.RefreshIncrementalAsync(
+                binding.Request.WorkspaceId,
+                documents,
+                publicationToken);
+        }
 
-            var duration = _timeProvider.GetElapsedTime(startedAt);
-            lock (binding.Gate)
-            {
-                ThrowIfObsolete(binding);
-                if (mode == SemanticRefreshMode.Full)
-                {
-                    _ = refreshedInventory
-                        ?? throw new InvalidOperationException(
-                            "A full refresh completed without a refreshed inventory.");
-                    ReplaceAppliedIdentitiesAfterFullRefresh(
-                        binding,
-                        refreshedDocuments,
-                        confirmedCurrentInputs,
-                        confirmedPreparedInputs);
-                }
-                else
-                {
-                    foreach (var change in prepared.Changes.Where(change => change.Content.IsStable))
-                    {
-                        binding.AppliedIdentities[change.Path] = change.Content.Identity;
-                    }
-                }
+        var loadResult = _publicationGate is null
+            ? await PublishAsync(cancellationToken)
+            : await _publicationGate.PublishAsync(
+                binding.Request.SessionId,
+                binding.Request.WorkspaceId,
+                PublishAsync,
+                cancellationToken);
+        IReadOnlyList<SemanticDocumentRefresh> refreshedDocuments = [];
+        SemanticRefreshInventory? refreshedInventory = null;
+        IReadOnlyDictionary<string, StableFileContent> confirmedCurrentInputs =
+            new Dictionary<string, StableFileContent>(PathComparer);
+        IReadOnlyDictionary<string, StableFileContent> confirmedPreparedInputs =
+            new Dictionary<string, StableFileContent>(PathComparer);
+        if (mode == SemanticRefreshMode.Full)
+        {
+            refreshedDocuments = (await _backend.GetLoadedDocumentsAsync(
+                binding.Request.WorkspaceId,
+                cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(binding.Request.RepositoryPath, document.Path)).ToArray();
+            refreshedInventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
+            var capturedInputs = preRefreshInputs
+                ?? throw new InvalidOperationException(
+                    "A full refresh started without an input snapshot.");
+            confirmedCurrentInputs = await ReconcileFullRefreshSnapshotAsync(
+                binding,
+                refreshedDocuments,
+                refreshedInventory,
+                capturedInputs,
+                cancellationToken);
+            confirmedPreparedInputs = await ConfirmPreparedInputIdentitiesAsync(
+                binding,
+                prepared.Changes,
+                refreshedDocuments,
+                refreshedInventory,
+                confirmedCurrentInputs,
+                cancellationToken);
+        }
 
-                RememberAppliedHostEchoIdentities(binding, prepared.Changes);
-                foreach (var change in prepared.Changes)
-                {
-                    binding.HostIdentities.Remove(change.Path);
-                    binding.HostMismatchPaths.Remove(change.Path);
-                }
-
-                binding.AppliedVersion = Math.Max(binding.AppliedVersion, batch.TargetDirtyVersion);
-                if (prepared.ForceFull)
-                {
-                    binding.ForceAppliedVersion = Math.Max(
-                        binding.ForceAppliedVersion,
-                        batch.TargetForceVersion);
-                }
-            }
-
+        var duration = _timeProvider.GetElapsedTime(startedAt);
+        lock (binding.Gate)
+        {
+            ThrowIfObsolete(binding);
             if (mode == SemanticRefreshMode.Full)
             {
-                var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
-                    .GroupBy(pair => pair.Key, PathComparer)
-                    .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.ByteIdentity : null, PathComparer);
-                _backend.ContinueEditAfterGraphRefresh(binding.Request.WorkspaceId, verifiedInputs);
-                try
+                _ = refreshedInventory
+                    ?? throw new InvalidOperationException(
+                        "A full refresh completed without a refreshed inventory.");
+                ReplaceAppliedIdentitiesAfterFullRefresh(
+                    binding,
+                    refreshedDocuments,
+                    confirmedCurrentInputs,
+                    confirmedPreparedInputs);
+            }
+            else
+            {
+                foreach (var change in prepared.Changes.Where(change => change.Content.IsStable))
                 {
-                    binding.RestartWatching(
-                        change => QueueChange(binding, change),
-                        () => QueueRecovery(binding, restartWatcher: true));
-                }
-                catch
-                {
-                    QueueRecovery(binding, restartWatcher: true);
-                    throw;
+                    binding.AppliedIdentities[change.Path] = change.Content.Identity;
                 }
             }
 
-            sequence.RecordSuccess(loadResult.Confidence);
-            RecordCycle(mode, "success", duration);
-            lock (binding.Gate)
+            RememberAppliedHostEchoIdentities(binding, prepared.Changes);
+            foreach (var change in prepared.Changes)
             {
-                if (binding.DirtyVersion > batch.TargetDirtyVersion)
-                {
-                    SemanticRefreshMetrics.DirtyFollowUps.Add(1);
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            var duration = _timeProvider.GetElapsedTime(startedAt);
-            var failureKind = binding.IsObsolete
-                ? SemanticRefreshFailureKind.BindingObsolete
-                : exception is InvalidDataException
-                    ? SemanticRefreshFailureKind.UnstableSnapshot
-                    : SemanticRefreshFailureKind.Infrastructure;
-            var safeReason = failureKind switch
-            {
-                SemanticRefreshFailureKind.BindingObsolete =>
-                    "The repository binding changed before semantic refresh completed.",
-                SemanticRefreshFailureKind.UnstableSnapshot =>
-                    "Repository files did not remain stable long enough to refresh.",
-                _ => "Semantic refresh could not establish current state.",
-            };
-            foreach (var sessionId in GetBindingSessionIds(binding))
-            {
-                await PublishSafelyAsync(
-                    new SemanticRefreshFailed(
-                        sessionId,
-                        _timeProvider.GetUtcNow(),
-                        sequence.RefreshId,
-                        binding.Request.WorkspaceId,
-                        sequence.Reason,
-                        sequence.Mode,
-                        sequence.ChangedPaths.Count,
-                        sequence.DirtyVersion,
-                        binding.AppliedVersion,
-                        failureKind,
-                        safeReason[..Math.Min(safeReason.Length, _resourceLimits.MaximumSafeReasonLength)],
-                        ToElapsedMilliseconds(duration))
-                    {
-                        TriggerPaths = CaptureTriggerPaths(binding, sequence),
-                    },
-                    CancellationToken.None);
+                binding.HostIdentities.Remove(change.Path);
+                binding.HostMismatchPaths.Remove(change.Path);
             }
 
-            _logger.LogWarning(
-                exception,
-                "Semantic refresh failed for workspace {WorkspaceId}",
-                binding.Request.WorkspaceId.Value);
-            RecordCycle(mode, "failure", duration);
-            throw;
+            binding.AppliedVersion = Math.Max(binding.AppliedVersion, batch.TargetDirtyVersion);
+            if (prepared.ForceFull)
+            {
+                binding.ForceAppliedVersion = Math.Max(
+                    binding.ForceAppliedVersion,
+                    batch.TargetForceVersion);
+            }
+        }
+
+        if (mode == SemanticRefreshMode.Full)
+        {
+            var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
+                .GroupBy(pair => pair.Key, PathComparer)
+                .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.ByteIdentity : null, PathComparer);
+            _backend.ContinueEditAfterGraphRefresh(binding.Request.WorkspaceId, verifiedInputs);
+            try
+            {
+                binding.RestartWatching(
+                    change => QueueChange(binding, change),
+                    () => QueueRecovery(binding, restartWatcher: true));
+            }
+            catch
+            {
+                QueueRecovery(binding, restartWatcher: true);
+                throw;
+            }
+        }
+
+        sequence.RecordSuccess(loadResult.Confidence);
+        RecordCycle(mode, "success", duration);
+        lock (binding.Gate)
+        {
+            if (binding.DirtyVersion > batch.TargetDirtyVersion)
+            {
+                SemanticRefreshMetrics.DirtyFollowUps.Add(1);
+            }
         }
     }
 
@@ -2799,6 +2740,52 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         return verified;
+    }
+
+    private async Task PublishRefreshFailureAsync(
+        WorkspaceBinding binding,
+        RefreshSequence sequence,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        var cause = exception is InvalidOperationException { InnerException: { } inner } ? inner : exception;
+        var failureKind = binding.IsObsolete
+            ? SemanticRefreshFailureKind.BindingObsolete
+            : cause is InvalidDataException
+                ? SemanticRefreshFailureKind.UnstableSnapshot
+                : SemanticRefreshFailureKind.Infrastructure;
+        var safeReason = failureKind switch
+        {
+            SemanticRefreshFailureKind.BindingObsolete =>
+                "The repository binding changed before semantic refresh completed.",
+            SemanticRefreshFailureKind.UnstableSnapshot =>
+                "Repository files did not remain stable long enough to refresh.",
+            _ => "Semantic refresh could not establish current state. Retry with /semantic_refresh.",
+        };
+        var duration = _timeProvider.GetElapsedTime(sequence.StartedTimestamp);
+        foreach (var sessionId in GetBindingSessionIds(binding))
+        {
+            // Trigger paths were already supplied by the start event. Re-evaluating path
+            // policy here could repeat the exception and strand the visible activity again.
+            await PublishSafelyAsync(
+                new SemanticRefreshFailed(
+                    sessionId,
+                    _timeProvider.GetUtcNow(),
+                    sequence.RefreshId,
+                    binding.Request.WorkspaceId,
+                    sequence.Reason,
+                    sequence.Mode,
+                    sequence.ChangedPaths.Count,
+                    sequence.DirtyVersion,
+                    binding.AppliedVersion,
+                    failureKind,
+                    safeReason[..Math.Min(safeReason.Length, _resourceLimits.MaximumSafeReasonLength)],
+                    ToElapsedMilliseconds(duration)),
+                cancellationToken);
+        }
+
+        _logger.LogWarning(exception, "Semantic refresh failed for workspace {WorkspaceId}", binding.Request.WorkspaceId.Value);
+        RecordCycle(sequence.Mode, "failure", duration);
     }
 
     private void RestoreFailedBatch(WorkspaceBinding binding, RefreshBatch batch)

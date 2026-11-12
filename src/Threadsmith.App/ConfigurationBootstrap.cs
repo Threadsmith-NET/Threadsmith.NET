@@ -56,8 +56,8 @@ internal static class ConfigurationBootstrap
         // The byte cap comes only from trusted machine/user/environment layers. Repository configuration
         // cannot widen the bound that protects itself, its session override, or its separate secret store.
         var trustedConfiguration = new ConfigurationBuilder()
-            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.MachineConfiguration)))
-            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.UserConfiguration)))
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.MachineConfiguration, SecurityPolicyConfigurationLoader.TrustedConfigurationMaximumBytes)))
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(paths.UserConfiguration, SecurityPolicyConfigurationLoader.TrustedConfigurationMaximumBytes)))
             .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))
             .Build();
         var maximumRepositoryConfigurationBytes = trustedConfiguration.GetValue(

@@ -32,7 +32,7 @@ public sealed class WebSearchTests
     [Fact]
     public void FreshnessLimitMustFitCalendarRange()
     {
-        var key = "webSearch:provider:maximumFreshnessDays";
+        const string key = "webSearch:provider:maximumFreshnessDays";
         var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             [key] = "1000000",

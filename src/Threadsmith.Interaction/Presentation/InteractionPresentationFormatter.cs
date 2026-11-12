@@ -7,7 +7,7 @@ using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
-internal static class InteractionPresentationFormatter
+internal static partial class InteractionPresentationFormatter
 {
     private const string BlockOuterIndent = " ";
     private const int MaximumToolDetailLength = 240;
@@ -294,7 +294,7 @@ internal static class InteractionPresentationFormatter
                 + $"analyzers {analyzers.Status}; {analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} documents";
             if (analyzers.Status is "completed" or "partial")
             {
-                summary += $"; {analyzers.ReportableFindings} analyzer findings";
+                summary += $"; {analyzers.ReportableFindings} analyzer findings" + FormatAnalyzerSeverityCounts(analyzers);
                 if (analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope)
                 {
                     summary += "; coverage incomplete";
@@ -325,7 +325,7 @@ internal static class InteractionPresentationFormatter
     internal static string GetSemanticCheckTitle(SemanticCheckPhase phase, string checkName)
     {
         var sanitizedCheckName = TruncateForDisplay(checkName);
-        if (string.Equals(checkName, "advisory edit analysis", StringComparison.Ordinal))
+        if (checkName is "advisory edit analysis" or "advisory edit analyzers")
         {
             return phase switch
             {
@@ -1549,6 +1549,10 @@ internal static class InteractionPresentationFormatter
         }
     }
 
+    private static string FormatAnalyzerSeverityCounts(SourceEditAnalyzerAnalysis analyzers) =>
+        analyzers is { Errors: { } errors, Warnings: { } warnings, Suggestions: { } suggestions }
+            ? $" ({errors} errors, {warnings} warnings, {suggestions} suggestions)" : string.Empty;
+
     private static void AppendAnalyzerAnalysisLines(List<TuiBlockLine> lines, SourceEditAnalysis analysis)
     {
         var analyzers = analysis.Analyzers;
@@ -1562,7 +1566,7 @@ internal static class InteractionPresentationFormatter
         lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
         if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
         {
-            var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}";
+            var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}" + FormatAnalyzerSeverityCounts(analyzers);
             counts += analyzers.NewFindings is { } introduced && analyzers.ResolvedFindings is { } resolved
                 ? $"; {introduced} new; {resolved} resolved" : "; before/after comparison unavailable";
             lines.Add(new(TuiBlockLineKind.Item, counts, PresentationTextRole.Muted));

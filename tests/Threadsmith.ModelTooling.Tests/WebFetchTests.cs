@@ -657,7 +657,7 @@ public sealed class WebFetchTests
         var runId = RunId.New();
         var context = CreateContext(fixture.Path, sessionId, runId);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions());
-        var message = "Read https://example.com/docs, [guide](https://example.com/docs) "
+        const string message = "Read https://example.com/docs, [guide](https://example.com/docs) "
             + "and https://second.example/path). Ignore http://unsafe.example and https://user:secret@example.com/.";
 
         // Act

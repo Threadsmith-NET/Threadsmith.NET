@@ -163,7 +163,7 @@ internal static class AnthropicRequestMapper
                         }
 
                         if (payload["legacy_input_digest"]?.GetValue<string>() is { } legacy
-                            && (request.Messages.FirstOrDefault() is not { Role: ModelMessageRole.User } first
+                            && ((request.Messages.Count > 0 ? request.Messages[0] : default) is not { Role: ModelMessageRole.User } first
                                 || legacy != Hash(Encoding.UTF8.GetBytes(first.GetModelVisibleContent()))))
                         {
                             throw new ModelProviderException("Anthropic legacy continuation lost its initial user input.");

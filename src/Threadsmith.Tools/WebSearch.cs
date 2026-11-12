@@ -347,7 +347,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         }
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        using var memory = new MemoryStream();
+        await using var memory = new MemoryStream();
         var buffer = new byte[8192];
         while (true)
         {

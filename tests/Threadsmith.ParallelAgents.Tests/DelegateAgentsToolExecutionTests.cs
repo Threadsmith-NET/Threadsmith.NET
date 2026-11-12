@@ -353,7 +353,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         Assert.Equal(DelegateAgentsStatus.Cancelled, execution.Value.Status);
         Assert.True(runner.JoinCancellationToken.CanBeCanceled);
         Assert.True(runner.JoinCancellationToken.IsCancellationRequested);
-        Assert.Equal(DelegationCheckpointPhase.Cancelled, checkpoints.History.Last().Phase);
+        Assert.Equal(DelegationCheckpointPhase.Cancelled, checkpoints.History[^1].Phase);
     }
 
     /// <summary>Verifies cancellation wins when a non-cooperative joiner throws another exception.</summary>
@@ -381,7 +381,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         // Assert
         Assert.Equal(DelegateAgentsStatus.Cancelled, execution.Value.Status);
-        Assert.Equal(DelegationCheckpointPhase.Cancelled, checkpoints.History.Last().Phase);
+        Assert.Equal(DelegationCheckpointPhase.Cancelled, checkpoints.History[^1].Phase);
     }
 
     /// <summary>Verifies cancellation cannot race disposal of the active token source.</summary>
@@ -476,8 +476,8 @@ public sealed partial class DelegateAgentsToolExecutionTests
             Assert.Contains("join failed", child.Summary, StringComparison.Ordinal);
         });
         Assert.Equal(1, runner.JoinCalls);
-        Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History.Last().Phase);
-        Assert.All(checkpoints.History.Last().ChildOutcomes, outcome => Assert.Null(outcome.Response));
+        Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History[^1].Phase);
+        Assert.All(checkpoints.History[^1].ChildOutcomes, outcome => Assert.Null(outcome.Response));
     }
 
     /// <summary>Verifies a host-owned evidence commit and ordinary response survive later subscriber failure.</summary>
@@ -509,8 +509,8 @@ public sealed partial class DelegateAgentsToolExecutionTests
         var committed = Assert.Single(evidence.Snapshot(fixture.Context.SessionId));
         Assert.Equal("joined child evidence", committed.Content);
         Assert.Equal("delegate_agents test join", committed.Provenance.Source);
-        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
-        Assert.Equal(child.Summary, Assert.Single(checkpoints.History.Last().ChildOutcomes).Response);
+        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History[^1].Phase);
+        Assert.Equal(child.Summary, Assert.Single(checkpoints.History[^1].ChildOutcomes).Response);
     }
 
     /// <summary>Verifies a completed sibling response joins as partial instead of becoming a failed checkpoint.</summary>
@@ -530,9 +530,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         // Assert
         Assert.Equal(DelegateAgentsStatus.Partial, execution.Value.Status);
         Assert.Equal(["Completed", "Failed"], execution.Value.Children.Select(child => child.Status).Order(StringComparer.Ordinal));
-        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
+        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History[^1].Phase);
         Assert.Equal("The assigned area has bounded evidence.", Assert.Single(execution.Value.Children, child => child.Status == "Completed").Summary);
-        Assert.Null(Assert.Single(checkpoints.History.Last().ChildOutcomes, outcome => outcome.Status == AgentRunStatus.Failed).Response);
+        Assert.Null(Assert.Single(checkpoints.History[^1].ChildOutcomes, outcome => outcome.Status == AgentRunStatus.Failed).Response);
     }
 
     /// <summary>Verifies ordinary completion accepts any present response without legacy finding fields.</summary>
@@ -560,8 +560,8 @@ public sealed partial class DelegateAgentsToolExecutionTests
         Assert.Equal(response, child.Summary);
         Assert.Empty(child.Findings);
         Assert.Empty(execution.Value.Disagreements);
-        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History.Last().Phase);
-        var outcome = Assert.Single(checkpoints.History.Last().ChildOutcomes);
+        Assert.Equal(DelegationCheckpointPhase.ResearchJoined, checkpoints.History[^1].Phase);
+        var outcome = Assert.Single(checkpoints.History[^1].ChildOutcomes);
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal(response, outcome.Response);
         Assert.Null(outcome.Findings);
@@ -581,11 +581,11 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         Assert.Equal(DelegateAgentsStatus.Failed, execution.Value.Status);
         Assert.Equal("Failed", Assert.Single(execution.Value.Children).Status);
-        Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History.Last().Phase);
-        var outcome = Assert.Single(checkpoints.History.Last().ChildOutcomes);
+        Assert.Equal(DelegationCheckpointPhase.Failed, checkpoints.History[^1].Phase);
+        var outcome = Assert.Single(checkpoints.History[^1].ChildOutcomes);
         Assert.Equal(AgentRunStatus.Failed, outcome.Status);
         Assert.Null(outcome.Response);
-        Assert.Equal(AgentAssignment.ResponseSchema, Assert.Single(checkpoints.History.Last().Assignments).OutputSchema);
+        Assert.Equal(AgentAssignment.ResponseSchema, Assert.Single(checkpoints.History[^1].Assignments).OutputSchema);
     }
 
     /// <summary>A host or workflow cannot launch children even with a valid model-visible snapshot.</summary>
@@ -737,7 +737,7 @@ public sealed partial class DelegateAgentsToolExecutionTests
         Assert.Empty(execution.Value.Disagreements);
         Assert.All(execution.Value.Children, child => Assert.Equal(
             child.Summary,
-            Assert.Single(checkpoints.History.Last().ChildOutcomes, outcome =>
+            Assert.Single(checkpoints.History[^1].ChildOutcomes, outcome =>
                 outcome.AssignmentId.Value.ToString("D") == child.AssignmentId).Response));
     }
 

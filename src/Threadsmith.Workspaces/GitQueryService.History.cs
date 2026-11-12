@@ -140,7 +140,7 @@ public sealed partial class GitQueryService
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCommits);
             using var timeoutDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(_owner._limits.TimeoutMilliseconds), _owner._timeProvider);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token, timeoutDeadline.Token);
-            using var termination = _process is null ? default : RegisterTermination(_process, timeout.Token);
+            await using var termination = _process is null ? default : RegisterTermination(_process, timeout.Token);
             try
             {
                 var commits = new List<GitCommitSummary>();

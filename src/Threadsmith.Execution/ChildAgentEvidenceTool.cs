@@ -108,7 +108,7 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
         else
         {
             var evidence = _store.Snapshot(_sessionId).SingleOrDefault(item => item.EvidenceId.Value == input.EvidenceId);
-            if (evidence is null || evidence.IsStale)
+            if (evidence?.IsStale != false)
             {
                 throw new InvalidOperationException("The requested evidence is missing or stale.");
             }

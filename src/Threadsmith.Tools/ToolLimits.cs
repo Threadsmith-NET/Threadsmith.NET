@@ -81,10 +81,10 @@ public sealed record ToolLimits
 
     // ── run_process ──────────────────────────────────────────────────────
 
-    /// <summary>Default <c>timeoutSeconds</c> when the model omits it. Historical default: 30.</summary>
+    /// <summary>Host-owned default execution timeout in seconds. Historical default: 30.</summary>
     public int RunProcessDefaultTimeoutSeconds { get; init; } = 30;
 
-    /// <summary>Upper bound for <c>timeoutSeconds</c>. Historical default: 60.</summary>
+    /// <summary>Host-owned execution timeout ceiling in seconds. Historical default: 60.</summary>
     public int RunProcessMaxTimeoutSeconds { get; init; } = 60;
 
     /// <summary>Maximum UTF-8 content bytes accepted by write_file.</summary>

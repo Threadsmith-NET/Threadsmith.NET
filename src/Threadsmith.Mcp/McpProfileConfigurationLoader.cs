@@ -235,7 +235,7 @@ public static class McpProfileConfigurationLoader
 
         var clientId = NormalizeOptional(section["clientId"]);
         var clientSecret = NormalizeOptional(section["clientSecret"]);
-        if (clientSecret is not null && !clientSecret.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase))
+        if (clientSecret?.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase) == false)
         {
             throw new InvalidOperationException(
                 $"MCP OAuth clientSecret in profile '{profile["id"]}' must be a logical secrets: reference.");

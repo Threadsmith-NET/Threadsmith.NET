@@ -593,7 +593,7 @@ public static partial class Milestone5Tests
         Assert.False(renameStage.Conflicts.HasConflicts);
         Assert.Contains("IRenamedService", renameStage.Preview.UnifiedDiff);
 
-        var sourcePath = "Contracts/Services.cs";
+        const string sourcePath = "Contracts/Services.cs";
         var source = await File.ReadAllTextAsync(repository.PathOf(sourcePath));
         var literalOffset = source.IndexOf("\"value\"", StringComparison.Ordinal);
         var replacement = await semanticMutations.ReplaceSyntaxNodeAsync(

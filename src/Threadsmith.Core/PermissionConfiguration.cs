@@ -117,6 +117,16 @@ public sealed record PermissionConfiguration
     /// <summary>Configuration shape for tools:runProcess; metadata owns source admission.</summary>
     public sealed record ToolsRunProcessSettings
     {
+        /// <summary>Gets the machine/user-owned command policy subtree.</summary>
+        [JsonPropertyName("commandPolicy")]
+        [ConfigurationPermission(Shape = PermissionInputShape.Subtree, Sources = PermissionConfigurationSources.Machine | PermissionConfigurationSources.User)]
+        public JsonElement? CommandPolicy { get; init; }
+
+        /// <summary>Gets the trusted launch shell; repository sources cannot select a dialect.</summary>
+        [JsonPropertyName("shellExecutable")]
+        [ConfigurationPermission(Shape = PermissionInputShape.Scalar, Sources = PermissionConfigurationSources.Machine | PermissionConfigurationSources.User, StartupBound = true)]
+        public string? ShellExecutable { get; init; }
+
         /// <summary>Configuration contract for tools:runProcess:requireApproval.</summary>
         [JsonPropertyName("requireApproval")]
         [ConfigurationPermission(Shape = PermissionInputShape.Boolean)]

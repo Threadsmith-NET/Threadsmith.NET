@@ -26,6 +26,7 @@ public static class InteractiveCommandCatalog
         new("/clone", "/clone", "Clone governed context into an independent session"),
         new("/code_explore_inspect", "/code_explore_inspect {on|off}", "Show future code_explore outputs in the tool block for this session"),
         new("/code_explore_output", "/code_explore_output {structured|markdown}", "Set code_explore output format for this session"),
+        new("/command-policy", "/command-policy <shell> [inspect|revoke <id>|reload|reset-session]", "Manage command rules and exact remembered approvals locally"),
         new("/context", "/context [mode|inspect|map|compact]", "Inspect context; map shows actual request usage; compact is retired"),
         new("/extensions", "/extensions", "Browse and toggle loaded extensions"),
         new("/fetch-authorize", "/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
@@ -54,10 +55,8 @@ public static class InteractiveCommandCatalog
     private static readonly FrozenDictionary<string, InteractiveCommandDescriptor> ByName = Entries
         .ToFrozenDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
 
-    private static readonly IReadOnlyList<InteractiveCommandDescriptor> ReadOnlyEntries = Array.AsReadOnly(Entries);
-
     /// <summary>Gets the ordered immutable command descriptors.</summary>
-    public static IReadOnlyList<InteractiveCommandDescriptor> All => ReadOnlyEntries;
+    public static IReadOnlyList<InteractiveCommandDescriptor> All { get; } = Array.AsReadOnly(Entries);
 
     /// <summary>Finds a command by canonical name.</summary>
     /// <param name="name">Slash-command name.</param>

@@ -125,7 +125,7 @@ public sealed class LocalTextEmbeddingGeneratorTests
         }
 
         var assetRoot = Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2");
-        using var vocabulary = File.OpenRead(Path.Combine(assetRoot, "vocab.txt"));
+        await using var vocabulary = File.OpenRead(Path.Combine(assetRoot, "vocab.txt"));
         var tokenizer = MiniLmEmbedderEngine.CreateTokenizer(vocabulary);
         await using var generator = new LocalTextEmbeddingGenerator();
         using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "production-reference-parity.json"), TestContext.Current.CancellationToken));

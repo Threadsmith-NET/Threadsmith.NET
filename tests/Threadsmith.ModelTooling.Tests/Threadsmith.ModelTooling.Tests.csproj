@@ -14,6 +14,8 @@
     <PackageReference Include="xunit.analyzers" />
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Policies\Threadsmith.Policies.csproj" />
+    <ProjectReference Include="..\Threadsmith.CommandMarker\Threadsmith.CommandMarker.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models.OpenAiCompatible\Threadsmith.Models.OpenAiCompatible.csproj" />
@@ -44,6 +46,12 @@
           Link="fixtures\semantic\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="CopyCommandMarkerFixture" AfterTargets="Build">
+    <ItemGroup>
+      <CommandMarkerFixture Include="..\Threadsmith.CommandMarker\bin\$(Configuration)\net10.0\Threadsmith.CommandMarker*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(CommandMarkerFixture)" DestinationFolder="$(OutDir)fixtures\command-marker" SkipUnchangedFiles="true" />
+  </Target>
   <Target Name="CopySemanticFixtureAnalyzer" AfterTargets="Build">
     <ItemGroup>
       <ThreadingFixtureAnalyzer Include="@(Analyzer)" Condition="'%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers' Or '%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers.CSharp'" />

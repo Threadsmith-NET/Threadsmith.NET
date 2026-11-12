@@ -672,7 +672,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 var finalSourceHash = mutation.Type == MutationType.CreateFile
                     ? GetLifecycleContentHash(mutation, source, baselineSourceHash)
                     : null;
-                string? baselineDestinationHash = null;
+                const string? baselineDestinationHash = null;
                 var finalDestinationHash = mutation.Type == MutationType.MoveFile
                     ? GetLifecycleContentHash(mutation, destination ?? source, baselineSourceHash)
                     : null;

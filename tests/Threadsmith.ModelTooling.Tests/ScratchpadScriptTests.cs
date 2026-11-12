@@ -256,9 +256,11 @@ public sealed class ScratchpadScriptTests : IDisposable
     public void ProcessScratchpadDirectoryDoesNotBypassTrustOrApproval()
     {
         var scope = CreateScope();
-        var tool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance);
-        var input = new RunProcessInput { Command = "echo test", WorkingDirectory = scope.ScratchpadPath };
-        var context = CreateContext(scope) with { AllowedExecutables = ["powershell", "bash"] };
+        var shell = OperatingSystem.IsWindows() ? "powershell" : "bash";
+        var tool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance, shellExecutable: shell);
+        var input = new RunProcessInput { Command = "dotnet --version", WorkingDirectory = scope.ScratchpadPath };
+        var policy = ShellCommandPolicyTests.Policy(scope.RepositoryPath, shell) with { ReviewTools = ["run_process"] };
+        var context = CreateContext(scope) with { AllowedExecutables = policy.AllowedExecutables, SecurityPolicy = policy };
         var decision = new DefaultPolicyEngine().Evaluate(tool, input, context);
         Assert.True(decision.IsAllowed, decision.Reason);
         Assert.Equal(ApprovalLevel.User, decision.RequiredApproval);

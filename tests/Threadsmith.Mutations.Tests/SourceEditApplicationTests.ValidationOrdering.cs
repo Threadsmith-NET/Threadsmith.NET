@@ -1,5 +1,6 @@
 namespace Threadsmith.Mutations.Tests;
 
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,6 +8,9 @@ using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Policies.Commands;
+using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Evaluation;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -36,11 +40,28 @@ public sealed partial class SourceEditApplicationTests
         var process = new RecordingValidationProcessManager();
         var provider = new ValidationOrderingProvider(validation, mixedBatch);
         var sanitizer = new SecretOutputSanitizer();
+        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+        var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            Fingerprint = "validation-ordering-fixture",
+            RepositoryPath = fixture.Repository,
+            MaximumTrust = RepositoryTrustLevel.TrustedMutation,
+            ReadFolders = [fixture.Repository],
+            EditableRoots = [fixture.Repository],
+            MutationRoots = [fixture.Repository],
+            AllowedExecutables = [shell, "dotnet"],
+            RequireShellApproval = false,
+            ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:parallel:maximumConcurrency", 4),
+            CommandPolicies = ImmutableDictionary<string, PolicySnapshot>.Empty.Add(shell, PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, platform, shell)),
+        };
         var registry = new ToolRegistry([
             new SourceEditTool(edits, TestPromptLoader.Instance),
             new DotNetBuildTool(new ReceiptValidationService(), TestPromptLoader.Instance),
             new TargetedTestTool(new ReceiptValidationService(), TestPromptLoader.Instance),
-            new RunProcessTool(process, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "bash"),
+            new RunProcessTool(process, TestPromptLoader.Instance, requireApproval: false, shellExecutable: shell),
         ]);
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
@@ -85,7 +106,8 @@ public sealed partial class SourceEditApplicationTests
                 WorkspaceId = fixture.WorkspaceId,
                 TrustLevel = RepositoryTrustLevel.TrustedMutation,
                 RequestedBy = "model",
-                AllowedExecutables = ["dotnet", "bash"],
+                AllowedExecutables = policy.AllowedExecutables,
+                SecurityPolicy = policy,
             }),
             contextAssembler: assembler,
             evidenceStore: evidence,
@@ -103,7 +125,13 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal("class Final { }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
         if (provider.ValidationTool == "run_process")
         {
-            Assert.Contains(validation, Assert.Single(process.Requests).Arguments);
+            var launch = Assert.Single(process.Requests);
+            Assert.True(Path.IsPathFullyQualified(launch.FileName));
+            Assert.Equal(shell, Path.GetFileNameWithoutExtension(launch.FileName));
+            Assert.Equal(fixture.Repository, launch.WorkingDirectory);
+            Assert.Equal(shell == "pwsh" ? "-Command" : "-c", launch.Arguments[^2]);
+            Assert.Contains(shell == "pwsh" ? "dotnet.exe'" : "/dotnet'", launch.Arguments[^1], OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            Assert.EndsWith(validation[validation.IndexOf(' ')..], launch.Arguments[^1], StringComparison.Ordinal);
         }
     }
 
@@ -176,6 +204,8 @@ public sealed partial class SourceEditApplicationTests
                 yield break;
             }
 
+            Assert.Contains(request.Messages, message => message.Role == ModelMessageRole.Tool
+                && message.ToolName == ValidationTool && message.IsError == false);
             yield return new() { Text = "Done.", FinishReason = ModelFinishReason.Stop };
         }
     }

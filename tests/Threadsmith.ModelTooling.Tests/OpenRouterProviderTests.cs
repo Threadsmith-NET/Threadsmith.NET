@@ -28,8 +28,7 @@ public static partial class OpenRouterProviderTests
             ParallelToolCalls = parallelParameterSupported,
             ReasoningControl = ReasoningControllability.AlwaysOn,
             SupportsReasoningReplay = true,
-            Upstream = "fixture-upstream",
-            ExpectedProviderName = "Fixture Provider",
+            Upstreams = [new() { Provider = "fixture-upstream", ExpectedProviderName = "Fixture Provider" }],
         };
         var request = Request() with { AllowMultipleToolCalls = allowMultiple };
         using var handler = new Handler(Completed(ReasoningItem("opaque"), FunctionCall("first"), FunctionCall("second")));
@@ -72,7 +71,7 @@ public static partial class OpenRouterProviderTests
     [Fact]
     public static async Task RepeatedTerminalTrailer_ReleasesOneBatchAfterUsageAndReplay()
     {
-        var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstream = "test", ExpectedProviderName = "test" };
+        var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstreams = [new() { Provider = "test", ExpectedProviderName = "test" }] };
         var terminal = Completed(ReasoningItem("opaque", "thinking"), FunctionCall("original-id"));
         using var handler = new Handler(ReasoningDelta("thinking") + terminal + terminal + Frame("[DONE]"));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
@@ -136,7 +135,7 @@ public static partial class OpenRouterProviderTests
                 chunks.Add(chunk);
             }
         });
-        Assert.DoesNotContain("private", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-key", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
     }
 
@@ -370,7 +369,7 @@ public static partial class OpenRouterProviderTests
     {
         using var handler = new Handler(Terminal("response.completed", "completed", [], Usage(), "other"));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        await Assert.ThrowsAsync<MalformedModelOutputException>(async () => await Provider(client, Model() with { Upstream = "test/region", ExpectedProviderName = "Test" }).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<MalformedModelOutputException>(async () => await Provider(client, Model() with { Upstreams = [new() { Provider = "test/region", ExpectedProviderName = "Test" }] }).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
     }
 
     /// <summary>Repository layers cannot change trusted upstream routing under an inherited model id.</summary>
@@ -381,13 +380,13 @@ public static partial class OpenRouterProviderTests
         Directory.CreateDirectory(root);
         try
         {
-            var model = Model() with { Upstream = "trusted" };
+            var model = Model() with { Upstreams = [new() { Provider = "trusted", ExpectedProviderName = "Trusted" }] };
             var registry = new ModelProviderRegistry([new OpenRouterProviderRegistration()]);
             var user = Path.Combine(root, "user.json");
             var repository = Path.Combine(root, "repository.json");
             File.WriteAllText(user, JsonSerializer.Serialize(new ModelProviderCatalogConfiguration { Providers = [Configuration(model)] }, registry.CreateSerializerOptions()));
             Assert.Single(ModelProviderConfigurationLoader.Load(user, repository, registry).ModelCatalog.Profiles);
-            File.WriteAllText(repository, JsonSerializer.Serialize(new { providers = new[] { new { id = "router", models = new[] { new { id = model.Id.Value, upstream = "untrusted" } } } } }));
+            File.WriteAllText(repository, JsonSerializer.Serialize(new { providers = new[] { new { id = "router", models = new[] { new { id = model.Id.Value, upstreams = new[] { new { provider = "untrusted", expectedProviderName = "Untrusted" } } } } } } }));
             Assert.Throws<InvalidOperationException>(() => ModelProviderConfigurationLoader.Load(user, repository, registry));
         }
         finally
@@ -429,7 +428,7 @@ public static partial class OpenRouterProviderTests
     [Fact]
     public static async Task FragmentedReasoning_PreservesReplayAndDisplay()
     {
-        var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstream = "test", ExpectedProviderName = "test" };
+        var model = Model() with { ReasoningControl = ReasoningControllability.AlwaysOn, SupportsReasoningReplay = true, Upstreams = [new() { Provider = "test", ExpectedProviderName = "test" }] };
         var reasoning = ReasoningItem("opaque-state", "thinking");
         reasoning["signature"] = null;
         reasoning["format"] = string.Empty;
@@ -484,7 +483,7 @@ public static partial class OpenRouterProviderTests
         });
         Assert.Equal(maximumAttempts, handler.Calls);
         Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
-        Assert.DoesNotContain("private", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("test-key", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Reported charges and cache counters survive each rate-limited attempt.</summary>
@@ -524,7 +523,7 @@ public static partial class OpenRouterProviderTests
     private static string Failed(int code, JsonObject? usage = null) => Frame(new JsonObject
     {
         ["type"] = "response.failed",
-        ["response"] = new JsonObject { ["status"] = "failed", ["usage"] = usage, ["error"] = new JsonObject { ["code"] = code, ["message"] = "private" } },
+        ["response"] = new JsonObject { ["status"] = "failed", ["usage"] = usage, ["error"] = new JsonObject { ["code"] = code, ["message"] = "Provider detail for test-key" } },
     }.ToJsonString());
 
     private static string ReasoningDelta(string delta) => Frame(new JsonObject
@@ -614,6 +613,10 @@ public static partial class OpenRouterProviderTests
 
         public int Calls { get; private set; }
 
+        public HttpStatusCode StatusCode { get; init; } = HttpStatusCode.OK;
+
+        public string? RequestId { get; init; }
+
         public string? Body { get; private set; }
 
         public Uri? RequestUri { get; private set; }
@@ -627,7 +630,13 @@ public static partial class OpenRouterProviderTests
             Body = await request.Content!.ReadAsStringAsync(cancellationToken);
             Bodies.Add(Body);
             var body = _responses[Math.Min(Calls - 1, _responses.Length - 1)];
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+            var response = new HttpResponseMessage(StatusCode) { Content = new StringContent(body, Encoding.UTF8, "text/event-stream") };
+            if (RequestId is not null)
+            {
+                response.Headers.Add("x-request-id", RequestId);
+            }
+
+            return response;
         }
     }
 }

@@ -373,7 +373,7 @@ public sealed partial class MultimodalTests
     {
         await using var fixture = await Fixture.CreateAsync();
         var token = TestContext.Current.CancellationToken;
-        using var stream = new MemoryStream(Png);
+        await using var stream = new MemoryStream(Png);
         await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Store.StoreImageAsync(stream, SessionId.New(), "growing-file", maximumBytes: Png.Length - 1, cancellationToken: token));
         Assert.Empty(await fixture.Store.ListAsync(null, token));
     }

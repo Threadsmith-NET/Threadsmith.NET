@@ -183,6 +183,8 @@ internal sealed class ChildAgentModelLoop
             ModelStreamRequest? previousRequest = null;
             for (var round = 0; round < maximumRounds; round++)
             {
+                childToolContext = childToolContext.OperationScope?.RefreshCommandPolicy(childToolContext) ?? childToolContext;
+
                 using var roundPromptScope = _prompts.BeginModelScope(model.ProfileId);
                 toolDefinitions = BindPrompts(model.ProfileId);
                 toolWireEstimate = ModelWireEstimator.EstimateTools(toolDefinitions, ToolTransportMode.Native);
@@ -851,7 +853,7 @@ internal sealed class ChildAgentModelLoop
             Bytes = bytes,
         });
         var evidenceId = EvidenceId.New();
-        var source = result.Sources.FirstOrDefault();
+        var source = result.Sources.Count > 0 ? result.Sources[0] : default;
         await _evidence.AddAsync(
             new Evidence
             {

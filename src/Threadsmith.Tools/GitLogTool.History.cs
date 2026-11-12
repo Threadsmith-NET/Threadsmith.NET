@@ -80,7 +80,7 @@ public sealed partial class GitLogTool
                     throw new InvalidOperationException("The chronological history page is out of sequence.");
                 }
 
-                using var registration = cancellationToken.Register(_lifetime.Cancel);
+                await using var registration = cancellationToken.Register(_lifetime.Cancel);
                 if (_reader is null)
                 {
                     _reader = await _service.OpenHistoryAsync(_repositoryPath, depth, _lifetime.Token);

@@ -200,6 +200,14 @@ public sealed class ContextAssembler : IContextAssembler
         var systemPolicy = scratchpadPrompt is null
             ? stableSystemPolicy
             : stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
+        var skillGuidance = request.ToolSchemas.Any(tool => tool.Id == "invoke_skill")
+            ? _prompts.Get(PromptFileNames.SystemSkillGuidance)
+            : null;
+        if (skillGuidance is not null)
+        {
+            systemPolicy += Environment.NewLine + skillGuidance;
+        }
+
         if (request.IntelligenceEnabled)
         {
             systemPolicy += Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryIntelligenceGuidance);
@@ -230,7 +238,7 @@ public sealed class ContextAssembler : IContextAssembler
                 request.ProhibitedPaths,
                 request.TrustGeneration,
                 cancellationToken);
-        var conversationPromptFileName = PromptFileNames.SystemConversationGuidance;
+        const string conversationPromptFileName = PromptFileNames.SystemConversationGuidance;
         var conversationInstructions = _prompts.Get(conversationPromptFileName);
         var sanitizedTask = request.Task with
         {
@@ -343,7 +351,7 @@ public sealed class ContextAssembler : IContextAssembler
             .ThenByDescending(item => item.Relevance)
             .ThenBy(item => item.CollectedAt)
             .ThenBy(item => item.EvidenceId.Value)];
-        var workloadClass = WorkloadClass.General;
+        const WorkloadClass workloadClass = WorkloadClass.General;
         var tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
         var requiredFixedTokens = fixedTokens - optionalConversationTokens - optionalRecoveryTokens;
         if (requiredFixedTokens > tokenBudget)
@@ -642,6 +650,15 @@ public sealed class ContextAssembler : IContextAssembler
                 PromptFileNames.SystemScratchpad,
                 promptAssets.Count,
                 scratchpadPrompt));
+        }
+
+        if (skillGuidance is not null)
+        {
+            promptAssets.Add(CreateAssetReference(
+                "host:skill-guidance",
+                PromptFileNames.SystemSkillGuidance,
+                promptAssets.Count,
+                skillGuidance));
         }
 
         var instructionAssetOffset = promptAssets.Count;

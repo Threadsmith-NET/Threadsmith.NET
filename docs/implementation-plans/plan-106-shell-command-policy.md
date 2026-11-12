@@ -1,7 +1,8 @@
 # Plan 106 — Shared action policies and shell command control
 
-**Status:** Planned. No implementation is part of this document change.
+**Status:** Implemented on `feature/plan-106-shell-command-policy`; local cleanup, focused validation and final correction review are complete. Full-suite and cross-platform acceptance remain open. See the closeout record below. Windows-only evidence does not complete the OS/shell matrix. Unchecked tasks below are not completion claims.
 **Delivery track:** Maintenance — process authorization hardening.
+**Allocated acceptance IDs:** SC106-01 through SC106-07 in `acceptance-scenarios.md`; manual procedure MTP-SC106 in `manual-test-plan.md`. Allocation is not evidence of completed acceptance.
 **Prerequisites:** Read [planning governance](planning-governance.md), [shared context](00-shared-context.md), and the root `AGENTS.md`. Before C# changes, read the [C# guardrails](../guardrails/portable-csharp-guardrails.md). Use the current tool pipeline, source-aware configuration loader, session policy binding, and settings coordinator.
 
 This revision replaces the earlier proposal in this file. Do not implement its former deny-list mode or repository policy sources.
@@ -27,7 +28,7 @@ Keep policy lists inside the host. Do not publish rules or grants to the model. 
 | Action | One operation identified by a host adapter. |
 | Fact | A typed value supplied by the host about an action. |
 | Matcher | A host-owned test of action facts. |
-| Rule | Matchers, an outcome, an identifier, and optional override references. |
+| Rule | Matchers, an outcome, an identifier, optional override references and optional argument deny expressions. |
 | Grant | A recorded user approval with a defined scope. |
 | Snapshot | An immutable, validated set of effective rules and grants. |
 | Binding | The current session authority identity and generation. |
@@ -131,7 +132,7 @@ Use these cohesive areas inside the new project:
 | `Evaluation` | Rule resolution, enforced constraints, grant checks, and explanations. |
 | `Configuration` | Document schema, source layering, transformations, and update orchestration. |
 | `Grants` | Session ownership, one-use consumption, revocation, and persistent approval records. |
-| `Commands` | Command facts, executable identity, argument coverage, and command matchers. |
+| `Commands` | Command facts, executable identity, optional argument deny expressions and command matchers. |
 
 Keep the generic areas independent of shells, tools, frontends, and model providers. Do not use arbitrary property dictionaries as the public fact contract. Use typed facts with explicit domain identifiers.
 
@@ -153,7 +154,7 @@ The structure contains:
 - `platforms.windows`, `platforms.macos`, and `platforms.linux`.
 - Common rules within each platform.
 - Shell profiles within each platform.
-- Stable rule IDs, matchers, outcomes, and explicit overrides.
+- Stable rule IDs, matchers, outcomes, explicit overrides and optional `denyArgumentsMatching` arrays.
 - A user `alwaysAllow` collection for exact persistent approvals.
 
 Select the actual host platform and the actual launch shell. Do not accept platform or shell identity from model arguments.
@@ -187,24 +188,20 @@ Start with these matchers:
 | Exact value | Match one typed fact against one exact value. |
 | Value set | Match one typed fact against a finite set. |
 | Executable | Match a resolved external executable or a known shell command identity. |
-| Argument prefix | Match complete initial argument tokens. Never match a string prefix. |
-| Argument schema | Define flags, value options, positional arguments, and their permitted counts. |
 | Path | Validate a path against explicit host-resolved roots and path rules. |
 | Glob | Match one fact value. Do not match the complete shell command. |
 | Regex | Match one fact value with explicit case and full-value semantics. |
 | `allOf` / `anyOf` | Combine validated matcher nodes. Reject empty groups. |
 
-Keep command-specific matchers in the command domain. Keep exact values, sets, composition, and bounded text matching reusable.
+Command authorization and optional argument restrictions are policy data. Do not parse command-specific arguments in C# or configuration. Each rule may supply `denyArgumentsMatching`: bounded non-backtracking regex searches on parsed literal argument values joined with single spaces, excluding the command name. Preserve contents and case without further normalization. Any match denies before approvals and outcome overrides; omitted/empty arrays add no argument restriction. Searches are case-sensitive by default with inline `(?i)` support. Shell-dialect analysis and immutable launch-binding safety remain host-owned.
 
 Return Match, NoMatch, or Error. An Error denies the invocation. Do not treat it as NoMatch and select a broader Allow rule.
 
 Reject unknown fact names and incompatible fact types. Validate every branch before evaluation, including unused `anyOf` branches.
 
-Require complete argument coverage for permission-bearing command rules. Combine coverage only within a successful matcher branch. Never combine partial coverage from failed alternatives.
+Allow arguments under ordinary command policy unless an applicable configured deny expression matches. Do not interpret subcommands, option arity, aliases, abbreviations, clusters or `--` boundaries. Document that the joined text does not preserve argument boundaries and can match harmless lookalike text.
 
-Unknown options, extra arguments, and duplicate options fail unless the schema explicitly permits them. Define option-value consumption and the `--` boundary. Do not let a prefix matcher imply unrestricted trailing arguments.
-
-Constrain case rules by fact type and platform. Use shell-specific comparison for cmdlets. Preserve Unix executable path case.
+Constrain command fact case rules by fact type and platform. Preserve Unix executable path case. Argument searches do not infer platform case rules.
 
 Bound rule counts, nesting, argument counts, input length, and pattern evaluation. Prefer non-backtracking regex where supported. Reject unsupported patterns or use a bounded timeout. A timeout denies execution.
 
@@ -219,8 +216,8 @@ Use explicit `overrides` references for exceptions. A narrower rule can replace 
 For each action:
 
 1. Validate the snapshot and action facts.
-2. Find matching ordinary rules.
-3. Apply override relationships between matching rules only.
+2. Find matching ordinary and enforced rules. If any applicable argument deny expression matches, deny without approval.
+3. Apply override relationships between matching ordinary rule outcomes only.
 4. Reject cycles and missing references during document validation.
 5. If no rule remains, deny without prompting.
 6. If remaining rules have different outcomes, deny with a conflict reason.
@@ -247,18 +244,9 @@ The example defines contract intent. Task T02 must finalize and test its seriali
         "powershell": {
           "rules": [
             {
-              "id": "git-status-short",
-              "matchers": [
-                { "type": "executable", "name": "git" },
-                { "type": "argumentPrefix", "values": ["status"] },
-                {
-                  "type": "argumentSchema",
-                  "afterPrefix": true,
-                  "flags": ["--short", "--branch"],
-                  "positionals": { "maximum": 0 },
-                  "allowUnknownOptions": false
-                }
-              ],
+              "id": "git-example",
+              "matchers": [{ "type": "executable", "value": "git" }],
+              "denyArgumentsMatching": ["(^| )--exec-path(=| |$)"],
               "policy": "Allow"
             }
           ],
@@ -270,7 +258,7 @@ The example defines contract intent. Task T02 must finalize and test its seriali
 }
 ```
 
-This example shows matcher composition. It is not the shipped Git default. Section 6.10 defines the shipped permissions. Other platforms and shells need their own effective profiles.
+This expression is illustrative, not an exhaustive Git restriction or the shipped Git default. Section 6.10 defines the shipped permissions. Other platforms and shells need their own effective profiles.
 
 ### 6.7 Shell analysis and execution binding
 
@@ -280,11 +268,11 @@ Analyze each pipeline stage and command in a sequence. Analyze supported substit
 
 Reject unsupported effects. An Allow rule for a read command must not authorize an unrelated file redirection.
 
-Reject dynamic targets, runtime alias/function definitions, evaluation commands, and uninspectable shell expressions. Unknown syntax must not fall through to approval.
+Reject dynamic targets, runtime alias/function definition syntax, and uninspectable shell expressions. Unknown syntax must not fall through to approval. Literal evaluation or dispatch commands require the same explicit name permission as other commands; their downstream behavior is not parsed.
 
 Do not use regex as a shell parser. Evaluate maintained parser options and their release footprint. If a shell lacks reliable support, deny its unsupported syntax.
 
-Use fixed known alias metadata where safe. Cover PowerShell module qualification and invocation operators. Do not ask an executing shell to discover aliases or functions.
+Do not discover or canonicalize aliases. Apply rules to each literal spelling. Support the PowerShell invocation operator for literal names. Module-qualified names remain outside the admitted subset. Do not ask an executing shell to discover commands.
 
 Bind analysis to the actual shell executable, startup arguments, working directory, environment, and original command text. Prevent repository shell selection from choosing a weaker interpretation.
 
@@ -294,9 +282,9 @@ The shared resolver alone does not bind shell execution. `ProcessManager` search
 
 For each external command, the adapter must produce a shell-safe reference to the authorized absolute executable path. Use the parsed command position and the actual shell's quoting and invocation rules. Do not use text replacement or concatenate unescaped paths. Preserve arguments, operators, and supported shell effects. Keep execution in the existing shell and process lifecycle. Do not add a separate direct-process route.
 
-Reject the entire request before launch if the adapter cannot bind every command without changing its analyzed meaning. Never authorize one path and then let a bare command name select another path. Approval cannot waive this check. Changing PATH or checking file existence alone is not sufficient.
+Reject the entire request before launch if an external target cannot be pinned without changing its analyzed meaning. Never authorize one external path and then let a bare name select another path. Approval cannot waive this check. Changing PATH or checking file existence alone is not sufficient.
 
-Preserve external paths and command kind. Do not reduce a path-qualified executable or cmdlet to an ambiguous basename. For supported built-ins, aliases, and cmdlets, bind the analyzed command kind and fixed target. Reject forms that can resolve to another function, alias, module, or external command at execution.
+Preserve external paths and command kind. Do not reduce a path-qualified target to a basename. First use external resolution and pin any result. For a simple literal name absent from that lookup, emit `shell-command` facts with an empty resolved target. Apply the same command policies, approval flow and normalized argument-deny expressions. This permission covers the literal name, not a fixed implementation. Document that shell lookup can select aliases, modules, functions or cwd files. Do not claim shadowing protection for this kind.
 
 Define the binding method for each supported OS/shell pair in T02. Cover working-directory lookup, empty and relative PATH entries, PATH order, PATHEXT, startup behavior, and shell command precedence. Reject state changes that can invalidate the prepared binding. A shell is not supported until its real-shell tests pass.
 
@@ -392,9 +380,9 @@ Ship explicit `Allow` rules for standard Git and .NET CLI operations. Do not lim
 
 Network access alone is not a reason to deny a Git or .NET operation. Do not require `--no-restore` for builds or tests. Permit implicit restore. Do not add blanket denials for Git remote operations or .NET restore, package, tool, or workload operations.
 
-Define the executable identities, argument coverage, and command forms for these rules in T02. A permission-bearing schema can explicitly permit additional arguments. Use that mechanism where a normal CLI workflow needs it. Do not accidentally restrict normal workflows to the example options in section 6.6.
+Define executable identities and selected argument deny expressions in T02. Otherwise allow arguments without subcommand dispatch or option parsing. Do not restrict normal workflows to the example expression in section 6.6.
 
-Review specific escape mechanisms as separate cases. Include Git shell aliases, external subcommands, injected executable options, and arbitrary extension dispatch. Do not assume that a program named `git-something` is Git. Do not assume that an unknown .NET extension is a standard CLI operation. Do not turn these cases into blanket network, installation, or delegation denials. Record proposed exceptions, their triggers, and their workflow impact in T02. Obtain a decision if an exception would block a normal workflow in this baseline.
+Argument expressions are selected text restrictions, not exhaustive recognition of equivalent operations. Git/.NET command authorization includes extension dispatch unless a configured expression matches. Do not rebuild a command grammar to distinguish every permutation. Do not assume a separately invoked program named `git-something` is Git. Document harmless lookalike denials and forms the expressions do not detect.
 
 An `Allow` outcome removes only this command policy's approval requirement. It does not authorize a push, destructive operation, or other action that needs authorization under another host rule.
 
@@ -412,7 +400,7 @@ The following names describe proposed contracts. They are not claims that these 
 |---|---|
 | `PolicyOutcome` | The five configured outcomes. |
 | `ActionFacts` | Typed, immutable, host-provided domain facts. |
-| `PolicyRule` | Stable ID, matcher tree, outcome, override IDs, and source identity. |
+| `PolicyRule` | Stable ID, matcher tree, outcome, override IDs, optional argument deny expressions and source identity. |
 | `PolicySnapshot` | Compiled rules, enforced constraints, revision, and fingerprint. |
 | `PolicyDecision` | Result, matched rules, reason code, and permitted approval scopes. |
 | `PolicyApprovalRequest` / `PolicyApprovalResponse` | Exact request identity, allowed choices, and selected choice. |
@@ -465,7 +453,7 @@ Exit: The integration map has no unresolved execution or update entry point.
 ### T02 — Fix the schema and shell support matrix
 
 - [ ] Define the serialized schema, source rules, and matcher catalog.
-- [ ] Define argument coverage, overrides, source layering, and closed-set constraints.
+- [ ] Define optional argument deny expressions, joined-text semantics, overrides, source layering and closed-set constraints.
 - [ ] Evaluate parser packages, license impact, deployment size, and supported grammar.
 - [ ] Define each OS/shell adapter's executable-binding method and rejection cases from section 6.7. Specify original and prepared launch identities.
 - [ ] Define real-shell shadowing fixtures and the evidence required to declare each OS/shell pair supported.
@@ -481,7 +469,7 @@ Exit: Schema fixtures and the support matrix can produce deterministic expected 
 
 - [ ] Create the new projects and targeted references.
 - [ ] Add immutable contracts, matcher registration, and validation.
-- [ ] Implement bounded matcher composition and complete argument coverage.
+- [ ] Implement bounded matcher composition and argument deny-regex evaluation.
 - [ ] Implement deterministic rule resolution and enforced constraints.
 - [ ] Add unit tests before connecting execution.
 
@@ -552,7 +540,7 @@ Use deterministic tests under G-24. Use barriers and completion signals for conc
 | Outcomes | All five outcomes; unmatched denial; no approval prompt for denied requests. |
 | Choices | Exact menu for each outcome; forged, unknown, and disallowed responses rejected. |
 | Matchers | Each matcher; mixed combinations; `anyOf`; empty groups; unknown types; invalid facts; bounded regex failures. |
-| Arguments | Unknown/duplicate options; attached values; option order; quoting; empty values; `--`; trailing argument rejection; branch coverage. |
+| Arguments | Omitted/empty deny arrays; joined literal values; quoting; empty values; embedded whitespace/newlines; search versus anchors; case and `(?i)`; any-match denial; invalid/unsupported expressions; whole-compound denial. |
 | Resolution | Explicit exceptions; order independence; cycles; missing IDs; conflicts; enforced denial; enforced approval ceilings. |
 | Sources | Machine/user accepted; repository, session, per-repository user, environment, and CLI excluded. |
 | Defaults | Normal Git operations, including clone/fetch/pull/push; normal .NET restore/build/test/run/publish/pack and package/tool/workload operations; implicit restore; no mandatory no-restore flags; empty profiles; missing shells; unmatched actions denied. |
@@ -649,7 +637,7 @@ Do not restore live session grants from resume or clone data. Re-resolve current
 - [ ] Every supported OS/shell pair has real-shell shadowing evidence. Windows `cmd` coverage includes repository-local `git.exe` shadowing of `git status`.
 - [ ] Rules support composable typed matchers and future host-owned matcher additions.
 - [ ] Invalid configuration, matcher errors, and unsupported syntax fail closed.
-- [ ] Permission-bearing rules account for all arguments and supported shell effects.
+- [ ] Argument deny expressions use joined literal values; all supported shell effects remain analyzed before launch.
 - [ ] Explicit overrides are deterministic and independent of configuration order.
 - [ ] Shipped rules allow the normal Git/.NET baseline in section 6.10, including Git network operations and .NET restore and package operations.
 - [ ] Builds and tests can use implicit restore. This feature adds no mandatory no-restore flags or approval prompts to the shipped Allow rules.
@@ -676,7 +664,7 @@ Do not restore live session grants from resume or clone data. Re-resolve current
 | Allowed binaries execute hidden code. | Accept the limit for normal workflows. State the non-sandbox limit. Review specific escape mechanisms. |
 | Policy diagnostics enter model context. | Separate user and model projections. Test every model-visible route. |
 | Pattern overlap creates accidental permission. | Use explicit overrides. Deny unresolved conflicts. |
-| A matcher ignores extra arguments. | Require complete coverage and negative tests. |
+| Regexes miss equivalent forms or reject harmless lookalikes. | Document text-filter scope and test positive and negative matches; do not claim a sandbox. |
 | Configuration saves diverge from active authority. | Use one update service and binding publication. Report partial failure. |
 | Approval state survives too long. | Bind grants to lifecycle and fingerprints. Test revocation. |
 | New abstraction grows into a framework. | Implement only the current domain and small host-owned ports. |
@@ -713,6 +701,22 @@ Resolve these bounded implementation choices in T02:
 
 Do not use these choices to restore a permissive fallback. Stop and report a conflict if an existing contract cannot preserve the fixed decisions.
 
+### Local implementation closeout
+
+The final local correction composes the existing `ContextAssembler` and `EvidenceStore` in the multi-round Always fixture. The fixture still requires two distinct launches, two publications and three model requests. It does not change the pre-existing no-assembler conversation path. Task-owned whitespace and analyzer suggestions were corrected. Program-specific authorization remains JSON policy data. Matcher kinds use a closed enum; platform identifiers use shared constants.
+
+Final local checks:
+
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore`: passed through the native build tool after the final C# edits.
+- `dotnet test --project tests/Threadsmith.Policies.Tests/Threadsmith.Policies.Tests.csproj --configuration Debug --no-build`: 120 passed. The policy library did not change afterward.
+- `dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj --configuration Debug --no-build -- --filter-class '*SecurityPolicyConfigurationTests' '*DependencyDirectionTests'`: 171 passed, 3 skipped (two macOS volume cases and an opt-in live-model case).
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build -- --filter-class '*ShellCommandPolicyTests'`: 12 passed, 1 skipped (zsh unavailable). Shell implementation did not change afterward.
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include <all changed C# files and new project directories>`: passed. This is changed-file coverage, not a clean whole-solution formatting claim.
+- Final scoped compiler feedback: zero errors and warnings. Completed changed-document analyzer feedback had no new findings; two task-owned suggestions were resolved. Suggestions in unrelated portions of existing files remain. This does not establish clean compilation-wide analyzer coverage.
+- Clean-context review of the final fixture, operation-scoped continuation, source admission and publication corrections: no actionable findings. It did not replace runtime tests or the outstanding platform matrix.
+
+The earlier full-solution test command timed out. It was not repeated during closeout. Linux/macOS execution, zsh, the complete platform/shell matrix and full-solution test completion remain acceptance limitations, not passing results. No commit, push or PR was requested or performed.
+
 ### Plan preparation record
 
-This revision is a documentation change only. Source inspection established the integration map. No policy code, configuration, project reference, or approval behavior was changed.
+The original plan-preparation revision changed documentation only. Source inspection established the integration map. Subsequent implementation is tracked by the current status above; the original preparation record does not establish implementation or acceptance completion.

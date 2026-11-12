@@ -98,16 +98,16 @@ internal sealed class ToolRuntimePolicy
         return new ConfiguredTool(ConfiguredTool.Unwrap(tool), definition);
     }
 
-    /// <summary>Applies invocation hints before mandatory ceilings, without changing the registered tool.</summary>
-    internal static ITool ResolveInvocation(ITool tool, object input, ToolInvocationContext context)
+    /// <summary>Applies tool-specific host constraints before mandatory ceilings, without changing the registered tool.</summary>
+    internal static ITool ResolveInvocation(ITool tool, ToolInvocationContext context)
     {
         var implementation = ConfiguredTool.Unwrap(tool);
-        if (implementation is not IInvocationTimeoutTool resolver)
+        if (implementation is not IToolTimeoutPolicy resolver)
         {
             return tool;
         }
 
-        var timeout = resolver.ResolveTimeout(input, context, tool.Definition.Timeout);
+        var timeout = resolver.ResolveTimeout(context, tool.Definition.Timeout);
         if (context.SecurityPolicy is { } policy)
         {
             timeout = policy.ToolTimeouts is { } timeouts ? timeouts.Clamp(tool.Definition.Id, timeout)

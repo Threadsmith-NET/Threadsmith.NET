@@ -18,7 +18,7 @@ public static class OpenAiCompatibleStreamErrorTests
     {
         var prefix = afterText ? "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" : string.Empty;
         var failure = prefix + "data: {\"error\":{\"code\":429},\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n";
-        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
+        const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":3}}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failure, failure, success);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
@@ -76,7 +76,7 @@ public static class OpenAiCompatibleStreamErrorTests
     public static async Task RateLimit_RetriesWithOneBusyNotice(string error, bool exhaust)
     {
         var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
-        var success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
         var handler = new StreamHandler(failed, failed, exhaust ? failed : success);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
@@ -144,7 +144,7 @@ public static class OpenAiCompatibleStreamErrorTests
             ? "data: {\"choices\":[{\"delta\":{\"content\":\"Starting\",\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"inspect\",\"arguments\":\"{}\"}}]}}]}\n\n"
             : string.Empty;
         var handler = new StreamHandler(initial
-            + "data: {\"error\":{\"message\":\"Invalid grammar specification: 'triggers'; private request content\",\"type\":\"BadRequestError\",\"code\":400}}\n\ndata: [DONE]\n\n");
+            + "data: {\"error\":{\"message\":\"Invalid grammar specification: 'triggers'; credential-canary\",\"type\":\"BadRequestError\",\"code\":400}}\n\ndata: [DONE]\n\n");
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = CreateProvider(client);
         var chunks = new List<ModelChunk>();
@@ -159,8 +159,9 @@ public static class OpenAiCompatibleStreamErrorTests
 
         Assert.Equal(1, handler.Calls);
         Assert.Equal(RetryClassification.Permanent, ModelFailureClassifier.Classify(exception));
-        Assert.Contains("error inside the response stream (code 400)", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("private request content", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("error inside the response stream", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Invalid grammar specification", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("credential-canary", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.Usage is not null || chunk.FinishReason is not null);
         Assert.Equal(afterPartialOutput ? "Starting" : string.Empty, string.Concat(chunks.Select(chunk => chunk.Text)));
     }
@@ -183,7 +184,28 @@ public static class OpenAiCompatibleStreamErrorTests
             await CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
                 .ToListAsync(TestContext.Current.CancellationToken));
 
-        Assert.Equal("The model endpoint reported an error inside the response stream. Check the provider server logs for details.", exception.Message);
+        Assert.StartsWith("The model endpoint reported an error inside the response stream.", exception.Message);
+    }
+
+    /// <summary>Code-only errors retain safe envelope correlation while malformed identifiers and messages stay absent.</summary>
+    [Theory]
+    [InlineData("\"req-1\"", "\"generation-1\"", true)]
+    [InlineData("{}", "[]", false)]
+    [InlineData("\"credential-canary\"", "null", false)]
+    public static async Task ErrorEnvelope_CodeOnlyRetainsSafeCorrelation(string requestId, string generationId, bool expected)
+    {
+        var body = "data: {\"request_id\":" + requestId + ",\"id\":" + generationId + ",\"error\":{\"code\":\"invalid_request\",\"message\":123}}\n\n";
+        using var client = new HttpClient(new StreamHandler(body)) { Timeout = Timeout.InfiniteTimeSpan };
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await CreateProvider(client, 1).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+
+        Assert.StartsWith("The model endpoint reported an error inside the response stream.", error.Message, StringComparison.Ordinal);
+        Assert.Contains("Code: invalid_request", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("credential-canary", error.Message, StringComparison.Ordinal);
+        Assert.Equal(expected, error.Message.Contains("Request ID: req-1", StringComparison.Ordinal));
+        Assert.Equal(expected, error.Message.Contains("Generation ID: generation-1", StringComparison.Ordinal));
+        Assert.DoesNotContain("123", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>A null optional error field does not change normal text or usage delivery.</summary>
@@ -200,6 +222,21 @@ public static class OpenAiCompatibleStreamErrorTests
         Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
         Assert.Single(chunks, chunk => chunk.Usage is not null);
+    }
+
+    /// <summary>HTTP rejection messages use the same safe explanatory fields as stream errors.</summary>
+    [Theory]
+    [InlineData(400, false)]
+    [InlineData(503, false)]
+    [InlineData(503, true)]
+    public static async Task HttpFailure_PreservesSafeExplanation(int status, bool chunked)
+    {
+        using var client = new HttpClient(new StreamHandler("{\"error\":{\"code\":\"capacity\",\"message\":\"Capacity detail for credential-canary\"}}") { StatusCode = (HttpStatusCode)status, Chunked = chunked });
+        var error = await Record.ExceptionAsync(() => CreateProvider(client, 1).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken).AsTask());
+        Assert.NotNull(error);
+        Assert.Contains("Capacity detail for [REDACTED]", error.Message, StringComparison.Ordinal);
+        Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + $"HTTP {status} · Code: capacity", error.Message);
+        Assert.DoesNotContain("credential-canary", error.Message, StringComparison.Ordinal);
     }
 
     private static ModelStreamRequest Request()
@@ -229,6 +266,7 @@ public static class OpenAiCompatibleStreamErrorTests
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
         },
+        apiKey: "credential-canary",
         timeProvider: new AdvancingTimeProvider());
     }
 
@@ -243,14 +281,24 @@ public static class OpenAiCompatibleStreamErrorTests
 
         public int Calls { get; private set; }
 
+        public HttpStatusCode StatusCode { get; init; } = HttpStatusCode.OK;
+
+        public bool Chunked { get; init; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            var body = _bodies[Math.Min(Calls - 1, _bodies.Length - 1)];
+            return Task.FromResult(new HttpResponseMessage(StatusCode)
             {
-                Content = new StringContent(_bodies[Math.Min(Calls - 1, _bodies.Length - 1)], Encoding.UTF8, "text/event-stream"),
+                Content = Chunked ? new StreamContent(new NonSeekableBody(Encoding.UTF8.GetBytes(body))) : new StringContent(body, Encoding.UTF8, "text/event-stream"),
             });
         }
+    }
+
+    private sealed class NonSeekableBody(byte[] bytes) : MemoryStream(bytes)
+    {
+        public override bool CanSeek => false;
     }
 }

@@ -246,7 +246,7 @@ public static class AnthropicConversationLoopTests
         Assert.True(steeringIndex > resultIndex && resultIndex >= 0);
         Assert.Equal(ModelMessageRole.User, second.Messages[steeringIndex].Role);
         Assert.False(second.Messages[resultIndex].IsError);
-        Assert.Contains(harness.Observed.OfType<EvidenceAdded>(), item => item.Kind == EvidenceKind.ToolResult.ToString());
+        Assert.Contains(harness.Observed.OfType<EvidenceAdded>(), item => item.Kind == nameof(EvidenceKind.ToolResult));
     }
 
     /// <summary>A corrected ordinary tool call preserves native replay through the final response.</summary>

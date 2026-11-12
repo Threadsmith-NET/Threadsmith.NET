@@ -795,10 +795,9 @@ public sealed partial class Plan91DelegationToolTests
         var sessionId = SessionId.New();
         var runId = RunId.New();
         var registrations = tools.GetRegistrations(sessionId, runId)
-            .Where(registration => visibleToolIds is null
-                || visibleToolIds.Contains(
+            .Where(registration => visibleToolIds?.Contains(
                     registration.Tool.Definition.Id,
-                    StringComparer.OrdinalIgnoreCase))
+                    StringComparer.OrdinalIgnoreCase) != false)
             .ToArray();
         var snapshotId = toolSnapshots.Capture(sessionId, runId, registrations);
         return new ToolExecutionContext(

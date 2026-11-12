@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "common": {
+    "rules": [
+      {
+        "id": "git-standard",
+        "policy": "Allow",
+        "matchers": [
+          { "type": "executable", "value": "git" },
+          { "type": "exact", "fact": "CommandKind", "value": "external" }
+        ],
+        "denyArgumentsMatching": [
+          "(^| )--(?:exec|exec-path|upload-pack|receive-pack|ext-diff|open-files-in-pager)(=| |$)",
+          "(^| )rebase .*-[x]|(^| )rebase -x",
+          "(^| )clone .* -u|(^| )clone -u",
+          "(^| )grep .* -O|(^| )grep -O",
+          "(^| )submodule foreach( |$)|(^| )bisect run( |$)",
+          "ext::",
+          "(?i)(?:alias\\.[^ =]+|core\\.(?:sshCommand|gitProxy|editor|pager|hooksPath|fsmonitor)|diff\\.external|credential\\.(?:[^ =]+\\.)?helper|remote\\.[^ =]+\\.(?:uploadpack|receivepack)|protocol\\.ext\\.allow)="
+        ]
+      },
+      {
+        "id": "dotnet-standard",
+        "policy": "Allow",
+        "matchers": [
+          { "type": "executable", "value": "dotnet" },
+          { "type": "exact", "fact": "CommandKind", "value": "external" }
+        ]
+      },
+      {
+        "id": "deny-http-clients",
+        "policy": "AlwaysDeny",
+        "matchers": [{ "type": "valueSet", "fact": "ExecutableName", "ignoreCase": true, "values": ["curl", "wget", "Invoke-WebRequest", "Invoke-RestMethod", "iwr", "irm"] }]
+      }
+    ]
+  },
+  "platforms": {
+    "windows": {
+      "rules": [{ "id": "deny-system-installation", "policy": "AlwaysDeny", "matchers": [{ "type": "valueSet", "fact": "ExecutableName", "ignoreCase": true, "values": ["dism", "Enable-WindowsOptionalFeature", "Install-WindowsFeature", "Add-WindowsCapability", "winget", "choco", "scoop"] }] }],
+      "shells": { "powershell": {}, "pwsh": {}, "cmd": {}, "bash": {}, "sh": {}, "zsh": {} }
+    },
+    "macos": {
+      "rules": [{ "id": "deny-system-installation", "policy": "AlwaysDeny", "matchers": [{ "type": "valueSet", "fact": "ExecutableName", "values": ["brew", "installer", "softwareupdate"] }] }],
+      "shells": { "pwsh": {}, "bash": {}, "sh": {}, "zsh": {} }
+    },
+    "linux": {
+      "rules": [{ "id": "deny-system-installation", "policy": "AlwaysDeny", "matchers": [{ "type": "valueSet", "fact": "ExecutableName", "values": ["apt", "apt-get", "dnf", "yum", "pacman", "zypper", "apk", "snap"] }] }],
+      "shells": { "pwsh": {}, "bash": {}, "sh": {}, "zsh": {} }
+    }
+  }
+}

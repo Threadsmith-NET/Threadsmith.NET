@@ -138,6 +138,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
         var accessToken = AccessToken;
         var replayedAfterAuthenticationRejection = false;
+        ModelUsage? interruptedUsage = null;
         await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
             (_, token) => ClassifyStreamFailureAsync(SendAttemptAsync(token), cancellationToken),
             _profile.RetryPolicy,
@@ -146,7 +147,20 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             timeout.Token,
             cancellationToken))
         {
-            yield return chunk;
+            if (chunk.Usage is { } usage)
+            {
+                var combined = ModelStreamRetry.CombineUsage(interruptedUsage, usage);
+                if (chunk.IsInterruptedUsage)
+                {
+                    interruptedUsage = combined;
+                }
+
+                yield return chunk with { Usage = combined };
+            }
+            else
+            {
+                yield return chunk;
+            }
         }
 
         async IAsyncEnumerable<ModelChunk> SendAttemptAsync([EnumeratorCancellation] CancellationToken token)
@@ -182,7 +196,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     }
                 }
 
-                throw await CreateFailureAsync(response, token).ConfigureAwait(false);
+                throw await CreateFailureAsync(response, accessToken, token).ConfigureAwait(false);
             }
         }
     }
@@ -594,15 +608,23 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     };
                     yield break;
                 case "response.failed":
+                case "response.incomplete":
                 case "error":
-                    var errorRoot = root.TryGetProperty("response", out var failedResponse) && failedResponse.ValueKind == JsonValueKind.Object ? failedResponse : root;
-                    if (ModelStreamRetry.IsRateLimitError(errorRoot))
                     {
-                        throw new TransientModelException("The Codex Responses stream reported a rate limit (code 429).") { IsRateLimit = true };
-                    }
+                        var errorRoot = root.TryGetProperty("response", out var failedResponse) && failedResponse.ValueKind == JsonValueKind.Object ? failedResponse : root;
+                        if (TryReadFailedUsage(root) is { } failedUsage)
+                        {
+                            yield return new ModelChunk { Usage = failedUsage, IsInterruptedUsage = true };
+                        }
 
-                    var errorDetails = ReadErrorIdentifiers(errorRoot);
-                    throw new ModelProviderException("The Codex Responses stream reported a provider error." + (errorDetails is null ? string.Empty : $" {errorDetails}"));
+                        if (ModelStreamRetry.IsRateLimitError(errorRoot))
+                        {
+                            throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported a rate limit (code 429)."))
+                            { IsRateLimit = true };
+                        }
+
+                        throw new ModelProviderException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported a provider error."));
+                    }
             }
         }
 
@@ -660,6 +682,29 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         return outputs;
     }
 
+    private static ModelUsage? TryReadFailedUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("response", out var response)
+            || response.ValueKind != JsonValueKind.Object
+            || !response.TryGetProperty("usage", out var usage)
+            || usage.ValueKind != JsonValueKind.Object
+            || GetNullableInt64(usage, "input_tokens") is not >= 0
+            || GetNullableInt64(usage, "output_tokens") is not >= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return TryReadUsage(root);
+        }
+        catch (ModelProviderException)
+        {
+            // Failed-attempt accounting is best-effort; the terminal provider error owns classification and reporting.
+            return null;
+        }
+    }
+
     private static ModelUsage? TryReadUsage(JsonElement root)
     {
         if (!root.TryGetProperty("response", out var response)
@@ -697,100 +742,32 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         };
     }
 
-    private static async Task<Exception> CreateFailureAsync(
+    private async Task<Exception> CreateFailureAsync(
         HttpResponseMessage response,
+        string accessToken,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(response);
         var statusCode = response.StatusCode;
+        var details = await ProviderErrorDetails.ReadAsync(response, accessToken, cancellationToken, _timeProvider).ConfigureAwait(false);
 
         // Retry eligibility comes from headers; an optional error body may never finish arriving.
         if (statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
             or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
         {
-            return new TransientModelException($"Codex returned transient HTTP {(int)statusCode}.")
+            return new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"Codex returned transient HTTP {(int)statusCode}."))
             {
                 IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
                 RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow),
             };
         }
 
-        var details = await ReadErrorDetailsAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        var suffix = details is null ? string.Empty : $" {details}";
         return statusCode switch
         {
             HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden =>
-                new ModelProviderException($"Codex authentication is missing, expired, or unauthorized.{suffix}"),
-            _ => new ModelProviderException($"Codex rejected the request with HTTP {(int)statusCode}.{suffix}"),
+                new ModelProviderException(ProviderErrorDetails.PreferMessage(details, $"Codex authentication is missing, expired, or unauthorized. HTTP {(int)statusCode}.")),
+            _ => new ModelProviderException(ProviderErrorDetails.PreferMessage(details, $"Codex rejected the request with HTTP {(int)statusCode}.")),
         };
-    }
-
-    private static async Task<string?> ReadErrorDetailsAsync(
-        HttpContent content,
-        CancellationToken cancellationToken)
-    {
-        const int maximumCharacters = 4096;
-        try
-        {
-            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            using StreamReader reader = new(stream, Encoding.UTF8);
-            var body = new StringBuilder(maximumCharacters);
-            var buffer = new char[1024];
-            while (body.Length <= maximumCharacters)
-            {
-                var remaining = maximumCharacters + 1 - body.Length;
-                var count = await reader.ReadAsync(
-                    buffer.AsMemory(0, Math.Min(buffer.Length, remaining)),
-                    cancellationToken).ConfigureAwait(false);
-                if (count is 0)
-                {
-                    break;
-                }
-
-                body.Append(buffer, 0, count);
-            }
-
-            if (body.Length is 0 or > maximumCharacters)
-            {
-                return null;
-            }
-
-            using var document = JsonDocument.Parse(body.ToString());
-            return ReadErrorIdentifiers(document.RootElement);
-        }
-        catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static string? ReadErrorIdentifiers(JsonElement root)
-    {
-        if (root.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        var error = root.TryGetProperty("error", out var nestedError)
-            && nestedError.ValueKind == JsonValueKind.Object
-            ? nestedError
-            : root;
-        var code = GetString(error, "code");
-        var parameter = GetString(error, "param");
-        var parts = new[]
-        {
-            IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
-            IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
-        }.Where(part => !string.IsNullOrWhiteSpace(part));
-        var details = string.Join(' ', parts);
-        return details.Length == 0 ? null : details;
-    }
-
-    private static bool IsSafeErrorIdentifier(string? value, int maximumLength)
-    {
-        return value is { Length: > 0 } && value.Length <= maximumLength
-            && value.All(character => char.IsAsciiLetterOrDigit(character)
-                || character is '_' or '-' or '.');
     }
 
     private static string ToProviderReasoning(ReasoningLevel level)
@@ -811,9 +788,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
     private static long? GetNullableInt64(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out var value) && value.TryGetInt64(out var result)
-            ? result
-            : null;
+        return element.ValueKind == JsonValueKind.Object
+            && element.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.Number
+            && value.TryGetInt64(out var result)
+                ? result : null;
     }
 
     private sealed record PendingCodexToolCall(string? Name, string? Arguments);

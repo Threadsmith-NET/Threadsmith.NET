@@ -133,7 +133,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-find_symbol-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_symbol-Description.md` | Advertised description for `find_symbol`. | None |
 | `Tool-find_references-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_references-Description.md` | Advertised description for `find_references`. | None |
 | `Tool-find_implementations-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_implementations-Description.md` | Advertised description for `find_implementations`. | None |
-| `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Process execution guidance, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | `ShellLanguage` |
+| `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, literal pipelines and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | `ShellLanguage` |
 | `Tool-datetime-Description.md` | `Threadsmith.Tools` | `prompts/Tool-datetime-Description.md` | Advertised description for `datetime`. | None |
 | `Tool-ask_user-Description.md` | `Threadsmith.Tools` | `prompts/Tool-ask_user-Description.md` | Parent-only blocking clarification guidance. | None |
 | `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand file API reference for `csharp_script`. | `CSharpScriptingReferencePath` |

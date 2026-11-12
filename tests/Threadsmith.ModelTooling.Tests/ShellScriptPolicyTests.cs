@@ -86,6 +86,45 @@ public static class ShellScriptPolicyTests
         }
     }
 
+    /// <summary>Output redirection survives binding both direct scripts and interpreter file operands.</summary>
+    [Theory]
+    [InlineData("powershell", "powershell")]
+    [InlineData("pwsh", "pwsh")]
+    [InlineData("bash", "bash")]
+    [InlineData("sh", "sh")]
+    [InlineData("zsh", "zsh")]
+    [InlineData("cmd", "pwsh")]
+    public static async Task ScriptOutputRedirectionPreservesItsPosition(string shell, string interpreter)
+    {
+        await using var fixture = new ScriptFixture(shell, interpreter);
+        var policy = fixture.Policy();
+        var destination = Path.Combine(fixture.Root, "script-output.log");
+        var redirect = " > " + fixture.Quote(destination);
+        var commands = new[]
+        {
+            fixture.Direct(fixture.ScriptPath) + " first" + redirect,
+            fixture.Wrapper(fixture.ScriptPath) + " second" + redirect,
+            fixture.Interpreter + redirect + (fixture.IsPowerShell ? " -File " : " -- ") + fixture.Quote(fixture.ScriptPath) + " third",
+        };
+        var cancellationToken = TestContext.Current.CancellationToken;
+        foreach (var command in commands)
+        {
+            var prepared = fixture.Prepare(command, policy);
+            var script = Assert.Single(prepared.Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
+
+            var result = await fixture.InvokeAsync(command, policy, cancellationToken: cancellationToken);
+
+            Assert.True(result.Succeeded, result.Error);
+            var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
+            Assert.NotNull(output);
+            Assert.Equal(0, output.ExitCode);
+            Assert.True(string.IsNullOrWhiteSpace(output.StandardOutput));
+            var lines = await File.ReadAllLinesAsync(destination, cancellationToken);
+            Assert.Equal("authorized", lines[0]);
+            Assert.Equal(script.Arguments, lines.Skip(1));
+        }
+    }
+
     /// <summary>File-mode invocation retains PowerShell script parameter and switch binding.</summary>
     [Theory]
     [InlineData("powershell")]
@@ -186,13 +225,13 @@ public static class ShellScriptPolicyTests
         AssertDenied(result, fixture, 0);
     }
 
-    /// <summary>Both captured and effective ceilings restrict both admitted actions.</summary>
+    /// <summary>Script and inner interpreter names need policy rules but no duplicate executable entries.</summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public static async Task BothOuterCeilingsIndependentlyRestrictScriptAndInterpreter(bool securityCeiling, bool removeInterpreter)
+    public static async Task ScriptAndInterpreterUsePolicyWithoutDuplicateExecutableEntries(bool securityCeiling, bool removeInterpreter)
     {
         // Different outer/inner engines ensure interpreter denial is not merely outer-shell denial.
         var shell = OperatingSystem.IsWindows() ? "powershell" : "bash";
@@ -206,11 +245,18 @@ public static class ShellScriptPolicyTests
             AllowedExecutables = securityCeiling ? policy.AllowedExecutables : names,
             SecurityPolicy = securityCeiling ? policy with { AllowedExecutables = names } : policy,
         };
-        using var handler = fixture.Coordinator.Attach((_, _) => throw new InvalidOperationException("Ceiling denial must not prompt."));
+        var prompts = 0;
+        using var handler = fixture.Coordinator.Attach((request, _) =>
+        {
+            prompts++;
+            return Task.FromResult(new PolicyApprovalResponse(request.RequestId, PolicyApprovalChoice.Once));
+        });
 
         var result = await fixture.InvokeAsync(fixture.Wrapper(fixture.ScriptPath), policy, context: context, cancellationToken: TestContext.Current.CancellationToken);
 
-        AssertDenied(result, fixture, 0);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal(1, prompts);
+        Assert.Equal(1, fixture.Manager.Launches);
     }
 
     /// <summary>Denied stages prevent every process in a compound from starting.</summary>

@@ -19,7 +19,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 3. Add machine-enforced denial and closed-set constraints. User replacement, disabling and remembered approval must not relax them.
 4. On an authorized command, omit or empty `denyArgumentsMatching` and verify no additional argument restriction. Add expressions and verify any match denies without approval, including on an outcome-overridden rule. Check literal argument values joined with single spaces excluding the command name, regex search, explicit anchors, default case sensitivity, inline `(?i)`, preserved whitespace within values and invalid-pattern rejection.
 
-5. Assign the same outcomes and argument-deny expressions to non-file shell commands, such as PowerShell `Write-Output`, CMD `echo` and POSIX `pwd`. Keep the outer command-name ceiling active. Verify quoted argument normalization, PowerShell named parameters, quoted parameter-looking values, and case-insensitive PowerShell names on every OS. Unmatched aliases remain denied; resolved-file path matchers do not match a shell-command action.
+5. Assign the same outcomes and argument-deny expressions to non-file shell commands, such as PowerShell `Write-Output`, CMD `echo` and POSIX `pwd`. Keep the outer shell ceiling active; command rules alone admit names inside it. Verify quoted argument normalization, PowerShell named parameters, quoted parameter-looking values, and case-insensitive PowerShell names on every OS. Unmatched aliases remain denied; resolved-file path matchers do not match a shell-command action.
 
 **Verifies:** Shared command policies for external and shell commands, optional argument deny expressions, deterministic precedence and scope restrictions.
 

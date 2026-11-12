@@ -204,7 +204,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.Equal(shell, Path.GetFileNameWithoutExtension(process.FileName));
             Assert.Equal(shell == "pwsh" ? "-Command" : "-c", process.Arguments[^2]);
             Assert.Contains(shell == "pwsh" ? "dotnet.exe'" : "/dotnet'", process.Arguments[^1], OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-            Assert.EndsWith(" 'test'", process.Arguments[^1], StringComparison.Ordinal);
+            Assert.EndsWith(" test", process.Arguments[^1], StringComparison.Ordinal);
             var requests = provider.Requests.ToArray();
             Assert.Equal(3, requests.Length);
             Assert.Equal(0, usage.GetOwnerSnapshot(sessionId).InputTokens);

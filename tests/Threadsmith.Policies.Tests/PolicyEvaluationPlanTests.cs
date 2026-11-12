@@ -105,7 +105,7 @@ public static class PolicyEvaluationPlanTests
         Assert.Equal(kind == "external" ? 2 : 1, candidates.Count());
         Assert.Same(plan, getPlan.Invoke(null, [snapshot]));
 
-        // Wrapping every rule in AllOf deliberately forces the conservative full-scan fallback.
+        // A singleton AnyOf preserves semantics but deliberately forces full-scan fallback.
         var unindexed = snapshot with { Rules = [.. snapshot.Rules.Select(Wrap)], Enforced = [.. snapshot.Enforced.Select(Wrap)] };
         var indexedDecision = PolicyEvaluator.Evaluate(snapshot, facts);
         var scannedDecision = PolicyEvaluator.Evaluate(unindexed, facts);
@@ -117,7 +117,133 @@ public static class PolicyEvaluationPlanTests
         Assert.Equal(PolicyReasons.AnalysisError, PolicyEvaluator.Evaluate(snapshot, facts with { WorkingDirectory = "relative" }).ReasonCode);
     }
 
-    private static PolicyRule Wrap(PolicyRule rule) => rule with { Matchers = [new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = rule.Matchers }] };
+    [Fact]
+    public static void CompositeSourceLimitsSelectConstantCandidatesAcross64Actions()
+    {
+        // Arrange: each source has 4096 rules, with mandatory executable constraints late in AllOf.
+        var platform = OperatingSystem.IsWindows() ? "windows" : "linux";
+        var ordinary = Enumerable.Range(0, 4096).Select(index => CompositeRule("ordinary-" + index, "command-" + index)).ToImmutableArray();
+        var enforced = Enumerable.Range(0, 4096).Select(index => CompositeRule("enforced-" + index, "command-" + index) with { Policy = PolicyOutcome.ApprovalRequired }).ToImmutableArray();
+        var snapshot = PolicyCompiler.Compile(
+            ShippedCommandPolicy.CreateDefaults(),
+            new PolicyDocument { Common = new PolicyProfile { Enforced = enforced } },
+            new PolicyDocument { Common = new PolicyProfile { Rules = ordinary } },
+            platform,
+            "bash");
+        snapshot = snapshot with { Rules = ordinary };
+        var unindexed = snapshot with { Rules = [.. ordinary.Select(Wrap)], Enforced = [.. enforced.Select(Wrap)] };
+
+        // Act / Assert: candidate work stays proportional to applicable rules, not the source size.
+        for (var action = 0; action < 64; action++)
+        {
+            var facts = Facts("command-" + action) with { Platform = platform };
+            Assert.Single(Candidates(snapshot, facts, "Ordinary"));
+            Assert.Single(Candidates(snapshot, facts, "Enforced"));
+            Assert.Equal(4096, Candidates(unindexed, facts, "Ordinary").Count());
+            AssertEquivalent(PolicyEvaluator.Evaluate(unindexed, facts), PolicyEvaluator.Evaluate(snapshot, facts));
+        }
+
+        // Warm both plans before measuring allocation; no wall-clock or runner-speed assertion.
+        var unmatched = Facts("absent") with { Platform = platform };
+        var small = snapshot with { Rules = [ordinary[0]], Enforced = [enforced[0]] };
+        _ = MeasureCandidates(small, unmatched);
+        _ = MeasureCandidates(snapshot, unmatched);
+        Assert.True(MeasureCandidates(snapshot, unmatched) <= MeasureCandidates(small, unmatched) + 65536);
+    }
+
+    [Fact]
+    public static void AnyOfRemainsFallbackUnlessItsSiblingRequiresAnExecutable()
+    {
+        var basis = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
+        var alternative = new PolicyMatcher
+        {
+            Type = PolicyMatcherType.AnyOf,
+            Matchers = [Rule("unused", "other").Matchers[0], new PolicyMatcher { Type = PolicyMatcherType.Exact, Fact = PolicyFact.Shell, Value = "bash" }],
+        };
+        var ambiguous = Rule("ambiguous", "unused") with { Matchers = [alternative] };
+        var mandatory = Rule("mandatory", "other") with { Matchers = [alternative, Rule("unused", "other").Matchers[0]] };
+        var snapshot = basis with { Rules = [ambiguous, mandatory] };
+        var facts = Facts("git");
+
+        var candidates = Candidates(snapshot, facts, "Ordinary").ToArray();
+
+        Assert.Equal(["ambiguous"], candidates.Select(rule => rule.Id));
+        AssertEquivalent(PolicyEvaluator.Evaluate(snapshot with { Rules = [.. snapshot.Rules.Select(Wrap)] }, facts), PolicyEvaluator.Evaluate(snapshot, facts));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void UnrelatedExecutableCannotHideInvalidSibling(bool enforced)
+    {
+        var basis = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
+        var invalid = Rule("invalid", "other") with
+        {
+            Matchers = [new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = [Rule("unused", "other").Matchers[0], new PolicyMatcher { Type = (PolicyMatcherType)int.MaxValue }] }],
+        };
+        var snapshot = enforced ? basis with { Enforced = [invalid] } : basis with { Rules = [invalid] };
+
+        var decision = PolicyEvaluator.Evaluate(snapshot, Facts("git"));
+
+        Assert.Equal(PolicyReasons.AnalysisError, decision.ReasonCode);
+        Assert.False(decision.IsAllowed);
+    }
+
+    private static PolicyRule CompositeRule(string id, string executable) => Rule(id, executable) with
+    {
+        Matchers =
+        [
+            new PolicyMatcher
+            {
+                Type = PolicyMatcherType.AllOf,
+                Matchers =
+                [
+                    new PolicyMatcher { Type = PolicyMatcherType.Regex, Fact = PolicyFact.Platform, Value = "windows|linux" },
+                    new PolicyMatcher { Type = PolicyMatcherType.Glob, Fact = PolicyFact.CommandKind, Value = "ext*" },
+                    new PolicyMatcher { Type = PolicyMatcherType.Path, Fact = PolicyFact.WorkingDirectory, Values = [Path.GetPathRoot(Path.GetFullPath("."))!] },
+                    new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = Rule("unused", executable).Matchers },
+                ],
+            },
+        ],
+    };
+
+    private static IEnumerable<PolicyRule> Candidates(PolicySnapshot snapshot, CommandFacts facts, string partition)
+    {
+        var type = typeof(PolicyEvaluator).Assembly.GetType("Threadsmith.Policies.Evaluation.PolicyEvaluationPlan")!;
+        var plan = type.GetMethod("For", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [snapshot]);
+        return (IEnumerable<PolicyRule>)type.GetMethod(partition, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(plan, [facts])!;
+    }
+
+    private static long MeasureCandidates(PolicySnapshot snapshot, CommandFacts facts)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var action = 0; action < 64; action++)
+        {
+            _ = PolicyEvaluator.Evaluate(snapshot, facts);
+        }
+
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static void AssertEquivalent(PolicyDecision expected, PolicyDecision actual)
+    {
+        Assert.Equal(expected.Outcome, actual.Outcome);
+        Assert.Equal(expected.ReasonCode, actual.ReasonCode);
+        Assert.Equal(expected.RuleIds, actual.RuleIds);
+        Assert.Equal(expected.RuleFingerprint, actual.RuleFingerprint);
+    }
+
+    private static PolicyRule Wrap(PolicyRule rule) => rule with
+    {
+        Matchers =
+        [
+            new PolicyMatcher
+            {
+                Type = PolicyMatcherType.AnyOf,
+                Matchers = [new PolicyMatcher { Type = PolicyMatcherType.AllOf, Matchers = rule.Matchers }],
+            },
+        ],
+    };
 
     private static PolicyRule Rule(string id, string executable) => new() { Id = id, Policy = PolicyOutcome.Allow, Matchers = [new PolicyMatcher { Type = PolicyMatcherType.Executable, Value = executable }] };
 

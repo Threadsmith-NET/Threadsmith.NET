@@ -26,7 +26,7 @@ Native validation's explicit `limits.validation.timeoutMilliseconds` remains an 
 
 | Key | Class and default | Production consumer |
 | --- | --- | --- |
-| `tools:allowedExecutables` | Narrow; OS shell (`powershell`/`bash`), `dotnet`, `git`; exact bare names, including `.ps1`/`.sh` filenames with spaces; no paths, patterns, or controls | `DefaultPolicyEngine`, process invocation |
+| `tools:allowedExecutables` | Narrow; OS shell (`powershell`/`bash`), `dotnet`, `git`; exact bare names, no paths, patterns, or controls. For `run_process`, admits the outer shell only; contained commands and scripts use command policy. Other tools retain their executable checks. | `DefaultPolicyEngine`, process invocation |
 | `tools:runProcess:shellExecutable` | Ordinary selector; platform shell; cannot grant an executable | `RunProcessTool`, existing supported-shell validation |
 | `tools:runProcess:requireApproval` | Legacy compatibility input; does not authorize commands or force review over an explicit command Allow | Command outcomes replace this coarse switch; independent `tools:requireApproval` remains mandatory |
 | `tools:runProcess:commandPolicy` | Machine/user only; unmatched command denial; no repository, session, environment or CLI authority | Shared policy library, existing tool pipeline and process manager; [reference](command-policy.md) |

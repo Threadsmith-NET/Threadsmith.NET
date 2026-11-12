@@ -131,7 +131,7 @@ public sealed partial class SourceEditApplicationTests
             Assert.Equal(fixture.Repository, launch.WorkingDirectory);
             Assert.Equal(shell == "pwsh" ? "-Command" : "-c", launch.Arguments[^2]);
             Assert.Contains(shell == "pwsh" ? "dotnet.exe'" : "/dotnet'", launch.Arguments[^1], OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-            Assert.Contains($"'{validation.Split(' ')[1]}' 'Example.csproj'", launch.Arguments[^1], StringComparison.Ordinal);
+            Assert.EndsWith(validation[validation.IndexOf(' ')..], launch.Arguments[^1], StringComparison.Ordinal);
         }
     }
 

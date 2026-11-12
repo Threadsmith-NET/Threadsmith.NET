@@ -252,8 +252,11 @@ Merge rule objects by ID using the existing policy semantics.
 Use `PolicyJson`, `PolicyCompiler`, and `PolicyEvaluator` for checks.
 
 Check every prepared action, including interpreter and script actions.
-Check the outer shell, interpreter, executable, script, and literal cmdlet/alias names.
-Distinguish missing outer-list entries from command-rule failures.
+Check the outer shell against the executable list.
+Check interpreters, executables, scripts, and literal cmdlet/alias names through command policy.
+Do not require duplicate executable-list entries for commands inside the shell.
+Offer command-name groups such as `Select-*`.
+Include literal pipelines, comma arrays, and redirection in command examples.
 Show machine-enforced restrictions and unresolved policy conflicts on the user surface.
 Do not generate saved `alwaysAllow` entries.
 

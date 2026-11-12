@@ -4,7 +4,7 @@
 
 ## Migration / unreleased behavior change
 
-Shell admission is no longer an executable-list fallback. Existing `tools.allowedExecutables` settings remain an outer ceiling, not permission for arbitrary commands inside an admitted shell. Replace obsolete command-policy lists with explicit machine/user rules. Do not copy policy into repository or session configuration. No automatic configuration migration runs. An explicit Allow removes only command-policy approval, not other host authorization or mandatory tool review. Back up trusted configuration before changing it, then reload or reopen the repository.
+Shell admission is no longer an executable-list fallback. For `run_process`, `tools.allowedExecutables` admits the selected outer shell. Command policy alone controls the commands inside it. Other tools retain their executable-list checks. Replace obsolete command-policy lists with explicit machine/user rules. Do not copy policy into repository or session configuration. No automatic configuration migration runs. An explicit Allow removes only command-policy approval, not other host authorization or mandatory tool review. Back up trusted configuration before changing it, then reload or reopen the repository.
 
 ## Configuration and ownership
 
@@ -46,7 +46,7 @@ These examples are configuration data to edit manually, not commands to run. Mer
 
 `CommonApplicationData` is the .NET platform folder used by the host. An isolated user profile changes these locations; see the [user guide](../user-guide.md#effective-configuration-preflight) for profile isolation. Command policy does not belong in the checkout's `.threadsmith/config.json` or the per-repository `permissions.json` file.
 
-The outer `tools.allowedExecutables` array must include **both the shell and each admitted executable or literal cmdlet/alias name**. Higher-precedence ordinary arrays replace lower arrays; extend your existing list deliberately. Adding a name here does not itself allow a command. Tool enablement, repository trust, mandatory tool approval, and enforced restrictions still apply.
+For `run_process`, the outer `tools.allowedExecutables` array must include **the selected shell only**. Executables, scripts, cmdlets, and aliases inside the command use command policy; they need no duplicate entries in this array. Higher-precedence ordinary arrays replace lower arrays; extend your existing list deliberately. Adding a name here does not itself allow a command. Tool enablement, repository trust, mandatory tool approval, and enforced restrictions still apply.
 
 ### User example: allow inspection, review changes, deny selected operations
 
@@ -56,8 +56,7 @@ Merge this into user `config.json`. It selects PowerShell 7 (`pwsh`) and a host-
 {
   "tools": {
     "allowedExecutables": [
-      "pwsh", "git", "dotnet", "Get-Process", "Get-ChildItem", "gci",
-      "New-Item", "Remove-Item", "Set-Location"
+      "pwsh", "git", "dotnet"
     ],
     "runProcess": {
       "shellExecutable": "pwsh",
@@ -133,8 +132,8 @@ Expected command-policy decisions, before independent host gates:
 | `Remove-Item -LiteralPath .inbox/policy-demo.txt` | Fresh Once/deny approval every time; session and permanent grants are not offered. |
 | `Remove-Item -Recurse .inbox/policy-demo` | Denied by the argument expression even if deletion would otherwise be approvable. |
 | `Set-Location src` | Explicitly denied without prompting. |
-| `Get-Service` | Denied: neither the outer list nor the example's ordinary rules permit it. |
-| `Get-Process \| Get-ChildItem` | Denied by preparation: unresolved shell commands cannot participate in compounds. |
+| `Get-Service` | Denied: the example's ordinary rules do not permit it. |
+| `Get-Process \| Get-ChildItem` | Passes command policy when both commands are allowed. PowerShell handles the pipeline and parameter binding. |
 | `git status; dotnet --version` | An external-only compound can be admitted, with combined exact approval. Every action must pass before either starts. |
 
 The examples assume the named cmdlets/aliases are unresolved external names. If PATH contains a native executable of the same name, native binding takes precedence and the `shell-command` inspection rule does not authorize it. A permitted but nonexistent alias fails in the shell; permission does not create an alias.
@@ -238,7 +237,7 @@ As an alternative machine command-policy subtree, use:
 }
 ```
 
-Place this object at machine `tools.runProcess.commandPolicy`, replacing the previous machine command-policy example. With the user example retained, `dotnet --version` and `Get-Process` have both ordinary permission and machine membership. `git status` and `Get-ChildItem` are denied for lacking membership. An enforced `Allow` is membership only: a name still needs ordinary permission and admission through the outer executable ceiling. This closed set also prevents user rules from expanding the admitted name set.
+Place this object at machine `tools.runProcess.commandPolicy`, replacing the previous machine command-policy example. With the user example retained, `dotnet --version` and `Get-Process` have both ordinary permission and machine membership. `git status` and `Get-ChildItem` are denied for lacking membership. An enforced `Allow` is membership only: each command still needs ordinary permission, and the outer shell needs executable-list permission. This closed set also prevents user rules from expanding the admitted name set.
 
 ### Limit a cmdlet rule by working directory
 
@@ -288,9 +287,9 @@ For CMD, this standalone user command-policy subtree allows the literal `dir` bu
 }
 ```
 
-Set `tools.runProcess.shellExecutable` to `cmd` and include `cmd` and `dir` in `tools.allowedExecutables`. `dir src` is eligible as a single action; `dir src & dir tests` is rejected as a compound containing unresolved shell commands. Redirection remains unsupported.
+Set `tools.runProcess.shellExecutable` to `cmd` and include `cmd` in `tools.allowedExecutables`. The rule covers `dir src`, `dir src & dir tests`, and `dir src > listing.txt`. Each command in a sequence must pass policy before any command or redirection starts.
 
-For Bash/sh/zsh, use the actual `linux` or `macos` platform and matching shell key. Include the shell and each external executable or literal builtin spelling in the outer list. These JSON profiles do not establish that a shell is installed or that a dialect has been validated on your platform. The same literal-name, no-expansion, single-shell-command, and default-deny limits apply.
+For Bash/sh/zsh, use the actual `linux` or `macos` platform and matching shell key. Include the selected shell in the outer list. Use command rules for external executables and literal builtin names. These JSON profiles do not establish that a shell is installed or that a dialect has been validated on your platform. The same literal-name and default-deny rules apply. Each supported pipeline or sequence is checked before launch.
 
 ### PowerShell and shell script files
 
@@ -304,9 +303,9 @@ bash -- ./eng/check.sh
 
 Use the selected outer shell's literal quoting rules; PowerShell needs `&` before a quoted direct script path. Relative script paths resolve against the admitted working directory, not PATH. Files must exist. Direct `.ps1` calls use the selected PowerShell engine, or `pwsh` when the outer shell is not PowerShell. Direct `.sh` calls use the selected Bash/sh/zsh engine, or `bash` otherwise. The script need not have executable permission; its interpreter reads it. Explicit interpreter calls select that engine instead of a shebang.
 
-Each call has **two independently authorized actions**: the absolute interpreter with its normalized complete argv, and the absolute script with `CommandKind: script`. The script's `ExecutableName` includes its extension, and its `Arguments` contain only the literal script arguments. The outer shell, interpreter name, and script filename must all appear in `tools.allowedExecutables`. Both actions need matching ordinary command rules. No interpreter or script is automatically allowed. Either action can use any normal outcome; the strictest applicable approval scope produces one prompt, and denial prevents the entire request from launching.
+Each call has **two independently authorized actions**: the absolute interpreter with its normalized complete argv, and the absolute script with `CommandKind: script`. The script's `ExecutableName` includes its extension, and its `Arguments` contain only the literal script arguments. Only the outer shell needs an entry in `tools.allowedExecutables`. The interpreter and script use command rules. Both actions need matching ordinary command rules. No interpreter or script is automatically allowed. Either action can use any normal outcome; the strictest applicable approval scope produces one prompt, and denial prevents the entire request from launching.
 
-For example, merge these rules into trusted user `tools.runProcess.commandPolicy.common.rules`, and add `pwsh` and `Test-SourceDocumentation.ps1` to the existing outer executable list:
+For example, merge these rules into trusted user `tools.runProcess.commandPolicy.common.rules`, and keep `pwsh` in the existing outer executable list:
 
 ```json
 [
@@ -326,7 +325,7 @@ For example, merge these rules into trusted user `tools.runProcess.commandPolicy
 ]
 ```
 
-Replace the absolute example path with your checkout. Choose `Allow`, `AlwaysDeny`, or another approval outcome deliberately. Bash/sh/zsh scripts use the same rule shape with their interpreter and `.sh` filename. An `executable` matcher can select either the complete script path or its filename. A filename rule applies to that name at **any explicitly supplied path**; use full paths, or a `ResolvedExecutable` path matcher combined with an `ExecutableName` glob such as `*.ps1`, to restrict a directory. List each admitted script filename in the outer executable ceiling. An explicitly absolute interpreter operand needs a rule matching its full path, as for other `explicit-external` commands.
+Replace the absolute example path with your checkout. Choose `Allow`, `AlwaysDeny`, or another approval outcome deliberately. Bash/sh/zsh scripts use the same rule shape with their interpreter and `.sh` filename. An `executable` matcher can select either the complete script path or its filename. A filename rule applies to that name at **any explicitly supplied path**; use full paths, or a `ResolvedExecutable` path matcher combined with an `ExecutableName` glob such as `*.ps1`, to restrict a directory. Script filenames do not need outer executable-list entries. An explicitly absolute interpreter operand needs a rule matching its full path, as for other `explicit-external` commands.
 
 PowerShell wrappers admit exact `-File`, optionally preceded by `-NoLogo`, `-NoProfile`, or `-NonInteractive` (case-insensitive). Bash/sh/zsh wrappers admit a script operand, optional `--`, and the individual flags `-e`, `-u`, `-x`, `-v`, or `-f`; Bash also admits `--noprofile` and `--norc`. Preparation adds no-profile/noninteractive startup flags where supported and pins both targets in the frozen environment. Unknown flags, abbreviations, combined flags, stdin scripts, inline `-Command`/`-EncodedCommand`/`-c`, and other unanalyzed shell modes remain denied. Native argument quoting restrictions still apply.
 
@@ -369,13 +368,40 @@ Cmdlets, built-ins and literal aliases use the same rules, outcomes, approvals a
 }
 ```
 
-The command name must also be present in the outer `tools.allowedExecutables` ceiling, as for external commands. No new commands are allowed automatically.
+Only the selected shell needs an entry in `tools.allowedExecutables`. Command names use these rules, including glob or regex groups. Unmatched commands remain denied.
 
 Preparation first resolves and pins an external executable. If a simple literal name is absent from the host's PATH lookup, it is passed to the selected shell with `CommandKind: shell-command` and an empty `ResolvedExecutable`. Explicit or relative file paths never take this fallback. Resolved-target path matchers do not match shell commands; working-directory matchers still apply. Native resolution takes precedence even if the shell has a same-name builtin or alias.
 
-Shell-command permission authorizes the literal name, not a verified implementation. Aliases are not expanded or canonicalized: configure each permitted spelling. Modules, aliases and shell lookup (including cwd/relative PATH where supported) can affect which implementation the shell selects. A shell-command action must be the only action in the request: sequences, conditionals and pipelines containing unresolved shell names are rejected even when each name is permitted. Their shell-state effects cannot be established before launch. External-only compounds remain supported. This is deliberately a command-name filter, not immutable binding of builtins or protection from command shadowing. Use explicit external targets when file identity matters. Unknown names still need a matching policy; permitted but nonexistent names fail in the shell.
+Shell-command permission authorizes the literal name, not a verified implementation. Aliases are not expanded or canonicalized: configure each permitted spelling. Modules, aliases and shell lookup (including cwd/relative PATH where supported) can affect which implementation the shell selects. Literal shell commands can participate in sequences, conditionals, and pipelines. Each command name must pass policy before the shell starts. Allowed shell commands can change shell state, including the working directory. The policy directory is the initial request directory; it does not confine relative file access after such changes. This is deliberately a command-name filter, not immutable binding of builtins or protection from command shadowing. Use explicit external targets when file identity matters. Unknown names still need a matching policy; permitted but nonexistent names fail in the shell.
 
-PowerShell's supported named parameters retain their syntax, while quoted parameter-looking values remain literal arguments. An unquoted `--` parameter terminator is not supported for shell-command actions and is rejected. Unquoted comma-array forms such as `Get-Item -Path src,tests` are rejected for shell-command actions rather than silently converted to literal strings. Quoted literal commas and native-program comma arguments remain supported. There is no cmdlet-specific parameter parsing or binding. Dynamic expressions and module-qualified command names are outside the admitted subset. CMD shell commands retain the admitted original argument text because builtins consume text rather than native argv; their policy filters still use the parsed, joined argument values.
+PowerShell receives the original argument text, including named parameters, `--`, and comma arrays such as `-Context 3,6`. The shell determines parameter binding and argument types. Quoted operators and commas remain quoted. There is no cmdlet-specific parameter parsing or binding. Dynamic expressions and module-qualified command names are outside the admitted subset. CMD shell commands retain the admitted original argument text because builtins consume text rather than native argv; their policy filters still use the parsed, joined argument values.
+
+### Command groups, pipelines, and log files
+
+Add this rule to `tools.runProcess.commandPolicy.platforms.windows.shells.pwsh.rules` to permit the `Select-*` command group in one checkout:
+
+```json
+{
+  "id": "powershell-selection",
+  "policy": "Allow",
+  "matchers": [
+    { "type": "glob", "fact": "ExecutableName", "value": "Select-*", "ignoreCase": true },
+    { "type": "exact", "fact": "CommandKind", "value": "shell-command" },
+    { "type": "path", "fact": "WorkingDirectory", "values": ["C:/source/repos/Threadsmith"] }
+  ]
+}
+```
+
+This covers `Select-String` and `Select-Object` without individual executable-list entries. Change the directory to your checkout. The group grants matching names; it does not prove that their implementation is read-only. Use another explicit rule for `gh`, such as an `executable` matcher with value `gh` and the same directory scope. If a suitable `gh` rule already exists, keep it.
+
+With both rules allowed and `pwsh` in `tools.allowedExecutables`, these forms are supported:
+
+```powershell
+gh run view 43210252869 --repo Threadsmith-NET/Threadsmith.NET --job 131155719715 --log | Select-String -Pattern 'fail|error|Expected:|Actual:|Stack Trace:' -Context 3,6
+gh run view --job 131155720059 --repo Threadsmith-NET/Threadsmith.NET --log > .threadsmith/.scratchpad/ci-linux.log
+```
+
+Use an existing output directory. `>` creates or overwrites the file; `>>` appends. A denied command anywhere in the request prevents the entire launch, including redirection. No separate command permission is required for `>`.
 
 ### Optional argument deny expressions
 
@@ -408,7 +434,7 @@ Shipped rules allow Git and .NET CLI commands without subcommand dispatch or opt
 
 Direct HTTP clients and OS component installation are denied by shipped rules or unresolved-action denial. The shipped HTTP-client name set is case-insensitive on every platform, including explicit external paths; this deliberately also denies distinct uppercase Unix names in that set. The Git rule uses a small configurable set of deny expressions for selected explicit execution text. They do not detect every abbreviation, short-option cluster or equivalent form and can reject harmless lookalikes, including option-looking message text. They do not inspect ambient Git hooks/helpers/configuration or prohibit normal network and package workflows. Review or replace the expressions deliberately when changing trusted policy.
 
-Preparation admits static literal external commands, bound `.ps1`/`.sh` file invocations, single simple shell-command actions, quoted arguments, and validated sequences/pipelines of bound targets. Embedded literal tildes, including unquoted .NET filters such as `FullyQualifiedName~ShellCommandPolicy`, are preserved; unsupported home-expansion forms remain rejected. PowerShell quoted executable names require an invocation operator. Profiles/startup hooks are disabled where supported and environment inputs are frozen. PowerShell's `--%` stop-parsing token is rejected even when quoted. Windows Bash/sh/zsh launches freeze `MSYS2_ARG_CONV_EXCL=*` and `MSYS_NO_PATHCONV=1` so MSYS does not rewrite authorized native arguments. Dynamic names, expansion/substitution, inline script syntax, unanalyzed nested shell dialects, redirection and unverified native argument forms are denied rather than approximated. Literal evaluation or dispatch commands, like other commands, need explicit permission; their downstream behavior is not inspected. The current limits are 32,768 command characters, bounded static actions/tokens, 512 KiB policy documents, JSON depth 32, matcher nesting 12 and bounded live grant stores.
+Preparation identifies literal command names and checks every action in a sequence or pipeline. External command heads and script paths retain their resolved binding. Argument text, literal redirection, and shell separators are passed to the shell without argument reconstruction. This includes `>`, `>>`, and stream redirection such as `2>&1`; redirection targets are not command names or policy arguments. Embedded literal tildes, including unquoted .NET filters such as `FullyQualifiedName~ShellCommandPolicy`, are preserved; unsupported home-expansion forms remain rejected. PowerShell quoted executable names require an invocation operator. Profiles/startup hooks are disabled where supported and environment inputs are frozen. PowerShell's `--%` stop-parsing token is rejected even when quoted. Windows Bash/sh/zsh launches freeze `MSYS2_ARG_CONV_EXCL=*` and `MSYS_NO_PATHCONV=1` so MSYS does not rewrite authorized native arguments. Calculated names, expansion/substitution, inline script syntax, unanalyzed nested shell dialects, and here-documents remain unsupported. Redirection uses the account permissions of the shell; it does not inherit `write_file` folder grants. Literal evaluation or dispatch commands, like other commands, need explicit permission; their downstream behavior is not inspected. The current limits are 32,768 command characters, bounded static actions/tokens, 512 KiB policy documents, JSON depth 32, matcher nesting 12 and bounded live grant stores.
 
 Windows native `cmd`, Windows PowerShell, `pwsh`, native Git Bash and `sh` have local shadowing fixture evidence. `zsh` was unavailable locally. WSL `bash.exe` wrappers are rejected because they cannot bind Windows native target identities. Linux/macOS and unavailable dialects still require their own real-platform evidence before support is claimed. Parser/fake-process tests are not that evidence.
 

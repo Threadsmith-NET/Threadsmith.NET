@@ -778,20 +778,20 @@ These settings narrow runtime use independently of availability:
 - `tools:allowedExecutables`;
 - `tools:allowedNetworkHosts`.
 
-`run_process` exposes a general `command` and optional `workingDirectory` and executes through `tools:runProcess:shellExecutable`. Enabled tools are advertised under current trust and tool allow/deny policy; execution side effects and required approval do not hide them. Execution timeouts are host-owned: `tools:runProcess:defaultTimeoutSeconds` supplies the default, runtime configuration can override it, and `tools:runProcess:maxTimeoutSeconds` plus mandatory policy ceilings bound it. The model cannot select a timeout. The shell uses a bounded static grammar: all actions are analyzed and bound to absolute targets before any pipeline or sequence starts. Unmatched or unsupported input is denied without an approval fallback. Machine/user command rules replace the old coarse `requireApproval` switch; independent mandatory tool review still applies. The shell and each command must pass `tools:allowedExecutables` as well as command policy. Cancellation terminates the tracked process tree and results retain bounded stdout/stderr. Approved binaries retain ambient account authority: this is not an OS or network sandbox. See the [command-policy reference](operations/command-policy.md) for configuration, exact approval scopes, support limits, migration, inspection and revocation.
+`run_process` exposes a general `command` and optional `workingDirectory` and executes through `tools:runProcess:shellExecutable`. Enabled tools are advertised under current trust and tool allow/deny policy; execution side effects and required approval do not hide them. Execution timeouts are host-owned: `tools:runProcess:defaultTimeoutSeconds` supplies the default, runtime configuration can override it, and `tools:runProcess:maxTimeoutSeconds` plus mandatory policy ceilings bound it. The model cannot select a timeout. The host checks literal command names before any pipeline or sequence starts. The shell handles argument syntax, comma arrays, and file redirection. Unmatched or unsupported input is denied without an approval fallback. Machine/user command rules replace the old coarse `requireApproval` switch; independent mandatory tool review still applies. The outer shell must pass `tools:allowedExecutables`; commands inside it use command policy alone. Cancellation terminates the tracked process tree and results retain bounded stdout/stderr. Approved binaries retain ambient account authority: this is not an OS or network sandbox. See the [command-policy reference](operations/command-policy.md) for configuration, exact approval scopes, support limits, migration, inspection and revocation.
 
 ### Configure `run_process`: allow, deny, and approval
 
 Configure command rules in **user** `~/.threadsmith/config.json` or **machine** `<CommonApplicationData>/Threadsmith/config.json` (`%ProgramData%\Threadsmith\config.json` on Windows). They are not repository-owned settings. On Windows the user file normally lives at `%USERPROFILE%\.threadsmith\config.json`.
 
-There are two permission checks: `tools.allowedExecutables` must contain the selected shell **and each admitted executable/cmdlet/alias name**; `tools.runProcess.commandPolicy` must then authorize each command. An unmatched command is denied, rather than offered for approval. Arrays replace inherited arrays, so preserve names needed by other configured tools when merging examples.
+There are two checks with different purposes: `tools.allowedExecutables` admits the selected shell; `tools.runProcess.commandPolicy` authorizes commands inside it. Command rules can match groups such as `Select-*`. Individual cmdlets and scripts need no duplicate executable-list entries. An unmatched command is denied, rather than offered for approval. Arrays replace inherited arrays, so preserve names needed by other configured tools when merging examples.
 
 For example, merge this into user `config.json` to allow a single `Get-Process` invocation through PowerShell 7 while retaining shipped Git/.NET command rules:
 
 ```json
 {
   "tools": {
-    "allowedExecutables": ["pwsh", "git", "dotnet", "Get-Process"],
+    "allowedExecutables": ["pwsh", "git", "dotnet"],
     "runProcess": {
       "shellExecutable": "pwsh",
       "commandPolicy": {
@@ -820,7 +820,9 @@ For example, merge this into user `config.json` to allow a single `Get-Process` 
 }
 ```
 
-This permits the literal cmdlet name when no external executable of that name was resolved. It does not permit other cmdlets, expand aliases, or allow a pipeline containing unresolved shell commands. Independent trust, tool approval, and machine restrictions still apply. An admitted cmdlet has your account's ambient authority; it is not confined by `read_file` or source-edit path permissions.
+This permits the literal cmdlet name when no external executable of that name was resolved. Other cmdlets need a matching command rule. Pipelines are supported when every command passes policy. Use a group matcher to cover related cmdlets with one rule. Independent trust, tool approval, and machine restrictions still apply. An admitted cmdlet has your account's ambient authority; it is not confined by `read_file` or source-edit path permissions.
+
+For filtering and saving CI logs, see [command groups, pipelines, and log files](operations/command-policy.md#command-groups-pipelines-and-log-files). PowerShell handles `-Context 3,6`; `>` writes a file and `>>` appends. These file operations use the shell account permissions.
 
 The [command-policy examples](operations/command-policy.md#configuration-examples) provide complete user and machine recipes:
 

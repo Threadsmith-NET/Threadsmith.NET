@@ -28,7 +28,19 @@ internal static class ProviderErrorDetails
                 StartBudget();
             }
 
-            await using var stream = await opening.ConfigureAwait(false);
+            Stream opened;
+            try
+            {
+                opened = await opening.WaitAsync(reading.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Content may ignore cancellation; reclaim a stream that opens after abandonment.
+                Discard(opening);
+                throw;
+            }
+
+            await using var stream = opened;
             var bytes = new byte[MaximumBytes + 1];
             var count = 0;
             while (count < bytes.Length)
@@ -39,7 +51,9 @@ internal static class ProviderErrorDetails
                     StartBudget();
                 }
 
-                var read = await pending.ConfigureAwait(false);
+                var read = pending.IsCompleted
+                    ? await pending.ConfigureAwait(false)
+                    : await WaitForReadAsync(pending.AsTask(), reading.Token).ConfigureAwait(false);
                 if (read == 0)
                 {
                     break;
@@ -91,7 +105,7 @@ internal static class ProviderErrorDetails
 
         // One waiting budget covers opening and all reads, independently of the request deadline.
         void StartBudget() => timer ??= (timeProvider ?? TimeProvider.System).CreateTimer(
-            _ => reading.Cancel(), null, TimeSpan.FromSeconds(1), Timeout.InfiniteTimeSpan);
+            _ => reading.Cancel(), null, TimeSpan.FromMilliseconds(100), Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>Extracts only explanatory text and allowlisted scalar identifiers from a parsed error.</summary>
@@ -138,6 +152,48 @@ internal static class ProviderErrorDetails
 
     /// <summary>Separates absent explanatory text from metadata and omission markers until adapter fallback selection.</summary>
     internal sealed record Detail(string Message, string Metadata, int? HttpStatus = null);
+
+    private static async Task<int> WaitForReadAsync(Task<int> pending, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Never inspect the buffer after abandoning a read; only observe a possible late fault.
+            ObserveFault(pending);
+            throw;
+        }
+    }
+
+    private static void Discard(Task<Stream> opening)
+    {
+        var cleanup = opening.ContinueWith(
+            static async completed =>
+            {
+                if (completed.IsCompletedSuccessfully)
+                {
+                    await using var stream = await completed.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    _ = completed.Exception;
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default).Unwrap();
+
+        // Observe late open/disposal failures without replacing the original HTTP failure.
+        ObserveFault(cleanup);
+    }
+
+    private static void ObserveFault(Task pending) => _ = pending.ContinueWith(
+        static completed => _ = completed.Exception,
+        CancellationToken.None,
+        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
 
     private static Detail Extract(Func<string, string?> error, Func<string, string?> root, string? credential)
     {

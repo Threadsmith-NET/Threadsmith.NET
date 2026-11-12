@@ -16,7 +16,7 @@ internal sealed record PreparedShellCommand(
     ImmutableArray<CommandFacts> Actions,
     PreparedProcessLaunch Launch);
 
-/// <summary>Parses a deliberately bounded literal-command language, not a full shell dialect.</summary>
+/// <summary>Identifies literal commands for policy while preserving shell argument and redirection syntax.</summary>
 internal static class ShellCommandPreparation
 {
     /// <summary>Gets the code-owned denial reason, rendered only at the feedback boundary.</summary>
@@ -69,12 +69,6 @@ internal static class ShellCommandPreparation
                 shellCommand = true;
             }
 
-            if (shellCommand && parsed.Length > 1)
-            {
-                // A name permission cannot establish shell-state effects on later actions.
-                throw Denied();
-            }
-
             if (!shellCommand && OperatingSystem.IsWindows() && !Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase))
             {
                 throw Denied();
@@ -83,17 +77,11 @@ internal static class ShellCommandPreparation
             var executableName = shellCommand ? name : OperatingSystem.IsWindows() ? Path.GetFileNameWithoutExtension(target) : Path.GetFileName(target);
             var interpreterName = executableName.ToLowerInvariant();
             var scriptCall = directScript || interpreterName is WindowsPowerShell or PowerShell or Bash or Sh or Zsh
-                ? BindScript(item, directScript, interpreterName, target, workingDirectory, environment)
+                ? BindScript(item, directScript, interpreterName, target, workingDirectory, environment, shell)
                 : null;
             if (interpreterName == Cmd)
             {
                 // Unanalyzed nested command text is still unsupported.
-                throw Denied();
-            }
-
-            if (shellCommand && shell is WindowsPowerShell or PowerShell && item.HasUnquotedComma)
-            {
-                // Cmdlet comma arrays are not literal argv; do not silently turn them into strings.
                 throw Denied();
             }
 
@@ -112,19 +100,13 @@ internal static class ShellCommandPreparation
 
             var shellTarget = shellCommand ? name : OperatingSystem.IsWindows() && shell is Bash or Sh or Zsh ? target.Replace('\\', '/') : target;
             text.Append(shellCommand && shell == Cmd ? shellTarget : Quote(shellTarget, shell, native: !shellCommand));
-            if (shellCommand && shell == Cmd)
+            if (scriptCall is null)
             {
-                // CMD builtins consume command text, not native argv. Retain admitted quoting.
                 text.Append(item.RawArguments);
             }
             else
             {
-                for (var index = 0; index < arguments.Length; index++)
-                {
-                    var argument = arguments[index];
-                    text.Append(' ').Append(shellCommand && item.NamedParameters.Contains(index + 1)
-                        ? QuoteParameter(argument, shell) : Quote(argument, shell, native: !shellCommand));
-                }
+                text.Append(scriptCall.LaunchArguments);
             }
 
             text.Append(item.Separator);
@@ -161,9 +143,10 @@ internal static class ShellCommandPreparation
         var token = new StringBuilder();
         var started = false;
         var explicitCall = false;
-        var unquotedComma = false;
-        var parameter = false;
-        var parameters = ImmutableHashSet.CreateBuilder<int>();
+        var tokenEnds = new List<int>();
+        var tokenStarts = new List<int>();
+        var tokenStart = 0;
+        var redirectTarget = false;
         var quote = '\0';
         var argumentStart = 0;
         var index = 0;
@@ -209,6 +192,11 @@ internal static class ShellCommandPreparation
                     throw Denied();
                 }
 
+                if (!started)
+                {
+                    tokenStart = index;
+                }
+
                 quote = character;
                 started = true;
                 continue;
@@ -216,6 +204,11 @@ internal static class ShellCommandPreparation
 
             if (!cmd && !powershell && character == '\\')
             {
+                if (!started)
+                {
+                    tokenStart = index;
+                }
+
                 if (++index == command.Length || command[index] is '\r' or '\n')
                 {
                     throw Denied();
@@ -236,7 +229,46 @@ internal static class ShellCommandPreparation
                 character = '\n';
             }
 
-            if (character is '<' or '>' or '(' or ')' or '{' or '}' || (!cmd && character is '$' or '`' or '@' or '*' or '?' or '[' or ']'))
+            if (character is '<' or '>' || (powershell && character == '*' && index + 1 < command.Length && command[index + 1] == '>'))
+            {
+                if (started && token.Length > 0 && command[tokenStart..index].All(char.IsAsciiDigit))
+                {
+                    // A stream number adjacent to the operator is not a command argument.
+                    token.Clear();
+                    started = false;
+                }
+
+                FinishToken();
+                if (tokens.Count == 0 || redirectTarget)
+                {
+                    throw Denied();
+                }
+
+                if (character == '*')
+                {
+                    character = command[++index];
+                }
+
+                if (index + 1 < command.Length && command[index + 1] == character)
+                {
+                    if (character == '<')
+                    {
+                        throw Denied();
+                    }
+
+                    index++;
+                }
+
+                if (index + 1 < command.Length && command[index + 1] == '&')
+                {
+                    index++;
+                }
+
+                redirectTarget = true;
+                continue;
+            }
+
+            if (character is '(' or ')' or '{' or '}' || (!cmd && character is '$' or '`' or '@' or '*' or '?' or '[' or ']'))
             {
                 throw Denied();
             }
@@ -247,7 +279,6 @@ internal static class ShellCommandPreparation
                 throw Denied();
             }
 
-            unquotedComma |= powershell && character == ',';
             var separator = character is '|' or '&' || (!cmd && character is ';' or '\n' or '\r');
             if (separator)
             {
@@ -263,6 +294,11 @@ internal static class ShellCommandPreparation
                 }
 
                 FinishToken();
+                if (redirectTarget)
+                {
+                    throw Denied();
+                }
+
                 if (tokens.Count == 0)
                 {
                     if (character is '\r' or '\n')
@@ -286,15 +322,10 @@ internal static class ShellCommandPreparation
                     throw Denied();
                 }
 
-                if (operation is "\r" or "\n")
-                {
-                    operation = ";";
-                }
-
-                result.Add(new LiteralCommand([.. tokens], " " + operation + " ", parameters.ToImmutable(), command[argumentStart..argumentEnd], unquotedComma));
+                result.Add(new LiteralCommand([.. tokens], " " + operation + " ", command[argumentStart..argumentEnd], [.. tokenEnds.Select(end => end - argumentStart)], [.. tokenStarts.Select(start => start - argumentStart)]));
                 tokens.Clear();
-                parameters.Clear();
-                unquotedComma = false;
+                tokenEnds.Clear();
+                tokenStarts.Clear();
                 explicitCall = false;
                 if (result.Count > 64)
                 {
@@ -309,7 +340,7 @@ internal static class ShellCommandPreparation
             {
                 if (!started)
                 {
-                    parameter = powershell && character == '-';
+                    tokenStart = index;
                 }
 
                 token.Append(character);
@@ -323,9 +354,14 @@ internal static class ShellCommandPreparation
         }
 
         FinishToken();
+        if (redirectTarget)
+        {
+            throw Denied();
+        }
+
         if (tokens.Count > 0)
         {
-            result.Add(new LiteralCommand([.. tokens], string.Empty, parameters.ToImmutable(), command[argumentStart..], unquotedComma));
+            result.Add(new LiteralCommand([.. tokens], string.Empty, command[argumentStart..], [.. tokenEnds.Select(end => end - argumentStart)], [.. tokenStarts.Select(start => start - argumentStart)]));
         }
         else if (result.Count == 0 || result[^1].Separator.Contains('|') || result[^1].Separator.Contains('&'))
         {
@@ -353,12 +389,17 @@ internal static class ShellCommandPreparation
                 argumentStart = index;
             }
 
-            if (parameter && (value == "--" || (value.Length > 1 && char.IsAsciiLetter(value[1]))))
+            if (redirectTarget)
             {
-                parameters.Add(tokens.Count);
+                redirectTarget = false;
+            }
+            else
+            {
+                tokens.Add(value);
+                tokenEnds.Add(index);
+                tokenStarts.Add(tokenStart);
             }
 
-            tokens.Add(value);
             if (tokens.Count > 1025)
             {
                 throw Denied();
@@ -366,7 +407,6 @@ internal static class ShellCommandPreparation
 
             token.Clear();
             started = false;
-            parameter = false;
         }
     }
 
@@ -391,7 +431,7 @@ internal static class ShellCommandPreparation
         }
     }
 
-    private static ScriptInvocation BindScript(LiteralCommand item, bool direct, string interpreter, string target, string workingDirectory, IReadOnlyDictionary<string, string> environment)
+    private static ScriptInvocation BindScript(LiteralCommand item, bool direct, string interpreter, string target, string workingDirectory, IReadOnlyDictionary<string, string> environment, string outerShell)
     {
         ValidateInterpreter(interpreter, target, environment);
         var powershell = interpreter is WindowsPowerShell or PowerShell;
@@ -468,27 +508,23 @@ internal static class ShellCommandPreparation
             Sh => [.. options, "--", scriptOperand, .. arguments],
             _ => throw Denied(),
         };
-        return new ScriptInvocation(path, arguments, startup);
+        var requiredStartup = interpreter switch
+        {
+            WindowsPowerShell or PowerShell => " -NoLogo -NoProfile -NonInteractive",
+            Bash => " --noprofile --norc",
+            Zsh => " -f",
+            _ => string.Empty,
+        };
+        var launchArguments = direct
+            ? " " + string.Join(' ', startup.Take(startup.Length - arguments.Length).Select(argument => Quote(argument, outerShell))) + item.RawArguments
+            : requiredStartup + item.RawArguments[..item.TokenStarts[index - 1]] + Quote(scriptOperand, outerShell) + item.RawArguments[item.TokenEnds[index - 1]..];
+        return new ScriptInvocation(path, arguments, startup, launchArguments);
     }
 
-    private sealed record ScriptInvocation(string Path, ImmutableArray<string> ScriptArguments, ImmutableArray<string> InterpreterArguments);
+    private sealed record ScriptInvocation(string Path, ImmutableArray<string> ScriptArguments, ImmutableArray<string> InterpreterArguments, string LaunchArguments);
 
     private static bool IsShellName(string name) => name.Length > 0 && char.IsAsciiLetter(name[0])
         && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
-
-    private static string QuoteParameter(string value, string shell)
-    {
-        // Preserve generic PowerShell parameter syntax, not command-specific parameter binding.
-        var colon = value.IndexOf(':');
-        var name = colon < 0 ? value : value[..colon];
-        if (name.Length < 2 || !char.IsAsciiLetter(name[1])
-            || !name.Skip(2).All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
-        {
-            throw Denied();
-        }
-
-        return colon < 0 ? name : name + ":" + Quote(value[(colon + 1)..], shell, native: false);
-    }
 
     private static string Quote(string value, string shell, bool native = true)
     {
@@ -519,5 +555,5 @@ internal static class ShellCommandPreparation
     private static UnauthorizedAccessException Denied() => new(DenialReasonCode);
 
     /// <summary>Contains literal tokens and a validated sequence operator.</summary>
-    internal sealed record LiteralCommand(ImmutableArray<string> Tokens, string Separator, ImmutableHashSet<int> NamedParameters, string RawArguments, bool HasUnquotedComma);
+    internal sealed record LiteralCommand(ImmutableArray<string> Tokens, string Separator, string RawArguments, ImmutableArray<int> TokenEnds, ImmutableArray<int> TokenStarts);
 }

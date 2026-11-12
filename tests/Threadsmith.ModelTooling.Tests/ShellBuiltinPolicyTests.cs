@@ -11,7 +11,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Checks non-file commands through the normal policy and tracked shell launch.</summary>
-public static class ShellBuiltinPolicyTests
+public static partial class ShellBuiltinPolicyTests
 {
     /// <summary>Allowed shell names run, while a denied stage prevents the whole launch.</summary>
     [Theory]
@@ -176,11 +176,11 @@ public static class ShellBuiltinPolicyTests
         }
     }
 
-    /// <summary>Either executable ceiling denies the whole compound before any approval or launch.</summary>
+    /// <summary>Either shell executable ceiling denies the whole compound before any approval or launch.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task CompoundExecutableDenialPreventsApprovalAndLaunch(bool securityCeiling)
+    public static async Task CompoundShellDenialPreventsApprovalAndLaunch(bool securityCeiling)
     {
         var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
         const string name = "dotnet";
@@ -188,8 +188,8 @@ public static class ShellBuiltinPolicyTests
         var policy = CreatePolicy(root, shell, name, PolicyOutcome.ApprovalRequired);
         var context = ShellCommandPolicyTests.Context(root, policy) with
         {
-            AllowedExecutables = securityCeiling ? policy.AllowedExecutables : [shell],
-            SecurityPolicy = securityCeiling ? policy with { AllowedExecutables = [shell] } : policy,
+            AllowedExecutables = securityCeiling ? policy.AllowedExecutables : [name],
+            SecurityPolicy = securityCeiling ? policy with { AllowedExecutables = [name] } : policy,
         };
         var manager = new RecordingProcessManager();
         var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: ResolveShell(shell));
@@ -213,6 +213,7 @@ public static class ShellBuiltinPolicyTests
     [InlineData("-InputObject 'one,two'", "one,two")]
     [InlineData("-InputObject \"one,two\"", "one,two")]
     [InlineData("-InputObject -1", "-1")]
+    [InlineData("-InputObject one,two", "one\ntwo")]
     [InlineData("-InputObject:'fixture-value'", "fixture-value")]
     [InlineData("'-InputObject'", "-InputObject")]
     [InlineData("'--'", "--")]
@@ -235,14 +236,14 @@ public static class ShellBuiltinPolicyTests
         var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
         Assert.NotNull(output);
         Assert.True(output.ExitCode == 0, output.StandardError);
-        Assert.Equal(expected, output.StandardOutput.TrimEnd('\r', '\n'));
+        Assert.Equal(expected, output.StandardOutput.TrimEnd('\r', '\n').Replace("\r\n", "\n", StringComparison.Ordinal));
     }
 
-    /// <summary>Unbound shell stages cannot share mutable shell state, even when individually permitted.</summary>
+    /// <summary>Allowed command groups run through the real PowerShell pipeline.</summary>
     [Theory]
     [InlineData("powershell")]
     [InlineData("pwsh")]
-    public static async Task PowerShellCmdletPipelineIsRejectedBeforeLaunch(string shell)
+    public static async Task PowerShellCmdletPipelineUsesCommandGroupPolicy(string shell)
     {
         var root = Path.GetFullPath(".");
         var policy = CreatePolicy(root, shell, "Get-Process", PolicyOutcome.Allow);
@@ -250,11 +251,11 @@ public static class ShellBuiltinPolicyTests
         var projection = snapshot.Rules[0] with
         {
             Id = "fixture-projection",
-            Matchers = [new PolicyMatcher { Type = PolicyMatcherType.Executable, Value = "Select-Object" }],
+            Matchers = [new PolicyMatcher { Type = PolicyMatcherType.Glob, Fact = PolicyFact.ExecutableName, Value = "Select-*" }],
         };
         policy = policy with
         {
-            AllowedExecutables = [shell, "Get-Process", "Select-Object"],
+            AllowedExecutables = [shell],
             CommandPolicies = policy.CommandPolicies.SetItem(shell, snapshot with { Rules = [.. snapshot.Rules, projection] }),
         };
         var clock = new FakeTimeProvider();
@@ -269,32 +270,37 @@ public static class ShellBuiltinPolicyTests
 
         var result = await pipeline.InvokeAsync(Request(root, command, ShellCommandPolicyTests.Context(root, policy)), TestContext.Current.CancellationToken);
 
-        Assert.False(result.Succeeded);
-        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
-        Assert.Equal(0, manager.Launches);
+        Assert.True(result.Succeeded, result.Error);
+        var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
+        Assert.NotNull(output);
+        Assert.Equal(0, output.ExitCode);
+        Assert.Equal(Environment.ProcessId, int.Parse(output.StandardOutput.Trim(), System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Equal(1, manager.Launches);
         Assert.Empty(manager.ActiveProcesses);
     }
 
-    /// <summary>Unsupported PowerShell parameter terminators fail before approval or launch.</summary>
+    /// <summary>PowerShell receives its literal parameter terminator unchanged.</summary>
     [Fact]
-    public static void PowerShellUnquotedParameterTerminatorIsRejected()
+    public static void PowerShellUnquotedParameterTerminatorIsPreserved()
     {
         var shell = ResolveShell("pwsh");
         var environment = new Dictionary<string, string> { ["PATH"] = string.Empty };
-        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare("Write-Output -- -NoEnumerate", shell, Path.GetFullPath("."), environment));
+        var prepared = ShellCommandPreparation.Prepare("Write-Output -- -NoEnumerate", shell, Path.GetFullPath("."), environment);
+        Assert.Equal<string>(["--", "-NoEnumerate"], Assert.Single(prepared.Actions).Arguments);
     }
 
-    /// <summary>Unsupported cmdlet arrays cannot silently become literal string arguments.</summary>
+    /// <summary>Literal comma arrays are preserved for PowerShell to interpret.</summary>
     [Theory]
     [InlineData("Write-Output one,two")]
     [InlineData("Get-Item -Path src,tests")]
     [InlineData("Write-Output safe; Write-Output one,two")]
-    public static void PowerShellCommaArraysAreRejectedBeforeLaunch(string command)
+    public static void PowerShellCommaArraysArePreserved(string command)
     {
         var shell = ResolveShell("pwsh");
         var environment = new Dictionary<string, string> { ["PATH"] = string.Empty };
 
-        Assert.Throws<UnauthorizedAccessException>(() => ShellCommandPreparation.Prepare(command, shell, Path.GetFullPath("."), environment));
+        var prepared = ShellCommandPreparation.Prepare(command, shell, Path.GetFullPath("."), environment);
+        Assert.Contains(command[(command.LastIndexOf(' ') + 1)..], prepared.Launch.Arguments[^1], StringComparison.Ordinal);
     }
 
     /// <summary>A failed file binding never becomes permission for a shell name.</summary>

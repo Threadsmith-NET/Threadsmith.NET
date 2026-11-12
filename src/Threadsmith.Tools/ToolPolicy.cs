@@ -228,12 +228,6 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 for (var index = 0; index < prepared.Actions.Length; index++)
                 {
                     var action = prepared.Actions[index];
-                    if (!context.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase)
-                        || !context.SecurityPolicy.AllowedExecutables.Contains(action.ExecutableName, StringComparer.OrdinalIgnoreCase))
-                    {
-                        return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
-                    }
-
                     var decision = Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action);
                     if (!decision.IsAllowed)
                     {

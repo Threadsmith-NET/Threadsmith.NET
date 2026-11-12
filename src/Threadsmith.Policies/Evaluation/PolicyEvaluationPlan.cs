@@ -3,6 +3,7 @@ namespace Threadsmith.Policies.Evaluation;
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Matching;
 
 /// <summary>Retains conservative executable indexes for the lifetime of each immutable snapshot.</summary>
 internal sealed class PolicyEvaluationPlan
@@ -40,10 +41,9 @@ internal sealed class PolicyEvaluationPlan
             _executables = new Dictionary<string, List<PolicyRule>>(comparer);
             foreach (var rule in rules)
             {
-                // Keep matchers with possible match-time failures in the conservative fallback.
-                var safe = rule.Matchers.All(node => node.Type is PolicyMatcherType.Executable
-                    or PolicyMatcherType.Exact or PolicyMatcherType.ValueSet);
-                var executable = safe ? rule.Matchers.FirstOrDefault(node => node.Type == PolicyMatcherType.Executable)?.Value : null;
+                // Only a validated mandatory constraint may exclude a rule. Selected candidates still
+                // evaluate every matcher, including regex/path failures, through the existing catalog.
+                var executable = CanIndex(rule.Matchers) ? MandatoryExecutable(rule.Matchers) : null;
                 if (executable is null)
                 {
                     _fallback.Add(rule);
@@ -84,6 +84,45 @@ internal sealed class PolicyEvaluationPlan
                     yield return rule;
                 }
             }
+        }
+
+        private static bool CanIndex(ImmutableArray<PolicyMatcher> matchers)
+        {
+            try
+            {
+                foreach (var matcher in matchers)
+                {
+                    PolicyMatcherCatalog.Validate(matcher, null);
+                }
+
+                return true;
+            }
+            catch (InvalidDataException)
+            {
+                // Source compilation owns declared-platform root validation. Foreign-platform roots
+                // and malformed copied nodes retain full evaluation, including fail-closed errors.
+                return false;
+            }
+        }
+
+        private static string? MandatoryExecutable(ImmutableArray<PolicyMatcher> matchers)
+        {
+            foreach (var matcher in matchers)
+            {
+                if (matcher.Type == PolicyMatcherType.Executable)
+                {
+                    return matcher.Value;
+                }
+
+                if (matcher.Type == PolicyMatcherType.AllOf
+                    && MandatoryExecutable(matcher.Matchers) is { } executable)
+                {
+                    return executable;
+                }
+            }
+
+            // An executable within AnyOf need not match a successful alternative.
+            return null;
         }
     }
 }

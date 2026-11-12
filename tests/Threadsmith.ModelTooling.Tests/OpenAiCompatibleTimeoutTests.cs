@@ -8,7 +8,7 @@ using Threadsmith.Models.OpenAiCompatible;
 using Xunit;
 
 /// <summary>Separates handler cancellation, caller cancellation, and the total model-request deadline.</summary>
-public static class OpenAiCompatibleTimeoutTests
+public static partial class OpenAiCompatibleTimeoutTests
 {
     private const string CompletedResponse = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
@@ -357,7 +357,9 @@ public static class OpenAiCompatibleTimeoutTests
             }
             else
             {
-                clock.Advance(TimeSpan.FromSeconds(1));
+                clock.Advance(TimeSpan.FromMilliseconds(99));
+                Assert.False(pending.IsCompleted);
+                clock.Advance(TimeSpan.FromMilliseconds(1));
             }
 
             // Assert
@@ -453,7 +455,7 @@ public static class OpenAiCompatibleTimeoutTests
                 _timers.Add(timer);
                 timer.Change(dueTime, period);
                 DeadlineRegistered |= dueTime == TimeSpan.FromMilliseconds(50);
-                if (dueTime == TimeSpan.FromSeconds(1))
+                if (dueTime == TimeSpan.FromMilliseconds(100))
                 {
                     DiagnosticsEntered.TrySetResult();
                 }
@@ -561,6 +563,8 @@ public static class OpenAiCompatibleTimeoutTests
 
         public bool IsDisposed { get; private set; }
 
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public override bool CanRead => true;
 
         public override bool CanSeek => false;
@@ -616,6 +620,7 @@ public static class OpenAiCompatibleTimeoutTests
         {
             IsDisposed = true;
             base.Dispose(disposing);
+            Disposed.TrySetResult();
         }
     }
 }

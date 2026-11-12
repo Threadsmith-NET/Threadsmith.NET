@@ -207,7 +207,7 @@ public static class ShellCommandPolicyTests
                 Assert.Equal(launches, recording.Launches);
             }
 
-            // Explicitly permitting a directory-changing builtin cannot invalidate later facts.
+            // Directory rules describe the initial request directory. Allowed shell commands can change it.
             var directoryCommand = shell is "powershell" or "pwsh" ? "Set-Location" : "cd";
             var directoryRule = new PolicyRule
             {
@@ -251,8 +251,20 @@ public static class ShellCommandPolicyTests
             foreach (var compoundSeparator in new[] { separator, " | ", " && " })
             {
                 var blocked = await pipeline.InvokeAsync(directoryRequest with { ArgumentsJson = JsonSerializer.Serialize(new RunProcessInput { Command = directoryChange + compoundSeparator + "git status", WorkingDirectory = root }) }, cancellationToken);
-                Assert.False(blocked.Succeeded);
-                Assert.Equal(ToolErrorClassification.PolicyDenied, blocked.ErrorClassification);
+                if (shell == "powershell" && compoundSeparator == " && ")
+                {
+                    Assert.False(blocked.Succeeded);
+                    Assert.Equal(ToolErrorClassification.PolicyDenied, blocked.ErrorClassification);
+                }
+                else
+                {
+                    Assert.True(blocked.Succeeded, blocked.Error);
+                    var changedDirectoryOutput = JsonSerializer.Deserialize<ProcessExecutionResult>(blocked.ResultJson!);
+                    Assert.NotNull(changedDirectoryOutput);
+                    Assert.Equal(0, changedDirectoryOutput.ExitCode);
+                    beforeBlocked++;
+                }
+
                 Assert.Equal(beforeBlocked, recording.Launches);
             }
         }
@@ -265,7 +277,7 @@ public static class ShellCommandPolicyTests
     /// <summary>Unproven syntax is rejected before any action runs.</summary>
     [Theory]
     [InlineData("bash", "git status $(bad)")]
-    [InlineData("sh", "git status > marker")]
+    [InlineData("sh", "git status > $(bad)")]
     [InlineData("zsh", "git status; bad $name")]
     [InlineData("powershell", "git status; Invoke-Expression $value")]
     [InlineData("pwsh", "git status @arguments")]

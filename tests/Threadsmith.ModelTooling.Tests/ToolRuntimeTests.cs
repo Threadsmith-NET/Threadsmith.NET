@@ -2957,7 +2957,7 @@ public static partial class ToolRuntimeTests
                 })
                 .Build();
             var timeoutEngine = new CSharpScriptEngine(
-                processManager,
+                new HostDeadlineProcessManager(processManager),
                 new ToolConfig(timeoutConfiguration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
             var timingOut = timeoutEngine.ExecuteAsync(
@@ -4449,6 +4449,34 @@ public static partial class ToolRuntimeTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(new CSharpScriptOutput(true, "stub", null, 0, false));
+        }
+    }
+
+    // Isolate host termination from the worker's real-clock deadline without changing the host request.
+    private sealed class HostDeadlineProcessManager : IProcessManager
+    {
+        private readonly ProcessManager _inner;
+
+        public HostDeadlineProcessManager(ProcessManager inner)
+        {
+            _inner = inner;
+        }
+
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => _inner.ActiveProcesses;
+
+        public Task<ProcessExecutionResult> RunAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            // Preserve coverage of the engine's deadline forwarding before isolating the worker clock.
+            Assert.Equal(TimeSpan.FromMilliseconds(500), request.Timeout);
+            var payload = System.Text.Json.Nodes.JsonNode.Parse(request.StandardInput!)!.AsObject();
+            Assert.Equal(500, payload["TimeoutMilliseconds"]!.GetValue<int>());
+            payload["TimeoutMilliseconds"] = -1;
+
+            return _inner.RunAsync(
+                request with { StandardInput = payload.ToJsonString() },
+                cancellationToken);
         }
     }
 

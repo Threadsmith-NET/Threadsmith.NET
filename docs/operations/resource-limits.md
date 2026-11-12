@@ -52,6 +52,9 @@ Every registered tool has a deadline, serialized result-byte limit, and source c
       "defaults": { "timeoutMilliseconds": 120000 },
       "byTool": [
         { "toolId": "read_file", "maximumOutputBytes": 2097152 },
+        { "toolId": "edit_source", "maximumOutputBytes": 65536 },
+        { "toolId": "run_process", "NumberOfExactToolInvocationsPerTurn": 5 },
+        { "toolId": "list_files", "NumberOfExactToolInvocationsPerTurn": 2 },
         { "toolId": "server:search", "timeoutMilliseconds": 90000, "maximumSourceConcurrency": 8 }
       ]
     },
@@ -62,7 +65,19 @@ Every registered tool has a deadline, serialized result-byte limit, and source c
 
 `timeoutMilliseconds` accepts positive values or `-1` to disable the outer tool deadline. `maximumOutputBytes` and `maximumSourceConcurrency` must be positive. For built-ins, `maximumSourceConcurrency` limits concurrent calls to the same tool ID across callers; unrelated built-ins have independent allowances. MCP and extension tools retain a shared allowance per source. Batch wave limits and trust policy remain additional constraints.
 
+`NumberOfExactToolInvocationsPerTurn` is a per-tool admission limit. Set it in `tools.runtime.byTool`, never in `tools.runtime.defaults` or `tools.config`. Omission retains the tool declaration. Zero permits one exact invocation and uses set membership without a numeric counter. A positive value permits that many total accepted invocations, including the first. Values must be integers from zero through `Int32.MaxValue`; negative, fractional, Boolean, empty, null, and out-of-range values fail before execution, including entries for unloaded tools.
+
+`run_process` declares three exact invocations per turn. `tools.runProcess.NumberOfExactToolInvocationsPerTurn` has the same default. The per-tool runtime override takes precedence. Mandatory machine constraints still apply; zero and one both permit one call when comparing ceilings. Use the existing trusted machine, user, user-owned repository-permission, or launch configuration sources. Repository configuration cannot increase the allowance. These settings bind at startup; restart after a change.
+
+Exact identity uses the canonical tool ID and the caller's existing tracked argument string. Operational identity ignores concept hints where the tool declares them as hints. Each argument string has its own allowance. Admission records the complete valid batch before dispatch. Failed, denied, timed-out, or subsequently cancelled admitted calls consume allowance. Rejected calls and rejected batches do not. Identical siblings in one response are always invalid. No automatic retry occurs. Every admitted repeat passes normal policy, approval, cancellation, and activity handling.
+
+Parent turns, child executions, and skill procedures retain independent histories. Model continuations and context summaries do not reset them; a new execution does. Tools previously permitting repeats (file reads, native validation, memories, skill invocation, and repository archeology) declare `Int32.MaxValue`, a finite compatibility maximum. Skill lifecycle deduplication still applies.
+
 **Limits compose.** To enlarge a result, raise each relevant layer: source-file/read window, service/projection size, then tool serialization size. For MCP, profile request timeouts and response/frame/line limits also apply. For scripts, worker timeout/output and outer tool timeout/output are separate. Model context budgets remain independent; a large tool result can still require compaction. Truncation, existing fallback behavior, or an explicit failure applies at the enforcing layer.
+
+`edit_source` defaults to **65536 serialized UTF-8 bytes**. Configure it through `tools.runtime.byTool` as above. Limits below 1024 bytes reject the invocation before attempting an edit. Oversized receipts omit details rather than losing `Status`, `EffectId`, `MutationSetId`, or `DurableOutcomeRecorded`; `OutputTruncated` is explicit. Full receipts are eligible for completed-turn evidence recovery (1 MiB per capture, 4 MiB aggregate, up to eight captures). Retention limits can omit recovery; omitted diagnostics never imply successful validation. Sanitized output is bounded again.
+
+The existing `limits.workspace.maximumMutations` default is **100**, enforced by the edit schema and host validation. Analyzer document-instance counts are not mutation counts: one file can be analyzed in several projects or target frameworks. Lowering this cap does not solve oversized diagnostic receipts.
 
 ## Settings and defaults
 

@@ -291,7 +291,7 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             (int)Math.Min(int.MaxValue, outputBytes)) with
         {
             // The same range can contain new source after a host or external edit.
-            AllowDuplicateInvocations = true,
+            NumberOfExactToolInvocationsPerTurn = int.MaxValue,
         };
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
@@ -1867,7 +1867,8 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
             ToolSideEffect.ExecutesCode,
             TimeSpan.FromSeconds(Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)),
-            256 * 1024);
+            256 * 1024) with
+        { NumberOfExactToolInvocationsPerTurn = _limits.RunProcessNumberOfExactToolInvocationsPerTurn };
     }
 
     /// <inheritdoc />

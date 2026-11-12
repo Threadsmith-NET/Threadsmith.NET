@@ -52,6 +52,9 @@ public record ToolRuntimeOverride
 /// <summary>Runtime overrides for one registered tool, including colon-qualified MCP IDs.</summary>
 public sealed record ToolRuntimeToolOverride : ToolRuntimeOverride
 {
+    /// <summary>Maximum total exact invocations per turn; omitted retains the declaration and zero permits one.</summary>
+    public int? NumberOfExactToolInvocationsPerTurn { get; init; }
+
     /// <summary>The exact registered tool identifier, compared without case.</summary>
     public required string ToolId { get; init; }
 }
@@ -89,6 +92,9 @@ internal sealed class ToolRuntimePolicy
         var definition = tool.Definition with
         {
             Timeout = timeout,
+            NumberOfExactToolInvocationsPerTurn = Math.Min(
+                tool.Definition.NumberOfExactToolInvocationsPerTurn,
+                policy.ResourceLimits.GetValueOrDefault("tools:runtime:byTool:" + tool.Definition.Id + ":NumberOfExactToolInvocationsPerTurn", int.MaxValue)),
             MaximumOutputBytes = Math.Min(tool.Definition.MaximumOutputBytes, Limit("maximumOutputBytes", int.MaxValue)),
             Scheduling = tool.Definition.Scheduling with
             {
@@ -120,7 +126,7 @@ internal sealed class ToolRuntimePolicy
 
     private readonly FrozenDictionary<string, TimeSpan> _configuredTimeouts;
     private readonly ToolRuntimeOverride _defaults;
-    private readonly FrozenDictionary<string, ToolRuntimeOverride> _byTool;
+    private readonly FrozenDictionary<string, ToolRuntimeToolOverride> _byTool;
     private readonly ConditionalWeakTable<ITool, ITool> _configured = [];
 
     /// <summary>Initializes a new instance of the <see cref="ToolRuntimePolicy"/> class.</summary>
@@ -146,9 +152,10 @@ internal sealed class ToolRuntimePolicy
             ArgumentNullException.ThrowIfNull(value);
             ArgumentException.ThrowIfNullOrWhiteSpace(value.ToolId);
             value.Validate();
+            ArgumentOutOfRangeException.ThrowIfNegative(value.NumberOfExactToolInvocationsPerTurn ?? 0, nameof(options));
         }
 
-        _byTool = options.ByTool.ToDictionary(value => value.ToolId, value => (ToolRuntimeOverride)value, StringComparer.OrdinalIgnoreCase)
+        _byTool = options.ByTool.ToDictionary(value => value.ToolId, value => value, StringComparer.OrdinalIgnoreCase)
             .ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
     }
 
@@ -168,7 +175,8 @@ internal sealed class ToolRuntimePolicy
                 ? TimeSpan.FromMilliseconds(defaultMilliseconds) : (TimeSpan?)null);
         var output = specific?.MaximumOutputBytes ?? _defaults.MaximumOutputBytes;
         var concurrency = specific?.MaximumSourceConcurrency ?? _defaults.MaximumSourceConcurrency;
-        if (timeout is null && output is null && concurrency is null)
+        var exactInvocations = specific?.NumberOfExactToolInvocationsPerTurn;
+        if (timeout is null && output is null && concurrency is null && exactInvocations is null)
         {
             return tool;
         }
@@ -177,6 +185,7 @@ internal sealed class ToolRuntimePolicy
         {
             Timeout = timeout ?? tool.Definition.Timeout,
             ConfiguredTimeout = configuredTimeout,
+            NumberOfExactToolInvocationsPerTurn = exactInvocations ?? tool.Definition.NumberOfExactToolInvocationsPerTurn,
             MaximumOutputBytes = output ?? tool.Definition.MaximumOutputBytes,
             Scheduling = tool.Definition.Scheduling with
             {
@@ -217,6 +226,7 @@ internal sealed class ConfiguredTool : ITool
                     _definition = source with
                     {
                         Timeout = _definition.Timeout,
+                        NumberOfExactToolInvocationsPerTurn = _definition.NumberOfExactToolInvocationsPerTurn,
                         MaximumOutputBytes = _definition.MaximumOutputBytes,
                         Scheduling = source.Scheduling with
                         {

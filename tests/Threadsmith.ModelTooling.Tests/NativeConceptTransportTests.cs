@@ -85,7 +85,7 @@ public static class NativeConceptTransportTests
         var external = native with { Id = "mcp_external", ConceptsAreHints = false };
         Assert.True(history.TryAdd(external, "{\"concepts\":[\"cancellation\"]}"));
         Assert.True(history.TryAdd(external, "{\"concepts\":[\"logging\"]}"));
-        var repeated = native with { AllowDuplicateInvocations = true };
+        var repeated = native with { NumberOfExactToolInvocationsPerTurn = int.MaxValue };
         var batch = new ToolCallHistory(history);
         Assert.True(batch.TryAdd(repeated, "{\"path\":\".\"}"));
         Assert.False(batch.TryAdd(repeated, "{\"path\":\".\",\"concepts\":[\"serialization\"]}"));

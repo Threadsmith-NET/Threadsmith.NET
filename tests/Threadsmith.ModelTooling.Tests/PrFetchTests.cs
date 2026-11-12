@@ -53,7 +53,7 @@ public sealed class PrFetchTests
         Assert.True(schema.RootElement.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal).SetEquals(["kind", "url"]));
         var kindSchema = schema.RootElement.GetProperty("properties").GetProperty("kind");
         Assert.Equal(["inventory", "diff"], kindSchema.GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
-        Assert.False(tool.Definition.AllowDuplicateInvocations);
+        Assert.Equal(0, tool.Definition.NumberOfExactToolInvocationsPerTurn);
         Assert.False(tool.Definition.SubagentAvailable);
         using var outputSchema = JsonDocument.Parse(tool.Definition.OutputSchema.JsonSchema);
         var outputProperties = outputSchema.RootElement.GetProperty("properties");
@@ -675,7 +675,7 @@ public sealed class PrFetchTests
         Assert.True(responseBatch.TryAdd(definition, "{\"cursor\":\"next\"}"));
         Assert.False(responseBatch.TryAdd(definition, "{\"cursor\":\"next\"}"));
 
-        var optedIn = definition with { AllowDuplicateInvocations = true };
+        var optedIn = definition with { NumberOfExactToolInvocationsPerTurn = int.MaxValue };
         var optedInHistory = new ToolCallHistory();
         Assert.True(optedInHistory.TryAdd(optedIn, "{}"));
         Assert.True(optedInHistory.TryAdd(optedIn, "{}"));
@@ -683,15 +683,15 @@ public sealed class PrFetchTests
         Assert.True(optedInBatch.TryAdd(optedIn, "{}"));
         Assert.False(optedInBatch.TryAdd(optedIn, "{}"));
 
-        Assert.False(new DateTimeTool(TestPromptLoader.Instance).Definition.AllowDuplicateInvocations);
+        Assert.Equal(0, new DateTimeTool(TestPromptLoader.Instance).Definition.NumberOfExactToolInvocationsPerTurn);
         var ordinaryHistory = new ToolCallHistory();
         Assert.True(ordinaryHistory.TryAdd("PR_FETCH", "{}"));
-        Assert.False(ordinaryHistory.TryAdd(definition with { AllowDuplicateInvocations = false }, "{}"));
+        Assert.False(ordinaryHistory.TryAdd(definition with { NumberOfExactToolInvocationsPerTurn = 0 }, "{}"));
         var wrapped = new ToolRegistry([CreateTool(http, new TestSecrets(), Options(false), false)], runtimeOptions: new ToolRuntimeOptions
         {
             Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 65536 },
         });
-        Assert.False(wrapped.Get("pr_fetch").Definition.AllowDuplicateInvocations);
+        Assert.Equal(0, wrapped.Get("pr_fetch").Definition.NumberOfExactToolInvocationsPerTurn);
     }
 
     /// <summary>Multi-megabyte evidence stays captured while model delivery and continuation reads remain bounded.</summary>

@@ -285,8 +285,16 @@ public sealed record ToolDefinition
     /// <summary>Whether a read-only subagent may receive this network tool under its frozen policy.</summary>
     public bool ReadOnlySubagentNetworkAvailable { get; init; }
 
-    /// <summary>Whether identical invocations may repeat in later responses; identical siblings in one response remain invalid.</summary>
-    public bool AllowDuplicateInvocations { get; init; }
+    /// <summary>Maximum total exact invocations per turn. Zero retains single-use admission without a numeric counter.</summary>
+    public int NumberOfExactToolInvocationsPerTurn
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(value);
+            field = value;
+        }
+    }
 
     /// <summary>Whether invocation requires a currently loaded semantic workspace identity.</summary>
     public bool RequiresWorkspace { get; init; }
@@ -495,7 +503,12 @@ public sealed record ToolExecution<TOutput>(
     [property: JsonIgnore] string? TransientActivityDetail = null,
     ToolExecutionFailure? Failure = null,
     IReadOnlyList<ImageArtifact>? Images = null,
-    [property: JsonIgnore] UserQuestionRequest? Suspension = null);
+    [property: JsonIgnore] UserQuestionRequest? Suspension = null)
+{
+    /// <summary>Original observation for bounded host retention, never sent directly to the model.</summary>
+    [JsonIgnore]
+    public string? RetainedEvidenceContent { get; init; }
+}
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -550,6 +563,10 @@ public sealed record ToolInvocationResult
 
     /// <summary>Optional bounded content supplied to the model instead of <see cref="ResultJson" />.</summary>
     public string? ModelResultContent { get; init; }
+
+    /// <summary>Sanitized original observation for bounded host retention.</summary>
+    [JsonIgnore]
+    public string? RetainedEvidenceContent { get; init; }
 
     /// <summary>Sources supporting the result.</summary>
     public IReadOnlyList<ToolProvenanceSource> Sources { get; init; } = [];
@@ -697,7 +714,12 @@ public sealed record ToolExecutionEnvelope(
     [property: JsonIgnore] string? TransientActivityDetail = null,
     ToolExecutionFailure? Failure = null,
     IReadOnlyList<ImageArtifact>? Images = null,
-    [property: JsonIgnore] UserQuestionRequest? Suspension = null);
+    [property: JsonIgnore] UserQuestionRequest? Suspension = null)
+{
+    /// <summary>Original observation for bounded host retention, never sent directly to the model.</summary>
+    [JsonIgnore]
+    public string? RetainedEvidenceContent { get; init; }
+}
 
 /// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
 internal interface ITransientToolActivityDetail
@@ -898,7 +920,10 @@ public abstract class Tool<TInput, TOutput> : ITool
             TransientActivityDetail: result.TransientActivityDetail,
             Failure: result.Failure,
             Images: result.Images,
-            Suspension: result.Suspension);
+            Suspension: result.Suspension)
+        {
+            RetainedEvidenceContent = result.RetainedEvidenceContent,
+        };
     }
 
     /// <summary>Executes validated typed input.</summary>

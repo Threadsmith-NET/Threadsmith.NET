@@ -339,7 +339,11 @@
         "maximumPreflightReasonCharacters": 512
       },
       "defaults": {},
-      "byTool": []
+      // Per-tool only. Zero permits one exact call. Restart after changes.
+      "byTool": [
+        { "toolId": "run_process", "NumberOfExactToolInvocationsPerTurn": 3 },
+        { "toolId": "list_files", "NumberOfExactToolInvocationsPerTurn": 2 }
+      ]
     },
     "writeFile": {
       "maxContentBytes": 1048576,

@@ -1111,6 +1111,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 Succeeded = succeeded,
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
+                RetainedEvidenceContent = execution.RetainedEvidenceContent is { Length: <= ConversationReceiptChecks.MaximumEvidenceBytes } retained
+                    ? JsonOutputSanitizer.SanitizeJsonOrText(retained, _sanitizer) : null,
                 Concepts = observedConcepts,
                 Sources = execution.Sources,
                 Images = succeeded ? execution.Images ?? [] : [],

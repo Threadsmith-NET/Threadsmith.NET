@@ -1478,7 +1478,8 @@ public sealed partial class SessionApplication
 
         foreach (var call in streamState.PendingToolCalls)
         {
-            var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            var registration = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
+            var definition = ToolRuntimePolicy.ApplyCeiling(registration.Tool, round.InvocationContext?.SecurityPolicy).Definition;
             loopState.InvokedToolCalls.TryAdd(definition, call.ArgumentsJson);
             if (SemanticFirstSearchPolicy.IsSemanticInspectionTool(call.ToolName))
             {
@@ -1667,7 +1668,8 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            var registration = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
+            var definition = ToolRuntimePolicy.ApplyCeiling(registration.Tool, round.InvocationContext?.SecurityPolicy).Definition;
             if (sourceEditRequested && (definition.SideEffect == ToolSideEffect.ExecutesCode
                 || definition.Category is ToolCategory.ProcessExecution or ToolCategory.CodeExecution))
             {
@@ -1681,13 +1683,13 @@ public sealed partial class SessionApplication
             }
 
             sourceEditRequested |= call.ToolName.Equals("edit_source", StringComparison.OrdinalIgnoreCase);
-            if (!observedToolCalls.TryAdd(definition, call.ArgumentsJson))
+            if (!observedToolCalls.TryAdd(definition, call.ArgumentsJson, out var rejection))
             {
                 diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                     MalformedInvocationFailureKind.PhaseInvalidTool,
                     call.Ordinal,
                     call.ToolName,
-                    RequireCorrectiveMessages().CreateDuplicateToolInvocationReason(call.ToolName),
+                    RequireCorrectiveMessages().CreateDuplicateToolInvocationReason(call.ToolName, rejection),
                     pendingCalls.Count);
                 return true;
             }

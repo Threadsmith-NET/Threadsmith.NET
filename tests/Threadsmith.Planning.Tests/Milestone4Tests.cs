@@ -1075,7 +1075,7 @@ public static class Milestone4Tests
             Assert.Equal(duplicateWithinResponse || !allowDuplicates, finalRequest.Messages.Any(message => message.Role == ModelMessageRole.Tool
                     && string.Equals(message.ToolName, "list_files", StringComparison.Ordinal)
                     && message.Content.Any(part => part.Content.Contains(
-                        "already called",
+                        duplicateWithinResponse ? "occurs more than once" : "already has 1 accepted invocations",
                         StringComparison.Ordinal))));
         }
         finally
@@ -2566,7 +2566,7 @@ public static class Milestone4Tests
 
         public DuplicatePolicyListTool(bool allowDuplicates)
         {
-            Definition = _inner.Definition with { AllowDuplicateInvocations = allowDuplicates };
+            Definition = _inner.Definition with { NumberOfExactToolInvocationsPerTurn = allowDuplicates ? int.MaxValue : 0 };
         }
 
         public override ToolDefinition Definition { get; }

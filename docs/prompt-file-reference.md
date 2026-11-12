@@ -47,12 +47,12 @@ Common editing rules:
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 26 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Correction prompts | 27 | Host-authored ordinary tool and malformed-output retry messages. |
+| Tool prompts | 197 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **296** | Complete deployed catalog. |
+| **Total** | **298** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -262,7 +262,8 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-Tool-DuplicateInvocation.md` | Duplicate-call reason for parent corrections and child execution failures. | [`ToolName`](#placeholder-toolname) |
+| `Correction-Tool-DuplicateInvocation.md` | Exact-call quota rejection shared by parent, child, and skill corrections. | [`ToolName`](#placeholder-toolname), [`InvocationCount`](#placeholder-invocationcount) |
+| `Correction-Tool-DuplicateSiblingInvocation.md` | Identical-sibling rejection shared by all model execution paths. | [`ToolName`](#placeholder-toolname) |
 | `Correction-Tool-Unavailable.md` | Corrective or retry guidance for `Tool-Unavailable`. | [`ToolName`](#placeholder-toolname) |
 
 #### `ToolBatch` family
@@ -480,6 +481,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
 | `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Within the configurable pre-edit window, completed reported compiler errors or warnings return NotApplied with diagnostics; observation expiry preserves writer admission and asynchronous feedback; the model must repair introduced errors and treat new compiler or analyzer warnings related to the current work as errors for completion, fixing them before finishing or explaining a conflict with the request. Unknown warning origins require assessment against the changes; unrelated existing warnings remain out of scope. The model must wait for and review completed compiler and enabled analyzer feedback for the final source state before declaring success, recheck after repairs, and report validation incomplete if checks remain pending or cannot establish current coverage. Disabled analyzers are not pending checks. Missing counts are unknown. Builds/tests require explicit tool calls in a later round after feedback review; subsequent code execution, including run_process, cannot share the edit batch. | `None` |
+| `Tool-edit_source-ReceiptTruncated.md` | Edit receipt truncation and evidence recovery guidance, loaded through the active prompt loader for repository/model overrides. No tokens. Output sizing, field omission, and disk outcome preservation remain code-owned; guidance is omitted if it cannot fit the minimum outcome envelope. | `None` |
 | `Tool-delegate_agents-Description.md` | Delegation guidance for roles, shared context with individual additions, evidence references, concurrent assignments, inherited tools, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
@@ -910,6 +912,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-toolcalls"></a>`ToolCalls` | Measured number of tool calls made by a child or operation. |
 | <a id="placeholder-toolid"></a>`ToolId` | Canonical code-owned tool identifier. |
 | <a id="placeholder-toolinventory"></a>`ToolInventory` | Rendered tool definitions available to the current governed request. |
+| <a id="placeholder-invocationcount"></a>`InvocationCount` | Accepted exact invocations before quota rejection, formatted with the invariant culture. |
 | <a id="placeholder-toolname"></a>`ToolName` | Display-safe or canonical name of the referenced tool. |
 | <a id="placeholder-toolresult"></a>`ToolResult` | Bounded serialized or textual result returned by a tool. |
 | <a id="placeholder-totalcallers"></a>`TotalCallers` | Total caller count before result projection bounds. |

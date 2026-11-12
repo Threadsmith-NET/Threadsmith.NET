@@ -289,7 +289,8 @@ public sealed partial class SourceEditApplicationTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await EditFixture.CreateAsync(ct);
         var analyzer = new AdvisoryAnalyzer([]);
-        var edits = fixture.CreateApplication(analyzer: analyzer);
+        await using var refresh = new StubEditRefresh(fixture.WorkspaceId);
+        var edits = fixture.CreateApplication(analyzer: analyzer, refresh: refresh);
         var command = fixture.Replace("Example", "Changed", false);
         await edits.HandleAsync(command, ct);
         analyzer.Publish(new()
@@ -301,6 +302,7 @@ public sealed partial class SourceEditApplicationTests
             Obsolete = true,
         });
 
+        refresh.Current = false;
         Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
 
         analyzer.Publish(new()

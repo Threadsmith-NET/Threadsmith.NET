@@ -100,6 +100,32 @@ public sealed class ConversationReceiptChecksTests
         Assert.Equal(result == "TimedOut", observation.TimedOut);
     }
 
+    /// <summary>Failure evidence retains priority over successful edits under entry and byte bounds.</summary>
+    [Theory]
+    [InlineData(100)]
+    [InlineData(1024 * 1024)]
+    public async Task FailedCheckEvidenceDisplacesEditReceiptsUnderSharedLimits(int size)
+    {
+        var checks = new ConversationReceiptChecks();
+        var repository = Path.GetTempPath();
+        for (var index = 0; index < 8; index++)
+        {
+            var edit = new ToolInvocationResult { ToolInvocationId = ToolInvocationId.New(), ToolId = "edit_source", Succeeded = true, IsTruncated = true, RetainedEvidenceContent = new string('x', size) };
+            checks.CaptureEvidence(edit, EvidenceId.New(), repository, "bounded receipt");
+        }
+
+        var context = CreateContext(checks);
+        await ConversationReceiptChecks.ObserveAsync(context, "dotnet_build", "a.csproj", "build", _ => Task.FromResult(Result(false)), TestContext.Current.CancellationToken);
+        var failure = new ToolInvocationResult { ToolInvocationId = context.ToolInvocationId, ToolId = "dotnet_build", Succeeded = true };
+        checks.CaptureEvidence(failure, EvidenceId.New(), repository, "failed build details");
+        var snapshot = checks.EvidenceSnapshot();
+        Assert.Equal("failed build details", snapshot[0].Content);
+        Assert.False(snapshot[0].WasTruncated);
+        Assert.True(snapshot.Count <= 8);
+        Assert.True(snapshot.Sum(item => System.Text.Encoding.UTF8.GetByteCount(item.Content)) <= 4 * 1024 * 1024);
+        Assert.All(snapshot.Where(item => item.Label == "edit_source"), item => Assert.False(item.WasTruncated));
+    }
+
     private static ToolExecutionContext CreateContext(ConversationReceiptChecks checks)
     {
         return new(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext { RepositoryPath = "/repo", RequestedBy = "model", ReceiptChecks = checks });

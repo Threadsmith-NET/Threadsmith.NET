@@ -127,7 +127,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             DisplayName = "Memories",
 
             // Lists must observe intervening writes; repeated mutations retain service-owned fences.
-            AllowDuplicateInvocations = true,
+            NumberOfExactToolInvocationsPerTurn = int.MaxValue,
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """

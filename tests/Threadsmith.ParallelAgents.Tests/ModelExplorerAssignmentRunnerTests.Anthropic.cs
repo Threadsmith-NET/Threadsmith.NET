@@ -132,7 +132,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(repeatCall, thirdResult.GetProperty("is_error").GetBoolean());
         if (repeatCall)
         {
-            Assert.Contains("already called with these arguments", thirdResult.GetRawText(), StringComparison.Ordinal);
+            Assert.Contains("already has 1 accepted invocations", thirdResult.GetRawText(), StringComparison.Ordinal);
         }
 
         Assert.DoesNotContain("private-child", JsonSerializer.Serialize(observed), StringComparison.Ordinal);

@@ -196,6 +196,7 @@ internal static class ConfigurationBootstrap
             ["tools:findImplementations:maxResults"] = "1000",
             ["tools:codeExplore:inspectCodeExploreOutput"] = "false",
             ["tools:runProcess:defaultTimeoutSeconds"] = "30",
+            ["tools:runProcess:NumberOfExactToolInvocationsPerTurn"] = "3",
             ["tools:runProcess:maxTimeoutSeconds"] = "60",
             ["tools:runProcess:requireApproval"] = "true",
             ["tools:runProcess:shellExecutable"] = OperatingSystem.IsWindows() ? "powershell" : "bash",

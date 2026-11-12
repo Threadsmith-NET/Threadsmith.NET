@@ -1,0 +1,1 @@
+Receipt details omitted at the output bound. Status and DurableOutcomeRecorded describe the disk outcome, not validation. Do not replay the edit. Completed-turn evidence recovery retains additional details subject to retention limits.

@@ -73,7 +73,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(1, outcome.Usage.Corrections);
         Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
         Assert.Contains(provider.Requests[1].Messages, message => message.IsError == true
-            && message.GetModelVisibleContent().Contains("already called with these arguments", StringComparison.Ordinal));
+            && message.GetModelVisibleContent().Contains("occurs more than once", StringComparison.Ordinal));
     }
 
     /// <summary>Children share the parent's configured consecutive correction limit and reset it after accepted tools.</summary>
@@ -118,7 +118,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         else
         {
             var exception = await Assert.ThrowsAsync<MalformedInvocationException>(() => runner.RunAsync(plan, assignment));
-            Assert.Contains("already called with these arguments", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("already has 1 accepted invocations", exception.Message, StringComparison.Ordinal);
             Assert.Equal(3, provider.Requests.Count);
             Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
         }
@@ -204,7 +204,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(batches.Length + 2, provider.Requests.Count);
         var correctionRequest = provider.Requests[batches.Length];
         Assert.Contains(correctionRequest.Messages, message => message.IsError == true
-            && message.GetModelVisibleContent().Contains("already called with these arguments", StringComparison.Ordinal));
+            && message.GetModelVisibleContent().Contains(duplicateWithinBatch ? "occurs more than once" : "already has 1 accepted invocations", StringComparison.Ordinal));
         Assert.All(provider.Requests, request => Assert.Equal(provider.Requests[0].RunId, request.RunId));
         Assert.NotNull(sibling.LastInvocationContext);
         Assert.Equal(duplicateWithinBatch ? 1 : 2, evidence.Snapshot(plan.Provenance.SessionId).Count);
@@ -285,7 +285,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal(1, outcome.Usage.Corrections);
         Assert.Contains(provider.Requests[^1].Messages, message => message.IsError == true
-            && message.GetModelVisibleContent().Contains("already called with these arguments", StringComparison.Ordinal));
+            && message.GetModelVisibleContent().Contains("already has 1 accepted invocations", StringComparison.Ordinal));
         Assert.Equal(1, provider.Summaries);
         Assert.Equal(1, provider.Requests[^1].HistoryRewriteGeneration);
         Assert.Equal(2, evidence.Snapshot(plan.Provenance.SessionId).Count);

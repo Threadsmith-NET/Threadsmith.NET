@@ -741,13 +741,13 @@ internal sealed class ChildAgentModelLoop
                     requests.Count));
             }
 
-            if (!pendingCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, request.ArgumentsJson))
+            if (!pendingCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(resolvedRegistrations[ordinal].Tool, childContext.SecurityPolicy).Definition, request.ArgumentsJson, out var rejection))
             {
                 throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                     MalformedInvocationFailureKind.PhaseInvalidTool,
                     ordinal,
                     request.ToolName,
-                    new CorrectiveMessageFactory(_prompts).CreateDuplicateToolInvocationReason(request.ToolName),
+                    new CorrectiveMessageFactory(_prompts).CreateDuplicateToolInvocationReason(request.ToolName, rejection),
                     requests.Count));
             }
 
@@ -756,7 +756,7 @@ internal sealed class ChildAgentModelLoop
 
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
-            toolCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, requests[ordinal].ArgumentsJson);
+            toolCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(resolvedRegistrations[ordinal].Tool, childContext.SecurityPolicy).Definition, requests[ordinal].ArgumentsJson);
         }
 
         var results = new List<ToolBatchResult>();

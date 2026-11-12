@@ -257,7 +257,7 @@ public sealed partial class SemanticEngine
                 && candidate.Command.RunId == runId && candidate.Command.EffectId == effectId
                 ? candidate.Result with
                 {
-                    Pending = candidate.Result.Pending || candidate.Result.CommittedGeneration is null,
+                    Pending = candidate.Result.Pending,
                     Obsolete = candidate.Result.Obsolete || (!ReferenceEquals(_solution, candidate.Base) && !ReferenceEquals(_solution, candidate.Solution)),
                 } : null;
         }
@@ -305,6 +305,22 @@ public sealed partial class SemanticEngine
         }
 
         discarded?.Cancel();
+    }
+
+    /// <summary>Captures replacement authority without constructing scope or starting analysis.</summary>
+    internal Action? CaptureEditAfterGraphRefreshContinuation(IReadOnlyDictionary<string, string?> verifiedInputs)
+    {
+        lock (_gate)
+        {
+            if (_editCandidate is not { } candidate)
+            {
+                return null;
+            }
+
+            var effectId = candidate.Command.EffectId;
+            var generation = _solutionGeneration;
+            return () => ContinueEditAfterGraphRefresh(verifiedInputs, effectId, generation);
+        }
     }
 
     /// <summary>Continues advisory coverage after the refresh owner verifies a graph replacement and the applied endpoints.</summary>
@@ -482,12 +498,12 @@ public sealed partial class SemanticEngine
         catch (OperationCanceledException)
         {
             outcome = SemanticCheckOutcome.Cancelled;
-            UpdateEditResult(candidate, result => result with { Pending = false, Omissions = [.. result.Omissions, "Remaining advisory analysis was cancelled or exceeded its bounded lifetime."] });
+            UpdateEditResult(candidate, result => result with { Pending = false, Omissions = [.. result.Omissions, "Remaining advisory analysis was cancelled or exceeded its bounded lifetime."] }, terminal: true);
         }
         catch (Exception)
         {
             outcome = SemanticCheckOutcome.Degraded;
-            UpdateEditResult(candidate, result => result with { Pending = false, Omissions = [.. result.Omissions, "Scoped compiler analysis is unavailable for the remaining coverage."] });
+            UpdateEditResult(candidate, result => result with { Pending = false, Omissions = [.. result.Omissions, "Scoped compiler analysis is unavailable for the remaining coverage."] }, terminal: true);
         }
         finally
         {
@@ -779,11 +795,13 @@ public sealed partial class SemanticEngine
             && (ReferenceEquals(_solution, candidate.Base) || ReferenceEquals(_solution, candidate.Solution));
     }
 
-    private void UpdateEditResult(EditCandidate candidate, Func<SourceEditAnalysis, SourceEditAnalysis> update)
+    private void UpdateEditResult(EditCandidate candidate, Func<SourceEditAnalysis, SourceEditAnalysis> update, bool terminal = false)
     {
         lock (_gate)
         {
-            if (ReferenceEquals(_editCandidate, candidate) && (ReferenceEquals(_solution, candidate.Base) || ReferenceEquals(_solution, candidate.Solution)))
+            // Terminal bookkeeping belongs to the terminating operation, even after retirement.
+            // Diagnostic publication still requires the current candidate and source snapshot.
+            if (terminal || (ReferenceEquals(_editCandidate, candidate) && (ReferenceEquals(_solution, candidate.Base) || ReferenceEquals(_solution, candidate.Solution))))
             {
                 var updated = update(candidate.Result);
                 candidate.Result = updated with
@@ -824,7 +842,15 @@ public sealed partial class SemanticEngine
 
         if (_editCandidate is { } candidate)
         {
-            candidate.Result = candidate.Result with { Obsolete = true, Pending = candidate.Applied, Revision = candidate.Result.Revision + 1 };
+            candidate.Result = candidate.Result with
+            {
+                Obsolete = true,
+                Pending = false,
+                Analyzers = candidate.Result.Analyzers.Status == "pending"
+                    ? candidate.Result.Analyzers with { Status = "cancelled" }
+                    : candidate.Result.Analyzers,
+                Revision = candidate.Result.Revision + 1,
+            };
             candidate.Cancel();
         }
     }

@@ -127,6 +127,11 @@ public sealed record PermissionConfiguration
         [ConfigurationPermission(Shape = PermissionInputShape.Scalar, Sources = PermissionConfigurationSources.Machine | PermissionConfigurationSources.User, StartupBound = true)]
         public string? ShellExecutable { get; init; }
 
+        /// <summary>Gets the startup-bound total exact process invocation allowance per turn.</summary>
+        [JsonPropertyName("NumberOfExactToolInvocationsPerTurn")]
+        [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 3, StartupBound = true)]
+        public int? NumberOfExactToolInvocationsPerTurn { get; init; }
+
         /// <summary>Configuration contract for tools:runProcess:requireApproval.</summary>
         [JsonPropertyName("requireApproval")]
         [ConfigurationPermission(Shape = PermissionInputShape.Boolean)]

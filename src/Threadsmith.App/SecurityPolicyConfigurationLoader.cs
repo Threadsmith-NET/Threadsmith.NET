@@ -15,8 +15,8 @@ internal static class SecurityPolicyConfigurationLoader
     /// <summary>Trusted machine and user settings use the shared reader's addressable byte ceiling.</summary>
     internal const long TrustedConfigurationMaximumBytes = int.MaxValue;
 
-    /// <summary>Builds a detached trusted adapter view with whole-array replacement.</summary>
-    internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths)
+    /// <summary>Builds a detached trusted adapter view with whole-array replacement; runtime preferences can defer enforcement to the captured policy.</summary>
+    internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths, bool includeEnforced = true)
     {
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         var trustedSources = ReadTrustedSources(paths, []);
@@ -58,7 +58,7 @@ internal static class SecurityPolicyConfigurationLoader
         }
 
         var machine = trustedSources.Single(source => source.Kind == "Machine");
-        if (machine.Values.TryGetValue("enforced", out var enforced))
+        if (includeEnforced && machine.Values.TryGetValue("enforced", out var enforced))
         {
             var values = ConfigurationDocument.Parse(Encoding.UTF8.GetBytes(enforced.GetRawText()));
             foreach (var (key, value) in values.Where(pair => pair.Value.ValueKind != JsonValueKind.Object))
@@ -189,7 +189,7 @@ internal static class SecurityPolicyConfigurationLoader
 
                 if (!int.TryParse(node.ToString(), CultureInfo.InvariantCulture, out var parsed)
                     || (parsed <= 0 && !(parsed == -1 && key.EndsWith(":timeoutMilliseconds", StringComparison.OrdinalIgnoreCase))
-                        && !(parsed == 0 && key == "webFetch:maximumRedirects")))
+                        && !(parsed == 0 && (key == "webFetch:maximumRedirects" || key.EndsWith(":NumberOfExactToolInvocationsPerTurn", StringComparison.OrdinalIgnoreCase)))))
                 {
                     throw Invalid(source, key);
                 }
@@ -202,6 +202,18 @@ internal static class SecurityPolicyConfigurationLoader
 
         limits["tools:runProcess:defaultTimeoutSeconds"] = Math.Min(limits["tools:runProcess:defaultTimeoutSeconds"], limits["tools:runProcess:maxTimeoutSeconds"]);
         ResolveRuntimeOverrides(trusted, [.. restrictions], limits, sources);
+        const string exactProcessKey = "tools:runProcess:NumberOfExactToolInvocationsPerTurn";
+        const string exactRuntimeKey = "tools:runtime:byTool:run_process:NumberOfExactToolInvocationsPerTurn";
+        var exactProcessLimit = limits.GetValueOrDefault(exactRuntimeKey, limits[exactProcessKey]);
+        foreach (var source in restrictions)
+        {
+            if (source.Values.TryGetValue(exactProcessKey, out var enforcedLimit))
+            {
+                exactProcessLimit = Math.Min(exactProcessLimit, int.Parse(enforcedLimit.ToString(), CultureInfo.InvariantCulture));
+            }
+        }
+
+        limits[exactRuntimeKey] = exactProcessLimit;
         string[] assemblies = ["System.Linq", "System.Collections", "System.Collections.Generic"];
         foreach (var source in trusted.Concat(restrictions))
         {
@@ -493,9 +505,19 @@ internal static class SecurityPolicyConfigurationLoader
                 || pair.Key.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase)))
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => new KeyValuePair<string, string?>(pair.Key.ToUpperInvariant(), pair.Value)).ToArray();
+
+        // The registry captures ordinary preferences separately from machine enforcement.
+        // An enforced byTool array must not hide changes to those startup-bound values.
+        var runtimePreferences = BuildTrusted(paths, includeEnforced: false);
+        using var runtimePreferencesLifetime = runtimePreferences as IDisposable;
+        var runtimeEntries = runtimePreferences.AsEnumerable()
+            .Where(pair => pair.Key.StartsWith("tools:runtime:", StringComparison.OrdinalIgnoreCase)
+                || pair.Key.Equals("tools:runProcess:NumberOfExactToolInvocationsPerTurn", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(pair => new KeyValuePair<string, string?>(pair.Key.ToUpperInvariant(), pair.Value)).ToArray();
         var requests = restrictions.Select(source => source.Values.TryGetValue("hooks:repositoryHandlers", out var handlers)
             ? JsonSerializer.Serialize(Normalize(handlers)) : string.Empty).ToArray();
-        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { entries, requests })));
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { entries, runtimeEntries, requests })));
 
         static object Normalize(JsonElement node) => node.ValueKind switch
         {
@@ -675,14 +697,16 @@ internal static class SecurityPolicyConfigurationLoader
                 foreach (var (name, value) in fields.Where(field => !field.Key.Equals("toolId", StringComparison.OrdinalIgnoreCase)))
                 {
                     var defaultKey = "tools:runtime:defaults:" + name;
-                    if (!ResourceDefaults.ContainsKey(defaultKey) || !int.TryParse(value.ToString(), CultureInfo.InvariantCulture, out var parsed)
-                        || (parsed <= 0 && !(parsed == -1 && name.Equals("timeoutMilliseconds", StringComparison.OrdinalIgnoreCase))))
+                    var exactInvocations = name.Equals("NumberOfExactToolInvocationsPerTurn", StringComparison.OrdinalIgnoreCase);
+                    if ((!exactInvocations && !ResourceDefaults.ContainsKey(defaultKey))
+                        || !int.TryParse(value.ToString(), CultureInfo.InvariantCulture, out var parsed)
+                        || (exactInvocations ? parsed < 0 : parsed <= 0 && !(parsed == -1 && name.Equals("timeoutMilliseconds", StringComparison.OrdinalIgnoreCase))))
                     {
                         throw Invalid(source, key);
                     }
 
                     var specific = key + ":" + id.GetString() + ":" + name;
-                    limits[specific] = isRestriction ? Narrow(limits.GetValueOrDefault(specific, limits[defaultKey]), parsed) : parsed;
+                    limits[specific] = isRestriction ? Narrow(limits.GetValueOrDefault(specific, exactInvocations ? int.MaxValue : limits[defaultKey]), parsed) : parsed;
                 }
             }
 

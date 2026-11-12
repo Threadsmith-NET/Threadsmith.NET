@@ -84,6 +84,9 @@ public sealed record ToolLimits
     /// <summary>Host-owned default execution timeout in seconds. Historical default: 30.</summary>
     public int RunProcessDefaultTimeoutSeconds { get; init; } = 30;
 
+    /// <summary>Maximum total exact process invocations admitted per turn; zero permits one.</summary>
+    public int RunProcessNumberOfExactToolInvocationsPerTurn { get; init; } = 3;
+
     /// <summary>Host-owned execution timeout ceiling in seconds. Historical default: 60.</summary>
     public int RunProcessMaxTimeoutSeconds { get; init; } = 60;
 
@@ -122,6 +125,7 @@ public sealed record ToolLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindReferencesMaxResults);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindImplementationsMaxResults);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessDefaultTimeoutSeconds);
+        ArgumentOutOfRangeException.ThrowIfNegative(RunProcessNumberOfExactToolInvocationsPerTurn);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessMaxTimeoutSeconds);
 
         // CancellationTokenSource uses an unsigned 32-bit millisecond timer on .NET 10.

@@ -6,7 +6,7 @@ using Threadsmith.Execution;
 using Xunit;
 
 /// <summary>Verifies the model-facing edit receipt preserves evidence without claiming unmeasured success.</summary>
-public sealed class SourceEditToolTests
+public sealed partial class SourceEditToolTests
 {
     /// <summary>Completed analyzer projection remains bounded and explicit while compiler totals are unknown.</summary>
     [Fact]
@@ -172,9 +172,12 @@ public sealed class SourceEditToolTests
             _receipt = receipt;
         }
 
+        public int Calls { get; private set; }
+
         public Task<SourceEditReceipt> HandleAsync(ApplySourceEditCommand command, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
             return Task.FromResult(_receipt);
         }
     }

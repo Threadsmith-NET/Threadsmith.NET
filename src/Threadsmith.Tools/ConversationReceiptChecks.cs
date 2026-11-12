@@ -5,6 +5,9 @@ using Threadsmith.Core;
 /// <summary>Bounded observations owned by one conversation run, captured before display projection.</summary>
 internal sealed class ConversationReceiptChecks
 {
+    /// <summary>Maximum UTF-8 bytes retained for one historical evidence item.</summary>
+    internal const int MaximumEvidenceBytes = 1024 * 1024;
+
     private readonly Lock _gate = new();
     private readonly List<ConversationCheckObservation> _checks = [];
     private readonly Dictionary<string, ReceiptEvidenceCapture> _evidence = new(StringComparer.Ordinal);
@@ -17,18 +20,35 @@ internal sealed class ConversationReceiptChecks
         lock (_gate)
         {
             var id = result.ToolInvocationId.Value.ToString();
-            if (!_checks.Any(check => check.Invocation == id) || _evidence.ContainsKey(id)
-                || content.Length > 1024 * 1024 || result.Images.Count > 0)
+            content = result.RetainedEvidenceContent ?? content;
+            if ((!_checks.Any(check => check.Invocation == id) && result.ToolId != "edit_source") || _evidence.ContainsKey(id)
+                || content.Length > MaximumEvidenceBytes || result.Images.Count > 0)
             {
                 return;
             }
 
             var bytes = System.Text.Encoding.UTF8.GetByteCount(content);
-            if (bytes <= 1024 * 1024 && _evidenceBytes + bytes <= 4 * 1024 * 1024)
+            if (bytes > MaximumEvidenceBytes)
             {
-                _evidence.Add(id, new ReceiptEvidenceCapture(evidenceId, result.ToolInvocationId, RepositoryIdentity.Create(repositoryPath), result.ToolId, content, result.IsTruncated));
-                _evidenceBytes += bytes;
+                return;
             }
+
+            var incomingPriority = GetEvidencePriority(id);
+            while (_evidence.Count >= 8 || _evidenceBytes + bytes > 4 * 1024 * 1024)
+            {
+                var removable = _evidence.Keys.OrderBy(GetEvidencePriority).FirstOrDefault();
+                if (removable is null || GetEvidencePriority(removable) > incomingPriority)
+                {
+                    return;
+                }
+
+                var removed = _evidence[removable];
+                _evidence.Remove(removable);
+                _evidenceBytes -= System.Text.Encoding.UTF8.GetByteCount(removed.Content);
+            }
+
+            _evidence.Add(id, new ReceiptEvidenceCapture(evidenceId, result.ToolInvocationId, RepositoryIdentity.Create(repositoryPath), result.ToolId, content, result.RetainedEvidenceContent is null && result.IsTruncated));
+            _evidenceBytes += bytes;
         }
     }
 
@@ -38,7 +58,8 @@ internal sealed class ConversationReceiptChecks
         lock (_gate)
         {
             return _checks.OrderBy(check => check.Succeeded).ThenByDescending(check => check.Started)
-                .Where(check => _evidence.ContainsKey(check.Invocation)).Select(check => _evidence[check.Invocation]).ToArray();
+                .Where(check => _evidence.ContainsKey(check.Invocation)).Select(check => _evidence[check.Invocation])
+                .Concat(_evidence.Where(pair => !_checks.Any(check => check.Invocation == pair.Key)).Select(pair => pair.Value)).ToArray();
         }
     }
 
@@ -49,7 +70,7 @@ internal sealed class ConversationReceiptChecks
         {
             lock (_gate)
             {
-                return _total > 0;
+                return _total > 0 || _evidence.Count > 0;
             }
         }
     }
@@ -139,6 +160,12 @@ internal sealed class ConversationReceiptChecks
                 owner._checks.Add(observation);
             }
         }
+    }
+
+    private int GetEvidencePriority(string invocation)
+    {
+        var check = _checks.FirstOrDefault(item => item.Invocation == invocation);
+        return check is null ? 0 : check.Succeeded ? 1 : 2;
     }
 }
 

@@ -8,11 +8,13 @@ public sealed class ToolCallHistory
 {
     private readonly HashSet<(string ToolName, string ArgumentsJson)>? _currentBatchCalls;
     private readonly HashSet<(string ToolName, string ArgumentsJson)> _calls;
+    private readonly Dictionary<(string ToolName, string ArgumentsJson), int> _counts;
 
     /// <summary>Initializes a new instance of the <see cref="ToolCallHistory"/> class with an empty execution history.</summary>
     public ToolCallHistory()
     {
         _calls = [];
+        _counts = [];
     }
 
     /// <summary>Initializes a new instance of the <see cref="ToolCallHistory"/> class for batch validation from accepted calls.</summary>
@@ -20,21 +22,29 @@ public sealed class ToolCallHistory
     {
         ArgumentNullException.ThrowIfNull(accepted);
         _calls = [.. accepted._calls];
+        _counts = new(accepted._counts);
         _currentBatchCalls = [];
     }
 
     /// <summary>Records a call, returning false if its name and arguments have already been recorded.</summary>
     /// <remarks>Callers retain their existing argument normalization policy.</remarks>
     public bool TryAdd(string toolName, string argumentsJson)
+        => TryAdd(toolName, argumentsJson, out _);
+
+    /// <summary>Tracks a request with the default single-use rule when no advertised definition is available.</summary>
+    public bool TryAdd(string toolName, string argumentsJson, [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out ToolCallRejection? rejection)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolName);
         ArgumentNullException.ThrowIfNull(argumentsJson);
-        var call = (toolName.ToUpperInvariant(), argumentsJson);
-        return TrackCurrentBatch(call) && _calls.Add(call);
+        return TryRecord(toolName, argumentsJson, 0, out rejection);
     }
 
     /// <summary>Applies host-owned reuse metadata while always rejecting identical siblings in the current batch.</summary>
     public bool TryAdd(ToolDefinition definition, string argumentsJson)
+        => TryAdd(definition, argumentsJson, out _);
+
+    /// <summary>Records an admitted call and returns the shared reason and accepted count when admission fails.</summary>
+    public bool TryAdd(ToolDefinition definition, string argumentsJson, [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out ToolCallRejection? rejection)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(argumentsJson);
@@ -59,20 +69,39 @@ public sealed class ToolCallHistory
             }
         }
 
-        var call = (definition.Id.ToUpperInvariant(), argumentsJson);
-        if (!TrackCurrentBatch(call))
-        {
-            return false;
-        }
-
-        var added = _calls.Add(call);
-        return added || definition.AllowDuplicateInvocations;
+        return TryRecord(definition.Id, argumentsJson, definition.NumberOfExactToolInvocationsPerTurn, out rejection);
     }
 
     /// <summary>Reports whether a tool has an accepted call in this execution's history.</summary>
     public bool ContainsTool(string toolName)
     {
         return _calls.Any(call => string.Equals(call.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private bool TryRecord(string toolName, string argumentsJson, int limit, [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out ToolCallRejection? rejection)
+    {
+        rejection = null;
+        var call = (toolName.ToUpperInvariant(), argumentsJson);
+        if (!TrackCurrentBatch(call))
+        {
+            rejection = new ToolCallRejection(true, _counts.GetValueOrDefault(call, _calls.Contains(call) ? 1 : 0));
+            return false;
+        }
+
+        var count = _counts.GetValueOrDefault(call, _calls.Contains(call) ? 1 : 0);
+        if (count >= Math.Max(1, limit))
+        {
+            rejection = new ToolCallRejection(false, count);
+            return false;
+        }
+
+        _calls.Add(call);
+        if (limit > 0)
+        {
+            _counts[call] = count + 1;
+        }
+
+        return true;
     }
 
     private bool TrackCurrentBatch((string ToolName, string ArgumentsJson) call)

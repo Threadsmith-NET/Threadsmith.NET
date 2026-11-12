@@ -150,6 +150,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemSystemPrompt prompt asset.</summary>
     public const string SystemSystemPrompt = "System-SystemPrompt.md";
 
+    /// <summary>Gets main-agent skill routing guidance used when invoke_skill is available.</summary>
+    public const string SystemSkillGuidance = "System-SkillGuidance.md";
+
     /// <summary>Gets the shared parent and child repository inspection guidance asset.</summary>
     public const string SystemRepositoryInspection = "System-RepositoryInspection.md";
 
@@ -1036,6 +1039,7 @@ public static class PromptFileNames
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
         SystemSystemPrompt,
+        SystemSkillGuidance,
         SystemRepositoryInspection,
         SystemScratchpad,
         SystemConversationGuidance,
@@ -1359,6 +1363,7 @@ public static class PromptAssetCatalog
         var contextAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.SystemSystemPrompt,
+            PromptFileNames.SystemSkillGuidance,
             PromptFileNames.SystemRepositoryInspection,
             PromptFileNames.SystemScratchpad,
             PromptFileNames.SystemConversationGuidance,

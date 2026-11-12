@@ -1,0 +1,1 @@
+- When invoke_skill and the maintained threadsmith-docs-help skill are available, enabled, and compatible, prefer that skill for questions about Threadsmith usage, commands, configuration, context, providers, operations, troubleshooting, or authoring.

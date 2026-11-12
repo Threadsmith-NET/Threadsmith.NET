@@ -38,6 +38,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 
 | # | File | Capability |
 |---|---|---|
+| 121 | [Guided command policy authoring](plan-121-command-policy-authoring.md) | Sequential modal for shell policy JSON generation and review |
 | M36 | [Tool statistics](Threadsmith-tool-statistics-implementation-plan.md) | Persistent repository tool counts, durations and shared reset controls |
 | Maintenance | [maintenance-early-startup-modal.md](maintenance-early-startup-modal.md) | Early startup modal with timed operation states and bounded progress display |
 | Maintenance | [maintenance-strict-semantic-memory-recall.md](maintenance-strict-semantic-memory-recall.md) | Mandatory semantic admission for automatic ordinary and intelligence recall |

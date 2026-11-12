@@ -64,6 +64,18 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 **Verifies:** Host-owned authority and separate user/model projections.
 
+## Scenario COMMAND-POLICY-AUTHOR — Guided command policy authoring
+
+1. Enter `/command-policy` without arguments. Select a shell, enter several commands, and select an outcome for each command. Select directory scope and user or machine configuration. Verify that one modal asks sequential questions and retains answers during Back navigation.
+2. Use the existing modal keys, editor, choice controls, table scrolling, and clipboard actions. Resize below the shared minimum size and then restore it. Verify that the draft survives and focus remains correct. Cancel from each page and during validation. Verify that the existing composer and input owner remain usable.
+3. Include native commands, literal cmdlets or builtins, aliases, and supported script invocations. Verify separate interpreter and script permissions. Check every action in supported compounds. Unsupported syntax or missing targets must produce a correction request. No example may execute.
+4. Select each of the five outcomes. Reuse an existing suitable rule and extend a compatible rule. Resolve an ordinary conflict only through an explicit scoped override choice. Verify that machine constraints and argument-deny expressions remain effective. Show when a rule covers arguments beyond the supplied example.
+5. Review the candidate outcomes, JSON, executable-list additions, resolved destination, and merge instructions. Verify complete replacement rule objects, stable IDs, and preservation of unrelated settings. Copy the exact checked fragment. Invalid, unsupported, or stale proposals must not be copied as validated configuration.
+6. Change policy sources or native binding inputs before copy. Verify that validation becomes stale. Complete the flow with recording process and configuration boundaries. Verify zero command launches, configuration writes, activation calls, persistent grants, and model requests.
+7. Use harmless command and policy canaries. Verify that they remain on the direct local user surface. They must not enter logs, ordinary events, conversation history, restored state, or model context. Verify that existing shell-specific inspect, reload, revoke, and reset operations retain their behavior.
+
+**Verifies:** Guided policy authoring through the shared modal and policy paths, explicit scope review, valid manual JSON export, and unchanged execution authority.
+
 ## Scenario TOOL-STATS — Repository tool completion statistics
 
 1. Complete successful, rejected and failed central-pipeline tool requests. Open `/toolstats` and inspect its nine columns: Tool ID, Total, Success, Failure, Last invocation (UTC), Total duration, Average duration, Last-run duration, and Measured invocations. Average duration uses measured invocation count and rounds to the nearest whole millisecond with midpoint values rounded up; unavailable and measured-zero durations remain distinct.

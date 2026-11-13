@@ -117,6 +117,19 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.True(policy.RequireShellApproval);
     }
 
+    /// <summary>Compiled artifact-write defaults use .inbox and retain explicit folder configuration.</summary>
+    [Fact]
+    public void WriteFoldersDefaultToInboxAndHonorRestrictions()
+    {
+        Assert.Equal([Path.Combine(_paths.RepositoryRoot, ".inbox")], Load().WriteFolders);
+
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"writeFile":{"allowedFolders":["exports"]}}}""");
+        Assert.Equal([Path.Combine(_paths.RepositoryRoot, "exports")], Load().WriteFolders);
+
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"writeFile":{"allowedFolders":[]}}}""");
+        Assert.Empty(Load().WriteFolders);
+    }
+
     /// <summary>Directory intersection preserves narrower subtrees.</summary>
     [Fact]
     public void PathsIntersectByContainmentWithoutSiblingPrefixGrants()

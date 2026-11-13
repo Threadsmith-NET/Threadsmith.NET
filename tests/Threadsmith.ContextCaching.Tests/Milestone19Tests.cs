@@ -355,6 +355,7 @@ public sealed partial class Milestone19Tests
 
             var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
             Assert.Contains(capability.Current.ModelPath, messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains("`list_files`, `search`, `read_file`, and `write_file`", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
             Assert.Contains(
                 result.Inspection.PromptAssets,
                 asset => asset.Source == PromptFileNames.SystemScratchpad);

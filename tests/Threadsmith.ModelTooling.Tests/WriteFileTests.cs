@@ -41,12 +41,73 @@ public static class WriteFileTests
         Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Repository, ".inbox/nested"), "*.tmp"));
     }
 
+    /// <summary>Default artifact grants cannot replace project or workflow configuration.</summary>
+    [Theory]
+    [InlineData("global.json")]
+    [InlineData(".github/workflows/build.yml")]
+    [InlineData(".github/workflows/build.yaml")]
+    public static async Task DefaultFolders_CannotReplaceProjectConfiguration(string path)
+    {
+        using var fixture = new Fixture();
+        var ct = TestContext.Current.CancellationToken;
+        var destination = Path.GetFullPath(path, fixture.Repository);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        const string original = "existing configuration\n";
+        await File.WriteAllTextAsync(destination, original, ct);
+        await using var events = new DomainEventStream();
+        var pipeline = CreatePipeline(events, fixture.Tool());
+
+        var relative = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(path, "replacement", Overwrite: true));
+        var absolute = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(destination, "replacement", Overwrite: true));
+
+        Assert.Equal(ToolErrorClassification.PolicyDenied, relative.ErrorClassification);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, absolute.ErrorClassification);
+        Assert.Equal(original, await File.ReadAllTextAsync(destination, ct));
+    }
+
+    /// <summary>Explicit broad grants never authorize Git metadata or instruction replacement.</summary>
+    [Theory]
+    [InlineData(false, ".git/refs/heads/release.json")]
+    [InlineData(false, "nested/.git/refs/heads/release.json")]
+    [InlineData(true, ".git/refs/heads/release.json")]
+    [InlineData(true, "nested/.git/refs/heads/release.json")]
+    [InlineData(false, "AGENTS.md")]
+    [InlineData(false, "nested/AGENTS.md")]
+    [InlineData(true, "AGENTS.md")]
+    public static async Task BroadFolderGrant_CannotReplaceProtectedTargets(bool external, string path)
+    {
+        using var fixture = new Fixture();
+        var ct = TestContext.Current.CancellationToken;
+        var folder = external
+            ? Directory.CreateDirectory(Path.Combine(fixture.Root, "external")).FullName
+            : fixture.Repository;
+        var destination = Path.GetFullPath(path, folder);
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        const string original = "existing protected content\n";
+        await File.WriteAllTextAsync(destination, original, ct);
+        var configuration = JsonConfig(JsonSerializer.Serialize(
+            new { tools = new { writeFile = new { allowedFolders = new[] { folder } } } }));
+        await using var events = new DomainEventStream();
+
+        var result = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool(configuration)),
+            fixture.Context,
+            new WriteFileInput(destination, "replacement", Overwrite: true));
+
+        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        Assert.Equal(original, await File.ReadAllTextAsync(destination, ct));
+    }
+
     /// <summary>Traversal and similarly prefixed siblings cannot escape the configured folder.</summary>
     [Theory]
     [InlineData("report.md")]
     [InlineData(".inbox-other/report.md")]
     [InlineData(".inbox/../report.md")]
+    [InlineData("docs/implementation-plans/feature.md")]
+    [InlineData(".threadsmith/notes.md")]
     [InlineData("../outside/report.md")]
+    [InlineData("../repo-other/report.md")]
+    [InlineData(".inbox/../../outside/report.md")]
     public static async Task OutsideFolder_IsDeniedBeforeWriting(string path)
     {
         using var fixture = new Fixture();
@@ -57,6 +118,39 @@ public static class WriteFileTests
         Assert.False(result.Succeeded);
         Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
         Assert.Empty(Directory.GetFiles(fixture.Root, "*", SearchOption.AllDirectories));
+    }
+
+    /// <summary>Explicit folder restrictions deny destinations outside their grants.</summary>
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("[\".inbox\"]")]
+    public static async Task ExplicitFolderRestrictions_AreRetained(string folders)
+    {
+        using var fixture = new Fixture();
+        var configuration = JsonConfig("{\"tools\":{\"writeFile\":{\"allowedFolders\":" + folders + "}}}");
+        await using var events = new DomainEventStream();
+
+        var result = await InvokeAsync(CreatePipeline(events, fixture.Tool(configuration)), fixture.Context, new WriteFileInput("docs/report.md", "denied"));
+
+        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        Assert.False(File.Exists(Path.Combine(fixture.Repository, "docs/report.md")));
+    }
+
+    /// <summary>A trusted relative folder grant allows report output outside the default folder.</summary>
+    [Fact]
+    public static async Task RelativeAllowlist_AllowsConfiguredReportFolder()
+    {
+        using var fixture = new Fixture();
+        var configuration = JsonConfig("""{"tools":{"writeFile":{"allowedFolders":["exports"]}}}""");
+        await using var events = new DomainEventStream();
+
+        var result = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool(configuration)),
+            fixture.Context,
+            new WriteFileInput("exports/report.md", "report"));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("report", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, "exports/report.md"), TestContext.Current.CancellationToken));
     }
 
     /// <summary>A configured absolute output folder is usable without expanding ordinary read access.</summary>
@@ -179,9 +273,9 @@ public static class WriteFileTests
         Assert.Equal("iteration.log", searchResult.Value.Matches[0].Path);
     }
 
-    /// <summary>Repository listing neither targets nor reveals an active in-repository scratchpad.</summary>
+    /// <summary>Only an explicit scratchpad listing reveals its transient files.</summary>
     [Fact]
-    public static async Task Scratchpad_ListFilesCannotAccessOrRevealContents()
+    public static async Task Scratchpad_ListFilesRequiresExplicitTarget()
     {
         using var fixture = new Fixture();
         var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
@@ -200,17 +294,131 @@ public static class WriteFileTests
         var list = new ListFilesTool(TestPromptLoader.Instance);
         var policy = new DefaultPolicyEngine();
 
-        Assert.False(policy.Evaluate(list, new ListFilesInput { Path = ".scratch" }, invocation).IsAllowed);
-        var repositoryListing = await list.ExecuteAsync(new ListFilesInput { Path = "." }, execution);
+        Assert.True(policy.Evaluate(list, new ListFilesInput { Path = ".scratch" }, invocation).IsAllowed);
+        var explicitListing = await list.ExecuteAsync(new ListFilesInput { Path = ".scratch" }, execution, TestContext.Current.CancellationToken);
+        var repositoryListing = await list.ExecuteAsync(new ListFilesInput { Path = "." }, execution, TestContext.Current.CancellationToken);
 
+        Assert.Equal("private.log", Assert.Single(explicitListing.Value.Files).Path);
         Assert.DoesNotContain(
             repositoryListing.Value.Files,
             file => file.Path.StartsWith(".scratch/", StringComparison.Ordinal));
     }
 
-    /// <summary>Replacing an active scratchpad root with a link revokes both built-in read paths.</summary>
+    /// <summary>Explicit listings use scratchpad authority through the ordinary configured pipeline.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static async Task Scratchpad_ListFilesUsesScopedAuthority(bool external, bool child)
+    {
+        using var fixture = new Fixture();
+        var ct = TestContext.Current.CancellationToken;
+        var scratchpad = Directory.CreateDirectory(external
+            ? Path.Combine(fixture.Root, "scratchpad")
+            : Path.Combine(fixture.Repository, ".threadsmith", ".scratchpad")).FullName;
+        var nested = Directory.CreateDirectory(Path.Combine(scratchpad, "analysis")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(nested, "result.log"), "transient", ct);
+        await File.WriteAllTextAsync(Path.Combine(scratchpad, "other.log"), "other", ct);
+        await File.WriteAllTextAsync(Path.Combine(fixture.Repository, ".gitignore"), ".threadsmith/.scratchpad/\n", ct);
+        var invocation = fixture.Context.Invocation with
+        {
+            TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+            IsChildAgent = child,
+            ApprovedRoots = [Directory.CreateDirectory(Path.Combine(fixture.Repository, "assigned")).FullName],
+            ProhibitedPaths = [".threadsmith/**"],
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = scratchpad,
+            },
+        };
+        var list = new ListFilesTool(TestPromptLoader.Instance);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([list]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
+        var request = new ToolInvocationRequest
+        {
+            SessionId = fixture.Context.SessionId,
+            RunId = fixture.Context.RunId,
+            ToolId = "list_files",
+            ArgumentsJson = JsonSerializer.Serialize(new ListFilesInput { Path = scratchpad, MaximumEntries = 1 }),
+            Context = invocation,
+        };
+
+        var result = await pipeline.InvokeAsync(request, ct);
+        var nestedResult = await pipeline.InvokeAsync(
+            request with
+            {
+                ArgumentsJson = JsonSerializer.Serialize(new ListFilesInput { Path = nested }),
+            },
+            ct);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotNull(result.ResultJson);
+        var output = JsonSerializer.Deserialize<ListFilesOutput>(result.ResultJson, JsonSerializerOptions.Web);
+        Assert.NotNull(output);
+        Assert.Single(output.Files);
+        Assert.True(output.IsTruncated);
+        Assert.True(nestedResult.Succeeded, nestedResult.Error);
+        Assert.NotNull(nestedResult.ResultJson);
+        var nestedOutput = JsonSerializer.Deserialize<ListFilesOutput>(nestedResult.ResultJson, JsonSerializerOptions.Web);
+        Assert.NotNull(nestedOutput);
+        Assert.Equal("analysis/result.log", Assert.Single(nestedOutput.Files).Path);
+        Assert.False(nestedOutput.IsTruncated);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => list.ExecuteAsync(
+            new ListFilesInput { Path = scratchpad }, fixture.Context with { Invocation = invocation }, new CancellationToken(true)));
+    }
+
+    /// <summary>Storage enablement never overrides explicit tool restrictions or grants sibling access.</summary>
+    [Theory]
+    [InlineData("inactive")]
+    [InlineData("denyAll")]
+    [InlineData("deniedTool")]
+    [InlineData("allowlist")]
+    [InlineData("sibling")]
+    [InlineData("traversal")]
+    [InlineData("lookalike")]
+    public static void Scratchpad_ListFilesRetainsPolicyDenials(string restriction)
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad")).FullName;
+        var invocation = fixture.Context.Invocation with
+        {
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = restriction != "inactive",
+                RootPath = scratchpad,
+                ModelPath = scratchpad,
+            },
+            DenyAllTools = restriction == "denyAll",
+            DeniedToolIds = restriction == "deniedTool" ? ["list_files"] : [],
+            AllowedToolIds = restriction == "allowlist" ? ["read_file"] : [],
+        };
+        var path = restriction switch
+        {
+            "sibling" => scratchpad + "-other",
+            "traversal" => Path.Combine(scratchpad, "..", "outside"),
+            _ => scratchpad,
+        };
+
+        ITool tool = restriction == "lookalike" ? new ScratchpadListLookalike() : new ListFilesTool(TestPromptLoader.Instance);
+        var decision = new DefaultPolicyEngine().Evaluate(tool, new ListFilesInput { Path = path }, invocation);
+
+        Assert.False(decision.IsAllowed);
+    }
+
+    /// <summary>Replacing an active scratchpad root with a link revokes the built-in read paths.</summary>
     [Fact]
-    public static async Task Scratchpad_ReplacedRootIsRejectedByReadAndSearch()
+    public static async Task Scratchpad_ReplacedRootIsRejectedByReaders()
     {
         using var fixture = new Fixture();
         var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
@@ -245,6 +453,10 @@ public static class WriteFileTests
             read.ExecuteAsync(new ReadFileInput { Path = Path.Combine(scratchpad, "private.log") }, execution));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             search.ExecuteAsync(new SearchTextInput { Query = "needle", Path = scratchpad }, execution));
+        var list = new ListFilesTool(TestPromptLoader.Instance);
+        Assert.False(new DefaultPolicyEngine().Evaluate(list, new ListFilesInput { Path = scratchpad }, invocation).IsAllowed);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            list.ExecuteAsync(new ListFilesInput { Path = scratchpad }, execution, TestContext.Current.CancellationToken));
     }
 
     /// <summary>Managed search ignores repository Git inventory for an ignored in-repository scratchpad.</summary>
@@ -399,11 +611,16 @@ public static class WriteFileTests
         Assert.Equal("second", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, ".inbox/report.txt")));
     }
 
-    /// <summary>Source files, metadata, and instruction files cannot use the report writer.</summary>
+    /// <summary>Source files, authority-control paths, and explicit prohibitions remain denied.</summary>
     [Theory]
     [InlineData(".inbox/Program.cs", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/AGENTS.md", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/.git/config.json", ToolErrorClassification.PolicyDenied)]
+    [InlineData(".threadsmith/config.json", ToolErrorClassification.PolicyDenied)]
+    [InlineData(".threadsmith/session.json", ToolErrorClassification.PolicyDenied)]
+    [InlineData(".threadsmith/providers.json", ToolErrorClassification.PolicyDenied)]
+    [InlineData(".threadsmith/extensions.json", ToolErrorClassification.PolicyDenied)]
+    [InlineData(".threadsmith/secrets/credentials.json", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/.threadsmith/config.json", ToolErrorClassification.PolicyDenied)]
     [InlineData(".inbox/private/report.md", ToolErrorClassification.PolicyDenied)]
     public static async Task ProtectedTargets_AreDenied(string path, ToolErrorClassification expected)
@@ -542,19 +759,27 @@ public static class WriteFileTests
     private static ToolInvocationPipeline CreatePipeline(DomainEventStream events, ITool tool)
     {
         return new(
-        new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            new ToolRegistry([tool]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new Microsoft.Extensions.Time.Testing.FakeTimeProvider());
     }
 
     private static Task<ToolInvocationResult> InvokeAsync(ToolInvocationPipeline pipeline, ToolExecutionContext context, WriteFileInput input)
     {
-        return pipeline.InvokeAsync(new ToolInvocationRequest
-        {
-            SessionId = context.SessionId,
-            RunId = context.RunId,
-            ToolId = "write_file",
-            ArgumentsJson = JsonSerializer.Serialize(input),
-            Context = context.Invocation,
-        });
+        return pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = context.SessionId,
+                RunId = context.RunId,
+                ToolId = "write_file",
+                ArgumentsJson = JsonSerializer.Serialize(input),
+                Context = context.Invocation,
+            },
+            TestContext.Current.CancellationToken);
     }
 
     private static ConversationMessage Message(SessionId session, long sequence, string? text)
@@ -571,6 +796,21 @@ public static class WriteFileTests
             EstimatedTokens = 1,
             OccurredAt = DateTimeOffset.UtcNow,
         };
+    }
+
+    private sealed class ScratchpadListLookalike : Tool<ListFilesInput, ListFilesOutput>
+    {
+        public override ToolDefinition Definition { get; } = new ListFilesTool(TestPromptLoader.Instance).Definition;
+
+        public override Task<ToolExecution<ListFilesOutput>> ExecuteAsync(
+            ListFilesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("A lookalike must never execute with scratchpad authority.");
+
+        protected override void ValidateInput(ListFilesInput input)
+            => ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
+
+        protected override IReadOnlyList<string> GetResourcePaths(ListFilesInput input, ToolInvocationContext context)
+            => [input.Path];
     }
 
     private sealed class Fixture : IDisposable

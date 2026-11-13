@@ -21,6 +21,43 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
+    /// <summary>Shared scratchpad guidance requires all four exact built-in file tools.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void ScratchpadPrompt_RequiresAssignedBuiltInListing(bool includeListing)
+    {
+        var repository = Path.Combine(Path.GetTempPath(), "threadsmith-scratchpad-prompt-fixture");
+        var configuration = new ConfigurationBuilder().Build();
+        ITool[] tools =
+        [
+            new ListFilesTool(TestPromptLoader.Instance),
+            new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
+            new SearchTextTool(TestPromptLoader.Instance),
+            new WriteFileTool(new WriteFileConfiguration(configuration, configuration, repository), new UnusedInheritedConversationStore(), TestPromptLoader.Instance),
+        ];
+        var registry = new ToolRegistry(tools.Where(tool => includeListing || tool.Definition.Id != "list_files"));
+        var context = new ToolInvocationContext
+        {
+            RepositoryPath = repository,
+            RequestedBy = "model",
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                RootPath = Path.Combine(repository, ".threadsmith", ".scratchpad"),
+                ModelPath = ".threadsmith/.scratchpad",
+            },
+        };
+
+        var messages = new ChildAgentPrompt(TestPromptLoader.Instance).CreateMessages(
+            new AgentContextSnapshot { AssignmentId = AgentAssignmentId.New(), BaselineIdentity = "fixture", Objective = "Inspect transient files." },
+            new RepositoryInstructionBundle { RepositoryRoot = repository, WorkingScope = ".", Digest = "fixture" },
+            context,
+            registry.GetRegistrations(SessionId.New(), RunId.New()));
+
+        Assert.Equal(includeListing, messages[0].GetModelVisibleContent().Contains("Scratchpad: `.threadsmith/.scratchpad`", StringComparison.Ordinal));
+    }
+
     /// <summary>Inherited children execute processes and writes while parent-only and workflow tools stay unavailable.</summary>
     [Fact]
     public async Task InheritedTools_ProcessesAndWritesUseSharedPipelineWithoutParentOnlyOrWorkflowTools()

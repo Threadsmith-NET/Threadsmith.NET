@@ -134,6 +134,42 @@ public static class ShellCommandPolicyTests
             Assert.Equal(filterFacts.Arguments, filterMarker.RootElement.GetProperty("Arguments").EnumerateArray().Select(argument => argument.GetString()));
             Assert.Equal("FullyQualifiedName~ShellCommandPolicy", filterFacts.Arguments[^1]);
 
+            // Variable setup stays in this child shell; the named native command remains pinned.
+            const string date = "2026-11-13T05:44:00-05:00";
+            var variableCommand = shell switch
+            {
+                "powershell" or "pwsh" => "$env:GIT_AUTHOR_DATE = '" + date + "'; $env:GIT_COMMITTER_DATE='" + date + "'; git commit -m \"fixture\" \"${env:GIT_AUTHOR_DATE}\" \"$env:GIT_COMMITTER_DATE\"",
+                "cmd" => "git status \"%USERPROFILE%\"",
+                _ => "THREADSMITH_DATE='" + date + "'; GIT_AUTHOR_DATE=\"${THREADSMITH_DATE}\" git commit -m fixture \"$THREADSMITH_DATE\"",
+            };
+            var variableInput = new RunProcessInput { Command = variableCommand, WorkingDirectory = shadow };
+            var variableFacts = Assert.Single(tool.Prepare(variableInput, context).PreparedCommand!.Actions);
+            Assert.Equal("git", variableFacts.ExecutableName);
+            var variableResult = await pipeline.InvokeAsync(request with { ArgumentsJson = JsonSerializer.Serialize(variableInput) }, cancellationToken);
+            Assert.True(variableResult.Succeeded, variableResult.Error);
+            var variableOutput = JsonSerializer.Deserialize<ProcessExecutionResult>(variableResult.ResultJson!);
+            Assert.NotNull(variableOutput);
+            Assert.True(variableOutput.ExitCode == 0, variableOutput.StandardError);
+            using var variableMarker = JsonDocument.Parse(variableOutput.StandardOutput.Trim());
+            Assert.Equal("authorized", variableMarker.RootElement.GetProperty("Identity").GetString());
+            var variableArguments = variableMarker.RootElement.GetProperty("Arguments").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+            string?[] expectedVariableArguments = shell switch
+            {
+                "powershell" or "pwsh" => ["commit", "-m", "fixture", date, date],
+                "cmd" => ["status", Environment.GetEnvironmentVariable("USERPROFILE")],
+                _ => ["commit", "-m", "fixture", date],
+            };
+            Assert.Equal(expectedVariableArguments, variableArguments);
+            if (shell != "cmd")
+            {
+                Assert.Equal(date, variableMarker.RootElement.GetProperty("GitAuthorDate").GetString());
+            }
+
+            if (shell is "powershell" or "pwsh")
+            {
+                Assert.Equal(date, variableMarker.RootElement.GetProperty("GitCommitterDate").GetString());
+            }
+
             // The same legitimate syntax is still subject to normal argument-denial policy.
             var filteredSnapshot = policy.CommandPolicies[shell];
             var restricted = policy with
@@ -278,8 +314,8 @@ public static class ShellCommandPolicyTests
     [Theory]
     [InlineData("bash", "git status $(bad)")]
     [InlineData("sh", "git status > $(bad)")]
-    [InlineData("zsh", "git status; bad $name")]
-    [InlineData("powershell", "git status; Invoke-Expression $value")]
+    [InlineData("zsh", "git status; $name")]
+    [InlineData("powershell", "git status; & $value")]
     [InlineData("pwsh", "git status @arguments")]
     [InlineData("powershell", "git fetch --% argument")]
     [InlineData("powershell", "git fetch '--%' argument")]

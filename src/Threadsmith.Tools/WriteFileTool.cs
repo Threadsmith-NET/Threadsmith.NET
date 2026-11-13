@@ -179,9 +179,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         var segments = destination.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-        if (!scratchpadDestination && (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase))
-            || Path.GetFileName(destination).Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase))
-            )
+        if (!scratchpadDestination
+            && (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase))
+                || Path.GetFileName(destination).Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase)))
         {
             throw new UnauthorizedAccessException("write_file cannot change Git metadata, Threadsmith settings, or AGENTS.md instructions.");
         }

@@ -26,8 +26,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 ## Scenario SC106-03 — Atomic compound admission
 
 1. Prepare a safe sequence and pipeline with inert executable markers. Include positive controls for supported literal quoting and argument preservation.
-2. Add one denied, unresolved, unsupported or dynamic stage at each position. Verify no stage reaches the launcher.
+2. Add one denied, unresolved, unsupported or runtime-calculated command stage at each position. Verify no stage reaches the launcher.
 3. Repeat through the existing manual, model-driven, eligible child and headless entry points. Retain ordinary trust, tool, hooks, activity, budget and cancellation gates; unattached/headless approval has no assumed consent.
+4. Use scalar PowerShell variable/environment setup, POSIX assignment statements/prefixes, and CMD variable references with permitted named commands. Verify shell expansion reaches native argv while executable binding, approval, argument-text restrictions, and whole-sequence denial still apply. Setup never runs before all named actions are admitted; command substitutions, script blocks, calculated executable/script names, and inline interpreter code remain unsupported. Variable state belongs only to that child shell; policy matches submitted references rather than expanded values.
 
 **Verifies:** One governed execution path and all-stage admission before effects.
 
@@ -1020,7 +1021,7 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 2. Without a positive repository `.gitignore` rule, observe disabled access and a warning before startup cleanup. Add the rule and confirm activation; global excludes and negations do not satisfy the requirement.
 3. Set legacy `scratchpad.path` to another directory and verify silent ignoring and preservation of that directory's contents, regardless of enablement.
 4. Restart, start a new session, switch repositories, and shut down with disposable contents; confirm cleanup remains confined to each repository's fixed folder. Links at the folder or its ancestors never redirect creation or cleanup, and links inside it never delete their targets.
-5. Confirm built-in search/read/write and writer availability checks apply. C# script files are writable only in the scratchpad; Python files are rejected. Execution retains its separate trust/tool/approval gates.
+5. Confirm built-in listing/search/read/write and writer availability checks apply. Explicit scratchpad listings return paths relative to the scratchpad root, while ordinary repository listings omit its contents. Listing retains tool denials, containment, link checks, cancellation, and result limits. C# script files are writable only in the scratchpad; Python files are rejected. Execution retains its separate trust/tool/approval gates.
 6. With scripting disabled, observe the instruction to ask the user to enable `csharp_script`. When enabled, read its packaged reference on demand, stream scratchpad or explicitly authorized inputs, and write results only in the scratchpad. External input folders survive session cleanup unchanged.
 7. Reject repository transitions during active work; cancel and join tracked execution before shutdown cleanup.
 

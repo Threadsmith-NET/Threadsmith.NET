@@ -82,7 +82,7 @@ public sealed partial class MultimodalTests
         var save = await fixture.InvokeAsync(session, "write_file", JsonSerializer.Serialize(new { path = ".inbox/red.png", artifactId = image.Id }), token);
         Assert.True(save.Succeeded, save.Error);
         Assert.Equal(Png, await File.ReadAllBytesAsync(Path.Combine(fixture.Root, ".inbox/red.png"), token));
-        foreach (var path in new[] { ".inbox/wrong.jpg", "outside.png", ".inbox/source.cs" })
+        foreach (var path in new[] { ".inbox/wrong.jpg", "outside.png", "../outside.png", ".inbox/source.cs" })
         {
             var denied = await fixture.InvokeAsync(session, "write_file", JsonSerializer.Serialize(new { path, artifactId = image.Id }), token);
             Assert.False(denied.Succeeded);

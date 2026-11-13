@@ -95,6 +95,13 @@ internal static class InteractionEventSegments
         }
     }
 
+    /// <summary>Selects source only from its owning completion, without adding it to ordinary output.</summary>
+    internal static ToolSourceDetail? GetSourceDetail(IDomainEvent domainEvent)
+    {
+        return domainEvent is ToolInvocationCompleted { SourceDetail: { } detail } completed
+            && detail.ToolInvocationId == completed.ToolInvocationId ? detail : null;
+    }
+
     /// <summary>Marks host semantic evidence for optional interactive disclosure without changing its full output.</summary>
     internal static PresentationDisclosure? CreateDisclosure(IDomainEvent domainEvent, IReadOnlyList<PresentationTextSegment> segments)
     {

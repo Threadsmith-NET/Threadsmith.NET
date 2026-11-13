@@ -150,7 +150,7 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemSystemPrompt prompt asset.</summary>
     public const string SystemSystemPrompt = "System-SystemPrompt.md";
 
-    /// <summary>Gets main-agent skill routing guidance used when invoke_skill is available.</summary>
+    /// <summary>Gets main-agent docs routing guidance used when invoke_skill and the maintained documentation skill are enabled.</summary>
     public const string SystemSkillGuidance = "System-SkillGuidance.md";
 
     /// <summary>Gets the shared parent and child repository inspection guidance asset.</summary>

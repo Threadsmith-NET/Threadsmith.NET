@@ -55,6 +55,13 @@ internal static class WorkspaceLayout
         return new Padding(2, 1, 2, 2).Deflate(new Rect(0, 0, size.Width, size.Height));
     }
 
+    /// <summary>Places scrollable modal content between the shared heading and footer rows.</summary>
+    internal static Rect ModalBody(Size size, bool spaceAfterSubtitle = false)
+    {
+        var top = spaceAfterSubtitle ? 4 : 3;
+        return new Rect(0, top, size.Width, Math.Max(1, size.Height - top - 2));
+    }
+
     /// <summary>Draws one clipped frame without altering the inner widget's origin.</summary>
     internal static void DrawFrame(ISurface surface, CellStyle style)
     {

@@ -113,7 +113,7 @@ System policy, stable conversation instructions, request envelopes, and required
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, artifact guidance, and native-tool concept hints. | `None` |
-| `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory. | `None` |
+| `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory and the maintained `threadsmith-docs-help` skill is enabled and verified. Enablement is checked through the shared skill-listing service on each assembly; missing availability omits the guidance. | `None` |
 | `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance; reuse of current background validation coverage, additional checks for concrete gaps or requirements, separate whitespace verification, and default durable-artifact output to repository-root `.inbox/` unless another location is specified (scratchpad remains temporary). | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad through built-in listing, search, read, and write tools. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 

@@ -941,6 +941,61 @@ public static partial class AgentWorkspaceTests
         Assert.Empty(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
     }
 
+    /// <summary>Real interleaved child completions carry their own live source into the shared viewer.</summary>
+    [Fact]
+    public static async Task ChildCompletionProjectionPreservesExactSourceIdentity()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var session = SessionId.New();
+        var now = DateTimeOffset.UtcNow;
+        var opened = new List<ToolSourceDetail>();
+        var views = new AgentViews(_ => CellStyle.Default, sourceRequested: opened.Add);
+        var sink = new RecordingSurface { Views = views };
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery", "Robin"]), false, token);
+        await projection.AttachAsync(session, token);
+        var targets = new[] { Target(session), Target(session) };
+        var sources = targets.Select((_, index) => new ToolSourceDetail
+        {
+            ToolInvocationId = ToolInvocationId.New(),
+            Language = "csharp",
+            Availability = ToolSourceAvailability.Available,
+            Source = $"// child {index}\r\n\t42",
+        }).ToArray();
+        for (var index = 0; index < targets.Length; index++)
+        {
+            var target = targets[index];
+            await projection.ObserveAsync(new DelegationCheckpointWritten(session, now, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "accepted"), token);
+            await projection.ObserveAsync(new AgentRunLifecycleObserved(session, now, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, "running"), token);
+            await projection.ObserveAsync(new AgentRunInstructionsObserved(session, now, target.DelegationId, target.AssignmentId, target.RunId, 1, AgentInstructionSource.AssignmentOnly, [new("Task", "Run a script")]), token);
+            Assert.True(await projection.ObserveAsync(new ToolInvocationStarted(session, now, sources[index].ToolInvocationId, "csharp_script", target.RunId), token));
+        }
+
+        for (var index = targets.Length - 1; index >= 0; index--)
+        {
+            var target = targets[index];
+            var completion = new ToolInvocationCompleted(session, now, sources[index].ToolInvocationId, index == 0, ResultJson: "{}")
+            {
+                RunId = target.RunId,
+                SourceDetail = sources[index],
+            };
+            Assert.True(await projection.ObserveAsync(completion, token));
+            var batch = Assert.Single(sink.Output, batch => batch.Items.OfType<PresentationTextItem>().Any(item => item.SourceDetail == sources[index]));
+            Assert.Equal(target, batch.Target);
+            Assert.Same(sources[index], Assert.Single(batch.Items.OfType<PresentationTextItem>()).SourceDetail);
+            var view = views.Ordered.Single(view => view.Snapshot?.Target == target).Transcript;
+            var buffer = new CellBuffer(110, 40);
+            view.Render(new BufferSurface(buffer));
+            var rows = TUIKit.Testing.Snapshot.ToText(buffer).Split('\n');
+            var row = Array.FindIndex(rows, line => line.Contains("View full script", StringComparison.Ordinal));
+            Assert.True(row >= 0);
+            Assert.True(view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 1, row, KeyModifiers.None, 1)));
+            Assert.Same(sources[index], opened[^1]);
+        }
+
+        Assert.Equal(2, opened.Count);
+        Assert.Empty(views.Main.Transcript.Lines);
+    }
+
     private static AgentPresentationTarget Target(SessionId session)
     {
         return new(session, DelegationId.New(), AgentAssignmentId.New(), RunId.New(), 1);

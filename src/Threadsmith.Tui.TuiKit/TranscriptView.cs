@@ -12,13 +12,14 @@ using TUIKit.Widgets;
 // This bounded projection is deliberately independent of durable session history.
 
 /// <summary>Retains a bounded, selectable transcript independently of durable session history.</summary>
-internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
+internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 {
     private readonly TuiResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="TranscriptView"/> class.</summary>
-    internal TranscriptView(TuiResourceLimits? limits = null)
+    internal TranscriptView(TuiResourceLimits? limits = null, ISourceHighlighter? highlighter = null)
     {
+        _highlighter = highlighter ?? new TuiKitSourceHighlighter();
         _limits = limits ?? new();
         _limits.Validate();
         _byteBudget = _limits.MaximumTranscriptBytes;
@@ -180,7 +181,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         {
             var visibleHeaders = _rows.Skip(_top).Take(_height).Select(row => _disclosureHeaders.GetValueOrDefault(row.Line.Id)).OfType<string>();
             var target = visibleHeaders.FirstOrDefault(id => id == _focusedDisclosure) ?? visibleHeaders.FirstOrDefault();
-            return target is not null && ToggleDisclosure(target);
+            return target is not null && ActivateControl(target);
         }
 
         if (key.Modifiers.HasFlag(KeyModifiers.Shift) && _rows.Count > _top
@@ -265,7 +266,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             && clickedRow >= _top && clickedRow < Math.Min(_rows.Count, _top + _height)
             && _disclosureHeaders.TryGetValue(_rows[clickedRow].Line.Id, out var disclosure))
         {
-            return ToggleDisclosure(disclosure);
+            return ActivateControl(disclosure);
         }
 
         MoveSelectionEnd(mouse);
@@ -295,6 +296,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             _rowGlyphRemovals.Clear();
             _styles.Clear();
             _expandedDisclosures.Clear();
+            _sourcePreviews.Clear();
+            _sourceDocument = null;
             _disclosureHeaders.Clear();
             _disclosureLines.Clear();
             _focusedDisclosure = null;
@@ -322,7 +325,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             }
 
             Retain(item);
-            if (item is PresentationTextItem { Disclosure: not null } && !_items.Contains(item))
+            if (item is PresentationTextItem { Disclosure: not null } or PresentationTextItem { SourceDetail: not null } && !_items.Contains(item))
             {
                 continue;
             }
@@ -418,6 +421,11 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         var (first, last) = OrderedSelection();
+        if (_sourceDocument is { } source)
+        {
+            return source.CopyRange(SourceDisplayOffset(first), SourceDisplayOffset(last));
+        }
+
         var selected = new StringBuilder();
         var firstLine = true;
         foreach (var line in _lines)
@@ -502,7 +510,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         {
             PresentationUserInputItem echo => Encoding.UTF8.GetByteCount(echo.Prompt) + Encoding.UTF8.GetByteCount(echo.Text) + 1,
             PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text))
-                + (text.Disclosure is { } disclosure ? Encoding.UTF8.GetByteCount(disclosure.Summary) + Encoding.UTF8.GetByteCount(disclosure.Id) : 0),
+                + (text.Disclosure is { } disclosure ? Encoding.UTF8.GetByteCount(disclosure.Summary) + Encoding.UTF8.GetByteCount(disclosure.Id) : 0)
+                + (text.SourceDetail?.Source is { } script ? Encoding.UTF8.GetByteCount(script) : 0),
             PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
             PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
             _ => 0,
@@ -582,6 +591,12 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             var style = ranges is not null && rangeIndex < ranges.Count && ranges[rangeIndex].Start <= glyph.Offset
                 ? ResolveStyle(ranges[rangeIndex].Role).WithHyperlink(ranges[rangeIndex].Link)
                 : row.Line.Style;
+            if (_sourceDocument is not null)
+            {
+                // Full-source tokens share the code pane background, not the modal chrome.
+                style = style.WithBackground(ResolveStyle(PresentationTextRole.OutputStreamPaneRole).Background);
+            }
+
             if (_focusedDisclosure is not null && _disclosureHeaders.GetValueOrDefault(row.Line.Id) == _focusedDisclosure)
             {
                 style = style.WithAttribute(CellAttributes.Underline, true);
@@ -770,6 +785,12 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void AppendItem(PresentationItem item)
     {
+        if (_sourceDocument is { } sourceDocument)
+        {
+            AppendSourceDocument(sourceDocument);
+            return;
+        }
+
         if (item is PresentationUserInputItem)
         {
             NormalizeInputBoundary();
@@ -803,6 +824,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
                 _disclosureHeaders[headerId] = disclosure.Id;
             }
         }
+
+        AppendScriptSource(item);
     }
 
     private IEnumerable<PresentationTextSegment> ProjectDisclosure(PresentationTextItem item)
@@ -835,6 +858,15 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private PresentationItem PrepareRetentionItem(PresentationItem item)
     {
+        if (item is PresentationTextItem { SourceDetail: { Source: { } source } detail } sourceItem
+            && (source.Length > Threadsmith.Core.ToolSourceDetail.MaximumCharacters || PresentationBytes(item) > _byteBudget))
+        {
+            item = sourceItem with
+            {
+                SourceDetail = detail with { Source = null, Availability = Threadsmith.Core.ToolSourceAvailability.RetentionLimitExceeded },
+            };
+        }
+
         if (item is not PresentationTextItem { Disclosure: { } disclosure } text)
         {
             return item;
@@ -854,10 +886,54 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     private bool FitsDisclosure(PresentationTextItem item)
     {
         var disclosure = item.Disclosure ?? throw new InvalidOperationException("Missing disclosure metadata.");
-        var chunks = string.Concat(item.Segments.Select(segment => segment.Text)).Split('\n')
-            .Sum(line => Math.Max(1L, ((long)line.Length + _limits.MaximumTranscriptLineCharacters - 1) / _limits.MaximumTranscriptLineCharacters));
         return PresentationBytes(item) <= _byteBudget
-            && chunks + 2 + ((long)disclosure.Summary.Length / _limits.MaximumTranscriptLineCharacters) <= _lineBudget;
+            && FitsDisclosure("\n[-] " + disclosure.Summary + "\n" + string.Concat(item.Segments.Select(segment => segment.Text)));
+    }
+
+    private bool FitsDisclosure(string projection)
+    {
+        var safe = Safe(projection);
+        if (Encoding.UTF8.GetByteCount(safe) > _byteBudget)
+        {
+            return false;
+        }
+
+        long chunks = 0;
+        foreach (var range in safe.AsSpan().Split('\n'))
+        {
+            var line = safe.AsSpan()[range];
+            while (line.Length > _limits.MaximumTranscriptLineCharacters)
+            {
+                var boundary = 0;
+                while (boundary < _limits.MaximumTranscriptLineCharacters)
+                {
+                    var length = StringInfo.GetNextTextElementLength(line[boundary..]);
+                    if (length > _limits.MaximumTranscriptLineCharacters - boundary)
+                    {
+                        if (boundary == 0)
+                        {
+                            boundary = length;
+                        }
+
+                        break;
+                    }
+
+                    boundary += length;
+                }
+
+                line = line[boundary..];
+                chunks++;
+            }
+
+            // Include an empty writable tail when a full chunk ends at a segment boundary.
+            chunks += line.Length == _limits.MaximumTranscriptLineCharacters ? 2 : 1;
+            if (chunks > _lineBudget)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private bool FocusDisclosure(bool forward)
@@ -879,7 +955,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private bool ToggleDisclosure(string id)
     {
-        if (!_items.OfType<PresentationTextItem>().Any(item => item.Disclosure?.Id == id))
+        if (!_items.OfType<PresentationTextItem>().Any(item => item.Disclosure?.Id == id || ScriptControlId(item.SourceDetail) == id))
         {
             return false;
         }
@@ -901,6 +977,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void RemoveDisclosure(PresentationItem item)
     {
+        RemoveScriptSource(item);
         if (ReferenceEquals(item, _clearFirstItem))
         {
             _clearFirstItem = null;

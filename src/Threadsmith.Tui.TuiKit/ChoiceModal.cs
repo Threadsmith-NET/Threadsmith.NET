@@ -1,5 +1,7 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using System.Text;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 
 using Threadsmith.Interaction.Presentation;
@@ -31,6 +33,7 @@ internal sealed class ChoiceModal : Modal
     private readonly string? _reviewDetails;
     private readonly Choice[] _options;
     private readonly int _contentWidth;
+    private readonly SourceDocument? _scriptDocument;
     private Choice[] _matches;
     private DisplayRow[] _rows = [];
     private int[] _optionRows = [];
@@ -43,9 +46,11 @@ internal sealed class ChoiceModal : Modal
     private bool _details;
     private bool _fits = true;
     private TranscriptView? _detail;
+    private Rect _detailBounds;
+    private string? _copyStatus;
 
     /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class.</summary>
-    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null, string? reviewDetails = null)
+    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null, string? reviewDetails = null, ToolSourceDetail? sourceDetail = null)
     {
         _limits = limits ?? new();
         _limits.Validate();
@@ -58,6 +63,26 @@ internal sealed class ChoiceModal : Modal
         _options = [.. options];
         _matches = _options;
         BuildRows();
+        if (sourceDetail is { Availability: ToolSourceAvailability.Available, Source: { } source }
+            && source.Length <= ToolSourceDetail.MaximumCharacters)
+        {
+            _scriptDocument = new SourceDocument(source, sourceDetail.Language, new TuiKitSourceHighlighter());
+
+            // Dedicated, bounded detail capacity: ordinary session retention remains unchanged.
+            var detailLimits = _limits with
+            {
+                MaximumTranscriptBytes = Math.Max(_limits.MaximumTranscriptBytes, ToolSourceDetail.MaximumCharacters * 12),
+                MaximumTranscriptLines = Math.Max(_limits.MaximumTranscriptLines, ToolSourceDetail.MaximumCharacters + 1),
+
+                // Keep per-fragment append/reflow bounded; Continued chunks preserve raw copy offsets.
+                MaximumTranscriptLineCharacters = Math.Min(_limits.MaximumTranscriptLineCharacters, 1024),
+            };
+            _detail = new TranscriptView(detailLimits);
+            _detail.PresentSource(_scriptDocument);
+            _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
+            _details = true;
+        }
+
         if (_options.Length <= 2)
         {
             _contentWidth = Math.Max(
@@ -105,9 +130,24 @@ internal sealed class ChoiceModal : Modal
             return true;
         }
 
+        if (_scriptDocument is not null && key.Code == KeyCode.F4)
+        {
+            CopySource(_scriptDocument.RawSource);
+            return true;
+        }
+
         if (key.Code == KeyCode.F6 && _details)
         {
-            CopyRequested?.Invoke(_detail?.SelectedText() ?? string.Empty);
+            var selection = _detail?.SelectedText() ?? string.Empty;
+            if (_scriptDocument is not null)
+            {
+                CopySource(selection);
+            }
+            else
+            {
+                CopyRequested?.Invoke(selection);
+            }
+
             return true;
         }
 
@@ -122,7 +162,7 @@ internal sealed class ChoiceModal : Modal
             return true;
         }
 
-        if (key.Code == KeyCode.F2)
+        if (key.Code == KeyCode.F2 && _scriptDocument is null)
         {
             _details = !_details;
             if (_details)
@@ -193,6 +233,19 @@ internal sealed class ChoiceModal : Modal
     }
 
     /// <inheritdoc/>
+    public override bool HandleMouse(MouseEvent mouse)
+    {
+        if (_fits && _details && _detail is not null
+            && mouse.X >= _detailBounds.X && mouse.X < _detailBounds.X + _detailBounds.Width
+            && mouse.Y >= _detailBounds.Y && mouse.Y < _detailBounds.Y + _detailBounds.Height)
+        {
+            return _detail.HandleMouse(new MouseEvent(mouse.Kind, mouse.Button, mouse.X - _detailBounds.X, mouse.Y - _detailBounds.Y, mouse.Modifiers, mouse.ClickCount));
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc/>
     public override bool HandlePaste(string text)
     {
         if (_fits && !_details && text.Length <= _limits.MaximumFilterCharacters - _filter.Text.Length)
@@ -209,12 +262,33 @@ internal sealed class ChoiceModal : Modal
     {
         // Leave the shared status row visible even when the modal needs the full width.
         _fits = ModalFrame.Fits(surface.Size);
-        Size? preferredSize = !_details && _options.Length <= 2 && _title.Length < 80
-            ? new Size(Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4), _rows.Length + 7)
-            : new Size(120, 26);
-        var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), preferredSize: preferredSize);
+        Size? preferredSize = _scriptDocument is not null ? new Size(90, 24)
+            : !_details && _options.Length <= 2 && _title.Length < 80
+                ? new Size(Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4), _rows.Length + 7)
+                : new Size(120, 26);
+        var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), expandHeight: _scriptDocument is not null, preferredSize: preferredSize);
         if (frame is null)
         {
+            return;
+        }
+
+        if (_scriptDocument is not null)
+        {
+            var content = ModalFrame.CreateBody(
+                frame,
+                _hintRun,
+                ResolveStyle,
+                _title,
+                "Read-only C# source",
+                _copyStatus ?? "F4 Copy full script; F6 Copy selection",
+                "Arrows/PgUp/PgDn scroll; Home/End; Esc closes",
+                spaceAfterSubtitle: true);
+            var bounds = ModalFrame.Bounds(surface.Size, expandHeight: true, preferredSize: preferredSize);
+            var inner = WorkspaceLayout.ModalContent(new Size(bounds.Width, bounds.Height));
+            var body = WorkspaceLayout.ModalBody(frame.Size, spaceAfterSubtitle: true);
+            _detailBounds = new Rect(bounds.X + inner.X + body.X, bounds.Y + inner.Y + body.Y, body.Width, body.Height);
+            _detail?.ResolveStyle = ResolveStyle;
+            _detail?.Render(content);
             return;
         }
 
@@ -227,11 +301,17 @@ internal sealed class ChoiceModal : Modal
             _prompt.Render(view.CreateView(new Rect(0, 0, area.Width, promptHeight)));
         }
 
-        _hintRun.Draw(view, 0, promptHeight + 1, _details ? "PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
+        var hint = _details ? "PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint;
+        _hintRun.Draw(view, 0, promptHeight + 1, hint, ResolveStyle(PresentationTextRole.Status));
         var contentTop = promptHeight + 3;
         _height = Math.Max(1, area.Height - contentTop);
         if (_details)
         {
+            var bounds = ModalFrame.Bounds(surface.Size, preferredSize: preferredSize);
+            var inner = WorkspaceLayout.ModalContent(new Size(bounds.Width, bounds.Height));
+            _detailBounds = new Rect(bounds.X + inner.X, bounds.Y + inner.Y + contentTop, area.Width, _height);
+            _detail?.ResolveStyle = ResolveStyle;
+
             _detail?.Render(view.CreateView(new Rect(0, contentTop, area.Width, _height)));
             return;
         }
@@ -255,6 +335,26 @@ internal sealed class ChoiceModal : Modal
             var indent = option.Group is null ? 0 : 2;
             (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, indent, row, prefix, style);
             GetOptionRun(option).Draw(view, indent + (selected ? _selectionPrefixWidth : 2), row, option.Label, style);
+        }
+    }
+
+    private void CopySource(string text)
+    {
+        if (Encoding.UTF8.GetByteCount(text) > _limits.MaximumClipboardCopyBytes)
+        {
+            _copyStatus = $"Copy blocked: {_limits.MaximumClipboardCopyBytes:N0}-byte clipboard limit; no text copied";
+            return;
+        }
+
+        try
+        {
+            _copyStatus = CopyRequested?.Invoke(text) == true
+                ? "Exact source sent to terminal clipboard; terminal must allow OSC 52"
+                : "Copy unavailable or no selection; no successful copy reported";
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or EncoderFallbackException)
+        {
+            _copyStatus = "Clipboard write failed; no successful copy reported";
         }
     }
 

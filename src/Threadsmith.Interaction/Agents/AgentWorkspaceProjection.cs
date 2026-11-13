@@ -319,7 +319,11 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 child.BlockSpacing.Observe(text);
                 var segments = new List<PresentationTextSegment>();
                 InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);
-                await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
+                var completionItem = new PresentationTextItem(segments)
+                {
+                    SourceDetail = InteractionEventSegments.GetSourceDetail(completed),
+                };
+                await _surface.PresentAsync(new PresentationBatch([completionItem]) { Target = child.Snapshot.Target }, cancellationToken);
                 child.Operations.Observe(completed);
                 child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
                 await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);

@@ -1,5 +1,7 @@
 namespace Threadsmith.Interaction.Presentation;
 
+using System.Text.Json.Serialization;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Base type for one bounded semantic presentation item.</summary>
@@ -22,6 +24,10 @@ public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment>
 
     /// <summary>Optional host-owned disclosure; Segments remain the complete output for noninteractive consumers.</summary>
     public PresentationDisclosure? Disclosure { get; init; }
+
+    /// <summary>Gets bounded exact source for live interactive inspection only.</summary>
+    [JsonIgnore]
+    public ToolSourceDetail? SourceDetail { get; init; }
 }
 
 /// <summary>Stable identity and concise header for an expandable host output block.</summary>

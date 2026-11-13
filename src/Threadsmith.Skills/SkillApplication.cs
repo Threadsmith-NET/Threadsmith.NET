@@ -80,6 +80,20 @@ public sealed class SkillApplication :
         return restored;
     }
 
+    /// <summary>Checks maintained documentation skill enablement through the shared metadata listing boundary.</summary>
+    public async Task<bool> IsDocumentationSkillEnabledAsync(CancellationToken cancellationToken = default)
+    {
+        var candidates = await HandleAsync(
+            new ListSkillsCommand(new SkillCatalogQuery
+            {
+                SkillId = new SkillId(PackagedDocumentationPolicy.SkillId),
+                Scope = SkillScope.Maintained,
+            }),
+            cancellationToken);
+        return candidates.Any(candidate => candidate.Enabled
+            && candidate.Verification == SkillVerificationState.Maintained);
+    }
+
     /// <inheritdoc />
     public Task<SkillCatalogCandidate> HandleAsync(
         GetSkillCommand command,

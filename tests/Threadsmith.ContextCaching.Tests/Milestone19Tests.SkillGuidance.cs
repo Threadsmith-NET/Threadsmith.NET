@@ -7,21 +7,26 @@ using Xunit;
 
 public sealed partial class Milestone19Tests
 {
-    /// <summary>Skill routing follows invocation availability across transports and subsequent assemblies.</summary>
+    /// <summary>Skill routing follows tool and skill enablement across transports and subsequent assemblies.</summary>
     [Theory]
-    [InlineData(ToolTransportMode.Native, null)]
-    [InlineData(ToolTransportMode.Native, "inspect_skill")]
-    [InlineData(ToolTransportMode.Native, "invoke_skill")]
-    [InlineData(ToolTransportMode.Text, null)]
-    [InlineData(ToolTransportMode.Text, "inspect_skill")]
-    [InlineData(ToolTransportMode.Text, "invoke_skill")]
+    [InlineData(ToolTransportMode.Native, null, true)]
+    [InlineData(ToolTransportMode.Native, "inspect_skill", true)]
+    [InlineData(ToolTransportMode.Native, "invoke_skill", true)]
+    [InlineData(ToolTransportMode.Native, "invoke_skill", false)]
+    [InlineData(ToolTransportMode.Text, null, true)]
+    [InlineData(ToolTransportMode.Text, "inspect_skill", true)]
+    [InlineData(ToolTransportMode.Text, "invoke_skill", true)]
+    [InlineData(ToolTransportMode.Text, "invoke_skill", false)]
     public async Task ContextAssembler_SkillGuidanceRequiresInvocationTool(
         ToolTransportMode transport,
-        string? toolId)
+        string? toolId,
+        bool availabilityKnown)
     {
         var root = CreateTemporaryDirectory();
         var sanitizer = new PassthroughSanitizer();
         await using var events = new NullEventStream();
+        var skillEnabled = false;
+        var availabilityChecks = 0;
         var assembler = new ContextAssembler(
             new EmptyEvidenceStore(),
             new TokenEstimator(),
@@ -29,7 +34,14 @@ public sealed partial class Milestone19Tests
             new PromptAppendLoader(sanitizer),
             sanitizer,
             events,
-            TestPromptLoader.Instance);
+            TestPromptLoader.Instance,
+            documentationSkillEnabled: availabilityKnown ? cancellationToken =>
+            {
+                Assert.Equal(TestContext.Current.CancellationToken, cancellationToken);
+                availabilityChecks++;
+                return Task.FromResult(skillEnabled);
+            }
+        : null);
 
         try
         {
@@ -43,14 +55,20 @@ public sealed partial class Milestone19Tests
                 ToolTransportMode = transport,
             };
             var baseline = await assembler.AssembleAsync(request, TestContext.Current.CancellationToken);
-            var result = await assembler.AssembleAsync(
-                request with
-                {
-                    ToolSchemas = toolId is null ? [] : [new ContextToolSchema(toolId, toolId, "{\"type\":\"object\"}")],
-                },
-                TestContext.Current.CancellationToken);
+            var toolRequest = request with
+            {
+                ToolSchemas = toolId is null ? [] : [new ContextToolSchema(toolId, toolId, "{\"type\":\"object\"}")],
+            };
 
-            var guidanceEnabled = toolId == "invoke_skill";
+            // Keeping invoke_skill available must not expose routing for a disabled skill.
+            var skillDisabled = await assembler.AssembleAsync(toolRequest, TestContext.Current.CancellationToken);
+            Assert.DoesNotContain(skillDisabled.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemSkillGuidance);
+            Assert.DoesNotContain("threadsmith-docs-help", skillDisabled.Messages![0].GetModelVisibleContent(), StringComparison.Ordinal);
+
+            skillEnabled = true;
+            var result = await assembler.AssembleAsync(toolRequest, TestContext.Current.CancellationToken);
+
+            var guidanceEnabled = toolId == "invoke_skill" && availabilityKnown;
             var assets = result.Inspection.PromptAssets.Where(asset => asset.Source == PromptFileNames.SystemSkillGuidance).ToArray();
             Assert.Equal(guidanceEnabled ? 1 : 0, assets.Length);
             var baselineMessages = baseline.Messages;
@@ -65,8 +83,11 @@ public sealed partial class Milestone19Tests
                 baselineMessages[0].GetModelVisibleContent().Length + addedCharacters,
                 messages[0].GetModelVisibleContent().Length);
 
-            var disabled = await assembler.AssembleAsync(request, TestContext.Current.CancellationToken);
+            skillEnabled = false;
+            var disabled = await assembler.AssembleAsync(toolRequest, TestContext.Current.CancellationToken);
             Assert.DoesNotContain(disabled.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemSkillGuidance);
+            Assert.DoesNotContain("threadsmith-docs-help", disabled.Messages![0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Equal(guidanceEnabled ? 3 : 0, availabilityChecks);
         }
         finally
         {

@@ -296,6 +296,10 @@ public sealed record ToolInvocationCompleted(
 {
     /// <summary>Gets the exact invocation owner; default supports historical events.</summary>
     public RunId RunId { get; init; }
+
+    /// <summary>Gets optional live source; omitted from durable events and restored sessions.</summary>
+    [JsonIgnore]
+    public ToolSourceDetail? SourceDetail { get; init; }
 }
 
 /// <summary>A semantic check started.</summary>

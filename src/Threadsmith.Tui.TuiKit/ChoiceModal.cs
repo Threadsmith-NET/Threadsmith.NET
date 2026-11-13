@@ -297,7 +297,9 @@ internal sealed class ChoiceModal : Modal
         var promptHeight = _details ? 0 : Math.Min(Math.Max(1, area.Height - 7), Math.Min(6, Math.Max(1, (UnicodeWidth.GetWidth(TranscriptView.Safe(_title)) + area.Width - 1) / area.Width)));
         if (promptHeight > 0)
         {
-            _prompt.ResolveStyle = ResolveStyle;
+            _prompt.ResolveStyle = role => ResolveStyle(role == PresentationTextRole.OutputStreamPaneRole
+                ? PresentationTextRole.Default
+                : role);
             _prompt.Render(view.CreateView(new Rect(0, 0, area.Width, promptHeight)));
         }
 

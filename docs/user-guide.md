@@ -974,7 +974,7 @@ All graph and search results carry semantic confidence, workspace generation, pr
 
 `csharp_script` is disabled by default and requires `FullyTrustedAutomation`. Its optional `kind` is the closed string `expression` or `statement` and defaults to `expression`. Enable the session scratchpad with repository ignore coverage, use `/trust automation`, enable **C# Script** through `/tools`, then ask the model to invoke `csharp_script` with `kind: expression` and `code: 6 * 7`. Confirm the activity names `csharp_script` and inspect the actual `Success`, `Output`, `Error`, `ExecutionMs`, and `IsTruncated` fields; successful output is `42`. The same running build picks up trust and availability changes without restart. Invocation still requires `dotnet` in `tools:allowedExecutables`; allow/deny and approval policy remain enforced.
 
-It executes each request in a fresh tracked worker process with bounded standard input, output, and time. It rejects directives and direct file, network, process, environment, reflection, native, dynamic, unsafe, and non-allowlisted namespace access. Use its scoped `Scratchpad` API for authorized file reads and transient writes; consult the [on-demand reference](operations/csharp-scripting.md).
+It executes each request in a fresh tracked worker process with bounded standard input, output, and time. It rejects directives and direct file, network, process, environment, reflection, native, dynamic, unsafe, and non-allowlisted namespace access. Use its scoped `Scratchpad` API for authorized file reads and transient writes; consult the [on-demand reference](operations/csharp-scripting-execution.md).
 
 These restrictions are defense in depth, not an operating-system sandbox. Enable scripting only for repositories you trust.
 
@@ -987,7 +987,7 @@ Configure it with scalar values:
       "csharp_script": {
         "timeout_ms": "5000",
         "max_output_bytes": "65536",
-        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic"
+        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json"
       }
     }
   }
@@ -2156,4 +2156,4 @@ Current compiled providers support image input when explicitly enabled. None adv
 
 ## C# scratchpad file access
 
-The optional `csharp_script` tool requires an active session scratchpad. Its file API reads the scratchpad and authorized repository inputs, plus explicit `tools.readFile.allowedFolders` grants from trusted permission configuration. This list defaults to empty and follows normal source validation, enforced restrictions, and child scope narrowing. `read_file` shares the same read grants; export write folders do not imply reads. Script outputs stay in the scratchpad and are deleted with the session. Python scripting is prohibited; containers are the planned future execution sandbox. See [C# scripting](operations/csharp-scripting.md) for the on-demand API reference.
+The optional `csharp_script` tool requires an active session scratchpad. Its file API reads the scratchpad and authorized repository inputs, plus explicit `tools.readFile.allowedFolders` grants from trusted permission configuration. This list defaults to empty and follows normal source validation, enforced restrictions, and child scope narrowing. `read_file` shares the same read grants; export write folders do not imply reads. Script outputs stay in the scratchpad and are deleted with the session. Python scripting is prohibited; containers are the planned future execution sandbox. See [C# scripting](operations/csharp-scripting-execution.md) for the on-demand API reference.

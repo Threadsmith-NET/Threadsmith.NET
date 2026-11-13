@@ -40,6 +40,15 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         };
     }
 
+    /// <summary>JSON is available by default while explicit trusted configuration can remove it.</summary>
+    [Fact]
+    public void ScriptDefaultsIncludeJsonAndRespectExplicitConfiguration()
+    {
+        Assert.Contains("System.Text.Json", Load().ScriptAssemblies);
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq"}}}}""");
+        Assert.Equal(["System.Linq"], Load().ScriptAssemblies);
+    }
+
     /// <summary>Ordinary tool preferences cannot broaden the trusted tool allowlist.</summary>
     [Fact]
     public void QuestionToolPreferenceCannotBroadenPolicy()
@@ -145,7 +154,7 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
     [InlineData(true)]
     public async Task ScriptingReferenceUsesOrdinaryReadTool(bool child)
     {
-        var path = Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting.md");
+        var path = Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting-execution.md");
         Assert.True(File.Exists(path));
         var tool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
         var context = new ToolInvocationContext

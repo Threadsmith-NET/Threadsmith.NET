@@ -453,7 +453,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand file API reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
+| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand execution reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family
 
@@ -964,4 +964,4 @@ Historical evidence recovery retains the `OutcomeJson` and tool input token cont
 
 ## C# scripting reference
 
-`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.
+`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting-execution.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.

@@ -154,7 +154,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         var allowedAssemblies = _toolConfig.Get(
             "csharp_script",
             "allowed_assemblies",
-            "System.Linq,System.Collections,System.Collections.Generic");
+            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json");
         var maximumCodeCharacters = _toolConfig.Get("csharp_script", "max_code_characters", 65536);
         var maximumAssemblies = _toolConfig.Get("csharp_script", "max_assemblies", 32);
         var maximumAssemblyNameCharacters = _toolConfig.Get("csharp_script", "max_assembly_name_characters", 128);

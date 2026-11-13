@@ -214,7 +214,7 @@ internal static class SecurityPolicyConfigurationLoader
         }
 
         limits[exactRuntimeKey] = exactProcessLimit;
-        string[] assemblies = ["System.Linq", "System.Collections", "System.Collections.Generic"];
+        string[] assemblies = ["System.Linq", "System.Collections", "System.Collections.Generic", "System.Text.Json"];
         foreach (var source in trusted.Concat(restrictions))
         {
             const string key = "tools:config:csharp_script:allowed_assemblies";

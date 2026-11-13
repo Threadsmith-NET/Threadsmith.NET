@@ -102,16 +102,22 @@ public static class Program
             references.Add(typeof(ScriptGlobals).Assembly);
             var options = ScriptOptions.Default
                 .WithReferences(references.Distinct())
-                .WithImports(request.AllowedAssemblies);
+                .WithImports(request.AllowedAssemblies.Prepend("System"));
             var script = CSharpScript.Create(request.Code, options, typeof(ScriptGlobals));
             var compilation = script.GetCompilation();
             var syntaxTree = compilation.SyntaxTrees.Single();
             var syntaxRoot = await syntaxTree.GetRootAsync(deadline.Token);
-            if (syntaxRoot.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective)
-                || syntaxRoot.DescendantTokens().Any(token => token.ValueText is "dynamic" or "unsafe" or "stackalloc"))
+            if (syntaxRoot.DescendantTrivia(descendIntoTrivia: true).Any(trivia => trivia.IsDirective))
             {
                 throw new InvalidOperationException(
-                    "Direct file, network, process, native, dynamic, or reflection access is prohibited. For files, read the C# scripting reference and use Scratchpad.");
+                    "Script directives are prohibited. Use the session-configured scripting APIs without directives.");
+            }
+
+            var prohibitedToken = syntaxRoot.DescendantTokens()
+                .FirstOrDefault(token => token.ValueText is "dynamic" or "unsafe" or "stackalloc");
+            if (prohibitedToken.RawKind != 0)
+            {
+                throw new InvalidOperationException($"The '{prohibitedToken.ValueText}' construct is prohibited in scripts.");
             }
 
             var diagnostics = compilation.GetDiagnostics();
@@ -144,20 +150,27 @@ public static class Program
                         throw new InvalidOperationException("Scripts may use only the supplied Scratchpad API, not host implementation types.");
                     }
 
+                    if (typeName == "System.Console")
+                    {
+                        throw new InvalidOperationException(
+                            "Console access is prohibited. Return the result as the script's final expression.");
+                    }
+
                     if (_prohibitedNamespacePrefixes.Any(prefix => namespaceName.Equals(prefix, StringComparison.Ordinal)
                             || namespaceName.StartsWith(prefix + ".", StringComparison.Ordinal))
                         || (typeName is not null && _prohibitedTypeNames.Contains(typeName, StringComparer.Ordinal)))
                     {
                         throw new InvalidOperationException(
-                            "Direct file, network, process, native, dynamic, or reflection access is prohibited. For files, read the C# scripting reference and use Scratchpad.");
+                            $"Access to '{typeName ?? namespaceName}' is prohibited in scripts. For files, use Scratchpad.");
                     }
 
                     if (namespaceName.StartsWith("System.", StringComparison.Ordinal)
                         && !request.AllowedAssemblies.Any(allowed => namespaceName.Equals(allowed, StringComparison.Ordinal)
-                            || namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal)))
+                            || namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal)
+                            || (symbol is INamespaceSymbol && allowed.StartsWith(namespaceName + ".", StringComparison.Ordinal))))
                     {
                         throw new InvalidOperationException(
-                            "The script references a namespace outside allowed_assemblies.");
+                            $"Namespace '{namespaceName}' is not permitted by this session's scripting configuration (allowed_assemblies).");
                     }
                 }
             }

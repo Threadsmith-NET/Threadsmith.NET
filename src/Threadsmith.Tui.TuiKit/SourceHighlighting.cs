@@ -16,6 +16,9 @@ internal interface ISourceHighlighter
 /// <summary>Adapts the pinned line-oriented TUIKit highlighter to host style ranges.</summary>
 internal sealed class TuiKitSourceHighlighter : ISourceHighlighter
 {
+    /// <summary>Maximum logical lines tokenized synchronously when opening source.</summary>
+    internal const int MaximumHighlightedLines = 256;
+
     /// <inheritdoc/>
     public IReadOnlyList<SourceHighlightSpan> Highlight(string source, string language)
     {
@@ -24,6 +27,17 @@ internal sealed class TuiKitSourceHighlighter : ISourceHighlighter
         if (!string.Equals(language, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             return [];
+        }
+
+        // Bound tokenizer calls independently of character count. Large documents stay readable
+        // and copyable as plain text, without allocating per-line strings or token runs.
+        var lines = 1;
+        foreach (var character in source)
+        {
+            if (character == '\n' && ++lines > MaximumHighlightedLines)
+            {
+                return [];
+            }
         }
 
         // TUIKit exposes colored runs, not token kinds. Match its own representative styles

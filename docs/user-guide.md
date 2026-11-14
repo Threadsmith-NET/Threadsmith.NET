@@ -978,6 +978,8 @@ It executes each request in a fresh tracked worker process with bounded standard
 
 These restrictions are defense in depth, not an operating-system sandbox. Enable scripting only for repositories you trust.
 
+By default, one unused worker is prewarmed in the background and replaced asynchronously before each script runs. Workers remain single-use, so no script state carries between calls. Set `NumberOfWarmWorkersInPool` to `0` for cold launches, or change `WorkerCreationTimeOut` (milliseconds) to bound startup and waiting for a ready worker. These preferences take effect after an application restart; they do not change script permissions. See [configuration and lifecycle](operations/csharp-scripting.md#configuration-and-lifecycle).
+
 Configure it with scalar values:
 
 ```json
@@ -985,6 +987,8 @@ Configure it with scalar values:
   "tools": {
     "config": {
       "csharp_script": {
+        "NumberOfWarmWorkersInPool": "1",
+        "WorkerCreationTimeOut": "3000",
         "timeout_ms": "5000",
         "max_output_bytes": "65536",
         "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json"

@@ -386,6 +386,8 @@ Variable syntax is preserved for evaluation in the child shell:
 
 Setup statements are admitted as part of a request containing at least one authorized named command. They do not add executable actions or require a separate rule for assignment syntax. All named actions are checked before setup, redirection, or any command executes. Command heads and script operands must remain explicit; references cannot choose a different executable or script at runtime. Assignment from command output, `$()`/backtick command substitution, script blocks, and inline interpreter programs remain unsupported. This is shell setup for ordinary CLI work, not an additional custom-scripting path.
 
+Assignment setup cannot set interpreter startup inputs (`BASH_ENV`, `ENV`, `ZDOTDIR`, `SHELLOPTS`, or `BASHOPTS`; reserved case-insensitively). This applies to POSIX assignment prefixes and standalone assignments, and PowerShell environment assignments, including setup before a later interpreter invocation. These inputs could introduce startup code or options outside the explicitly authorized command and script actions.
+
 Variables are not evaluated by the host. Policy facts and argument-deny expressions see submitted references, not their expanded values; exact approvals bind the submitted syntax and frozen initial environment, not a predicted runtime value. Variable values can change arguments and shell behavior; CMD expansion can also introduce shell syntax. These text filters do not inspect resulting operations or provide a sandbox. Assignments affect only that child shell and its descendants, never the host process or later tool calls.
 
 ### Command groups, pipelines, and log files

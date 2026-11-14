@@ -42,6 +42,28 @@ public sealed class SourceHighlightingTests
         Assert.True(largeBytes <= smallBytes + 1024, $"Blank lines allocated {largeBytes} bytes versus {smallBytes} bytes.");
     }
 
+    /// <summary>Logical line count bounds tokenization independently of source length.</summary>
+    [Fact]
+    public void HighlightingFallsBackAboveLineBudgetWithoutChangingSource()
+    {
+        // Arrange
+        var highlighter = new TuiKitSourceHighlighter();
+        var atLimit = string.Join('\n', Enumerable.Repeat("class", TuiKitSourceHighlighter.MaximumHighlightedLines));
+        var maximumSource = string.Concat(Enumerable.Repeat("1\n", ToolSourceDetail.MaximumCharacters / 2));
+
+        // Act
+        var highlighted = highlighter.Highlight(atLimit, "csharp");
+        var overLimit = highlighter.Highlight(atLimit + "\nclass", "csharp");
+        var document = new SourceDocument(maximumSource, "csharp", highlighter);
+
+        // Assert
+        Assert.Equal(TuiKitSourceHighlighter.MaximumHighlightedLines, highlighted.Count);
+        Assert.Empty(overLimit);
+        Assert.Equal(new SourceHighlightSpan(0, maximumSource.Length, PresentationTextRole.MarkdownCode), Assert.Single(document.Ranges));
+        Assert.Equal(maximumSource, document.DisplaySource);
+        Assert.Equal(maximumSource, document.CopyRange(0, document.DisplaySource.Length));
+    }
+
     /// <summary>Adjacent equal styles and plain gaps share compact ranges.</summary>
     [Fact]
     public void DocumentMergesAdjacentStylesAndKeepsOffsetsInsteadOfSubstrings()

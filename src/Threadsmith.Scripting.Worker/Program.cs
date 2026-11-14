@@ -14,6 +14,7 @@ using Threadsmith.Core;
 /// <summary>Reads one bounded script request from standard input and writes one JSON result.</summary>
 public static class Program
 {
+    private static readonly JsonSerializerOptions RequestJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly string[] _prohibitedNamespacePrefixes =
     [
         "System.Diagnostics",
@@ -36,8 +37,22 @@ public static class Program
     ];
 
     /// <summary>Runs one fresh Roslyn script invocation.</summary>
-    public static async Task<int> Main()
+    public static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--warm", StringComparer.Ordinal))
+        {
+            // Warm compiler infrastructure without executing code or receiving file authority.
+            var options = CreateOptions(["System.Linq", "System.Collections", "System.Collections.Generic", "System.Text.Json"], 128);
+            var diagnostics = CSharpScript.Create("0", options, typeof(ScriptGlobals)).Compile();
+            if (diagnostics.Any(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+            {
+                return 1;
+            }
+
+            await Console.Out.WriteAsync("THREADSMITH_SCRIPT_READY\n");
+            await Console.Out.FlushAsync();
+        }
+
         var requestJson = await Console.In.ReadToEndAsync();
         ScriptWorkerResult result;
         var stopwatch = Stopwatch.StartNew();
@@ -45,7 +60,7 @@ public static class Program
         {
             var request = JsonSerializer.Deserialize<ScriptWorkerRequest>(
                 requestJson,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                RequestJsonOptions)
                 ?? throw new InvalidOperationException("The scripting request was empty.");
             if (string.IsNullOrWhiteSpace(request.Code)
                 || request.MaximumCodeCharacters <= 0
@@ -59,50 +74,19 @@ public static class Program
                 throw new InvalidOperationException("The scripting request exceeded a worker boundary.");
             }
 
-            var trustedPlatformAssemblies = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
-                ?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
-                ?? [];
-            var platformAssemblies = trustedPlatformAssemblies
-                .GroupBy(
-                    path => Path.GetFileNameWithoutExtension(path),
-                    StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(
-                    group => group.Key,
-                    group => group.First(),
-                    StringComparer.OrdinalIgnoreCase);
-            var references = new List<Assembly> { typeof(object).Assembly };
-            foreach (var assemblyName in request.AllowedAssemblies.Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                if (string.IsNullOrWhiteSpace(assemblyName)
-                    || assemblyName.Length > request.MaximumAssemblyNameCharacters
-                    || !assemblyName.StartsWith("System.", StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
-                }
-
-                var referenceName = assemblyName;
-                string? assemblyPath;
-                while (!platformAssemblies.TryGetValue(referenceName, out assemblyPath))
-                {
-                    var separator = referenceName.LastIndexOf('.');
-                    if (separator <= "System".Length)
-                    {
-                        throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
-                    }
-
-                    referenceName = referenceName[..separator];
-                }
-
-                references.Add(Assembly.LoadFrom(assemblyPath));
-            }
-
             var scope = request.FileScope ?? throw new InvalidOperationException("Scratchpad file authority is required.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(request.TimeoutMilliseconds));
             var globals = new ScriptGlobals(scope, deadline.Token);
-            references.Add(typeof(ScriptGlobals).Assembly);
-            var options = ScriptOptions.Default
-                .WithReferences(references.Distinct())
-                .WithImports(request.AllowedAssemblies.Prepend("System"));
+
+            // Warm workers start without invocation-specific environment or working directory.
+            Directory.SetCurrentDirectory(scope.ScratchpadPath);
+            var temporaryPath = Path.Combine(scope.ScratchpadPath, "tmp");
+            foreach (var variable in new[] { "TMP", "TEMP", "TMPDIR" })
+            {
+                Environment.SetEnvironmentVariable(variable, temporaryPath);
+            }
+
+            var options = CreateOptions(request.AllowedAssemblies, request.MaximumAssemblyNameCharacters);
             var script = CSharpScript.Create(request.Code, options, typeof(ScriptGlobals));
             var compilation = script.GetCompilation();
             var syntaxTree = compilation.SyntaxTrees.Single();
@@ -175,13 +159,8 @@ public static class Program
                 }
             }
 
-            var value = await CSharpScript.EvaluateAsync(
-                request.Code,
-                options,
-                globals: globals,
-                globalsType: typeof(ScriptGlobals),
-                cancellationToken: deadline.Token);
-            var output = value?.ToString() ?? string.Empty;
+            var state = await script.RunAsync(globals, cancellationToken: deadline.Token);
+            var output = state.ReturnValue?.ToString() ?? string.Empty;
             var outputBytes = Encoding.UTF8.GetBytes(output);
             var truncated = outputBytes.Length > request.MaximumOutputBytes;
             if (truncated)
@@ -233,6 +212,42 @@ public static class Program
 
         await Console.Out.WriteAsync(JsonSerializer.Serialize(result));
         return 0;
+    }
+
+    private static ScriptOptions CreateOptions(IReadOnlyList<string> allowedAssemblies, int maximumAssemblyNameCharacters)
+    {
+        var trustedPlatformAssemblies = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
+            ?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries) ?? [];
+        var platformAssemblies = trustedPlatformAssemblies
+            .GroupBy(path => Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+        var references = new List<Assembly> { typeof(object).Assembly, typeof(ScriptGlobals).Assembly };
+        foreach (var assemblyName in allowedAssemblies.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(assemblyName)
+                || assemblyName.Length > maximumAssemblyNameCharacters
+                || !assemblyName.StartsWith("System.", StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
+            }
+
+            var referenceName = assemblyName;
+            string? assemblyPath;
+            while (!platformAssemblies.TryGetValue(referenceName, out assemblyPath))
+            {
+                var separator = referenceName.LastIndexOf('.');
+                if (separator <= "System".Length)
+                {
+                    throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
+                }
+
+                referenceName = referenceName[..separator];
+            }
+
+            references.Add(Assembly.LoadFrom(assemblyPath));
+        }
+
+        return ScriptOptions.Default.WithReferences(references.Distinct()).WithImports(allowedAssemblies.Prepend("System"));
     }
 
     private sealed record ScriptWorkerRequest

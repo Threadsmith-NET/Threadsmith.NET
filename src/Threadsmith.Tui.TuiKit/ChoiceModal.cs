@@ -74,8 +74,9 @@ internal sealed class ChoiceModal : Modal
                 MaximumTranscriptBytes = Math.Max(_limits.MaximumTranscriptBytes, ToolSourceDetail.MaximumCharacters * 12),
                 MaximumTranscriptLines = Math.Max(_limits.MaximumTranscriptLines, ToolSourceDetail.MaximumCharacters + 1),
 
-                // Keep per-fragment append/reflow bounded; Continued chunks preserve raw copy offsets.
-                MaximumTranscriptLineCharacters = Math.Min(_limits.MaximumTranscriptLineCharacters, 1024),
+                // Use dedicated chunks, not tiny session chunks: tab expansion must not exceed
+                // the full-source line budget. Continued chunks preserve raw copy offsets.
+                MaximumTranscriptLineCharacters = 1024,
             };
             _detail = new TranscriptView(detailLimits);
             _detail.PresentSource(_scriptDocument);

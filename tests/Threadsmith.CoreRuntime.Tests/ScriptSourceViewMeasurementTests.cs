@@ -15,13 +15,17 @@ public sealed class ScriptSourceViewMeasurementTests
     /// <summary>Records warm modal activation without imposing a runner-speed requirement.</summary>
     [Theory(Explicit = true)]
     [Trait("Category", "Performance")]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void MeasureMaximumSourceModalActivation(bool tokenDense)
+    [InlineData("newline-only")]
+    [InlineData("token-dense")]
+    [InlineData("short-nonempty-lines")]
+    public void MeasureMaximumSourceModalActivation(string shape)
     {
-        var source = tokenDense
-            ? "var values = new[]{" + string.Concat(Enumerable.Repeat("1,", 32740)) + "0};"
-            : new string('\n', ToolSourceDetail.MaximumCharacters);
+        var source = shape switch
+        {
+            "token-dense" => "var values = new[]{" + string.Concat(Enumerable.Repeat("1,", 32740)) + "0};",
+            "short-nonempty-lines" => string.Concat(Enumerable.Repeat("1\n", ToolSourceDetail.MaximumCharacters / 2)),
+            _ => new string('\n', ToolSourceDetail.MaximumCharacters),
+        };
         var detail = Detail(source);
         var surface = new BufferSurface(new CellBuffer(110, 40));
         var warm = new ChoiceModal("script", [], sourceDetail: detail);
@@ -34,7 +38,7 @@ public sealed class ScriptSourceViewMeasurementTests
         var elapsed = Stopwatch.GetElapsedTime(start);
         var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        TestContext.Current.TestOutputHelper?.WriteLine($"Modal activation ({(tokenDense ? "token-dense" : "newline-only")}, {source.Length} chars): {bytes} allocated bytes; {elapsed.TotalMilliseconds:F3} ms.");
+        TestContext.Current.TestOutputHelper?.WriteLine($"Modal activation ({shape}, {source.Length} chars): {bytes} allocated bytes; {elapsed.TotalMilliseconds:F3} ms.");
         string? copied = null;
         modal.CopyRequested = text =>
         {

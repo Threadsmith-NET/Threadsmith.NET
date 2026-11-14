@@ -338,6 +338,61 @@ public sealed class ScriptSourceViewTests
         Assert.Equal(source, copied);
     }
 
+    /// <summary>Tab expansion cannot trim the full view or shift selection offsets.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void TabHeavySourceRetainsBeginningAndExactSelectionsWithTinySessionChunks(int chunkSize)
+    {
+        // Arrange
+        var source = "// start" + new string('\t', ToolSourceDetail.MaximumCharacters - 16) + "\r\n// end";
+        string? copied = null;
+        var limits = new TuiResourceLimits
+        {
+            MaximumTranscriptLineCharacters = chunkSize,
+            MaximumTranscriptLines = 1,
+            MaximumTranscriptBytes = 256,
+        };
+        var modal = new ChoiceModal("script", [], limits, sourceDetail: Item(source).SourceDetail)
+        {
+            CopyRequested = value =>
+            {
+                copied = value;
+                return true;
+            },
+        };
+
+        // Act and assert through the modal selection and copy entry points, including reflow.
+        foreach (var width in SourceViewerWidths)
+        {
+            modal.HandleKey(KeyEvent.Special(KeyCode.Home));
+            var rows = Render(modal, width).Split('\n');
+            var y = Array.FindIndex(rows, row => row.Contains("// start", StringComparison.Ordinal));
+            Assert.True(y >= 0);
+            var x = rows[y].IndexOf("// start", StringComparison.Ordinal);
+            modal.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, x, y, KeyModifiers.None, 1));
+            modal.HandleMouse(new(MouseEventKind.Release, MouseButton.Left, x + 8, y, KeyModifiers.None, 1));
+            modal.HandleKey(KeyEvent.Special(KeyCode.F6));
+            Assert.Equal("// start", copied);
+
+            modal.HandleKey(KeyEvent.Special(KeyCode.End));
+            rows = Render(modal, width).Split('\n');
+            y = Array.FindIndex(rows, row => row.Contains("// end", StringComparison.Ordinal));
+            Assert.True(y >= 0);
+            x = rows[y].IndexOf("// end", StringComparison.Ordinal);
+            modal.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, x, y, KeyModifiers.None, 1));
+            modal.HandleMouse(new(MouseEventKind.Release, MouseButton.Left, x + 6, y, KeyModifiers.None, 1));
+            modal.HandleKey(KeyEvent.Special(KeyCode.F6));
+            Assert.Equal("// end", copied);
+
+            modal.HandleKey(KeyEvent.Char('a', KeyModifiers.Ctrl));
+            modal.HandleKey(KeyEvent.Special(KeyCode.F6));
+            Assert.Equal(source, copied);
+            modal.HandleKey(KeyEvent.Special(KeyCode.F4));
+            Assert.Equal(source, copied);
+        }
+    }
+
     /// <summary>Pointer selection uses the modal's content coordinates.</summary>
     [Fact]
     public void ModalMouseSelectionCopiesOriginalRange()

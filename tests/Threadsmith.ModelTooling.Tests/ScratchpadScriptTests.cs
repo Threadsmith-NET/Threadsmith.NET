@@ -50,7 +50,7 @@ public sealed class ScratchpadScriptTests : IDisposable
             .Concat(messages.Select(message => JsonSerializer.Serialize(new { level = "error", message })))
             .Append("not JSON: the script must stop before reading this line");
         await File.WriteAllLinesAsync(Path.Combine(scope.ScratchpadPath, "events.jsonl"), input, cancellationToken);
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(examples[exampleIndex], kind, context, cancellationToken);
@@ -69,7 +69,7 @@ public sealed class ScratchpadScriptTests : IDisposable
     public async Task WorkerSupportsDefaultComputation(string code, string expected)
     {
         var scope = CreateScope();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(code, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
@@ -100,7 +100,7 @@ public sealed class ScratchpadScriptTests : IDisposable
             });
         }
 
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(builder.Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(builder.Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(code, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
@@ -117,7 +117,7 @@ public sealed class ScratchpadScriptTests : IDisposable
         var input = Path.Combine(scope.ScratchpadPath, "input.log");
         await File.WriteAllLinesAsync(input, Enumerable.Range(0, 100000).Select(index => index % 10 == 0 ? "ERROR" : "ok"), TestContext.Current.CancellationToken);
         var config = new ConfigurationBuilder().Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
         var result = await engine.ExecuteAsync(
             "var count = Scratchpad.ReadLines(\"input.log\").Count(line => line.Contains(\"ERROR\")); await Scratchpad.WriteAllTextAsync(\"results/count.txt\", count.ToString()); return count;",
@@ -181,7 +181,7 @@ public sealed class ScratchpadScriptTests : IDisposable
         var scope = CreateScope();
         await File.WriteAllBytesAsync(Path.Combine(scope.ScratchpadPath, "input.bin"), [1, 2, 3, 4, 5], TestContext.Current.CancellationToken);
         var config = new ConfigurationBuilder().Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(
@@ -369,7 +369,7 @@ public sealed class ScratchpadScriptTests : IDisposable
     {
         var scope = CreateScope();
         var process = new RecordingProcessManager();
-        var engine = new CSharpScriptEngine(process, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(process, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var tool = new CSharpScriptTool(engine, TestPromptLoader.Instance);
         var registry = new ToolRegistry(
             [tool],

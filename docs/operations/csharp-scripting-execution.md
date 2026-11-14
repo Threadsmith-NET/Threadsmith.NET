@@ -8,7 +8,7 @@ Read this reference when using `csharp_script`; reuse it while it remains in con
 - `System` is imported automatically. Defaults also import and permit `System.Linq`, `System.Collections`, `System.Collections.Generic`, and `System.Text.Json`. Explicit `allowed_assemblies` configuration can restrict these APIs; imports do not grant permissions.
 - Console access is prohibited. The returned value is converted with `.ToString()`; collections are not automatically serialized. Return readable text with `string.Join`, or explicitly serialize supported data with `JsonSerializer.Serialize`.
 - Use `using (...) { ... }` to dispose resources. The current script compiler rejects top-level `using var` declarations.
-- Each call runs in a fresh worker. Variables do not persist between calls. The host saves the submitted `.csx` in the session scratchpad and returns its path.
+- Each call runs in a fresh, single-use worker, which may already be prewarmed. Variables do not persist between calls. The host saves the submitted `.csx` in the session scratchpad and returns its path.
 - Directives, direct file/process/network/reflection/native access, dynamic code, and unsafe constructs are prohibited. Follow the specific rejection message; do not repeat the same denied operation through another API.
 
 ## Files and limits

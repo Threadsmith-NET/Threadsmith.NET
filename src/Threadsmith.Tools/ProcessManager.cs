@@ -73,6 +73,10 @@ public sealed record ProcessExecutionRequest
     /// <summary>Gets the immutable host-prepared launch, never model-controlled.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     internal PreparedProcessLaunch? PreparedLaunch { get; init; }
+
+    /// <summary>Gets an unused scripting process to adopt into ordinary tracked execution.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal ScriptWorkerProcess? ScriptWorker { get; init; }
 }
 
 /// <summary>Normalized, sanitized child-process exit data.</summary>
@@ -144,6 +148,25 @@ public sealed class ProcessManager : IProcessManager
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var process = request.ScriptWorker?.TakeProcess() ?? StartProcess(request, _limits);
+        var startedAt = _timeProvider.GetUtcNow();
+        var processId = process.Id;
+        _active[processId] = new ActiveProcessInfo(
+            processId,
+            request.RunId,
+            request.ToolInvocationId,
+            startedAt,
+            request.WorkingDirectory,
+            request.Timeout,
+            request.Origin);
+        return await RunStartedProcessAsync(process, request, startedAt, cancellationToken);
+    }
+
+    /// <summary>Uses the same host-owned launch path for cold and prewarmed processes.</summary>
+    internal static Process StartProcess(ProcessExecutionRequest request, ProcessResourceLimits? limits = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        limits ??= new ProcessResourceLimits();
         ArgumentException.ThrowIfNullOrWhiteSpace(request.FileName);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkingDirectory);
         if ((request.Timeout <= TimeSpan.Zero && request.Timeout != Timeout.InfiniteTimeSpan)
@@ -152,9 +175,9 @@ public sealed class ProcessManager : IProcessManager
             throw new ArgumentOutOfRangeException(nameof(request), "Process bounds must be positive, or the timeout must be infinite.");
         }
 
-        if (request.EnvironmentVariables.Count > _limits.MaximumEnvironmentVariables
-            || request.EnvironmentVariables.Any(item => item.Key.Length < 1 || item.Key.Length > _limits.MaximumEnvironmentNameCharacters
-                || item.Value.Length > _limits.MaximumEnvironmentValueCharacters
+        if (request.EnvironmentVariables.Count > limits.MaximumEnvironmentVariables
+            || request.EnvironmentVariables.Any(item => item.Key.Length < 1 || item.Key.Length > limits.MaximumEnvironmentNameCharacters
+                || item.Value.Length > limits.MaximumEnvironmentValueCharacters
                 || item.Key.Contains('=')
                 || item.Key.Contains('\0')
                 || item.Value.Contains('\0')))
@@ -212,22 +235,30 @@ public sealed class ProcessManager : IProcessManager
             startInfo.Environment[key] = value;
         }
 
-        using var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-        var startedAt = _timeProvider.GetUtcNow();
-        if (!process.Start())
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        try
         {
-            throw new InvalidOperationException($"Process '{request.FileName}' did not start.");
-        }
+            if (!process.Start())
+            {
+                throw new InvalidOperationException($"Process '{request.FileName}' did not start.");
+            }
 
+            return process;
+        }
+        catch
+        {
+            process.Dispose();
+            throw;
+        }
+    }
+
+    private async Task<ProcessExecutionResult> RunStartedProcessAsync(
+        Process process,
+        ProcessExecutionRequest request,
+        DateTimeOffset startedAt,
+        CancellationToken cancellationToken)
+    {
         var processId = process.Id;
-        _active[processId] = new ActiveProcessInfo(
-            processId,
-            request.RunId,
-            request.ToolInvocationId,
-            startedAt,
-            request.WorkingDirectory,
-            request.Timeout,
-            request.Origin);
         var stdoutTask = ReadBoundedAsync(
             process.StandardOutput,
             request.MaximumOutputCharacters,

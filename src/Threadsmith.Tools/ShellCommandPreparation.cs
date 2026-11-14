@@ -423,6 +423,11 @@ internal static class ShellCommandPreparation
                     throw Denied();
                 }
 
+                if (scopeEnd >= 0 && variableName[..scopeEnd].Equals("env", StringComparison.OrdinalIgnoreCase))
+                {
+                    ValidateSetupVariable(variableName[(scopeEnd + 1)..]);
+                }
+
                 result.Add(new LiteralCommand([], separator, string.Empty, [], [], raw, true, []));
                 return;
             }
@@ -432,6 +437,8 @@ internal static class ShellCommandPreparation
             {
                 while (first < tokens.Count && IsPosixAssignment(command[tokenStarts[first]..tokenEnds[first]]))
                 {
+                    var assignment = command[tokenStarts[first]..tokenEnds[first]];
+                    ValidateSetupVariable(assignment[..assignment.IndexOf('=')]);
                     first++;
                 }
             }
@@ -490,6 +497,15 @@ internal static class ShellCommandPreparation
             token.Clear();
             started = false;
             tokenHasExpansion = false;
+        }
+    }
+
+    private static void ValidateSetupVariable(string name)
+    {
+        // Startup inputs must not add code or interpreter options outside command policy.
+        if (name.ToUpperInvariant() is "BASH_ENV" or "ENV" or "ZDOTDIR" or "SHELLOPTS" or "BASHOPTS")
+        {
+            throw Denied();
         }
     }
 

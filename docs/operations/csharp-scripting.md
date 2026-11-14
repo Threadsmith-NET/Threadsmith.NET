@@ -8,6 +8,10 @@ For execution rules, available file methods, and tested examples, see the [scrip
 
 Configure `tools:config:csharp_script:allowed_assemblies`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, and JSON; explicit allowlists replace those defaults. See the [configuration example](../user-guide.md) in the user guide.
 
+The host prepares one unused worker in the background at startup by default. Set `tools:config:csharp_script:NumberOfWarmWorkersInPool` to change that count; `0` disables the pool and starts a fresh worker for each invocation. Set `tools:config:csharp_script:WorkerCreationTimeOut` to change the creation/acquisition timeout in milliseconds (default `3000`). These are ordinary startup preferences, not permission grants; restart the application after changing them.
+
+Warm workers initialize the Roslyn compiler without executing a script or receiving file authority. Each worker serves exactly one invocation and exits; variables and script state never carry between calls. Taking a worker queues background replacements on the thread pool before script execution, without waiting for those replacements. If no worker is ready, the invocation asynchronously waits up to the creation timeout. Idle workers have no expiry and remain available until application shutdown. Script execution still uses the ordinary tracked-process path, invocation-specific file scope, output limits, and cancellation.
+
 The host saves each submitted snippet as a `.csx` file in `.threadsmith/.scratchpad` and returns its path. Files survive individual calls, but variables do not. Scratchpad files are deleted at session boundaries and application startup/shutdown. All script outputs stay in the scratchpad. Absolute input paths require repository authority or trusted `tools:readFile:allowedFolders` grants.
 
 If a tracked process cannot be confirmed terminated within the shutdown backstop, cleanup stays blocked to preserve its working files. Restart Threadsmith before retrying cleanup.

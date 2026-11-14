@@ -25,6 +25,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     private readonly HttpClient _hookHttpClient;
     private readonly HttpClient? _jiraHttpClient;
     private readonly HttpClient? _prHttpClient;
+    private readonly CSharpScriptEngine _scriptEngine;
     private readonly IDomainEventSubscription _persistenceSubscription;
     private readonly IDomainEventSubscription _projectionSubscription;
     private readonly IDomainEventSubscription _semanticSubscription;
@@ -82,7 +83,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         SemanticLifecycleObserver semanticObserver,
         IDomainEventSubscription semanticSubscription,
         HttpClient? jiraHttpClient,
-        HttpClient? prHttpClient)
+        HttpClient? prHttpClient,
+        CSharpScriptEngine scriptEngine)
     {
         Events = events;
         Projections = projections;
@@ -104,6 +106,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         _hookHttpClient = hookHttpClient;
         _jiraHttpClient = jiraHttpClient;
         _prHttpClient = prHttpClient;
+        _scriptEngine = scriptEngine;
         EvidenceStore = evidenceStore;
         PromptLoader = promptLoader;
         PromptAppendLoader = promptAppendLoader;
@@ -143,6 +146,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         await _hookSubscription.DisposeAsync();
         await _hookObserver.DisposeAsync();
         await HookCoordinator.DisposeAsync();
+        await _scriptEngine.DisposeAsync();
         await ToolStatistics.DisposeAsync();
         RepositoryMemoryStore.Dispose();
         WebFetchAuthorization.RevokeAll();
@@ -462,6 +466,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HttpClient? jiraHttpClient = null;
         HttpClient? prHttpClient = null;
         SqliteToolStatisticsWorker? toolStatistics = null;
+        CSharpScriptEngine? scriptEngine = null;
 
         try
         {
@@ -596,7 +601,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory.CreateLogger<HostFoundation>().LogDebug("Jira is unavailable: no enabled tools.jira.providers accounts are configured in trusted user/machine configuration.");
             }
 
-            (var toolStateManager, var toolRegistry, var webFetchAuthorization, var approvalPrompt) = CreateTools(
+            (var toolStateManager, var toolRegistry, var webFetchAuthorization, var approvalPrompt, var createdScriptEngine) = CreateTools(
                 configuration,
                 trustedConfiguration,
                 paths,
@@ -620,6 +625,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 jiraTool,
                 prFetchTool,
                 policyBinding);
+            scriptEngine = createdScriptEngine;
+            scriptEngine.StartWarming();
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -708,11 +715,17 @@ internal sealed class HostFoundation : IAsyncDisposable
                 semanticObserver,
                 semanticSubscription,
                 jiraHttpClient,
-                prHttpClient);
+                prHttpClient,
+                scriptEngine);
         }
         catch
         {
             // Reverse partial initialization so a failed startup does not retain subscriptions or workspace state.
+            if (scriptEngine is not null)
+            {
+                await scriptEngine.DisposeAsync();
+            }
+
             if (toolStatistics is not null)
             {
                 await toolStatistics.DisposeAsync();
@@ -1069,7 +1082,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     }
 
     /// <summary>Creates built-in tools, persisted availability, and the shared dynamic registry.</summary>
-    private static (ToolStateManager StateManager, ToolRegistry Registry, WebFetchAuthorizationAuthority WebFetchAuthorization, DirectFetchApprovalPromptRouter ApprovalPrompt) CreateTools(
+    private static (ToolStateManager StateManager, ToolRegistry Registry, WebFetchAuthorizationAuthority WebFetchAuthorization, DirectFetchApprovalPromptRouter ApprovalPrompt, CSharpScriptEngine ScriptEngine) CreateTools(
         IConfiguration configuration,
         IConfiguration trustedConfiguration,
         ConfigurationPaths paths,
@@ -1110,7 +1123,12 @@ internal sealed class HostFoundation : IAsyncDisposable
             processManager,
             new ToolConfig(trustedConfiguration),
             workerPath,
-            limits.WriteFileMaximumContentBytes);
+            limits.WriteFileMaximumContentBytes,
+            workerOptions: new ScriptWorkerOptions
+            {
+                NumberOfWarmWorkersInPool = configuration.GetValue("tools:config:csharp_script:NumberOfWarmWorkersInPool", 1),
+                WorkerCreationTimeOut = configuration.GetValue("tools:config:csharp_script:WorkerCreationTimeOut", 3000),
+            });
         var webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
         var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration, policyBinding);
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(
@@ -1217,7 +1235,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 runtimePreferences.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true),
                 CreateConfiguredToolTimeouts(configuration)),
             webFetchAuthorization,
-            directFetchApprovalPrompt);
+            directFetchApprovalPrompt,
+            scriptEngine);
     }
 
     /// <summary>Disposes an optional partially-created subscription during failed startup.</summary>

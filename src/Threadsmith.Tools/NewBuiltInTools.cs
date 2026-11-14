@@ -116,19 +116,23 @@ public interface ICSharpScriptEngine
 }
 
 /// <summary>Tracked-process adapter for the Roslyn scripting worker.</summary>
-public sealed class CSharpScriptEngine : ICSharpScriptEngine
+public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
 {
     private readonly IProcessManager _processManager;
     private readonly IToolConfig _toolConfig;
     private readonly string _workerPath;
     private readonly int _maximumWriteBytes;
+    private readonly ScriptWorkerPool<ScriptWorkerProcess>? _workerPool;
+    private static readonly JsonSerializerOptions OutputJsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptEngine"/> class.</summary>
     public CSharpScriptEngine(
         IProcessManager processManager,
         IToolConfig toolConfig,
         string workerPath,
-        int maximumWriteBytes = 1024 * 1024)
+        int maximumWriteBytes = 1024 * 1024,
+        ScriptWorkerOptions? workerOptions = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(toolConfig);
@@ -138,7 +142,23 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         _workerPath = Path.GetFullPath(workerPath);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWriteBytes);
         _maximumWriteBytes = maximumWriteBytes;
+        var options = workerOptions ?? new ScriptWorkerOptions
+        {
+            NumberOfWarmWorkersInPool = toolConfig.Get("csharp_script", "NumberOfWarmWorkersInPool", 1),
+            WorkerCreationTimeOut = toolConfig.Get("csharp_script", "WorkerCreationTimeOut", 3000),
+        };
+        options.Validate();
+        if (options.NumberOfWarmWorkersInPool > 0)
+        {
+            _workerPool = new ScriptWorkerPool<ScriptWorkerProcess>(options, CreateWarmWorkerAsync, timeProvider ?? TimeProvider.System);
+        }
     }
+
+    /// <summary>Schedules startup warming without blocking application composition.</summary>
+    public void StartWarming() => _workerPool?.Start();
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync() => _workerPool?.DisposeAsync() ?? ValueTask.CompletedTask;
 
     /// <inheritdoc />
     public async Task<CSharpScriptOutput> ExecuteAsync(
@@ -197,6 +217,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         }
 
         await AtomicFileWriter.WriteAsync(scriptPath, scriptBytes, false, () => ScopedFilePaths.ValidateWrite(scriptPath, scope), cancellationToken);
+        await using var worker = _workerPool is null ? null : await _workerPool.RentAsync(cancellationToken);
         var executionTimeout = context.GetRemainingExecutionTimeout(TimeSpan.FromMilliseconds(timeoutMilliseconds));
         timeoutMilliseconds = executionTimeout == Timeout.InfiniteTimeSpan ? -1 : checked((int)Math.Ceiling(executionTimeout.TotalMilliseconds));
         var workerRequest = new ScriptWorkerRequest
@@ -213,30 +234,13 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
         };
         var requestJson = JsonSerializer.Serialize(workerRequest);
-        var launchAppHost = !string.Equals(
-            Path.GetExtension(_workerPath),
-            ".dll",
-            StringComparison.OrdinalIgnoreCase);
-        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
-            ?? throw new InvalidOperationException("The host entry assembly path is unavailable.");
-        IReadOnlyList<string> arguments = launchAppHost
-            ? []
-            :
-            [
-                "exec",
-                "--runtimeconfig",
-                Path.ChangeExtension(entryAssemblyPath, ".runtimeconfig.json"),
-                "--depsfile",
-                Path.ChangeExtension(entryAssemblyPath, ".deps.json"),
-                _workerPath,
-            ];
+        var launch = CreateLaunchRequest();
         var result = await _processManager.RunAsync(
-            new ProcessExecutionRequest
+            launch with
             {
                 ToolInvocationId = context.ToolInvocationId,
                 RunId = context.RunId,
-                FileName = launchAppHost ? _workerPath : "dotnet",
-                Arguments = arguments,
+                ScriptWorker = worker,
                 WorkingDirectory = scope.ScratchpadPath,
                 EnvironmentVariables = ScriptFilePolicy.TemporaryEnvironment(scope.ScratchpadPath, scope.RepositoryPath),
                 Timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds),
@@ -274,7 +278,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         {
             var output = JsonSerializer.Deserialize<CSharpScriptOutput>(
                 result.StandardOutput,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+                OutputJsonOptions)
                 ?? throw new InvalidOperationException("The C# scripting worker returned an empty result.");
             return output with { ScriptPath = scriptPath };
         }
@@ -282,6 +286,38 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         {
             throw new InvalidOperationException("The C# scripting worker returned malformed output.", exception);
         }
+    }
+
+    private Task<ScriptWorkerProcess> CreateWarmWorkerAsync(CancellationToken cancellationToken)
+    {
+        var request = CreateLaunchRequest();
+        return ScriptWorkerProcess.CreateAsync(request with { Arguments = [.. request.Arguments, "--warm"] }, cancellationToken);
+    }
+
+    private ProcessExecutionRequest CreateLaunchRequest()
+    {
+        var launchAppHost = !string.Equals(Path.GetExtension(_workerPath), ".dll", StringComparison.OrdinalIgnoreCase);
+        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location
+            ?? throw new InvalidOperationException("The host entry assembly path is unavailable.");
+        return new ProcessExecutionRequest
+        {
+            ToolInvocationId = default,
+            RunId = default,
+            FileName = launchAppHost ? _workerPath : "dotnet",
+            Arguments = launchAppHost ? [] :
+            [
+                "exec",
+                "--runtimeconfig",
+                Path.ChangeExtension(entryAssemblyPath, ".runtimeconfig.json"),
+                "--depsfile",
+                Path.ChangeExtension(entryAssemblyPath, ".deps.json"),
+                _workerPath,
+            ],
+            WorkingDirectory = AppContext.BaseDirectory,
+            StandardInput = string.Empty,
+            Timeout = Timeout.InfiniteTimeSpan,
+            Origin = ProcessRequestOrigin.Host,
+        };
     }
 
     private sealed record ScriptWorkerRequest

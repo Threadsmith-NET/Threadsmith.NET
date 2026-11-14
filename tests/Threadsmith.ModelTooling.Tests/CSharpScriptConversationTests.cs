@@ -66,7 +66,8 @@ public static class CSharpScriptConversationTests
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
-                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
+                workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
             var tool = new CSharpScriptTool(engine, prompts);
             var state = new ToolStateManager(
                 [tool.Definition],

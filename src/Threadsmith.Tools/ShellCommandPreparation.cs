@@ -302,8 +302,15 @@ internal static class ShellCommandPreparation
                 continue;
             }
 
-            if (character is '(' or ')' or '{' or '}' || (!cmd && character is '`' or '@' or '*' or '?' or '[' or ']'))
+            if (character is '(' or ')' or '{' or '}' || (!cmd && character is '`' or '@' or '*' or '?'))
             {
+                throw Denied();
+            }
+
+            if (!cmd && character is '[' or ']' && !(powershell && tokens.Count > 0 && started && !tokenHasExpansion))
+            {
+                // PowerShell argument suffixes such as .items[].name are literal, not indexing.
+                // Keep expression/command positions, variable indexing, and POSIX globbing unsupported.
                 throw Denied();
             }
 

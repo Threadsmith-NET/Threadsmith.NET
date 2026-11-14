@@ -338,6 +338,26 @@ public static partial class ShellBuiltinPolicyTests
         Assert.Equal(0, manager.Launches);
     }
 
+    internal static string ResolveShell(string shell)
+    {
+        if (!OperatingSystem.IsWindows() && shell is "cmd" or "powershell")
+        {
+            Assert.Skip("This shell is not native to the current platform.");
+        }
+
+        try
+        {
+            var configured = OperatingSystem.IsWindows() && shell is "bash" or "sh"
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", shell + ".exe") : shell;
+            return ProcessLaunchResolver.Resolve(configured, ProcessLaunchResolver.EnvironmentFor(new Dictionary<string, string>()));
+        }
+        catch (FileNotFoundException)
+        {
+            Assert.Skip("Shell unavailable; this OS/shell pair remains unvalidated.");
+            throw;
+        }
+    }
+
     private static EffectiveSessionPolicy CreatePolicy(string root, string shell, string name, PolicyOutcome outcome, ImmutableArray<string> deny = default)
     {
         var basis = ShellCommandPolicyTests.Policy(root, shell);
@@ -363,26 +383,6 @@ public static partial class ShellBuiltinPolicyTests
         ArgumentsJson = JsonSerializer.Serialize(new RunProcessInput { Command = command, WorkingDirectory = root }),
         Context = context,
     };
-
-    private static string ResolveShell(string shell)
-    {
-        if (!OperatingSystem.IsWindows() && shell is "cmd" or "powershell")
-        {
-            Assert.Skip("This shell is not native to the current platform.");
-        }
-
-        try
-        {
-            var configured = OperatingSystem.IsWindows() && shell is "bash" or "sh"
-                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", shell + ".exe") : shell;
-            return ProcessLaunchResolver.Resolve(configured, ProcessLaunchResolver.EnvironmentFor(new Dictionary<string, string>()));
-        }
-        catch (FileNotFoundException)
-        {
-            Assert.Skip("Shell unavailable; this OS/shell pair remains unvalidated.");
-            throw;
-        }
-    }
 
     private sealed class RecordingProcessManager : IProcessManager
     {

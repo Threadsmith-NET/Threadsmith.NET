@@ -148,6 +148,34 @@ public sealed class CommandPolicyCoordinator : IApprovalPolicy
     /// <summary>Combines all action requirements without offering a scope excluded by any requirement.</summary>
     internal static PolicyDecision Combine(PolicyDecision[] decisions, bool mandatoryReview)
     {
+        ArgumentNullException.ThrowIfNull(decisions);
+        if (decisions.Length == 0)
+        {
+            return new PolicyDecision(false, false, PolicyReasons.Unmatched, null, [], string.Empty, []);
+        }
+
+        // Unassessed actions cannot become explicit-denial matches through another action.
+        var unavailable = decisions.FirstOrDefault(decision => decision.Outcome is null
+            || (!decision.IsAllowed && (decision.Outcome != PolicyOutcome.AlwaysDeny
+                || decision.ReasonCode != PolicyReasons.ExplicitDenial)));
+        if (unavailable is not null)
+        {
+            return unavailable with { IsAllowed = false, RequiresApproval = false, Outcome = null, Choices = [] };
+        }
+
+        if (decisions.Any(decision => decision.Outcome == PolicyOutcome.AlwaysDeny
+            && decision.ReasonCode == PolicyReasons.ExplicitDenial))
+        {
+            return new PolicyDecision(
+                false,
+                false,
+                PolicyReasons.ExplicitDenial,
+                PolicyOutcome.AlwaysDeny,
+                [.. decisions.SelectMany(decision => decision.RuleIds).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+                string.Empty,
+                []);
+        }
+
         var outcome = mandatoryReview || decisions.Any(decision => decision.Outcome == PolicyOutcome.ApprovalAlwaysRequired)
             ? PolicyOutcome.ApprovalAlwaysRequired
             : decisions.Any(decision => decision.Outcome == PolicyOutcome.ApprovalRequiredSession) ? PolicyOutcome.ApprovalRequiredSession

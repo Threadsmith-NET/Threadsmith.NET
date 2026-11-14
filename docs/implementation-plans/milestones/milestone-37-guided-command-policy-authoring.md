@@ -4,22 +4,22 @@ Current lifecycle status is owned by the [milestone index](../milestones.md).
 
 ## Objective
 
-Use `/command-policy` without arguments to prepare shell access rules through a sequential modal.
-Generate checked JSON for manual use in trusted machine or user configuration.
+Use a maintained native skill to draft command policy with the user through repeated questions and checks.
+Return isolated, checked JSON for manual use in trusted machine or user configuration.
 
 ## Capability prerequisites
 
-Use the M3 tool policy runtime, M7.1 visual system, M7.2 configuration controls, and M20 session lifecycle.
-Follow ADR-63 and the existing shell policy contracts.
+Use the M3 tool policy runtime, M12 skills, and M20 session lifecycle.
+Follow ADR-34, ADR-63, and the existing shell preparation contracts.
 
 ## Deliverables
 
-- One guided flow for shell, commands, outcomes, directory scope, destination, and review.
-- Reuse of existing retained modal components, TUIKit widgets, keyboard controls, and clipboard handling.
-- Rule proposals that reuse suitable ordinary rules and show the full scope of each change.
-- Candidate checks through existing command preparation, strict policy compilation, and evaluation.
-- Explicit JSON copy and merge instructions, with source revision checks.
-- Deterministic policy and interaction tests, user documentation, and maintained manual checks.
+- One maintained skill with declared input and output schemas and a collaborative draft–validate–revise procedure.
+- Shared execution-scoped enablement for required native tools; optional tools retain normal enablement.
+- A disabled-by-default validator under Native Skill Tools, available through the ordinary pipeline.
+- Candidate checks through existing command preparation, strict parsing, compilation, and evaluation against an empty baseline.
+- Explicit scope warnings, validation identity, unassessed checks, and manual JSON merge instructions.
+- Deterministic policy and skill tests, user documentation, and maintained manual checks.
 
 ## Exit criteria
 
@@ -32,8 +32,9 @@ Report unavailable environments separately from completed checks.
 
 Generate a proposal only.
 Do not execute command examples, write configuration, activate policy, or create persistent grants.
-Do not add a skill, model call, model-facing tool, or separate modal runtime.
-Keep policy details on the direct local user surface.
+Do not read active policy for the skill or expose live authorization decisions.
+Use the existing model, tool, clarification, cancellation, activity, and recovery owners.
+Required dependencies change availability only; policy, approvals, consent, and child restrictions remain authoritative.
 Preserve existing command management and execution controls.
 
 [Implementation plan](../plan-121-command-policy-authoring.md) · [Dependency DAG](dependency-dag.md)

@@ -309,6 +309,9 @@ public static class PromptFileNames
     /// <summary>Gets the compiled clarification tool guidance.</summary>
     public const string ToolAskUserDescription = "Tool-ask_user-Description.md";
 
+    /// <summary>Gets isolated candidate command-policy validation guidance.</summary>
+    public const string ToolValidateCommandPolicyDescription = "Tool-validate_command_policy-Description.md";
+
     /// <summary>Gets the stable filename for the ToolCsharpScriptDescription prompt asset.</summary>
     public const string ToolCsharpScriptDescription = "Tool-csharp_script-Description.md";
 
@@ -1099,6 +1102,7 @@ public static class PromptFileNames
         ToolRunProcessDescription,
         ToolDatetimeDescription,
         ToolAskUserDescription,
+        ToolValidateCommandPolicyDescription,
         ToolCsharpScriptDescription,
         ToolCodeExploreDescription,
         ToolCallHierarchyDescription,

@@ -34,3 +34,13 @@ SQLite migration 5 stores verification provenance, immutable pins, and versioned
 ## Direct-editing amendment (2026-10-05)
 
 Skills cannot propose, approve or execute plans through host actions. Retired plan workflow nodes are rejected. Maintained remediation skills produce advisory procedure output; edits use the ordinary tool and exact authorization path. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
+
+## Native tool dependency amendment
+
+Verified, enabled native packages can declare execution-scoped tool dependencies. Registered `requiredTools` do not need normal catalog enablement; `optionalTools` and inherited tools do. Required takes precedence over optional. Missing, incompatible, or prohibited required tools block admission before model work. Claude-style mappings retain their existing behavior.
+
+Resolve dependencies through the shared registry and capture exact registrations without changing saved settings or the outer catalog. Required declarations cannot bypass allow/deny policy, trust, phase, consent, approvals, child restrictions, source invalidation, or budgets. Resume recomputes availability under current authority; checkpoints do not restore live authority.
+
+Native procedures can ask necessary clarification questions through the ordinary `ask_user` pipeline and input owner. They retain normal cancellation and question limits; answers grant no authority. No private question service or alternate skill runner is permitted.
+
+Declared input/output schemas and host-resolved dependencies form an explicit native execution contract. These improve structural consistency, not semantic correctness or model determinism. Portable Agent Skills Specification packages do not imply these Threadsmith-specific host guarantees; other hosts can provide extensions.

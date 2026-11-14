@@ -2,6 +2,7 @@ namespace Threadsmith.Interaction.Coordination;
 
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Tools;
 
 /// <summary>Reconciles retained availability requests through the existing tool authority.</summary>
 public sealed partial class InteractionCoordinator
@@ -285,9 +286,9 @@ public sealed partial class InteractionCoordinator
             var current = refreshed.Single(item => item.Id == id);
             return new(current.Enabled, current.AvailabilityReason)
             {
-                UpdatedOption = new(current.Id, current.DisplayName, current.Category.ToString(), current.Enabled, Reason: current.AvailabilityReason),
+                UpdatedOption = new(current.Id, current.DisplayName, ToolCategoryLabel(current.Category), current.Enabled, Reason: current.AvailabilityReason),
                 UpdatedOptions = refreshed.Where(item => item.AvailabilityReasonCode is not null)
-                    .Select(item => new InteractionToggleOption(item.Id, item.DisplayName, item.Category.ToString(), item.Enabled, Reason: item.AvailabilityReason)).ToArray(),
+                    .Select(item => new InteractionToggleOption(item.Id, item.DisplayName, ToolCategoryLabel(item.Category), item.Enabled, Reason: item.AvailabilityReason)).ToArray(),
             };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -295,4 +296,7 @@ public sealed partial class InteractionCoordinator
             return new(manager.GetAllStates().Single(item => item.Id == id).Enabled, "Host rejected the availability change; setting reflects actual state.");
         }
     }
+
+    private static string ToolCategoryLabel(ToolCategory category) =>
+        category == ToolCategory.NativeSkillTools ? "Native Skill Tools" : category.ToString();
 }

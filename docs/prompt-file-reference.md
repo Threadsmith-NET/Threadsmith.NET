@@ -48,11 +48,11 @@ Common editing rules:
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 27 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 197 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **298** | Complete deployed catalog. |
+| **Total** | **299** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -462,6 +462,12 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-ask_user-Description.md` | Parent-only blocking clarification guidance. | `None` |
+
+#### `validate_command_policy` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-validate_command_policy-Description.md` | Isolated supplied-candidate validation; `ValidateCommandPolicyTool` reads it through the normal loader. | `None` |
 
 #### `datetime` family
 

@@ -1199,6 +1199,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 shellExecutable),
             new DateTimeTool(promptLoader),
             new AskUserTool(promptLoader),
+            new ValidateCommandPolicyTool(promptLoader),
             new CSharpScriptTool(scriptEngine, promptLoader, configuration.GetValue("tools:config:csharp_script:max_code_characters", 65536)),
             new WebSearchTool(
                 webSearchClient,

@@ -2498,7 +2498,7 @@ public sealed partial class InteractionCoordinator
                 new InteractionToggleRequest("Tools", catalog.Select(state => new InteractionToggleOption(
                     state.Id,
                     state.DisplayName,
-                    state.Category.ToString(),
+                    ToolCategoryLabel(state.Category),
                     state.Enabled,
                     state.Essential,
                     state.AvailabilityReason ?? (state.Essential ? "Essential: locked by host policy" : state.ConsentRequired ? "Enabling requires repository consent" : null))).ToArray()),

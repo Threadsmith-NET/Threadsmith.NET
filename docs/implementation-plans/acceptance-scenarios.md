@@ -75,15 +75,15 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario COMMAND-POLICY-AUTHOR — Guided command policy authoring
 
-1. Enter `/command-policy` without arguments. Select a shell, enter several commands, and select an outcome for each command. Select directory scope and user or machine configuration. Verify that one modal asks sequential questions and retains answers during Back navigation.
-2. Use the existing modal keys, editor, choice controls, table scrolling, and clipboard actions. Resize below the shared minimum size and then restore it. Verify that the draft survives and focus remains correct. Cancel from each page and during validation. Verify that the existing composer and input owner remain usable.
-3. Include native commands, literal cmdlets or builtins, aliases, and supported script invocations. Verify separate interpreter and script permissions. Check every action in supported compounds. Unsupported syntax or missing targets must produce a correction request. No example may execute.
-4. Select each of the five outcomes. Reuse an existing suitable rule and extend a compatible rule. Resolve an ordinary conflict only through an explicit scoped override choice. Verify that machine constraints and argument-deny expressions remain effective. Show when a rule covers arguments beyond the supplied example.
-5. Review the candidate outcomes, JSON, executable-list additions, resolved destination, and merge instructions. Verify complete replacement rule objects, stable IDs, and preservation of unrelated settings. Copy the exact checked fragment. Invalid, unsupported, or stale proposals must not be copied as validated configuration.
-6. Change policy sources or native binding inputs before copy. Verify that validation becomes stale. Complete the flow with recording process and configuration boundaries. Verify zero command launches, configuration writes, activation calls, persistent grants, and model requests.
-7. Use harmless command and policy canaries. Verify that they remain on the direct local user surface. They must not enter logs, ordinary events, conversation history, restored state, or model context. Verify that existing shell-specific inspect, reload, revoke, and reset operations retain their behavior.
+1. Invoke the maintained command-policy-authoring skill manually, through a model, and headlessly. Verify that its declared schemas govern inputs and results. Required tools are available only within that execution even when normally disabled. Denied tools and child restrictions remain denied; disabled optional tools remain absent.
+2. Supply a request and complete examples. Use the ordinary `ask_user` path for unclear approval intent or missing context. Omit the working directory and verify that examples use the active repository root without adding a policy directory restriction.
+3. Include native commands, literal cmdlets or builtins, aliases, and supported scripts and compounds. Verify every prepared action. No example may execute. Unsupported syntax and unresolved targets cannot satisfy an expected denial.
+4. Exercise all five outcomes, explicit denials, conflicts, overrides, and argument restrictions against supplied candidate data only. Review broader matcher scope and unassessed installed-layer integration.
+5. Correct a failed first draft, clarify a user decision, and validate again within one skill execution. Keep agreed requirements and retained examples. An unsupported requirement, declined necessary answer, cancellation, stop request, or exhausted budget must not produce a false success claim.
+6. Review the exact checked JSON, candidate and example identities, outcomes, warnings, and manual merge instructions. Changed candidates or examples need new checks. No configuration writes, activation, or persistent grants occur.
+7. Place harmless canaries in active policy sources. Verify that they do not enter validator results or skill context. Supplied drafts and examples can enter normal model context and governed persistence. Verify normal tool activity, completion, cancellation, and resume, unchanged outer settings, and existing command-management behavior.
 
-**Verifies:** Guided policy authoring through the shared modal and policy paths, explicit scope review, valid manual JSON export, and unchanged execution authority.
+**Verifies:** Collaborative native skill authoring, execution-scoped dependencies without additional authority, isolated policy checks, honest limits, and manual application.
 
 ## Scenario TOOL-STATS — Repository tool completion statistics
 

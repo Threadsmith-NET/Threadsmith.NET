@@ -136,6 +136,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, pipelines, variable/environment syntax and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | `ShellLanguage` |
 | `Tool-datetime-Description.md` | `Threadsmith.Tools` | `prompts/Tool-datetime-Description.md` | Advertised description for `datetime`. | None |
 | `Tool-ask_user-Description.md` | `Threadsmith.Tools` | `prompts/Tool-ask_user-Description.md` | Parent-only blocking clarification guidance. | None |
+| `Tool-validate_command_policy-Description.md` | `Threadsmith.Tools` | `prompts/Tool-validate_command_policy-Description.md` | Isolated supplied-candidate validation; `ValidateCommandPolicyTool` reads it through the normal loader. | None |
 | `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand execution reference for `csharp_script`. | `CSharpScriptingReferencePath` |
 | `Tool-code_explore-Description.md` | `Threadsmith.Tools` | `prompts/Tool-code_explore-Description.md` | Advertised description for `code_explore`. | None |
 | `Tool-call_hierarchy-Description.md` | `Threadsmith.Tools` | `prompts/Tool-call_hierarchy-Description.md` | Advertised description for `call_hierarchy`. | None |

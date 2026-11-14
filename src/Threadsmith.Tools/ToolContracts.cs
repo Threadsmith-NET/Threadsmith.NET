@@ -41,6 +41,9 @@ public enum ToolCategory
 
     /// <summary>Direct writes of allowlisted text artifacts.</summary>
     FileWrite,
+
+    /// <summary>Ordinary tools supporting governed native skill procedures.</summary>
+    NativeSkillTools,
 }
 
 /// <summary>Whether a tool can change externally visible state.</summary>

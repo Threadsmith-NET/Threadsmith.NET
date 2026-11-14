@@ -24,7 +24,9 @@ Live approvals belong to their session/authority epoch, not checkpoints. Once is
 
 The existing primary `ToolOperationScope` owns correlated Always publication continuation for its conversation and descendants. Only completed, correlated publication chains can advance future round captures. Each capture retains its own assignment ceilings; queued invocations remain immutable. Unrelated invalidations and session resets cannot advance those captures. Explicit manual reload reuses the existing idle-only full repository rebind and can recover after configuration repair. It does not retain an executable fallback or a second authority baseline. Always saves keep the focused active-operation path.
 
-Detailed policy data is user-only: local management and approval surfaces may show rules, sources, targets and grant IDs. Model prompts, ordinary events, tool results and retrieved diagnostics receive only generic success or denial, never policy catalogs or suggested alternatives.
+Active policy data is user-only: local management and approval surfaces may show rules, sources, targets and grant IDs. Model prompts, ordinary events, tool results and retrieved diagnostics receive only generic live authorization success or denial, never active policy catalogs or suggested alternatives.
+
+An isolated candidate validator can return details about explicitly supplied draft policy and prepared example facts. It reuses shell preparation and policy parsing, compilation, and evaluation against an explicit empty baseline. It cannot read active policy sources, compare against live authorization, execute examples, write configuration, activate rules, or create grants. Results identify the exact candidate, examples, platform, shell, bindings, and unassessed installed-layer integration. This is candidate evidence, not permission or a safety proof. A maintained native skill can use it through the ordinary governed pipeline to draft and revise policy with the user.
 
 ## Limits
 

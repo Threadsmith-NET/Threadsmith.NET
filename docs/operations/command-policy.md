@@ -6,6 +6,18 @@
 
 Shell admission is no longer an executable-list fallback. For `run_process`, `tools.allowedExecutables` admits the selected outer shell. Command policy alone controls the commands inside it. Other tools retain their executable-list checks. Replace obsolete command-policy lists with explicit machine/user rules. Do not copy policy into repository or session configuration. No automatic configuration migration runs. An explicit Allow removes only command-policy approval, not other host authorization or mandatory tool review. Back up trusted configuration before changing it, then reload or reopen the repository.
 
+## Isolated candidate checks
+
+The `validate_command_policy` tool appears under **Native Skill Tools**. It is non-essential and disabled by default. Enable it through ordinary tool controls for direct use. Normal tool policy still applies.
+
+Supply a policy subtree as `policyJson`, the intended `user` or `machine` layer, current host platform, supported shell, an existing absolute working directory, and 1–32 complete examples with unique `id`, `command`, and `expectedOutcome` fields. Omit `policyJson` for preparation only. Limits are 8,192 characters per command, 64 KiB aggregate command UTF-8, and 64 KiB candidate UTF-8. An optional supplied `allowedExecutables` list checks only the outer shell.
+
+The tool uses the existing shell preparation and policy engine. It does not launch commands, read script bodies or active policy sources, write configuration, activate policy, or create grants. It compiles only the supplied candidate against an empty baseline. Installed defaults, other layers, and saved grants are not checked. Missing override targets fail compilation. A matching shell profile is needed for ordinary candidate rules.
+
+Results include parse and compile status, candidate diagnostics, each prepared action, complete-command outcomes, expected comparisons, and unassessed checks. An expected `AlwaysDeny` requires an explicit denial; preparation failure, conflict, or unmatched/default denial cannot count as a match. `CandidateDigest` identifies exact candidate UTF-8 bytes; `ExampleSetId` identifies examples, context, and observed bindings. Changed inputs need new checks. An isolated passing result is not permission, activation, installed-layer compatibility, or proof of general safety. Coverage-limit results do not support a validation claim.
+
+The collaborative maintained authoring skill and execution-scoped required-tool integration are still under implementation. Direct validation does not require that skill.
+
 ## Configuration and ownership
 
 Define `tools.runProcess.commandPolicy` only in machine or user configuration. Repository, session, per-repository user, environment and CLI sources cannot define it. Obsolete `denyList`, `allowList` and `webAccess` shapes are rejected. The old `requireApproval` Boolean neither authorizes unmatched actions nor forces approval on a new explicit Allow. Independently configured `tools.requireApproval` remains mandatory.

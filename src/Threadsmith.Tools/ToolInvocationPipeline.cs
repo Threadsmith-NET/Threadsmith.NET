@@ -210,14 +210,15 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     {
         ArgumentNullException.ThrowIfNull(requests);
         requests = requests.Select(item => item with { Invocation = CapturePolicy(item.Invocation) }).ToArray();
-        if (requests.Count > 1 && requests.FirstOrDefault(item => item.Invocation.ToolId.Equals("ask_user", StringComparison.OrdinalIgnoreCase)) is { } question)
+        if (requests.Count > 1 && requests.FirstOrDefault(item => item.Invocation.ToolId.Equals("ask_user", StringComparison.OrdinalIgnoreCase)
+                || item.Invocation.ToolId.Equals("invoke_skill", StringComparison.OrdinalIgnoreCase)) is { } question)
         {
             return new ToolBatchPreflightResult
             {
                 FailedOrdinal = question.Ordinal,
                 FailedToolId = question.Invocation.ToolId,
                 ErrorClassification = ToolErrorClassification.InvalidArguments,
-                SafeReason = "ask_user must be the sole call in a tool batch. No sibling calls were executed.",
+                SafeReason = $"{question.Invocation.ToolId} must be the sole call in a tool batch. No sibling calls were executed.",
             };
         }
 
@@ -913,9 +914,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             ExecutionTimeout = tool.Definition.Timeout,
             ExecutionDeadline = tool.Definition.Timeout == Timeout.InfiniteTimeSpan ? null : _timeProvider.GetUtcNow() + tool.Definition.Timeout,
         };
-        using var executionDeadline = new CancellationTokenSource(tool.Definition.Timeout, _timeProvider);
-        using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken, executionDeadline.Token);
+        using var timeoutCancellation = new ActiveExecutionBudget(tool.Definition.Timeout, cancellationToken, _timeProvider);
+        executionContext = executionContext with { ActiveBudget = timeoutCancellation };
         var executionStarted = _timeProvider.GetTimestamp();
         IReadOnlyList<string> observedConcepts = [];
         ToolSourceDetail? sourceDetail = null;
@@ -930,10 +930,33 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
             using var admissionCancellation = new CancellationTokenSource(remaining, _timeProvider);
             using var waitingCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeoutCancellation.Token, admissionCancellation.Token);
-            using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
+
+            void Revalidate()
+            {
+                if (request.Context.SecurityPolicy is { } policy)
+                {
+                    request.Context.PolicyBinding?.Validate(policy);
+                }
+
+                var current = _registry.GetRegistration(request.ToolId, request.Context);
+                if (registration is null || !ToolRegistrationIdentity.Matches(current, registration))
+                {
+                    throw new InvalidOperationException("The tool registration changed while awaiting clarification.");
+                }
+            }
+
+            using var admission = new ToolExecutionAdmission(
+                _sourceConcurrencyLimiter,
                 ToolConcurrencyScope.Create(source, tool.Definition.Id),
                 tool.Definition.Scheduling.MaximumSourceConcurrency,
-                waitingCancellation.Token);
+                Revalidate,
+                timeoutCancellation.Token);
+            await admission.AcquireAsync(waitingCancellation.Token);
+            if (request.Context.RequiredSkillToolIds.Contains(request.ToolId, StringComparer.OrdinalIgnoreCase))
+            {
+                Revalidate();
+            }
+
             waitingCancellation.Token.ThrowIfCancellationRequested();
             if (request.Context.SecurityPolicy is { } capturedPolicy)
             {

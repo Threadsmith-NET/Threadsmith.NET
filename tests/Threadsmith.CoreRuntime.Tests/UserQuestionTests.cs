@@ -91,6 +91,67 @@ public static class UserQuestionTests
         Assert.Equal(RunSteeringPauseRequestStatus.Accepted, steering.RequestPause(request.SessionId, request.RunId).Status);
     }
 
+    /// <summary>Consumption and interruption choose one terminal state under the same gate.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ConsumptionAndInterruptionSerializeTerminalPublication(bool consumeFirst)
+    {
+        // Arrange an accepted answer, then hold the winning terminal publication.
+        var token = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var steering = new RunSteeringCoordinator();
+        using var coordinator = new UserQuestionCoordinator(events, steering);
+        coordinator.Attach((_, _) => Task.FromResult(new UserQuestionResult(UserQuestionStatus.Cancelled, [])));
+        var request = CreateRequest();
+        steering.RegisterRun(request.SessionId, request.RunId);
+        await coordinator.AdmitAsync(request, token);
+        await coordinator.CompleteAsync(request.SessionId, request.RequestId, 0, new(UserQuestionStatus.Answered, [new("q", "a", null)]), token);
+        var observed = new ConcurrentQueue<UserQuestionStateChanged>();
+        var publishing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe(async (value, cancellationToken) =>
+        {
+            if (value is UserQuestionStateChanged state)
+            {
+                observed.Enqueue(state);
+                if (consumeFirst ? state.Consumed : state.Result.Status == UserQuestionStatus.Interrupted)
+                {
+                    publishing.TrySetResult();
+                    await release.Task.WaitAsync(cancellationToken);
+                }
+            }
+        });
+
+        // Act: force the other operation to enter while publication owns the gate.
+        var winner = consumeFirst ? coordinator.ConsumeAsync(request, token) : coordinator.InterruptAsync(request, token);
+        var contender = Task.CompletedTask;
+        try
+        {
+            await publishing.Task.WaitAsync(token);
+            contender = consumeFirst ? coordinator.InterruptAsync(request, token) : coordinator.ConsumeAsync(request, token);
+            Assert.False(contender.IsCompleted);
+            Assert.Equal(RunSteeringPauseRequestStatus.TooLate, steering.RequestPause(request.SessionId, request.RunId).Status);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await Task.WhenAll(winner, contender);
+        }
+
+        // Assert one terminal outcome, idempotent retries, and reusable question ownership.
+        var terminal = Assert.Single(observed);
+        Assert.Equal(consumeFirst, terminal.Consumed);
+        Assert.Equal(consumeFirst ? UserQuestionStatus.Answered : UserQuestionStatus.Interrupted, terminal.Result.Status);
+        await coordinator.ConsumeAsync(request, token);
+        await coordinator.InterruptAsync(request, token);
+        Assert.Single(observed);
+        var next = request with { RequestId = Guid.NewGuid(), InvocationKey = "next" };
+        Assert.Equal(next.RequestId, (await coordinator.AdmitAsync(next, token)).RequestId);
+        await coordinator.EndRunAsync(request.SessionId, request.RunId, token);
+        Assert.Equal(RunSteeringPauseRequestStatus.Accepted, steering.RequestPause(request.SessionId, request.RunId).Status);
+    }
+
     /// <summary>Clarification uses the configured retention cap, including zero to disable it.</summary>
     [Theory]
     [InlineData(null, 256)]

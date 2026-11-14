@@ -13,6 +13,9 @@ public interface IToolStateManager
     /// <summary>Returns whether a registered tool is enabled.</summary>
     bool IsEnabled(string toolId);
 
+    /// <summary>Checks non-preference consent and approval gates for a declared skill dependency.</summary>
+    bool CanSupplyRequiredTool(string toolId) => IsEnabled(toolId);
+
     /// <summary>Enables a non-essential registered tool.</summary>
     Task EnableAsync(string toolId, CancellationToken cancellationToken = default);
 
@@ -212,6 +215,13 @@ public sealed class ToolStateManager : IToolStateManager
         ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
         var definition = GetDefinition(toolId);
         return IsEnabledCore(definition);
+    }
+
+    /// <inheritdoc />
+    public bool CanSupplyRequiredTool(string toolId)
+    {
+        var definition = GetDefinition(toolId);
+        return HasAvailabilityConsent(definition);
     }
 
     /// <inheritdoc />
@@ -473,8 +483,7 @@ public sealed class ToolStateManager : IToolStateManager
     {
         return (definition.Essential
                 || IsAvailabilityRequested(definition))
-                && (!definition.RequiresOutboundConsent
-                    || _consentStore.HasValidConsent(definition.Id, _repositoryRoot));
+                && HasAvailabilityConsent(definition);
     }
 
     private string? GetPolicyRestriction(string toolId)
@@ -497,9 +506,13 @@ public sealed class ToolStateManager : IToolStateManager
             && (_hasEnabledAllowList
                 ? _enabled.Contains(preferenceId)
                 : definition.EnabledByDefault || _defaultEnabledOverrides.Contains(preferenceId));
-        return requested
-            && (!IsMcpTool(definition)
-                || _mcpApprovals.HasApproval(_repositoryRoot, preferenceId));
+        return requested;
+    }
+
+    private bool HasAvailabilityConsent(ToolDefinition definition)
+    {
+        return (!definition.RequiresOutboundConsent || _consentStore.HasValidConsent(definition.Id, _repositoryRoot))
+            && (!IsMcpTool(definition) || _mcpApprovals.HasApproval(_repositoryRoot, GetPreferenceId(definition)));
     }
 
     private static bool IsMcpTool(ToolDefinition definition)

@@ -16,7 +16,96 @@ The tool uses the existing shell preparation and policy engine. It does not laun
 
 Results include parse and compile status, candidate diagnostics, each prepared action, complete-command outcomes, expected comparisons, and unassessed checks. An expected `AlwaysDeny` requires an explicit denial; preparation failure, conflict, or unmatched/default denial cannot count as a match. `CandidateDigest` identifies exact candidate UTF-8 bytes; `ExampleSetId` identifies examples, context, and observed bindings. Changed inputs need new checks. An isolated passing result is not permission, activation, installed-layer compatibility, or proof of general safety. Coverage-limit results do not support a validation claim.
 
-The collaborative maintained authoring skill and execution-scoped required-tool integration are still under implementation. Direct validation does not require that skill.
+## Guided authoring with the maintained skill
+
+The maintained native `command-policy-authoring` skill uses the configured model to draft a policy with you. It requires only `validate_command_policy` and `ask_user`, and inherits no other tools. These dependencies can be available inside the skill while disabled for ordinary conversation; package enablement, policy, trust, approvals, and caller restrictions still apply. Direct validation does not require the skill.
+
+### Quick start
+
+1. Open the repository whose root should provide the example working directory. Make sure the intended shell is installed and the maintained skill is enabled and compatible with the selected model.
+2. Ask naturally, for example: “Use the command-policy-authoring skill to draft a user policy for Windows PowerShell (`powershell`) that prompts for `Get-Content` and offers allow for session, with no directory restriction. Check `Get-Content -Path example.txt` against `ApprovalRequiredSession`.” You do not need to prepare JSON for conversational use.
+3. Alternatively, inspect and invoke the package manually with `/skills` as below. Keep the JSON input on one line; everything after the selector is parsed as one input document. Use the version shown by your installed catalog.
+4. Answer any necessary clarification questions. Review the returned `status`, candidate, example comparisons, warnings, and outstanding items. Do not treat an `incomplete` draft as ready to install.
+5. If the result meets your requirements, follow [manual merge and activation](#manually-merge-an-authored-proposal). Authoring itself changes no permissions.
+
+This manual example requests approval every time for Git commands:
+
+```text
+/skills inspect Maintained:command-policy-authoring@1.0.0
+/skills use Maintained:command-policy-authoring@1.0.0 {"request":"Require approval every time for Git commands in user configuration, with no directory restriction.","shell":"pwsh","layer":"user","examples":[{"command":"git status","expectedOutcome":"ApprovalAlwaysRequired"}]}
+```
+
+| Input | What to supply |
+| --- | --- |
+| `request` | Required. Describe the commands, approval choices, destination layer, and any directory restriction. |
+| `shell` | Optional initially. Use the actual shell key: `powershell` for Windows PowerShell, `pwsh` for PowerShell 7, or another supported shell. They are separate profiles. |
+| `layer` | Optional initially. Choose `user` for personal policy or `machine` for administrator-managed policy. |
+| `workingDirectory` | Optional existing absolute directory for preparing examples; defaults to the active repository root. It does not restrict rule scope. |
+| `examples` | Optional initially. Supply up to 32 objects with `command` and `expectedOutcome` from the [outcome table](#outcomes-and-approval). Include representative allowed, denied, and approval cases as needed. Do not add validator-only example IDs to skill input. |
+
+Only `request` is required to start; the skill collects necessary missing details. For model-driven use, the model discovers and inspects the package with `inspect_skill`, then passes a native input object to `invoke_skill`. The skill does not inherit the parent conversation, so the invocation must carry the requirements and examples.
+
+Manual completion displays the authoritative candidate and validation fields beside the readable instructions. The model does not need to repeat the candidate in prose. If you change or remove a retained example, the skill asks for the exact replacement set as free text in the input example shape, such as `{"examples":[{"command":"git status","expectedOutcome":"Allow"}]}`. Include all retained examples. Only an actual answered clarification can replace that baseline; ordinary prose or a model-generated option label cannot. The revised set needs a fresh check. If an exact necessary revision cannot be collected within question limits, the result stays incomplete.
+
+This example assumes PowerShell 7 and Git are installed. Choose a supported shell for your host. The skill prepares the example; it does not run it. For conversational use, ask to use the command policy authoring skill and pass complete requirements and examples. Only `request` is required initially. The skill asks for necessary missing or unclear answers, corrects failures, and repeats validation after candidate or example changes within one execution. It must not weaken expectations to pass. Normal budgets and cancellation remain in effect. Headless and child surfaces cannot collect answers; a required dependency still needs an eligible clarification surface.
+
+Omitting `workingDirectory` means the active repository root, not process cwd. A supplied directory must be an existing absolute path. If neither is available, the skill reports missing context rather than guessing. This is example context, not policy scope: a rule without a directory matcher can apply across repositories at user/machine scope. A repository-only request needs an explicit WorkingDirectory matcher.
+
+Output contains `status`, `warnings`, `outstandingItems`, and readable `instructions`, plus `policyJson` and `validation` when available. `validated` requires the exact candidate and complete retained examples from an observed validator call in this execution. Fabricated, stale, altered, and partial claims fail the normal output correction path. `incomplete` can complete the skill normally; it is not checked policy. Unavailable optional fields are omitted, not null. Cancellation can end execution without structured final output.
+
+Authoring is not local-only: requirements, examples, drafts, and clarification answers can reach the configured provider under normal privacy and persistence rules. Do not supply secrets. Active machine/user rules and saved grants are not read; installed-layer integration is not checked. Outer eligibility remains unassessed without a supplied list. Passing examples do not prove general safety or exact-command scope. Directory rules include descendants but do not confine file arguments or later behavior. Script permissions do not check contents; aliases do not bind fixed implementations. No examples are launched, no configuration written or activated, and no grants created.
+
+### Example: Get-Content with allow for session
+
+On Windows with Windows PowerShell installed, invoke:
+
+```text
+/skills use Maintained:command-policy-authoring@1.0.0 {"request":"Prompt for Get-Content in Windows PowerShell with once, allow for session, or deny choices, but no permanent approval. Use user configuration with no directory restriction.","shell":"powershell","layer":"user","examples":[{"command":"Get-Content -Path example.txt","expectedOutcome":"ApprovalRequiredSession"}]}
+```
+
+`example.txt` is illustrative: the validator prepares the command without reading the file or running `Get-Content`. A suitable candidate has this shape; this static documentation example is **not a recorded validation result**:
+
+```json
+{
+  "schemaVersion": 1,
+  "platforms": {
+    "windows": {
+      "shells": {
+        "powershell": {
+          "rules": [
+            {
+              "id": "authored-get-content-session-review",
+              "policy": "ApprovalRequiredSession",
+              "matchers": [
+                { "type": "executable", "value": "Get-Content" }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+`ApprovalRequiredSession` offers **Once**, **this session**, or **deny** when approval is required; it does not automatically grant session permission. A session approval covers the exact invocation and context, not every `Get-Content` command. The rule itself matches the command name with any arguments and paths, not just `example.txt`, and has no repository restriction. It does not separately authorize aliases such as `gc` or `cat`.
+
+Review and merge the returned subtree into trusted user `tools.runProcess.commandPolicy`, preserving existing arrays and checking for rule conflicts. The selected outer shell must also be permitted by `tools.allowedExecutables`. For policy-only changes, wait until idle, then run:
+
+```text
+/command-policy powershell reload
+/command-policy powershell inspect
+```
+
+For PowerShell 7, request `shell: "pwsh"`, use a `pwsh` policy profile, and reload/inspect `pwsh` instead. Recheck the candidate for that host/shell pair; a Windows PowerShell result does not validate PowerShell 7. Changing the selected shell or its executable-list admission requires a restart, not just a policy reload.
+
+### Manually merge an authored proposal
+
+`policyJson` is the schemaVersion 1 subtree at `tools` → `runProcess` → `commandPolicy`, not a full configuration file. Review existing trusted machine/user configuration yourself and preserve unrelated settings. Do not put it in repository configuration. A same-ID rule is a complete replacement, including argument-deny expressions. Different-ID conflicting outcomes require explicit `overrides`, not array order. Isolated compilation cannot resolve absent override targets or prove compatibility with installed rules or machine constraints. Any later candidate edit needs another check.
+
+Ordinary configuration arrays replace rather than append. Preserve complete existing arrays; never replace one with a partial generated list. List outer-shell additions separately at `tools.allowedExecutables`. Only the selected outer shell needs that entry; inner commands and scripts use command policy. The skill does not read or edit the installed list or invent user-specific configuration paths. Use the documented locations below; profile isolation can change them.
+
+For policy-only changes, wait for idle and use `/command-policy <shell> reload`, then inspect. Restart after shell or outer-list changes. These are manual steps, not effects of authoring. See [apply and diagnose changes](#apply-and-diagnose-changes).
 
 ## Configuration and ownership
 
@@ -50,6 +139,8 @@ A pending Always response is reserved before saving. Only its own correlated aut
 ## Configuration examples
 
 These examples are configuration data to edit manually, not commands to run. Merge their `tools` members into the existing file; do not replace unrelated provider, MCP, memory, or permission settings.
+
+To generate a proposal for your own requirements, use the [command-policy-authoring quick start](#quick-start). The [Get-Content session-review example](#example-get-content-with-allow-for-session) shows a skill invocation, illustrative policy subtree, and reload commands. The skill returns only the `commandPolicy` subtree, unlike the full configuration wrappers below.
 
 | Source | File | Use |
 | --- | --- | --- |

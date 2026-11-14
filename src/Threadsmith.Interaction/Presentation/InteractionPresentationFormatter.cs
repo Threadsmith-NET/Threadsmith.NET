@@ -40,6 +40,35 @@ internal static partial class InteractionPresentationFormatter
         PresentationTextRole Role,
         bool PreserveText = false);
 
+    /// <summary>Shows authoritative structured fields alongside the readable response without repeating it.</summary>
+    internal static string? FormatSkillOutput(SkillInvocationResult result)
+    {
+        if (string.IsNullOrWhiteSpace(result.OutputJson) || result.Response is null || result.Response == result.OutputJson)
+        {
+            return result.Response ?? result.OutputJson;
+        }
+
+        var output = new StringBuilder(result.Response);
+        using var document = JsonDocument.Parse(result.OutputJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            return output.AppendLine().Append(result.OutputJson).ToString();
+        }
+
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.String && property.Value.GetString() == result.Response)
+            {
+                continue;
+            }
+
+            output.AppendLine().Append(property.Name).AppendLine(":")
+                .Append(property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : property.Value.GetRawText());
+        }
+
+        return output.ToString();
+    }
+
     /// <summary>Creates a live tool block with the same identity and detail as its eventual completion.</summary>
     internal static InteractionActivity CreateToolActivity(
         ToolInvocationStarted started,

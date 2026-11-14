@@ -786,7 +786,8 @@ internal static class ApplicationComposition
                     usage,
                     integration.Models.TrustedProvider,
                     integration.Models.TrustedCatalog,
-                    trustedProviderInstructionResolver),
+                    trustedProviderInstructionResolver,
+                    userQuestions),
                 host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>

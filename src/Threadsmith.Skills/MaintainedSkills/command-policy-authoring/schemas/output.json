@@ -1,0 +1,32 @@
+{
+  "type": "object", "additionalProperties": false,
+  "required": ["status", "warnings", "outstandingItems", "instructions"],
+  "properties": {
+    "status": { "type": "string", "enum": ["validated", "incomplete"] },
+    "policyJson": { "type": "string", "minLength": 1, "maxLength": 65536, "description": "Candidate command policy subtree, not a complete configuration document." },
+    "validation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["candidateDigest", "exampleSetId", "results"],
+      "properties": {
+        "candidateDigest": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "exampleSetId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "results": {
+          "type": "array", "maxItems": 32,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["command", "expectedOutcome", "matched"],
+            "properties": {
+              "command": { "type": "string", "minLength": 1, "maxLength": 8192 },
+              "expectedOutcome": { "type": "string", "enum": ["Allow", "AlwaysDeny", "ApprovalRequired", "ApprovalRequiredSession", "ApprovalAlwaysRequired"] },
+              "actualOutcome": { "type": "string", "enum": ["Allow", "AlwaysDeny", "ApprovalRequired", "ApprovalRequiredSession", "ApprovalAlwaysRequired"] },
+              "matched": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "warnings": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 2048 } },
+    "outstandingItems": { "type": "array", "maxItems": 32, "items": { "type": "string", "minLength": 1, "maxLength": 2048 } },
+    "instructions": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Manual merge instructions, or information needed to continue." }
+  }
+}

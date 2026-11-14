@@ -1489,6 +1489,13 @@ public sealed partial class SessionApplication
 
         var intentEpoch = round.Registration.MemoryIntent.Epoch;
         var intentRepository = round.Registration.MemoryRepositoryIdentity;
+        using var interaction = new UserInteractionScope(
+            round.Registration.RunStopwatch.Stop,
+            _ =>
+            {
+                round.Registration.RunStopwatch.Start();
+                return Task.CompletedTask;
+            });
         var batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
 
         // Historical user pixels can yield during context selection; current attachments and
@@ -1500,38 +1507,16 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
-            if (result.Suspension is { } question)
+            if (result.Suspension is not null)
             {
                 var questions = _userQuestions ?? throw new InvalidOperationException("Question coordination is unavailable.");
-                round.Registration.RunStopwatch.Stop();
-                try
-                {
-                    var answer = await questions.WaitAsync(question, cancellationToken);
-                    if (invocationContext.SecurityPolicy is { } captured)
-                    {
-                        invocationContext.PolicyBinding?.Validate(captured);
-                    }
-
-                    var current = await CreateToolInvocationContextAsync(round.Registration, cancellationToken);
-                    if (current is null || RepositoryIdentity.Create(current.RepositoryPath) != question.RepositoryIdentity
-                        || (current.SecurityPolicy?.Generation ?? 0) != question.PolicyGeneration)
-                    {
-                        throw new InvalidOperationException("The repository or policy changed while awaiting clarification.");
-                    }
-
-                    result = await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, answer, cancellationToken);
-                }
-                catch
-                {
-                    // Pre-delivery failures interrupt the invocation. If terminal publication
-                    // already began, the pipeline rethrows that attempt without another outcome or hook.
-                    await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, new(UserQuestionStatus.Interrupted, []), CancellationToken.None);
-                    throw;
-                }
-                finally
-                {
-                    round.Registration.RunStopwatch.Start();
-                }
+                result = await UserQuestionContinuation.CompleteAsync(
+                    _toolPipeline,
+                    questions,
+                    requests.Single().Invocation,
+                    result,
+                    token => CreateToolInvocationContextAsync(round.Registration, token),
+                    cancellationToken);
             }
 
             if (round.Registration.UsesMemoryConcepts)

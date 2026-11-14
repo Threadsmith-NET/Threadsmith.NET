@@ -81,6 +81,22 @@ public interface IUserQuestionAdmission
     Task<UserQuestionRequest> AdmitAsync(UserQuestionRequest request, CancellationToken cancellationToken = default);
 }
 
+/// <summary>Shared live clarification lifecycle used by conversation and skill runners.</summary>
+public interface IUserQuestionCoordinator : IUserQuestionAdmission
+{
+    /// <summary>Establishes an owned manual run; disposal closes only that run.</summary>
+    IAsyncDisposable BeginRun(SessionId sessionId, RunId runId);
+
+    /// <summary>Waits after execution resources have been released.</summary>
+    Task<UserQuestionResult> WaitAsync(UserQuestionRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Interrupts an undelivered question without closing its owning run.</summary>
+    Task InterruptAsync(UserQuestionRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>Records delivery after the correlated model tool result was appended.</summary>
+    Task ConsumeAsync(UserQuestionRequest request, CancellationToken cancellationToken = default);
+}
+
 /// <summary>Code-owned limits shared by admission, answer commands, and restoration.</summary>
 public static class UserQuestionValidation
 {

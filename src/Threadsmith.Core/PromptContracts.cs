@@ -1712,6 +1712,7 @@ public static class PromptAssetCatalog
                         "Path",
                         "UrlDigest"),
                     [PromptFileNames.SkillProcedureRequest] = Set(
+                        "HostContextJson",
                         "PackageId",
                         "PackageVersion",
                         "PackageDigest",

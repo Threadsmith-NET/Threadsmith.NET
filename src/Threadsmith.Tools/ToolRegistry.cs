@@ -135,8 +135,10 @@ public sealed class ToolRegistry : IToolRegistry
         lock (_gate)
         {
             return _tools.Values
-                .Where(tool => (_stateManager?.IsEnabled(tool.Definition.Id) != false)
-                    && (_activationPolicy?.IsActive(tool.Definition.Id, sessionId, runId) != false))
+                .Where(tool => (context?.RequiredSkillToolIds.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase) == true
+                        && _stateManager?.CanSupplyRequiredTool(tool.Definition.Id) != false)
+                    || ((_stateManager?.IsEnabled(tool.Definition.Id) != false)
+                        && (_activationPolicy?.IsActive(tool.Definition.Id, sessionId, runId) != false)))
                 .OrderBy(tool => tool.Definition.Id, StringComparer.Ordinal)
                 .Select(tool => new ToolRegistration(tool, GetSourceUnsafe(tool.Definition.Id)))
                 .ToArray();
@@ -148,7 +150,17 @@ public sealed class ToolRegistry : IToolRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
         ArgumentNullException.ThrowIfNull(context);
-        return GetRegistration(toolId);
+        if (!context.RequiredSkillToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase))
+        {
+            return GetRegistration(toolId);
+        }
+
+        lock (_gate)
+        {
+            return _tools.TryGetValue(toolId, out var tool) && _stateManager?.CanSupplyRequiredTool(toolId) != false
+                ? new ToolRegistration(tool, GetSourceUnsafe(toolId))
+                : throw new KeyNotFoundException($"Tool '{toolId}' is not registered.");
+        }
     }
 
     /// <inheritdoc />

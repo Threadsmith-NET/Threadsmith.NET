@@ -10,7 +10,7 @@ The built-in tool registry includes:
 
 | Tool | Minimum trust | Approval | Purpose |
 |---|---|---|---|
-| `ask_user` | `UntrustedInspection` | None | Default off; user opt-in. Pauses the parent conversation until answer/cancel in an interactive terminal. Answers grant no permissions. |
+| `ask_user` | `UntrustedInspection` | None | Default off for ordinary conversation; native required dependencies can supply scoped availability. Collects clarification through the shared interactive presenter, including skill procedures. Answers grant no permissions. |
 | `list_files` | `UntrustedInspection` | None | Bounded repository file inventory. |
 | `read_file` | `TrustedRead` | None | Bounded text, image and PDF read (default input-file limit 5 MiB). |
 | `memories` | `TrustedRead` | None | Explicit add/update/remove/list for local repository notes; bounded complete-input embeddings and best-effort recall. |
@@ -59,6 +59,12 @@ Model-authored sibling tool calls are preflighted as one batch before any tool s
 Before validating model-authored JSON against an input or output contract, Threadsmith uses the common JSON cleanup path to extract a complete object or array from surrounding prose or Markdown fences. The extracted value still undergoes the original schema, type, policy, and authority checks; cleanup does not accept invalid fields or execute anything by itself.
 
 Process executable values must be bare names; path-qualified values are rejected even when their basename is allow-listed. The process manager resolves the name only from absolute host `PATH` entries, never from the repository working directory. Cancellation terminates the entire tracked process tree, and a manager timeout is recorded as a failed tool invocation. Standard output and error are captured separately, sanitized, and bounded. If a semantic tool is unavailable, inspect the displayed semantic confidence and reopen the solution with `TrustedBuild` or explicitly request the supported text fallback.
+
+## Native Skill Tools
+
+`validate_command_policy` appears under **Native Skill Tools**, disabled by default for ordinary conversation. Enable it through `/tools` for direct use. Normal trust, policy, approvals, and allow/deny lists still apply. It is not restricted to one skill. The maintained `command-policy-authoring` package requires this validator and `ask_user`, with no inherited tools; required availability changes neither ordinary checkboxes nor caller authority. An explicit denial is not bypassed.
+
+Direct validation supplies the current platform, shell, explicit absolute working directory, layer, complete examples, and optional candidate JSON. Omitting candidate JSON prepares examples only. It launches no commands, reads no active policies or saved grants, writes or activates no configuration, and creates no persistent grants. See [isolated checks](command-policy.md#isolated-candidate-checks) and [guided authoring](command-policy.md#guided-authoring-with-the-maintained-skill).
 
 ## Repository tool statistics
 
@@ -120,7 +126,7 @@ The tool remains subject to repository trust, `/tools` availability, `tools.allo
 
 ## Repository memories
 
-The single `memories` tool accepts `action` (`add`, `update`, `remove`, `list`) and optional nullable `id`, `text`, `memoryType`, `kind`, `concepts`, `expectedRevision`, and `confirmDistinctFrom`. Add requires text; update requires id/text; remove requires id only; list accepts no write fields. Add/update may set memoryType, kind, and concepts; expectedRevision belongs only to update and confirmDistinctFrom only to add. Unknown fields or invalid combinations return corrective feedback. The model cannot select repository paths, SQL, vectors, origin, timestamps, or the embedding provider. The deployed `Tool-memories-Description.md` guides concise durable preferences/corrections/project context and excludes routine progress, receipts, secrets, and instructions copied from untrusted sources.
+The single `memories` tool accepts `action` (`add`, `update`, `remove`, `list`) and optional nullable `id`, `text`, `memoryType`, `kind`, `concepts`, `expectedRevision`, and `confirmDistinctFrom`. Add requires text; update requires id/text; remove requires id only; list accepts no write fields. Add/update may set memoryType, kind, and concepts; expectedRevision belongs only to update and confirmDistinctFrom only to add. Unknown fields or invalid combinations return corrective feedback. The model cannot select repository paths, SQL, vectors, origin, timestamps, or the embedding provider. The deployed `Tool-memories-Description.md` guides concise durable preferences, corrections, project context, and actionable lessons from user clarifications or approaches that worked or failed. Notes identify when the lesson applies and what action to take or avoid. It excludes routine progress, receipts, secrets, and instructions copied from untrusted sources.
 
 This is a repository-scoped application-state write capability, serialized for conflicting calls and unavailable to read-only children. It needs no plan or code-mutation preview. Ordinary tool trust/allow/deny/enable controls remain effective; withholding this tool also withholds automatic memory injection, while explicit user `/memory` management remains available. Console activity identifies the operation and ID. Completed interactive tool blocks also show the actual outcome and full returned memory text, including removed notes; lists show each returned note and any omission count. Failed add/update attempts show the sanitized requested text. Memory bodies have a separate 98,304-character display bound, so the ordinary 240-character tool-detail truncation does not shorten typical notes. Headless tool results include the action, outcome, and returned note text in their bounded JSON preview.
 

@@ -869,6 +869,8 @@ The [command-policy examples](operations/command-policy.md#configuration-example
 
 | Scenario | Example |
 | --- | --- |
+| Draft and check a policy interactively with the maintained skill | [Command-policy-authoring quick start](operations/command-policy.md#quick-start) |
+| Prompt for Windows PowerShell `Get-Content` with allow for session | [Skill invocation, candidate shape, and reload steps](operations/command-policy.md#example-get-content-with-allow-for-session) |
 | Allow inspection cmdlets and explicit aliases; review creation/deletion; deny selected Git arguments | [User policy and expected decisions](operations/command-policy.md#user-example-allow-inspection-review-changes-deny-selected-operations) |
 | Make shipped Git/.NET rules require approval, or remove ordinary permission | [Replace, override, or disable rules](operations/command-policy.md#change-or-disable-a-shipped-rule) |
 | Require approval every time, allow session-only decisions, or offer persistent exact approval | The user example exercises `ApprovalAlwaysRequired`, `ApprovalRequiredSession`, and `ApprovalRequired`; see [approval choices](operations/command-policy.md#outcomes-and-approval). |
@@ -1668,7 +1670,7 @@ Extension authors should read [extension-authoring/authoring-guide.md](extension
 
 Skills provide reusable declarative procedures without making package content executable or authoritative. Threadsmith searches organization, machine, user, repository, and maintained catalogs by bounded metadata. Startup does not open instruction/schema/reference bodies. A candidate reports scope, id, semantic version, SHA-256 digest, publisher/source, declared requirements, verification state, and enablement state.
 
-Skills are data packages, not extensions. They cannot add executable capabilities, grant trust, or approve their own work. Model procedures use existing enabled tools under normal host policy, including delegation, processes, and file writes when available. Workflows can also return typed host-action proposals. The [code review guide](code-review.md) explains how the maintained review skill uses these shared tools to gather evidence, launch specialists, and produce a report.
+Skills are data packages, not extensions. They cannot add executable capabilities, grant trust, or approve their own work. Native model procedures receive registered required dependencies with execution-scoped availability, plus normally enabled optional or inherited tools, under normal host policy. Dependencies cannot grant trust or bypass denial, approval, or caller authority. Workflows can also return typed host-action proposals. The [code review guide](code-review.md) explains how the maintained review skill uses these shared tools to gather evidence, launch specialists, and produce a report.
 
 ### Claude-style compatibility
 
@@ -1751,7 +1753,7 @@ For conversational use, describe the task naturally, for example: `Use a review 
 
 Detailed inspection returns one skill with its verified input schema and exact selector, plus guidance to preserve the task and ask for required information missing from the conversation. `invoke_skill.input` is the native JSON value matching that schema: an object schema receives an object directly, never a quoted or JSON-encoded object string. Skills without a declared input schema, including Claude-compatible skills, return `{}` and guidance to pass the complete task and relevant context as a JSON string. Detailed inspection does not execute a skill or include its instruction body in the caller's context; disabled or unverified packages are rejected. The skill procedure does not automatically receive the parent conversation.
 
-During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller. Inspection is model guidance, not a new runtime prerequisite; direct `/skills use` invocations still accept JSON.
+During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; required native dependencies can supply availability absent from the outer advertisement, but cannot exceed caller authority or bypass current policy and registration checks. Inspection is model guidance, not a new runtime prerequisite; direct `/skills use` invocations still accept JSON.
 
 Assess a Central Package Management upgrade without implicitly restoring packages or accessing the network:
 
@@ -1767,6 +1769,16 @@ Review the current Threadsmith branch against `main`:
 ```
 
 The lead uses the selected TUI model, calls `delegate_agents` for five specialists, and synthesizes their results into Markdown. See [Code reviews with the maintained review skill](code-review.md) for setup, remote-branch and focused JSON examples, natural-language invocation, reviewer responsibilities, prompt locations, and report delivery.
+
+### Author a command policy
+
+Ask: “Use the command policy authoring skill to require approval for Git commands.” The maintained `command-policy-authoring` package asks for necessary shell, layer, approval-mode, and example details, then revises and checks drafts in one execution. Inspect it with `/skills inspect Maintained:command-policy-authoring@1.0.0` and invoke it through ordinary skill commands or model discovery. Only `request` is required initially.
+
+For a more specific request, ask: “Use the command-policy-authoring skill to draft a user policy for Windows PowerShell (`powershell`) that prompts for `Get-Content` with allow for session, no permanent approval, and no directory restriction. Check `Get-Content -Path example.txt` against `ApprovalRequiredSession`.” This offers a session choice; it does not automatically approve execution. See the [quick start and input reference](operations/command-policy.md#quick-start) and [complete Get-Content example](operations/command-policy.md#example-get-content-with-allow-for-session) for manual `/skills use` input and reload steps. Windows PowerShell (`powershell`) and PowerShell 7 (`pwsh`) need separate profiles and checks.
+
+An omitted `workingDirectory` uses the active repository root, not process cwd. That does not make the rule repository-only; request an explicit directory matcher for that scope. Supplied directories must be existing absolute paths. Required `validate_command_policy` and `ask_user` dependencies need no ordinary tool checkbox changes, but still obey policy and caller restrictions. Clarification needs an eligible interactive surface. The validator is also available directly under **Native Skill Tools** after ordinary enablement.
+
+`validated` means an isolated check of the exact returned candidate and retained examples, not installed-policy compatibility or execution permission. `incomplete` identifies unresolved work and may include a draft; it can be a completed skill result. Cancellation is not validation. The skill reads no active policies or grants, runs no examples, writes no configuration, and activates nothing. Inputs can reach the configured provider under normal privacy rules. Manually review and merge the subtree into trusted machine/user `tools.runProcess.commandPolicy`, preserving rules and complete arrays. See [guided authoring and manual application](operations/command-policy.md#guided-authoring-with-the-maintained-skill).
 
 ### Model selection for skills
 
@@ -1801,7 +1813,7 @@ Examples:
 
 ### Skills that use subagents
 
-A native skill procedure can call the ordinary `delegate_agents` tool when that tool is required or inherited and enabled for the invocation. The procedure prompt supplies the requested roles, tasks, context, and assignment count. Skill manifests do not declare agent templates, child counts, concurrency, worktrees, or reviewer-finding limits.
+A native skill procedure can call the ordinary `delegate_agents` tool when that tool is available as a required dependency, or normally enabled and inherited, under current invocation policy. The procedure prompt supplies the requested roles, tasks, context, and assignment count. Skill manifests do not declare agent templates, child counts, concurrency, worktrees, or reviewer-finding limits.
 
 The host validates every `delegate_agents` call through the same policy used by conversation turns. Trusted `agents:delegation:maximumAgents` configuration caps assignments in one call, while the global and per-parent concurrency settings control how many admitted children run simultaneously. Trust, sensitivity, one-level depth, tool access, model routing, cancellation, and child resource limits remain host-owned. Model selection is hierarchical: each accepted child receives a host-selected model and reasoning choice constrained by the parent and repository policy. A skill cannot force an incompatible model, elevate a child, or bypass the parent ledger.
 

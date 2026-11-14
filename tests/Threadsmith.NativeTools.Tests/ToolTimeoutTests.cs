@@ -238,6 +238,10 @@ public sealed class ToolTimeoutTests
         public DateTimeOffset Now { get; set; } = DateTimeOffset.UnixEpoch;
 
         public override DateTimeOffset GetUtcNow() => Now;
+
+        public override long GetTimestamp() => Now.UtcTicks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
     }
 
     private sealed class RecordingTool : Tool<DateTimeInput, string>

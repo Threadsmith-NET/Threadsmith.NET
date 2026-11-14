@@ -6,7 +6,7 @@ using Threadsmith.Core;
 using Threadsmith.Telemetry;
 
 /// <summary>Owns live clarification admission and persist-before-release terminal selection.</summary>
-public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHandler<SubmitUserQuestionAnswerCommand, bool>, ICommandHandler<CancelUserQuestionCommand, bool>, IDisposable
+public sealed class UserQuestionCoordinator : IUserQuestionCoordinator, ICommandHandler<SubmitUserQuestionAnswerCommand, bool>, ICommandHandler<CancelUserQuestionCommand, bool>, IDisposable
 {
     private readonly IDomainEventStream _events;
     private readonly RunSteeringCoordinator _steering;
@@ -31,6 +31,13 @@ public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHa
 
     /// <inheritdoc />
     public bool IsAvailable => Volatile.Read(ref _present) is not null;
+
+    /// <inheritdoc />
+    public IAsyncDisposable BeginRun(SessionId sessionId, RunId runId)
+    {
+        _steering.RegisterRun(sessionId, runId);
+        return new QuestionRun(this, sessionId, runId);
+    }
 
     /// <inheritdoc />
     public Task<bool> HandleAsync(SubmitUserQuestionAnswerCommand command, CancellationToken cancellationToken = default)
@@ -219,40 +226,78 @@ public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHa
     /// <summary>Records delivery only after the original correlated tool result was appended.</summary>
     public async Task ConsumeAsync(UserQuestionRequest request, CancellationToken cancellationToken = default)
     {
-        if (_pending.TryGetValue(request.SessionId, out var pending) && pending.Request.RequestId == request.RequestId && !pending.Consumed && pending.Result is { } result)
+        if (!_pending.TryGetValue(request.SessionId, out var pending) || pending.Request.RequestId != request.RequestId
+            || pending.Request.RunId != request.RunId)
         {
-            await _events.PublishAsync(new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, pending.Request, result, Consumed: true), cancellationToken);
-            pending.Consumed = true;
-            _steering.EndQuestion(request.SessionId, request.RunId);
+            return;
+        }
+
+        await pending.Gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_pending.TryGetValue(request.SessionId, out var current) && ReferenceEquals(current, pending)
+                && !pending.Consumed && pending.Result is { } result)
+            {
+                await _events.PublishAsync(new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, pending.Request, result, Consumed: true), cancellationToken);
+                pending.Consumed = true;
+                _steering.EndQuestion(request.SessionId, request.RunId);
+            }
+        }
+        finally
+        {
+            pending.Gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task InterruptAsync(UserQuestionRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!_pending.TryGetValue(request.SessionId, out var pending) || pending.Request.RequestId != request.RequestId
+            || pending.Request.RunId != request.RunId)
+        {
+            return;
+        }
+
+        await pending.Gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!pending.Consumed && pending.Result?.Status != UserQuestionStatus.Interrupted)
+            {
+                var interrupted = new UserQuestionResult(UserQuestionStatus.Interrupted, []);
+                await _events.PublishAsync(new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, pending.Request, interrupted), cancellationToken);
+                pending.Result = interrupted;
+                pending.Completion.TrySetResult(interrupted);
+            }
+        }
+        finally
+        {
+            if (_pending.TryRemove(new KeyValuePair<SessionId, PendingQuestion>(request.SessionId, pending)))
+            {
+                _steering.EndQuestion(request.SessionId, request.RunId);
+            }
+
+            pending.Gate.Release();
         }
     }
 
     /// <summary>Closes any unconsumed wait when its owning run exits.</summary>
     public async Task EndRunAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default)
     {
-        if (_pending.TryGetValue(sessionId, out var pending) && pending.Request.RunId == runId)
+        try
         {
-            try
+            if (_pending.TryGetValue(sessionId, out var pending) && pending.Request.RunId == runId)
             {
-                if (!pending.Consumed)
-                {
-                    await CompleteAsync(sessionId, pending.Request.RequestId, 0, new(UserQuestionStatus.Interrupted, []), cancellationToken);
-                    if (pending.Result?.Status == UserQuestionStatus.Answered)
-                    {
-                        await _events.PublishAsync(new UserQuestionStateChanged(sessionId, DateTimeOffset.UtcNow, pending.Request, new(UserQuestionStatus.Interrupted, [])), cancellationToken);
-                    }
-                }
+                await InterruptAsync(pending.Request, cancellationToken);
             }
-            finally
+        }
+        finally
+        {
+            foreach (var item in _requests.Where(item => item.Value.Request.SessionId == sessionId && item.Value.Request.RunId == runId))
             {
-                _pending.TryRemove(new KeyValuePair<SessionId, PendingQuestion>(sessionId, pending));
-                foreach (var item in _requests.Where(item => item.Value.Request.SessionId == sessionId && item.Value.Request.RunId == runId))
-                {
-                    _requests.TryRemove(item);
-                }
+                _requests.TryRemove(item);
+            }
 
-                _steering.EndQuestion(sessionId, runId);
-            }
+            _steering.EndQuestion(sessionId, runId);
         }
     }
 
@@ -264,6 +309,32 @@ public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHa
         foreach (var pending in _requests.Values)
         {
             pending.Gate.Dispose();
+        }
+    }
+
+    private sealed class QuestionRun : IAsyncDisposable
+    {
+        private readonly UserQuestionCoordinator _owner;
+        private readonly SessionId _sessionId;
+        private readonly RunId _runId;
+
+        public QuestionRun(UserQuestionCoordinator owner, SessionId sessionId, RunId runId)
+        {
+            _owner = owner;
+            _sessionId = sessionId;
+            _runId = runId;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await _owner.EndRunAsync(_sessionId, _runId, CancellationToken.None);
+            }
+            finally
+            {
+                _owner._steering.CompleteRun(_sessionId, _runId);
+            }
         }
     }
 

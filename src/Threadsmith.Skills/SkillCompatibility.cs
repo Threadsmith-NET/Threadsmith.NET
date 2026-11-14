@@ -82,10 +82,11 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
 
         IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.GetDefinitions(request.SessionId, request.RunId)
             .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+        var registered = _tools.AllDefinitions.ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
         var availableRequired = new List<string>();
         foreach (var toolId in requirements.RequiredTools)
         {
-            if (!definitions.TryGetValue(toolId, out var definition))
+            if (!registered.TryGetValue(toolId, out var definition))
             {
                 denials.Add($"required-tool-unavailable:{toolId}");
                 continue;
@@ -104,6 +105,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         string[] unavailableOptional =
         [
             .. requirements.OptionalTools
+                .Except(requirements.RequiredTools, StringComparer.OrdinalIgnoreCase)
                 .Where(tool => !definitions.ContainsKey(tool))
                 .OrderBy(item => item, StringComparer.Ordinal),
         ];

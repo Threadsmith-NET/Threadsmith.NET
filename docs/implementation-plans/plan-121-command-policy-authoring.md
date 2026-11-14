@@ -1,6 +1,6 @@
 # Command policy authoring with a maintained native skill
 
-**Status:** Active. Prerequisite contracts are aligned. The isolated validator increment is implemented. Required-tool enablement, the maintained package, and skill clarification integration are not implemented. Clarification resource and budget ownership needs a user decision before a significant lifecycle extension.
+**Status:** Active. Implementation is complete: the isolated validator, shared required dependencies and clarification lifecycle, maintained package and schemas, host repository/platform context, and observed-result checks are present. The ordinary manual completion projection shows the exact candidate and validation fields beside instructions. Supplied and observed examples remain required; only an exact example-set replacement supplied by an answered user clarification changes that baseline. Fresh-context review findings have been repaired. Final exit evidence remains limited to the available Windows environment; physical-terminal/provider authoring, other platforms, and the complete native release matrix remain unverified. Shared clarification uses the existing question coordinator and tool pipeline, releases execution admission while waiting, and preserves the remaining active-time budget.
 **Delivery track:** M37 — Guided command policy authoring.
 **Prerequisites:** Existing M3 tool policy, M12 skills, and M20 session contracts; ADR-11, ADR-34, and ADR-63; existing shell preparation.
 **Date:** 2026-11-14.

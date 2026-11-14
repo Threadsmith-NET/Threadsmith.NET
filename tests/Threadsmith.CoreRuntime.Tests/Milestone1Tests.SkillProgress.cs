@@ -1,5 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
@@ -58,6 +59,50 @@ public static partial class Milestone1Tests
         Assert.Equal(1, handler.Calls);
         Assert.DoesNotContain(" - starting", surface.Text, StringComparison.Ordinal);
         Assert.Equal(1, surface.Text.Split("SKILLS:", StringSplitOptions.None).Length - 1);
+    }
+
+    /// <summary>All manual completion paths expose exact structured fields, not a model-generated duplicate.</summary>
+    [Theory]
+    [InlineData("use")]
+    [InlineData("continue")]
+    [InlineData("resume")]
+    public static async Task SkillInvocationProgress_ShowsStructuredOutputBesideResponse(string operation)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var id = SkillInvocationId.New();
+        var command = operation switch
+        {
+            "use" => "/skills use Maintained:command-policy-authoring@1.0.0 {}",
+            "continue" => $"/skills continue {id.Value:D} {{}}",
+            _ => $"/skills resume {id.Value:D}",
+        };
+        const string candidate = "{\"schemaVersion\":1,\"common\":{\"rules\":[]}}";
+        const string instructions = "Manually review and merge this isolated proposal.";
+        var surface = new SkillProgressSurface([command, "/quit"]);
+        var handler = new PendingSkillHandler
+        {
+            Response = instructions,
+            OutputJson = JsonSerializer.Serialize(new
+            {
+                status = "validated",
+                policyJson = candidate,
+                validation = new { candidateDigest = "observed-digest", exampleSetId = "observed-examples" },
+                instructions,
+            }),
+        };
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [handler]);
+        handler.Events = harness.EventStream;
+        handler.Session = () => harness.Events.OfType<SessionCreated>().Single().SessionId;
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var run = coordinator.RunAsync(cancellationToken: token);
+        await handler.Started.Task.WaitAsync(token);
+        await surface.Started.Task.WaitAsync(token);
+        handler.Release.SetResult();
+        await run.WaitAsync(token);
+        Assert.Contains(candidate, surface.Text, StringComparison.Ordinal);
+        Assert.Contains("observed-digest", surface.Text, StringComparison.Ordinal);
+        Assert.Contains("observed-examples", surface.Text, StringComparison.Ordinal);
+        Assert.Equal(1, surface.Text.Split(instructions, StringSplitOptions.None).Length - 1);
     }
 
     /// <summary>Provider failures in manual skill operations remain visible and leave the command loop usable.</summary>
@@ -314,6 +359,10 @@ public static partial class Milestone1Tests
 
         internal bool Fail { get; init; }
 
+        internal string? OutputJson { get; init; }
+
+        internal string? Response { get; init; }
+
         internal Exception? Failure { get; init; }
 
         internal bool HoldCancellationCleanup { get; init; }
@@ -412,6 +461,8 @@ public static partial class Milestone1Tests
                 Package = package,
                 Status = SkillInvocationStatus.Completed,
                 Reason = "Finished",
+                OutputJson = OutputJson,
+                Response = Response,
                 Checkpoint = new SkillWorkflowCheckpoint
                 {
                     WorkflowId = SkillWorkflowId.New(),

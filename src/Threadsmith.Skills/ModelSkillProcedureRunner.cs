@@ -25,6 +25,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
     private readonly ToolRegistry _tools;
     private readonly IConversationToolSnapshotStore _snapshots;
     private readonly SessionUsageProjection? _sessionUsage;
+    private readonly IUserQuestionCoordinator? _questions;
 
     /// <summary>Initializes a new instance of the <see cref="ModelSkillProcedureRunner"/> class.</summary>
     public ModelSkillProcedureRunner(
@@ -41,7 +42,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         SessionUsageProjection? sessionUsage = null,
         IModelProvider? trustedModelProvider = null,
         ConfiguredModelCatalog? trustedCatalog = null,
-        IModelProviderInstructionResolver? trustedProviderInstructionResolver = null)
+        IModelProviderInstructionResolver? trustedProviderInstructionResolver = null,
+        IUserQuestionCoordinator? questions = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -49,6 +51,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(toolContext);
         ArgumentNullException.ThrowIfNull(prompts);
+        _questions = questions;
         _limits = limits ?? new();
         _limits.Validate();
         _snapshots = snapshots ?? new ConversationToolSnapshotStore();
@@ -104,6 +107,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var outputSchemaContent = content.SingleOrDefault(segment =>
             string.Equals(segment.AssetPath, step.OutputSchemaAsset, StringComparison.OrdinalIgnoreCase));
         var outputSchema = outputSchemaContent is null ? null : schemas.Compile(outputSchemaContent.Content);
+        var authoring = CommandPolicyAuthoringPolicy.Applies(plan.Scope, plan.Package.SkillId.Value)
+            ? new CommandPolicyAuthoringPolicy(inputJson, plan.RepositoryPath) : null;
+        var inputSchemaContent = authoring is null ? null : content.Single(segment =>
+            string.Equals(segment.AssetPath, step.InputSchemaAsset, StringComparison.OrdinalIgnoreCase));
+        var authoringInputSchema = inputSchemaContent is null ? null : schemas.Compile(inputSchemaContent.Content);
         var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
         var messages = new List<ModelMessage>
         {
@@ -114,8 +122,18 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 Content = [new ModelContentPart { Content = prompt }],
             },
         };
+
+        // Model-driven skills borrow the existing conversation run. Only manual procedures
+        // establish and close their own clarification run.
+        await using var questionRun = plan.Request.CallerToolSnapshotId is null
+            ? _questions?.BeginRun(plan.Request.SessionId, plan.Request.RunId) : null;
         using var transientState = new ModelRequestTransientState();
         var initialContext = await CreateToolContextAsync(plan, cancellationToken);
+        var callerTools = plan.Request.CallerToolSnapshotId is { } initialCallerSnapshot
+            ? _snapshots.Resolve(initialCallerSnapshot, plan.Request.SessionId, plan.Request.RunId) : null;
+        var requiredRegistrations = plan.Compatibility.AvailableRequiredTools.Select(toolId =>
+            callerTools?.FirstOrDefault(item => item.Tool.Definition.Id.Equals(toolId, StringComparison.OrdinalIgnoreCase))
+                ?? _tools.GetRegistration(toolId, initialContext)).ToArray();
         await using var ownedScope = initialContext.OperationScope is null ? new ToolOperationScope(cancellationToken) : null;
         var operationScope = initialContext.OperationScope ?? ownedScope
             ?? throw new InvalidOperationException("Skill procedure operation scope was unavailable.");
@@ -123,6 +141,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             SkillInvocationOperationState.OperationScopeKey,
             static () => new SkillInvocationOperationState());
         var sideEffects = new List<SkillSideEffectRecord>();
+        UserQuestionRequest? undeliveredQuestion = null;
+        IUserQuestionCoordinator? deliveryOwner = null;
 
         var seenCalls = new ToolCallHistory();
         try
@@ -135,6 +155,19 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
                     ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
                     : null;
+                foreach (var required in requiredRegistrations)
+                {
+                    var current = _tools.GetRegistration(required.Tool.Definition.Id, modelContext);
+                    if (!ToolRegistrationIdentity.Matches(current, required))
+                    {
+                        throw new InvalidOperationException("A required skill tool registration changed during execution.");
+                    }
+                }
+
+                var candidateRegistrations = (callerRegistrations
+                    ?? _tools.GetRegistrations(plan.Request.SessionId, plan.Request.RunId, modelContext))
+                    .Where(item => !plan.Compatibility.AvailableRequiredTools.Contains(item.Tool.Definition.Id, StringComparer.OrdinalIgnoreCase))
+                    .Concat(requiredRegistrations).ToArray();
                 var available = ConversationToolAvailability.CreateSnapshot(
                     _toolPipeline,
                     _tools,
@@ -142,7 +175,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     plan.Request.RunId,
                     modelContext,
                     toolsWithheld: formattingOnly,
-                    callerRegistrations);
+                    candidateRegistrations);
+                if (!formattingOnly && plan.Compatibility.AvailableRequiredTools.Any(toolId =>
+                    !available.Definitions.Any(item => item.Id.Equals(toolId, StringComparison.OrdinalIgnoreCase))))
+                {
+                    throw new InvalidOperationException("A required skill tool is no longer permitted or available.");
+                }
+
                 var registrations = available.Registrations.ToDictionary(
                     item => item.Tool.Definition.Id,
                     StringComparer.OrdinalIgnoreCase);
@@ -295,6 +334,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             {
                                 using var document = JsonDocument.Parse(output);
                             }
+
+                            authoring?.ValidateOutput(output);
                         }
                         catch (Exception exception) when (exception is JsonException or InvalidDataException)
                         {
@@ -346,6 +387,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                                 cancellationToken);
                         }
 
+                        if (authoring is not null)
+                        {
+                            _ = await CreateToolContextAsync(plan, cancellationToken);
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
                         return new SkillProcedureResult(output, round + 1, toolCalls, sideEffects.ToArray());
                     }
 
@@ -369,9 +416,30 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             ? null : (int)Math.Clamp(profile.ContextWindow - wireEstimate.TotalCapacityTokens, 0L, int.MaxValue),
                     };
                     var batch = new List<ToolBatchRequest>(toolRequests.Count);
+                    ToolBatchPreflightResult? bindingFailure = null;
                     for (var ordinal = 0; ordinal < toolRequests.Count; ordinal++)
                     {
                         var toolRequest = toolRequests[ordinal];
+                        if (authoring is not null && toolRequest.ToolName.Equals("validate_command_policy", StringComparison.OrdinalIgnoreCase))
+                        {
+                            try
+                            {
+                                toolRequest = toolRequest with { ArgumentsJson = authoring.BindArguments(toolRequest.ArgumentsJson) };
+                                toolRequests[ordinal] = toolRequest;
+                            }
+                            catch (Exception exception) when (exception is JsonException or InvalidDataException or InvalidOperationException or ArgumentException)
+                            {
+                                bindingFailure ??= new ToolBatchPreflightResult
+                                {
+                                    FailedOrdinal = ordinal,
+                                    FailedToolId = toolRequest.ToolName,
+                                    ErrorClassification = ToolErrorClassification.InvalidArguments,
+                                    SafeReason = _sanitizer.Sanitize(exception.Message),
+                                };
+                                authoring.Observe(toolRequest.ArgumentsJson, null);
+                            }
+                        }
+
                         if (!plan.AvailableToolIds.Contains(toolRequest.ToolName, StringComparer.OrdinalIgnoreCase))
                         {
                             throw new UnauthorizedAccessException("Skill procedure requested an undeclared tool.");
@@ -396,7 +464,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             }));
                     }
 
-                    var preflight = _toolPipeline.PreflightBatch(batch);
+                    var preflight = bindingFailure ?? _toolPipeline.PreflightBatch(batch);
                     string? failureSummary = null;
                     IReadOnlyList<ToolBatchResult> results = [];
                     ToolBatchCancelledException? interruptedBatch = null;
@@ -473,6 +541,32 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             continue;
                         }
 
+                        if (authoring is not null && toolRequest.ToolName.Equals("validate_command_policy", StringComparison.OrdinalIgnoreCase))
+                        {
+                            authoring.Observe(batchRequest.Invocation.ArgumentsJson, failureSummary is null ? result : null);
+                        }
+
+                        var suspendedQuestion = result?.Suspension;
+                        if (suspendedQuestion is not null && result is not null)
+                        {
+                            var questions = context.UserQuestions as IUserQuestionCoordinator
+                                ?? throw new InvalidOperationException("Question coordination is unavailable.");
+                            undeliveredQuestion = suspendedQuestion;
+                            deliveryOwner = questions;
+                            result = await UserQuestionContinuation.CompleteAsync(
+                                _toolPipeline,
+                                questions,
+                                batchRequest.Invocation,
+                                result,
+                                async token => await _toolContext(plan.Request, token),
+                                cancellationToken);
+                        }
+
+                        if (suspendedQuestion is not null && result is not null && authoringInputSchema is not null)
+                        {
+                            authoring?.ObserveAnswer(result, value => schemas.Validate(authoringInputSchema, value));
+                        }
+
                         if (result is { Succeeded: true }
                             && TryCreateSideEffect(toolRequest.ToolName, result, out var sideEffect))
                         {
@@ -523,6 +617,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             transientState.BindToolCall(round, batchRequest.Ordinal, toolCallId);
                         }
 
+                        if (suspendedQuestion is not null && context.UserQuestions is IUserQuestionCoordinator deliveryCoordinator)
+                        {
+                            await deliveryCoordinator.ConsumeAsync(suspendedQuestion, cancellationToken);
+                            undeliveredQuestion = null;
+                            deliveryOwner = null;
+                        }
+
                         // Legacy input needs result text; structured messages retain the same model round for all siblings.
                         prompt += _prompts.Render(
                             PromptFileNames.SkillProcedureContinuation,
@@ -559,6 +660,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         {
             SkillProcedureInterruption.Attach(sideEffects.ToArray(), exception);
             throw;
+        }
+        finally
+        {
+            if (undeliveredQuestion is not null && deliveryOwner is not null)
+            {
+                await deliveryOwner.InterruptAsync(undeliveredQuestion, CancellationToken.None);
+            }
         }
     }
 
@@ -647,6 +755,17 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             ? _snapshots.ResolveContext(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
                 ?? throw new InvalidOperationException("The invoking model request has no tool authority snapshot.")
             : await _toolContext(plan.Request, cancellationToken);
+        if (CommandPolicyAuthoringPolicy.Applies(plan.Scope, plan.Package.SkillId.Value))
+        {
+            var live = await _toolContext(plan.Request, cancellationToken);
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (live.WorkspaceId != plan.Request.WorkspaceId
+                || !string.Equals(live.RepositoryPath, plan.RepositoryPath, comparison))
+            {
+                throw new InvalidOperationException("The authoring repository context changed during execution.");
+            }
+        }
+
         context = PackagedDocumentationPolicy.IsDocumentationSkill(
             plan.Scope,
             plan.Package.SkillId.Value)
@@ -660,8 +779,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             && !context.DeniedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
         return context with
         {
-            // Skill procedures do not own the conversation loop's suspension handoff.
-            UserQuestions = null,
+            UserQuestions = context.UserQuestions ?? _questions,
+            RequiredSkillToolIds = plan.Compatibility.AvailableRequiredTools,
             TrustLevel = (RepositoryTrustLevel)Math.Min((int)context.TrustLevel, (int)plan.Request.Trust),
             ModelUsesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog,
             AllowedToolIds = allowedTools,
@@ -693,6 +812,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 PromptFileNames.SkillProcedureRequest,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
+                    ["HostContextJson"] = JsonSerializer.Serialize(new { repositoryRoot = plan.RepositoryPath, platform = CommandPolicyAuthoringPolicy.HostPlatform }),
                     ["PackageId"] = plan.Package.SkillId.Value,
                     ["PackageVersion"] = plan.Package.Version,
                     ["PackageDigest"] = plan.Package.Digest.Value,

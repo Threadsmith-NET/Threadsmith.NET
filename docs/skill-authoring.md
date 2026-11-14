@@ -31,7 +31,19 @@ Use `src/Threadsmith.Skills/MaintainedSkills/fix-analyzer-warnings/skill.json` a
 - one acyclic `workflow` with a closed set of host-recognized steps;
 - optional detached signature envelope.
 
-Ids use lowercase ASCII letters, digits, `.`, `_`, or `-`. Versions use bounded semantic version text. Tool ids must already exist in the host registry. Requirements can narrow host selection but never add availability, trust, network/process/secrets, approval, or budget.
+Ids use lowercase ASCII letters, digits, `.`, `_`, or `-`. Versions use bounded semantic version text. Tool ids must already exist in the host registry. Required native tool dependencies can supply execution-scoped availability without changing session settings. Optional and inherited tools still require normal enablement. Requirements never add trust, network/process/secrets permission, approval, or budget; tool policy and consent remain authoritative.
+
+## Native skill contracts
+
+Native skills combine declared input and output schemas with host-resolved tool dependencies. Schemas improve structural consistency, not semantic correctness or model determinism. Required dependencies remove manual tool setup for that execution; they grant no authority and do not change the outer conversation's catalog or saved settings. Optional tools are not enabled implicitly. If a tool is both required and optional, required semantics take precedence. Missing, incompatible, denied, or consent-blocked dependencies stop model work rather than silently disappearing.
+
+Portable Agent Skills Specification packages supply instructions and resources. The schema and dependency behaviors described here are Threadsmith host contracts, not portable specification guarantees or claims of exclusivity over other hosts.
+
+### Narrow authoring example
+
+The maintained `command-policy-authoring` package declares `requiredTools: ["validate_command_policy", "ask_user"]`, `optionalTools: []`, and `inheritAvailableTools: false`. It uses one ordinary `invokeProcedure` step for the collaborative loop, maps `responseProperty` to `instructions`, and has no `successProperty`. An `incomplete` policy can be a completed procedure. Unavailable optional output values are omitted, not null. The host binds this maintained contract's validation claims to completed validator results; do not infer that arbitrary package schemas prove semantic correctness. See [guided authoring](operations/command-policy.md#guided-authoring-with-the-maintained-skill).
+
+The ordinary procedure prompt includes host-owned repository-root and platform facts as JSON. A missing root is explicit; process cwd is not a repository default. Package input and text cannot replace host facts or grant authority.
 
 ## Safe JSON schemas
 
@@ -105,4 +117,6 @@ Optional step `successProperty` and `responseProperty` name top-level output fie
 
 The maintained review skill uses these generic contracts with `prompts/Skill-Review.md` and ordinary `delegate_agents`. Agent roles and assignment count come from the procedure prompt and tool input; manifests do not define per-skill agent templates or agent limits. Trusted `agents:delegation:maximumAgents` configuration caps each delegation call. There is no private reviewer package format or special host entry.
 
-Native procedures do not advertise recursive `invoke_skill` calls: the invoking tool owns its source lease until the procedure returns. Use the ordinary `delegate_agents` tool for child work.
+Native procedures do not advertise recursive `invoke_skill` calls; recursion remains prohibited. Use the ordinary `delegate_agents` tool for child work.
+
+A native procedure can declare `ask_user` as required and use its normal bounded questions when clarification is necessary. Model-driven skills borrow the conversation run; manual skills own and close a run through the same question coordinator. The host releases execution admission before presenting a question, pauses enclosing active-time allowances during human waiting, and revalidates policy, repository identity and registrations before continuing. Cancellation interrupts only the undelivered question, not a borrowed parent run. Clarification is unavailable to child agents or surfaces without a presenter. Answers never grant authority. `ask_user` and the enclosing `invoke_skill` must each be the sole call in their model batch.

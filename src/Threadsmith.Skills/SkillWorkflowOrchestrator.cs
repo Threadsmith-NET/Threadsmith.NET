@@ -16,6 +16,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly IPromptLoader _prompts;
     private readonly ISkillPackageVerifier _verifier;
     private readonly SkillRuntimeLimits _limits;
+    private readonly TimeProvider _timeProvider;
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
@@ -35,7 +36,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
         IDomainEventStream events,
         IConversationToolSnapshotStore? snapshots = null,
-        SkillRuntimeLimits? limits = null)
+        SkillRuntimeLimits? limits = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -60,6 +62,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _snapshots = snapshots;
         _limits = limits ?? new();
         _limits.Validate();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -300,8 +303,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         SkillWorkflowCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
-        using var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        source.CancelAfter(plan.EffectiveBudget.WallTime);
+        using var budget = new ActiveExecutionBudget(plan.EffectiveBudget.WallTime, cancellationToken, _timeProvider);
+        using var source = CancellationTokenSource.CreateLinkedTokenSource(budget.Token);
         if (!_active.TryAdd(checkpoint.InvocationId, source))
         {
             throw new InvalidOperationException("The skill invocation is already active.");
@@ -680,7 +683,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Compatibility = compatibility,
             ModelProfileId = checkpoint.ModelProfileId,
             ReasoningLevel = checkpoint.ReasoningLevel,
-            AvailableToolIds = checkpoint.AvailableToolIds,
+            AvailableToolIds = ResolveAvailableTools(candidate, compatibility, request),
             EffectiveBudget = checkpoint.EffectiveBudget,
         });
     }
@@ -768,11 +771,17 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         CancellationToken cancellationToken)
     {
         var entry = candidate.Metadata.Workflow.Steps.Single(item => item.DependsOn.Count == 0);
-        return await ValidateAgainstAssetAsync(
+        var input = await ValidateAgainstAssetAsync(
             candidate,
             entry.InputSchemaAsset,
             inputJson,
             cancellationToken);
+        if (CommandPolicyAuthoringPolicy.Applies(candidate.Provenance.Scope, candidate.Metadata.SkillId.Value))
+        {
+            CommandPolicyAuthoringPolicy.ValidateInput(input);
+        }
+
+        return input;
     }
 
     private async Task<string> ValidateAgainstAssetAsync(
@@ -1096,7 +1105,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             .Concat(candidate.Metadata.Requirements.OptionalTools.Except(
                 compatibility.UnavailableOptionalTools,
                 StringComparer.OrdinalIgnoreCase))
-            .Where(toolId => callerTools?.Contains(toolId, StringComparer.OrdinalIgnoreCase) != false)
+            .Where(toolId => candidate.Metadata.Requirements.RequiredTools.Contains(toolId, StringComparer.OrdinalIgnoreCase)
+                || callerTools?.Contains(toolId, StringComparer.OrdinalIgnoreCase) != false)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.Ordinal)
             .ToArray();

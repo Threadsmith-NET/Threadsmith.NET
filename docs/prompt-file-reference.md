@@ -613,7 +613,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Explicit memory writes, bounded current-repository intelligence search, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, concise actionable lessons from user clarifications and successful or failed approaches, bounded current-repository intelligence search, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-repository_intelligence-Description.md` | Read-only explicit stored intelligence query. | `None` |
 | `Tool-repository_archeology-Description.md` | Bounded read-only historical investigation. | `None` |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
@@ -719,7 +719,7 @@ For captured PR reviews, the shared handoff references the snapshot's complete i
 |---|---|---|
 | `Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
 | `Skill-Procedure-OutputCorrection.md` | Formatting-only recovery of invalid final skill output without repeating completed tools. | [`FailureSummary`](#placeholder-failuresummary) |
-| `Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
+| `Skill-Procedure-Request.md` | Skill procedure request, including host-owned repository/platform facts as JSON (not instructions). | [`HostContextJson`](#placeholder-hostcontextjson), [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 
 #### `Workflow` family
@@ -815,6 +815,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-hiddencount"></a>`HiddenCount` | Number of bounded result items not shown. |
 | <a id="placeholder-holderid"></a>`HolderId` | Identifier of the agent or operation currently holding a conflicting resource. |
 | <a id="placeholder-hostactionkind"></a>`HostActionKind` | Host-classified action required to continue or recover. |
+| <a id="placeholder-hostcontextjson"></a>`HostContextJson` | Host-owned active repository root (null when unavailable) and current platform encoded as JSON data. Never process cwd, package instructions, or a policy directory restriction. |
 | <a id="placeholder-identity"></a>`Identity` | Display identity of the surrounding artifact, result, or capability. |
 | <a id="placeholder-impactitems"></a>`ImpactItems` | Fully rendered set of symbol/project/test impact entries. |
 | <a id="placeholder-implementationpluralsuffix"></a>`ImplementationPluralSuffix` | Grammar suffix selected from the implementation count. |

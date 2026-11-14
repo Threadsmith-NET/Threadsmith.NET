@@ -122,6 +122,15 @@ public sealed partial class SkillSubsystemTests
             Assert.Empty(selectedProvider.Requests);
             var checkpoint = JsonSerializer.Deserialize<SkillWorkflowCheckpoint>(JsonSerializer.Serialize(result.Checkpoint));
             Assert.True(Assert.IsType<SkillWorkflowCheckpoint>(checkpoint).ModelUsesTrustedCatalog);
+            if (!allowTool)
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => workflow.ContinueAsync(result.InvocationId, "{}"));
+                Assert.Empty(selectedProvider.Requests);
+                Assert.Empty(tool.Contexts);
+                Assert.True(sessionContextCalls > 0);
+                return;
+            }
+
             result = await workflow.ContinueAsync(result.InvocationId, "{}");
         }
 

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "skillId": { "value": "command-policy-authoring" },
+  "packageId": "threadsmith.command-policy-authoring",
+  "version": "1.0.0",
+  "displayName": "Command policy authoring",
+  "description": "Collaboratively draft command policy, check supplied examples without execution, and return isolated results with manual merge instructions.",
+  "tags": ["command-policy", "configuration", "authoring"],
+  "publisher": "Threadsmith.NET",
+  "license": "Apache-2.0",
+  "assets": [
+    { "path": "instructions/author.md", "bytes": 13929, "sha256": "421eb3c33c60e7e6fcab88b81c7198b9a31851b31fae147c720310ec67792059", "required": true, "kind": "instructions" },
+    { "path": "schemas/input.json", "bytes": 1148, "sha256": "3be0a9743ade89daab3dad605a45cceef00a681f11ea92be112c4f620448bdb0", "required": true, "kind": "input-schema" },
+    { "path": "schemas/output.json", "bytes": 1860, "sha256": "2d5685007ad02d3cd92826ce854c82813f58138c198f1292c39a068c4beee9bc", "required": true, "kind": "output-schema" }
+  ],
+  "requirements": {
+    "requiredTools": ["validate_command_policy", "ask_user"],
+    "optionalTools": [],
+    "inheritAvailableTools": false,
+    "toolContractVersions": {},
+    "minimumTrust": "UntrustedInspection",
+    "approvalCategories": [],
+    "model": { "workloads": ["Planning"], "requiresToolCalls": true, "requiresStructuredOutput": true, "minimumContextWindow": 16384, "allowedProfiles": [], "deniedProfiles": [] },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": { "contentTokens": 8000, "workflowSteps": 1, "modelTurns": 64, "toolCalls": 64, "mutations": 0, "validationAttempts": 0, "wallTime": "00:20:00" },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "command-policy-authoring",
+    "steps": [
+      { "stepId": "author", "kind": "invokeProcedure", "instructionAsset": "instructions/author.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/output.json", "responseProperty": "instructions", "maximumIterations": 1, "dependsOn": [] }
+    ]
+  }
+}

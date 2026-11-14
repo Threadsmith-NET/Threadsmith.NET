@@ -111,7 +111,8 @@ public sealed partial class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(4, verified.Length);
+        Assert.Equal(5, verified.Length);
+        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "command-policy-authoring");
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");

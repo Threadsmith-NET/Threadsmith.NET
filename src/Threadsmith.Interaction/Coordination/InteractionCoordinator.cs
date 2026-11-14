@@ -4129,7 +4129,7 @@ public sealed partial class InteractionCoordinator
 
     private static string FormatSkillInvocation(SkillInvocationResult result)
     {
-        var response = result.Response ?? result.OutputJson;
+        var response = InteractionPresentationFormatter.FormatSkillOutput(result);
         var output = string.IsNullOrWhiteSpace(response)
             ? string.Empty
             : $"\n{response}";

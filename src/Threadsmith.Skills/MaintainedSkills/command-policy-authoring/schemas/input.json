@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request"],
+  "properties": {
+    "request": { "type": "string", "minLength": 1, "maxLength": 8192, "description": "Requirements for the command policy." },
+    "shell": { "type": "string", "minLength": 1, "maxLength": 1024, "description": "Shell used for command examples." },
+    "workingDirectory": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Working directory for command examples. If omitted, use the active repository root." },
+    "layer": { "type": "string", "enum": ["user", "machine"], "description": "Configuration layer where the user intends to apply the policy." },
+    "examples": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["command", "expectedOutcome"],
+        "properties": {
+          "command": { "type": "string", "minLength": 1, "maxLength": 8192 },
+          "expectedOutcome": { "type": "string", "enum": ["Allow", "AlwaysDeny", "ApprovalRequired", "ApprovalRequiredSession", "ApprovalAlwaysRequired"] }
+        }
+      }
+    }
+  }
+}

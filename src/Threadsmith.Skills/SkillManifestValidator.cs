@@ -32,13 +32,6 @@ internal static partial class SkillManifestValidator
 
         ValidateIds(requirements.RequiredTools, "required tools", options.MaximumRequiredTools, options.MaximumIdentifierCharacters);
         ValidateIds(requirements.OptionalTools, "optional tools", options.MaximumRequiredTools, options.MaximumIdentifierCharacters);
-        if (requirements.RequiredTools.Intersect(
-            requirements.OptionalTools,
-            StringComparer.OrdinalIgnoreCase).Any())
-        {
-            throw new InvalidDataException("A tool cannot be both required and optional.");
-        }
-
         if (requirements.RequiredTools.Concat(requirements.OptionalTools).Any(tool =>
             ProhibitedDirectTools.Contains(tool)
             || tool.Contains("mutation", StringComparison.OrdinalIgnoreCase)

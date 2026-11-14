@@ -183,7 +183,7 @@ public sealed partial class SkillSubsystemTests
         await using var workflow = new SkillWorkflowOrchestrator(
             new FixedCatalog([candidate]),
             new PassThroughVerifier(),
-            new CompatibleEvaluator { Profiles = [selected] },
+            new CompatibleEvaluator { Profiles = [selected], InheritedTools = ["permission_probe"] },
             new SkillContentLoader(sanitizer, TestPromptLoader.Instance),
             new BoundedJsonSchemaValidator(),
             runner,

@@ -441,6 +441,8 @@ public sealed class ScratchpadScriptTests : IDisposable
     private sealed class FixedClock : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch;
+
+        public override long GetTimestamp() => 0;
     }
 
     private sealed class RecordingProcessManager : IProcessManager

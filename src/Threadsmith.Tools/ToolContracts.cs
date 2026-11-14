@@ -350,6 +350,10 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public ToolOperationScope? OperationScope { get; init; }
 
+    /// <summary>Verified skill dependencies supplied only to this execution, not the session catalog.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> RequiredSkillToolIds { get; init; } = [];
+
     /// <summary>Opened workspace used to scope semantic operations.</summary>
     public WorkspaceId? WorkspaceId { get; init; }
 
@@ -684,6 +688,13 @@ public sealed record ToolExecutionContext(
     /// <summary>Returns the remaining shared execution budget without restarting its clock.</summary>
     public TimeSpan GetRemainingExecutionTimeout(TimeSpan fallback)
     {
+        if (ActiveBudget is { } budget)
+        {
+            var allowance = budget.Remaining;
+            return allowance == Timeout.InfiniteTimeSpan || allowance > TimeSpan.Zero
+                ? allowance : throw new TimeoutException("The tool execution deadline expired.");
+        }
+
         if (ExecutionDeadline is not { } deadline)
         {
             return ExecutionTimeout ?? fallback;
@@ -695,6 +706,10 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Host clock used to interpret the absolute deadline.</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>Live active-time owner, excluded from durable and model output.</summary>
+    [JsonIgnore]
+    internal ActiveExecutionBudget? ActiveBudget { get; init; }
 
     /// <summary>Whether tool policy requires review of the exact staged diff.</summary>
     internal bool RequireExactDiffReview { get; init; }

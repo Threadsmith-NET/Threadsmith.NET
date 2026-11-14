@@ -131,6 +131,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
     private readonly IScratchpadSessionCapabilityProvider? _scratchpad;
+    private readonly Func<CancellationToken, Task<bool>>? _documentationSkillEnabled;
     private readonly TokenEstimator _tokenEstimator;
 
     /// <summary>Initializes a new instance of the <see cref="ContextAssembler"/> class.</summary>
@@ -149,7 +150,8 @@ public sealed class ContextAssembler : IContextAssembler
         IModelProviderInstructionResolver? providerInstructionResolver = null,
         IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null,
         IModelRequestPreparationResolver? requestPreparationResolver = null,
-        IScratchpadSessionCapabilityProvider? scratchpad = null)
+        IScratchpadSessionCapabilityProvider? scratchpad = null,
+        Func<CancellationToken, Task<bool>>? documentationSkillEnabled = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -184,6 +186,7 @@ public sealed class ContextAssembler : IContextAssembler
         _providerInstructionResolver = providerInstructionResolver;
         _requestPreparationResolver = requestPreparationResolver;
         _scratchpad = scratchpad;
+        _documentationSkillEnabled = documentationSkillEnabled;
     }
 
     /// <inheritdoc />
@@ -201,8 +204,10 @@ public sealed class ContextAssembler : IContextAssembler
             ? stableSystemPolicy
             : stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
         var skillGuidance = request.ToolSchemas.Any(tool => tool.Id == "invoke_skill")
-            ? _prompts.Get(PromptFileNames.SystemSkillGuidance)
-            : null;
+            && _documentationSkillEnabled is not null
+            && await _documentationSkillEnabled(cancellationToken)
+                ? _prompts.Get(PromptFileNames.SystemSkillGuidance)
+                : null;
         if (skillGuidance is not null)
         {
             systemPolicy += Environment.NewLine + skillGuidance;

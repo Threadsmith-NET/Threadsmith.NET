@@ -42,7 +42,8 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         "F9 — paste image; inspect/remove image attachments",
         "Ctrl+C — copy selected text; exit Threadsmith when none is selected",
         "F6 — copy the current selection without using Ctrl+C",
-        "Output: click semantic headers to expand/collapse; Ctrl+Up/Down selects, Enter/Space toggles",
+        "Output: click semantic/script controls; Ctrl+Up/Down selects, Enter/Space activates",
+        "C# script: View full script opens details; F4 copies full source, F6 selection",
         "Ctrl+Shift+C — copy the complete message draft",
         "F12 — let the terminal select text; press again to return mouse control",
         "Ctrl+Enter — insert a line break without sending",
@@ -142,7 +143,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _ordinaryWorkspace = new(CreateComposer);
         _secondaryWorkspace = new(CreateComposer);
         _steeringWorkspace = new(CreateComposer);
-        _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits));
+        _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits, ShowScriptSource));
         _agentTabs = new(() => new AgentTabStrip(Agents, SelectAgent, ResolveStyle, CloseAgent));
         _commandDiscovery = new(() => new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits));
         _commandCompletion = new(() => new ComposerCommandCompletion(Discovery));
@@ -1071,6 +1072,22 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _app.Modals.RemoveClosed();
         _paletteModal = null;
         _paletteTarget = null;
+    }
+
+    private void ShowScriptSource(ToolSourceDetail detail)
+    {
+        if (!_utilityModal.IsCompleted)
+        {
+            return;
+        }
+
+        var modal = new ChoiceModal("C# script", [], _limits, sourceDetail: detail)
+        {
+            ResolveStyle = ResolveStyle,
+            ToggleMouse = () => _app.ToggleMouseCapture(),
+            CopyRequested = Copy,
+        };
+        _utilityModal = ShowUtilityModalAsync(modal, _stop.Token);
     }
 
     private Task ShowKeyHelpAsync(CancellationToken cancellationToken)

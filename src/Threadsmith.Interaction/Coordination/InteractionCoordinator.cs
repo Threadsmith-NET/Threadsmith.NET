@@ -413,6 +413,7 @@ public sealed partial class InteractionCoordinator
         SemanticActivityKey? currentSemanticActivityKey = null;
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, (InteractionActivity Activity, Guid? EffectId)>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
+        var handedOffSemanticEffects = new HashSet<Guid>();
         var toolSurface = _surface.Surface as IInteractionToolActivitySurface;
         var operationActivities = new InteractionOperationActivities(_timeProvider, _displayOptions.ShowOperationDurations);
         long? turnStartedTimestamp = null;
@@ -481,6 +482,7 @@ public sealed partial class InteractionCoordinator
                     if (domainEvent is TaskIntentRecorded)
                     {
                         turnStartedTimestamp = _timeProvider.GetTimestamp();
+                        handedOffSemanticEffects.Clear();
                         latestRunDiagnostic = null;
                     }
 
@@ -502,6 +504,11 @@ public sealed partial class InteractionCoordinator
                             or DirectFetchApprovalOutcome.ApprovedForSession
                             or DirectFetchApprovalOutcome.ApprovedForUser),
                     };
+                    if (domainEvent is DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } feedback })
+                    {
+                        handedOffSemanticEffects.Add(feedback.EffectId);
+                    }
+
                     SemanticActivityKey? incomingSemanticActivityKey = null;
                     InteractionActivity? incomingActivity;
                     if (domainEvent is SemanticCheckStarted semanticStarted)
@@ -520,13 +527,24 @@ public sealed partial class InteractionCoordinator
                         }
 
                         semanticActivitiesByKey[semanticKey] = (incomingActivity, semanticStarted.EffectId);
-                        incomingSemanticActivityKey = semanticKey;
+
+                        // Graph-refresh replacements retain their effect identity. Keep tracking
+                        // them, but do not let background work take over model continuation.
+                        if (semanticStarted.EffectId is { } effectId && handedOffSemanticEffects.Contains(effectId))
+                        {
+                            incomingActivity = null;
+                        }
+                        else
+                        {
+                            incomingSemanticActivityKey = semanticKey;
+                        }
                     }
                     else if (domainEvent is DiagnosticObserved { Code: "AdvisorySemanticFeedback", PendingSemanticEffectId: { } waitingEffect }
                         && semanticActivityOrder.LastOrDefault(key => semanticActivitiesByKey[key].EffectId == waitingEffect) is var waitingKey
                         && semanticActivitiesByKey.TryGetValue(waitingKey, out var waitingActivity)
                         && waitingActivity.EffectId == waitingEffect)
                     {
+                        handedOffSemanticEffects.Remove(waitingEffect);
                         incomingActivity = waitingActivity.Activity;
                         incomingSemanticActivityKey = waitingKey;
                     }
@@ -534,6 +552,15 @@ public sealed partial class InteractionCoordinator
                     {
                         incomingActivity = domainEvent switch
                         {
+                            // Consolidated feedback is delivered after the host wait, even when
+                            // its deadline leaves checks pending. Resume without reasoning tokens.
+                            DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: not null }
+                                when turnStartedTimestamp is { } feedbackTurnStart =>
+                                new InteractionActivity(
+                                    "THINKING",
+                                    feedbackTurnStart,
+                                    _displayOptions.ShowOperationDurations,
+                                    _timeProvider),
                             TaskIntentRecorded when turnStartedTimestamp is { } turnStart =>
                                 new InteractionActivity(
                                     "THINKING",
@@ -659,6 +686,7 @@ public sealed partial class InteractionCoordinator
                             {
                                 Notification = InteractionEventSegments.CreateNotification(domainEvent),
                                 Disclosure = InteractionEventSegments.CreateDisclosure(domainEvent, eventSegments),
+                                SourceDetail = InteractionEventSegments.GetSourceDetail(domainEvent),
                                 WakeIdleInput = domainEvent is DiagnosticObserved { Code: "intelligence.refresh.pending" },
                             });
                         }
@@ -688,6 +716,7 @@ public sealed partial class InteractionCoordinator
                             if (TryGetLatestSemanticActivity(
                                 semanticActivitiesByKey,
                                 semanticActivityOrder,
+                                handedOffSemanticEffects,
                                 out var latestSemanticKey,
                                 out var latestSemanticActivity))
                             {
@@ -729,6 +758,7 @@ public sealed partial class InteractionCoordinator
                             semanticActivityOrder,
                             completed.RunId);
                         turnStartedTimestamp = null;
+                        handedOffSemanticEffects.Clear();
                     }
 
                     switch (domainEvent)
@@ -2641,13 +2671,15 @@ public sealed partial class InteractionCoordinator
     private static bool TryGetLatestSemanticActivity(
         IReadOnlyDictionary<SemanticActivityKey, (InteractionActivity Activity, Guid? EffectId)> activitiesByKey,
         IReadOnlyList<SemanticActivityKey> activityOrder,
+        IReadOnlySet<Guid> handedOffEffects,
         out SemanticActivityKey key,
         out InteractionActivity? activity)
     {
         for (var index = activityOrder.Count - 1; index >= 0; index--)
         {
             var candidate = activityOrder[index];
-            if (activitiesByKey.TryGetValue(candidate, out var state))
+            if (activitiesByKey.TryGetValue(candidate, out var state)
+                && (state.EffectId is not { } effectId || !handedOffEffects.Contains(effectId)))
             {
                 activity = state.Activity;
                 key = candidate;

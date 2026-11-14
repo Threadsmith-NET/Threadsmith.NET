@@ -113,9 +113,9 @@ System policy, stable conversation instructions, request envelopes, and required
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, artifact guidance, and native-tool concept hints. | `None` |
-| `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory. | `None` |
+| `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory and the maintained `threadsmith-docs-help` skill is enabled and verified. Enablement is checked through the shared skill-listing service on each assembly; missing availability omits the guidance. | `None` |
 | `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance; reuse of current background validation coverage, additional checks for concrete gaps or requirements, separate whitespace verification, and default durable-artifact output to repository-root `.inbox/` unless another location is specified (scratchpad remains temporary). | `None` |
-| `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
+| `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad through built-in listing, search, read, and write tools. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family
 
@@ -453,7 +453,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand file API reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
+| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand execution reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family
 
@@ -601,7 +601,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-list_files-Description.md` | Repository listing guidance and clamped `maximumEntries` hint semantics. | `None` |
+| `Tool-list_files-Description.md` | Repository and explicit scratchpad listing guidance, scratchpad-relative output paths, and clamped `maximumEntries` hint semantics. | `None` |
 
 #### `nuget_health` family
 
@@ -618,13 +618,13 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 |---|---|---|
 | `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of current-run source evidence and retained same-session check/diff observations authorized by intact host receipts in the final request. | `None` |
-| `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
+| `Tool-write_file-Description.md` | Direct artifact-write guidance, `.inbox` default, configured destinations, and Git-metadata/instruction-file safety boundaries. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, literal pipelines and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, pipelines, variable/environment syntax and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 
@@ -964,4 +964,4 @@ Historical evidence recovery retains the `OutcomeJson` and tool input token cont
 
 ## C# scripting reference
 
-`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.
+`Tool-csharp_script-Description.md` uses `{{CSharpScriptingReferencePath}}`: the host-resolved absolute path to the installed `ThreadsmithDocs/docs/operations/csharp-scripting-execution.md` reference. The model reads it only when electing to use the host. API details are not preloaded. Shared inspection guidance requires C#-only scripting and asking the user to enable the tool when disabled. Scratchpad and process guidance retain that restriction; writer guidance allows .cs/.csx only in the scratchpad.

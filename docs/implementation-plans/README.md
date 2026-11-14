@@ -38,6 +38,9 @@ This table is navigation only. Each active document owns its status, delivery tr
 
 | # | File | Capability |
 |---|---|---|
+| Maintenance | [C# script source view](csharp-script-source-view-implementation-plan.md) | Bounded live source preview and exact-copy detail modal |
+| Maintenance | [Shell variable and environment syntax](maintenance-shell-variables.md) | Variable setup and expansion through shared command admission |
+| Maintenance | [Scratchpad file listing](maintenance-scratchpad-listing.md) | Explicit bounded scratchpad inventory through the existing file tool |
 | 121 | [Guided command policy authoring](plan-121-command-policy-authoring.md) | Sequential modal for shell policy JSON generation and review |
 | M36 | [Tool statistics](Threadsmith-tool-statistics-implementation-plan.md) | Persistent repository tool counts, durations and shared reset controls |
 | Maintenance | [maintenance-early-startup-modal.md](maintenance-early-startup-modal.md) | Early startup modal with timed operation states and bounded progress display |
@@ -226,6 +229,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [Threadsmith-security-policy-implementation-plan.md](Threadsmith-security-policy-implementation-plan.md) | Source-aware configuration authority and session policy |
 | Maintenance | [maintenance-fixed-repository-scratchpad.md](maintenance-fixed-repository-scratchpad.md) | Fixed repository scratchpad with boolean enablement |
 | Maintenance | [maintenance-scratchpad-scripts.md](maintenance-scratchpad-scripts.md) | Session-scoped temporary C# scripts |
+| Maintenance | [Scripting execution reference](maintenance-scripting-execution-reference.md) | On-demand scripting guidance with executable examples |
 | Maintenance | [maintenance-delegation-shared-context.md](maintenance-delegation-shared-context.md) | Shared delegation handoff with focused child assignments |
 | Maintenance | [maintenance-subagent-instructions-display.md](maintenance-subagent-instructions-display.md) | Show received instructions at the start of each subagent window |
 | Implementation | [openrouter-provider.md](openrouter-provider.md) | Manually configured OpenRouter provider |

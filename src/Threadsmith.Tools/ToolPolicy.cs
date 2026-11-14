@@ -108,7 +108,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             return new ToolPolicyDecision(
                 false,
                 ApprovalLevel.None,
-                "Only the built-in search, read_file, and write_file tools may access the active scratchpad.");
+                "Only the built-in list_files, search, read_file, and write_file tools may access the active scratchpad.");
         }
 
         if ((context.TrustLevel < tool.Definition.RequiredTrust
@@ -257,7 +257,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
     private static bool IsEligibleScratchpadAccess(ITool tool, object input, ToolInvocationContext context)
     {
         var implementation = ConfiguredTool.Unwrap(tool);
-        if (implementation is not (ReadFileTool or SearchTextTool or WriteFileTool)
+        if (implementation is not (ListFilesTool or ReadFileTool or SearchTextTool or WriteFileTool)
             || !context.Scratchpad.IsActive)
         {
             return false;
@@ -265,6 +265,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         var path = implementation switch
         {
+            ListFilesTool when input is ListFilesInput list => list.Path,
             ReadFileTool when input is ReadFileInput read => read.Path,
             SearchTextTool when input is SearchTextInput search => search.Path ?? ".",
             WriteFileTool when input is WriteFileInput write => write.Path,
@@ -344,7 +345,8 @@ internal static class ToolPathRules
         RepositoryPathCaseContext? caseContext = null)
     {
         caseContext ??= new RepositoryPathCaseContext(context.RepositoryPath);
-        if ((toolId.Equals("search", StringComparison.Ordinal)
+        if ((toolId.Equals("list_files", StringComparison.Ordinal)
+                || toolId.Equals("search", StringComparison.Ordinal)
                 || toolId.Equals("read_file", StringComparison.Ordinal)
                 || toolId.Equals("write_file", StringComparison.Ordinal))
             && IsWithinScratchpad(candidatePath, context, inspectFileSystem, caseContext))

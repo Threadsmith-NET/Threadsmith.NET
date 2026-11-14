@@ -134,6 +134,42 @@ public static class ShellCommandPolicyTests
             Assert.Equal(filterFacts.Arguments, filterMarker.RootElement.GetProperty("Arguments").EnumerateArray().Select(argument => argument.GetString()));
             Assert.Equal("FullyQualifiedName~ShellCommandPolicy", filterFacts.Arguments[^1]);
 
+            // Variable setup stays in this child shell; the named native command remains pinned.
+            const string date = "2026-11-13T05:44:00-05:00";
+            var variableCommand = shell switch
+            {
+                "powershell" or "pwsh" => "$env:GIT_AUTHOR_DATE = '" + date + "'; $env:GIT_COMMITTER_DATE='" + date + "'; git commit -m \"fixture\" \"${env:GIT_AUTHOR_DATE}\" \"$env:GIT_COMMITTER_DATE\"",
+                "cmd" => "git status \"%USERPROFILE%\"",
+                _ => "THREADSMITH_DATE='" + date + "'; GIT_AUTHOR_DATE=\"${THREADSMITH_DATE}\" git commit -m fixture \"$THREADSMITH_DATE\"",
+            };
+            var variableInput = new RunProcessInput { Command = variableCommand, WorkingDirectory = shadow };
+            var variableFacts = Assert.Single(tool.Prepare(variableInput, context).PreparedCommand!.Actions);
+            Assert.Equal("git", variableFacts.ExecutableName);
+            var variableResult = await pipeline.InvokeAsync(request with { ArgumentsJson = JsonSerializer.Serialize(variableInput) }, cancellationToken);
+            Assert.True(variableResult.Succeeded, variableResult.Error);
+            var variableOutput = JsonSerializer.Deserialize<ProcessExecutionResult>(variableResult.ResultJson!);
+            Assert.NotNull(variableOutput);
+            Assert.True(variableOutput.ExitCode == 0, variableOutput.StandardError);
+            using var variableMarker = JsonDocument.Parse(variableOutput.StandardOutput.Trim());
+            Assert.Equal("authorized", variableMarker.RootElement.GetProperty("Identity").GetString());
+            var variableArguments = variableMarker.RootElement.GetProperty("Arguments").EnumerateArray().Select(argument => argument.GetString()).ToArray();
+            string?[] expectedVariableArguments = shell switch
+            {
+                "powershell" or "pwsh" => ["commit", "-m", "fixture", date, date],
+                "cmd" => ["status", Environment.GetEnvironmentVariable("USERPROFILE")],
+                _ => ["commit", "-m", "fixture", date],
+            };
+            Assert.Equal(expectedVariableArguments, variableArguments);
+            if (shell != "cmd")
+            {
+                Assert.Equal(date, variableMarker.RootElement.GetProperty("GitAuthorDate").GetString());
+            }
+
+            if (shell is "powershell" or "pwsh")
+            {
+                Assert.Equal(date, variableMarker.RootElement.GetProperty("GitCommitterDate").GetString());
+            }
+
             // The same legitimate syntax is still subject to normal argument-denial policy.
             var filteredSnapshot = policy.CommandPolicies[shell];
             var restricted = policy with
@@ -274,12 +310,125 @@ public static class ShellCommandPolicyTests
         }
     }
 
+    /// <summary>Literal jq brackets reach native argv without bypassing compound policy admission.</summary>
+    [Theory]
+    [InlineData("powershell")]
+    [InlineData("pwsh")]
+    public static async Task PowerShellJqBracketsPreserveNativeArgumentsAndPolicy(string shell)
+    {
+        var shellPath = ShellBuiltinPolicyTests.ResolveShell(shell);
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-jq-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            // Arrange: a local native marker replaces gh; no GitHub access is needed.
+            InstallMarker(root);
+            var extension = OperatingSystem.IsWindows() ? ".exe" : string.Empty;
+            var markerPath = Path.Combine(root, "gh" + extension);
+            File.Copy(Path.Combine(root, "git" + extension), markerPath);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(markerPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            var clock = new FakeTimeProvider();
+            var manager = new RecordingProcessManager(new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, clock));
+            var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: shellPath)
+            {
+                PreparationEnvironment = new Dictionary<string, string> { ["PATH"] = root },
+            };
+            var policy = Policy(root, shell);
+            var rule = new PolicyRule
+            {
+                Id = "fixture-gh",
+                Policy = PolicyOutcome.Allow,
+                Matchers = [new PolicyMatcher { Type = PolicyMatcherType.Executable, Value = "gh" }],
+            };
+            var snapshot = policy.CommandPolicies[shell] with { Rules = [rule] };
+            policy = policy with { AllowedExecutables = [shell, "gh"], CommandPolicies = policy.CommandPolicies.SetItem(shell, snapshot) };
+            const string command = "gh run view 43552320985 --json headSha,status,conclusion,jobs,url; gh api repos/Threadsmith-NET/Threadsmith.NET/actions/runs/43552320985 --jq .pull_requests[].number";
+            var input = new RunProcessInput { Command = command, WorkingDirectory = root };
+            var context = Context(root, policy);
+            var actions = tool.Prepare(input, context).PreparedCommand!.Actions;
+            Assert.Equal(2, actions.Length);
+            var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            Assert.All(actions, action => Assert.Equal(markerPath, action.ResolvedExecutable, pathComparer));
+            Assert.Equal(".pull_requests[].number", actions[1].Arguments[^1]);
+            await using var events = new DomainEventStream();
+            var coordinator = new CommandPolicyCoordinator();
+            using var handler = coordinator.Attach((_, _) => throw new InvalidOperationException("No approval should be requested."));
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var request = new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "run_process",
+                ArgumentsJson = JsonSerializer.Serialize(input),
+                Context = context,
+            };
+
+            // Act / Assert: both admitted stages reach the same native argument boundary.
+            var result = await pipeline.InvokeAsync(request, TestContext.Current.CancellationToken);
+            Assert.True(result.Succeeded, result.Error);
+            var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
+            Assert.NotNull(output);
+            Assert.True(output.ExitCode == 0, output.StandardError);
+            var lines = output.StandardOutput.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+            for (var index = 0; index < lines.Length; index++)
+            {
+                using var marker = JsonDocument.Parse(lines[index]);
+                Assert.Equal(actions[index].Arguments, marker.RootElement.GetProperty("Arguments").EnumerateArray().Select(argument => argument.GetString()));
+            }
+
+            var restricted = policy with
+            {
+                CommandPolicies = policy.CommandPolicies.SetItem(shell, snapshot with
+                {
+                    Rules = [rule with { DenyArgumentsMatching = [@"\.pull_requests\[\]\.number"] }],
+                }),
+            };
+            var deniedArguments = await pipeline.InvokeAsync(request with { Context = Context(root, restricted) }, TestContext.Current.CancellationToken);
+            Assert.False(deniedArguments.Succeeded);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, deniedArguments.ErrorClassification);
+            var deniedStage = await pipeline.InvokeAsync(
+                request with
+                {
+                    ArgumentsJson = JsonSerializer.Serialize(input with { Command = command + "; unapproved-command" }),
+                },
+                TestContext.Current.CancellationToken);
+            Assert.False(deniedStage.Succeeded);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, deniedStage.ErrorClassification);
+            Assert.Equal(1, manager.Launches);
+            Assert.Empty(manager.ActiveProcesses);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     /// <summary>Unproven syntax is rejected before any action runs.</summary>
     [Theory]
+    [InlineData("bash", "git status path[0]")]
+    [InlineData("sh", "git status path[]")]
+    [InlineData("zsh", "git status path[abc]")]
+    [InlineData("pwsh", "gh[0] api")]
+    [InlineData("powershell", "gh api [int]42")]
+    [InlineData("pwsh", "gh api $value[0]")]
+    [InlineData("pwsh", "gh api ${value}[0]")]
+    [InlineData("powershell", "gh api prefix$value[0]")]
+    [InlineData("pwsh", "gh api \"$value\"[0]")]
+    [InlineData("pwsh", "gh api .items[$(bad)]")]
+    [InlineData("powershell", "gh api .items[]`escape")]
+    [InlineData("pwsh", "gh api .items[]()")]
+    [InlineData("pwsh", "gh api .items[]@arguments")]
+    [InlineData("pwsh", "gh api .items[]; [int]42")]
+    [InlineData("pwsh", "gh api .items[] | gh[0] api")]
     [InlineData("bash", "git status $(bad)")]
     [InlineData("sh", "git status > $(bad)")]
-    [InlineData("zsh", "git status; bad $name")]
-    [InlineData("powershell", "git status; Invoke-Expression $value")]
+    [InlineData("zsh", "git status; $name")]
+    [InlineData("powershell", "git status; & $value")]
     [InlineData("pwsh", "git status @arguments")]
     [InlineData("powershell", "git fetch --% argument")]
     [InlineData("powershell", "git fetch '--%' argument")]
@@ -316,6 +465,25 @@ public static class ShellCommandPolicyTests
 
         Assert.Equal("dotnet", parsed.Tokens[0]);
         Assert.Equal("FullyQualifiedName~ShellCommandPolicy", parsed.Tokens[^1]);
+    }
+
+    /// <summary>Bracket suffixes stay literal in PowerShell argument mode across token boundaries.</summary>
+    [Theory]
+    [InlineData("powershell", "gh api .items[].name", ".items[].name")]
+    [InlineData("pwsh", "gh api name[0]", "name[0]")]
+    [InlineData("powershell", "gh api name[", "name[")]
+    [InlineData("pwsh", "gh api name]", "name]")]
+    [InlineData("pwsh", "gh api 'literal'[0]", "literal[0]")]
+    [InlineData("pwsh", "gh api $value .items[]", ".items[]")]
+    [InlineData("pwsh", "gh api .items[]; gh api .other[]", ".other[]")]
+    [InlineData("pwsh", "gh api .items[] | gh api .other[]", ".other[]")]
+    [InlineData("pwsh", "gh api .items[] && gh api .other[]", ".other[]")]
+    [InlineData("bash", "gh api '.items[]'", ".items[]")]
+    public static void LiteralBracketArgumentsRetainTheirTokens(string shell, string command, string expected)
+    {
+        var parsed = ShellCommandPreparation.Parse(command, shell);
+
+        Assert.Equal(expected, parsed[^1].Tokens[^1]);
     }
 
     /// <summary>Quoted literal operators do not create executable stages.</summary>

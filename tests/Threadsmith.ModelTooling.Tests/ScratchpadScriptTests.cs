@@ -30,6 +30,85 @@ public sealed class ScratchpadScriptTests : IDisposable
         _root = Path.Combine(physical, $"threadsmith-script-files-{Guid.NewGuid():N}");
     }
 
+    /// <summary>Executes the reference's exact code fences so documentation cannot silently drift.</summary>
+    [Theory]
+    [InlineData(0, ScriptKind.Expression)]
+    [InlineData(1, ScriptKind.Statement)]
+    public async Task ExecutionReferenceExamplesRunInWorker(int exampleIndex, ScriptKind kind)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var reference = await File.ReadAllTextAsync(
+            Path.Combine(TestPromptLoader.FindRepositoryRoot(), "docs", "operations", "csharp-scripting-execution.md"),
+            cancellationToken);
+        var examples = reference.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split("```csharp\n", StringSplitOptions.None).Skip(1)
+            .Select(block => block[..block.IndexOf("\n```", StringComparison.Ordinal)]).ToArray();
+        Assert.Equal(2, examples.Length);
+        var scope = CreateScope();
+        var messages = Enumerable.Range(0, 20).Select(index => $"error-{index}" + new string('x', 220)).ToArray();
+        var input = new[] { JsonSerializer.Serialize(new { level = "info", message = "ignore" }) }
+            .Concat(messages.Select(message => JsonSerializer.Serialize(new { level = "error", message })))
+            .Append("not JSON: the script must stop before reading this line");
+        await File.WriteAllLinesAsync(Path.Combine(scope.ScratchpadPath, "events.jsonl"), input, cancellationToken);
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+
+        var result = await engine.ExecuteAsync(examples[exampleIndex], kind, context, cancellationToken);
+
+        Assert.True(result.Success, result.Error);
+        Assert.False(result.IsTruncated);
+        Assert.Equal(exampleIndex == 0 ? "5" : string.Join("\n", messages.Select(message => message[..200])), result.Output);
+    }
+
+    /// <summary>Ordinary computation and JSON parsing use the real worker's default imports and permissions.</summary>
+    [Theory]
+    [InlineData("Math.Sqrt(25)", "5")]
+    [InlineData("string.Equals(\"a\", \"A\", StringComparison.OrdinalIgnoreCase)", "True")]
+    [InlineData("using (var doc = JsonDocument.Parse(\"{\\\"value\\\":25}\")) { return Math.Sqrt(doc.RootElement.GetProperty(\"value\").GetInt32()); }", "5")]
+    [InlineData("using (var doc = System.Text.Json.JsonDocument.Parse(\"[1,2,3]\")) { return doc.RootElement.GetArrayLength(); }", "3")]
+    public async Task WorkerSupportsDefaultComputation(string code, string expected)
+    {
+        var scope = CreateScope();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+
+        var result = await engine.ExecuteAsync(code, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(expected, result.Output);
+    }
+
+    /// <summary>Imports and namespace qualifiers do not grant access to restricted APIs.</summary>
+    [Theory]
+    [InlineData("Console.WriteLine(25)", null, "Console access is prohibited. Return the result as the script's final expression.")]
+    [InlineData("System.Console.WriteLine(25)", null, "Console access is prohibited. Return the result as the script's final expression.")]
+    [InlineData("Environment.CurrentDirectory", null, "System.Environment")]
+    [InlineData("System.IO.File.Exists(\"input\")", null, "System.IO")]
+    [InlineData("new System.Text.StringBuilder()", null, "Namespace 'System.Text' is not permitted")]
+    [InlineData("System.Text.Json.JsonDocument.Parse(\"{}\")", "System.Text.Json.Serialization", "Namespace 'System.Text.Json' is not permitted")]
+    [InlineData("dynamic value = 25; value", null, "The 'dynamic' construct is prohibited")]
+    [InlineData("#r \"System.Console\"\n25", null, "Script directives are prohibited")]
+    public async Task WorkerExplainsRejectedCapabilities(string code, string? allowedAssemblies, string expectedError)
+    {
+        var scope = CreateScope();
+        var builder = new ConfigurationBuilder();
+        if (allowedAssemblies is not null)
+        {
+            builder.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["tools:config:csharp_script:allowed_assemblies"] = allowedAssemblies,
+            });
+        }
+
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(builder.Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+
+        var result = await engine.ExecuteAsync(code, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains(expectedError, result.Error, StringComparison.Ordinal);
+    }
+
     /// <summary>Verifies the file execution contract through observable effects.</summary>
     [Fact]
     public async Task WorkerReadsLargeInputAndWritesInspectableResult()
@@ -38,7 +117,7 @@ public sealed class ScratchpadScriptTests : IDisposable
         var input = Path.Combine(scope.ScratchpadPath, "input.log");
         await File.WriteAllLinesAsync(input, Enumerable.Range(0, 100000).Select(index => index % 10 == 0 ? "ERROR" : "ok"), TestContext.Current.CancellationToken);
         var config = new ConfigurationBuilder().Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
         var result = await engine.ExecuteAsync(
             "var count = Scratchpad.ReadLines(\"input.log\").Count(line => line.Contains(\"ERROR\")); await Scratchpad.WriteAllTextAsync(\"results/count.txt\", count.ToString()); return count;",
@@ -102,7 +181,7 @@ public sealed class ScratchpadScriptTests : IDisposable
         var scope = CreateScope();
         await File.WriteAllBytesAsync(Path.Combine(scope.ScratchpadPath, "input.bin"), [1, 2, 3, 4, 5], TestContext.Current.CancellationToken);
         var config = new ConfigurationBuilder().Build();
-        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
 
         var result = await engine.ExecuteAsync(
@@ -290,7 +369,7 @@ public sealed class ScratchpadScriptTests : IDisposable
     {
         var scope = CreateScope();
         var process = new RecordingProcessManager();
-        var engine = new CSharpScriptEngine(process, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+        var engine = new CSharpScriptEngine(process, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
         var tool = new CSharpScriptTool(engine, TestPromptLoader.Instance);
         var registry = new ToolRegistry(
             [tool],

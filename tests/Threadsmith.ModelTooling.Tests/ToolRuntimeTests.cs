@@ -2883,7 +2883,8 @@ public static partial class ToolRuntimeTests
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
-                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
+                workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
             var context = new ToolExecutionContext(
                 ToolInvocationId.New(),
                 SessionId.New(),
@@ -2959,7 +2960,8 @@ public static partial class ToolRuntimeTests
             var timeoutEngine = new CSharpScriptEngine(
                 new HostDeadlineProcessManager(processManager),
                 new ToolConfig(timeoutConfiguration),
-                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
+                Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
+                workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
             var timingOut = timeoutEngine.ExecuteAsync(
                 "while (true) { }",
                 ScriptKind.Statement,
@@ -3015,7 +3017,10 @@ public static partial class ToolRuntimeTests
                 TimeSpan.FromMilliseconds(1)));
             var engine = new CSharpScriptEngine(
                 processManager,
-                new ToolConfig(new ConfigurationBuilder().Build()),
+                new ToolConfig(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["tools:config:csharp_script:NumberOfWarmWorkersInPool"] = "0",
+                }).Build()),
                 workerPath);
             var context = new ToolExecutionContext(
                 ToolInvocationId.New(),
@@ -3057,7 +3062,8 @@ public static partial class ToolRuntimeTests
             var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(CreateScriptWorkerIntegrationConfiguration()),
-                workerPath);
+                workerPath,
+                workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
             var context = new ToolExecutionContext(
                 ToolInvocationId.New(),
                 SessionId.New(),

@@ -63,7 +63,7 @@ internal static class ConversationToolAvailability
         }
 
         var scratchpadEligible = context.Scratchpad.IsActive
-            && definition.Id is "search" or "read_file" or "write_file"
+            && definition.Id is "list_files" or "search" or "read_file" or "write_file"
             && definition.Source.Equals("Built-in", StringComparison.OrdinalIgnoreCase);
         if ((!scratchpadEligible && (context.TrustLevel < definition.RequiredTrust
                 || (context.SecurityPolicy is { } trustPolicy && trustPolicy.MaximumTrust < definition.RequiredTrust)))

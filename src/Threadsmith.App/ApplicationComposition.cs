@@ -306,6 +306,7 @@ internal static class ApplicationComposition
             throw;
         }
 
+        SkillApplication? skillApplication = null;
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
             new TokenEstimator(),
@@ -321,7 +322,10 @@ internal static class ApplicationComposition
             providerInstructionResolver: providerInstructionResolver,
             repositoryMemoryRetriever: memoryRetriever,
             requestPreparationResolver: integration.Models.Provider as IModelRequestPreparationResolver,
-            scratchpad: scratchpad);
+            scratchpad: scratchpad,
+            documentationSkillEnabled: cancellationToken => (skillApplication
+                ?? throw new InvalidOperationException("Skill application is not initialized."))
+                .IsDocumentationSkillEnabledAsync(cancellationToken));
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -808,7 +812,7 @@ internal static class ApplicationComposition
                 host.Events,
                 conversationToolSnapshots,
                 skillRuntimeLimits);
-            var skillApplication = new SkillApplication(
+            skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,
                 skillPolicy,

@@ -6,7 +6,7 @@ using Threadsmith.Core;
 internal static class ScriptFilePolicy
 {
     /// <summary>Gets the installed on-demand scripting reference.</summary>
-    internal static string ReferencePath => Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting.md");
+    internal static string ReferencePath => Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting-execution.md");
 
     /// <summary>Freezes invocation authority for one worker.</summary>
     internal static ScriptFileScope CreateScope(ToolInvocationContext context, int maximumWriteBytes)

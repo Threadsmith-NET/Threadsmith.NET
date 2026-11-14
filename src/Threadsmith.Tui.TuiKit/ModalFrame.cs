@@ -1,5 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using Threadsmith.Interaction.Presentation;
 using TUIKit;
 
 /// <summary>Owns the shared minimum size and centered modal geometry.</summary>
@@ -22,6 +23,24 @@ internal static class ModalFrame
         var view = buffer.CreateView(Bounds(surface.Size, large, expandHeight, preferredSize));
         WorkspaceLayout.DrawFrame(view, background);
         return view.CreateView(WorkspaceLayout.ModalContent(view.Size));
+    }
+
+    /// <summary>Draws the standard heading and footer, returning the scrollable body viewport.</summary>
+    internal static BufferSurface CreateBody(
+        BufferSurface frame,
+        CachedTextRun text,
+        Func<PresentationTextRole, CellStyle> resolveStyle,
+        string title,
+        string subtitle,
+        string status,
+        string footer,
+        bool spaceAfterSubtitle = false)
+    {
+        text.Draw(frame, 0, 0, title, resolveStyle(PresentationTextRole.SelectionPrompt));
+        text.Draw(frame, 0, 2, subtitle, resolveStyle(PresentationTextRole.Muted));
+        text.Draw(frame, 0, frame.Size.Height - 2, status, resolveStyle(PresentationTextRole.Status));
+        text.Draw(frame, 0, frame.Size.Height - 1, footer, resolveStyle(PresentationTextRole.Muted));
+        return frame.CreateView(WorkspaceLayout.ModalBody(frame.Size, spaceAfterSubtitle));
     }
 
     /// <summary>Returns the same centered frame geometry for rendering and pointer translation.</summary>

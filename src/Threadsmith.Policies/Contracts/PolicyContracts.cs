@@ -5,7 +5,7 @@ using System.Collections.Immutable;
 /// <summary>Identifies a typed, host-provided operation domain.</summary>
 public abstract record ActionFacts(string Domain);
 
-/// <summary>Contains literal command facts established by a shell adapter; shell commands have an empty resolved executable.</summary>
+/// <summary>Contains source command facts established by a shell adapter; variable arguments retain submitted syntax and shell commands have an empty resolved executable.</summary>
 public sealed record CommandFacts(
     string Platform,
     string Shell,

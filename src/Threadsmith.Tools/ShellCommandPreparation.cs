@@ -16,7 +16,7 @@ internal sealed record PreparedShellCommand(
     ImmutableArray<CommandFacts> Actions,
     PreparedProcessLaunch Launch);
 
-/// <summary>Identifies literal commands for policy while preserving shell argument and redirection syntax.</summary>
+/// <summary>Identifies named commands for policy while preserving variable, argument, and redirection syntax.</summary>
 internal static class ShellCommandPreparation
 {
     /// <summary>Gets the code-owned denial reason, rendered only at the feedback boundary.</summary>
@@ -49,6 +49,13 @@ internal static class ShellCommandPreparation
         var actions = ImmutableArray.CreateBuilder<CommandFacts>();
         foreach (var item in parsed)
         {
+            text.Append(item.AssignmentPrefix);
+            if (item.IsAssignment)
+            {
+                text.Append(item.Separator);
+                continue;
+            }
+
             var name = item.Tokens[0];
             var directScript = IsScript(name);
             string target;
@@ -128,7 +135,7 @@ internal static class ShellCommandPreparation
         return new PreparedShellCommand(command, workingDirectory, shell, identity, actions.ToImmutable(), launch);
     }
 
-    /// <summary>Parses each dialect's admitted static literal subset without asking a shell to evaluate input.</summary>
+    /// <summary>Parses named commands and variable setup without asking a shell to evaluate input.</summary>
     internal static ImmutableArray<LiteralCommand> Parse(string command, string shell)
     {
         if (string.IsNullOrWhiteSpace(command) || command.Length > 32768 || command.Contains('\0'))
@@ -145,15 +152,17 @@ internal static class ShellCommandPreparation
         var explicitCall = false;
         var tokenEnds = new List<int>();
         var tokenStarts = new List<int>();
+        var tokenExpansions = new List<bool>();
+        var tokenHasExpansion = false;
         var tokenStart = 0;
+        var commentStart = -1;
         var redirectTarget = false;
         var quote = '\0';
-        var argumentStart = 0;
         var index = 0;
         for (; index < command.Length; index++)
         {
             var character = command[index];
-            if (cmd && character is '%' or '!' or '^' or '\r' or '\n')
+            if (cmd && character is '^' or '\r' or '\n')
             {
                 throw Denied();
             }
@@ -174,7 +183,16 @@ internal static class ShellCommandPreparation
                 }
                 else
                 {
-                    if (quote == '"' && ((powershell && character is '$' or '`') || (!powershell && !cmd && character is '$' or '`' or '\\')))
+                    if (quote == '"' && ((!cmd && character == '$') || (cmd && character is '%' or '!')))
+                    {
+                        var end = ReadVariableEnd(command, index, shell);
+                        token.Append(command[index..end]);
+                        index = end - 1;
+                        tokenHasExpansion = true;
+                        continue;
+                    }
+
+                    if (quote == '"' && ((powershell && character == '`') || (!powershell && !cmd && character is '`' or '\\')))
                     {
                         throw Denied();
                     }
@@ -219,8 +237,24 @@ internal static class ShellCommandPreparation
                 continue;
             }
 
+            if ((!cmd && character == '$') || (cmd && character is '%' or '!'))
+            {
+                if (!started)
+                {
+                    tokenStart = index;
+                }
+
+                var end = ReadVariableEnd(command, index, shell);
+                token.Append(command[index..end]);
+                index = end - 1;
+                started = true;
+                tokenHasExpansion = true;
+                continue;
+            }
+
             if (!cmd && character == '#' && !started)
             {
+                commentStart = index;
                 while (index < command.Length && command[index] != '\n')
                 {
                     index++;
@@ -268,8 +302,15 @@ internal static class ShellCommandPreparation
                 continue;
             }
 
-            if (character is '(' or ')' or '{' or '}' || (!cmd && character is '$' or '`' or '@' or '*' or '?' or '[' or ']'))
+            if (character is '(' or ')' or '{' or '}' || (!cmd && character is '`' or '@' or '*' or '?'))
             {
+                throw Denied();
+            }
+
+            if (!cmd && character is '[' or ']' && !(powershell && tokens.Count > 0 && started && !tokenHasExpansion))
+            {
+                // PowerShell argument suffixes such as .items[].name are literal, not indexing.
+                // Keep expression/command positions, variable indexing, and POSIX globbing unsupported.
                 throw Denied();
             }
 
@@ -303,6 +344,7 @@ internal static class ShellCommandPreparation
                 {
                     if (character is '\r' or '\n')
                     {
+                        commentStart = -1;
                         continue;
                     }
 
@@ -322,10 +364,12 @@ internal static class ShellCommandPreparation
                     throw Denied();
                 }
 
-                result.Add(new LiteralCommand([.. tokens], " " + operation + " ", command[argumentStart..argumentEnd], [.. tokenEnds.Select(end => end - argumentStart)], [.. tokenStarts.Select(start => start - argumentStart)]));
+                FinishCommand(argumentEnd, " " + operation + " ");
                 tokens.Clear();
                 tokenEnds.Clear();
                 tokenStarts.Clear();
+                tokenExpansions.Clear();
+                commentStart = -1;
                 explicitCall = false;
                 if (result.Count > 64)
                 {
@@ -361,7 +405,7 @@ internal static class ShellCommandPreparation
 
         if (tokens.Count > 0)
         {
-            result.Add(new LiteralCommand([.. tokens], string.Empty, command[argumentStart..], [.. tokenEnds.Select(end => end - argumentStart)], [.. tokenStarts.Select(start => start - argumentStart)]));
+            FinishCommand(command.Length, string.Empty);
         }
         else if (result.Count == 0 || result[^1].Separator.Contains('|') || result[^1].Separator.Contains('&'))
         {
@@ -369,6 +413,62 @@ internal static class ShellCommandPreparation
         }
 
         return result.ToImmutable();
+
+        void FinishCommand(int end, string separator)
+        {
+            var raw = command[tokenStarts[0]..end];
+            if (powershell && raw.StartsWith('$') && raw.IndexOf('=') is > 0 and var equals)
+            {
+                var variable = raw[..equals].TrimEnd();
+                var variableName = variable.TrimStart('$', '{').TrimEnd('}');
+                var scopeEnd = variableName.IndexOf(':');
+                var valueEnd = commentStart < 0 ? raw.Length : commentStart - tokenStarts[0];
+                if (ReadVariableEnd(variable, 0, shell) != variable.Length
+                    || (scopeEnd >= 0 && variableName[..scopeEnd].ToLowerInvariant() is not ("env" or "global" or "local" or "script" or "private" or "variable"))
+                    || !IsScalarAssignmentValue(raw[(equals + 1)..valueEnd].Trim(), shell))
+                {
+                    throw Denied();
+                }
+
+                if (scopeEnd >= 0 && variableName[..scopeEnd].Equals("env", StringComparison.OrdinalIgnoreCase))
+                {
+                    ValidateSetupVariable(variableName[(scopeEnd + 1)..]);
+                }
+
+                result.Add(new LiteralCommand([], separator, string.Empty, [], [], raw, true, []));
+                return;
+            }
+
+            var first = 0;
+            if (!powershell && !cmd)
+            {
+                while (first < tokens.Count && IsPosixAssignment(command[tokenStarts[first]..tokenEnds[first]]))
+                {
+                    var assignment = command[tokenStarts[first]..tokenEnds[first]];
+                    ValidateSetupVariable(assignment[..assignment.IndexOf('=')]);
+                    first++;
+                }
+            }
+
+            var assignmentOnly = first == tokens.Count;
+            if (!assignmentOnly && tokenExpansions[first])
+            {
+                // Policy still requires a statically named command, even when arguments expand.
+                throw Denied();
+            }
+
+            var prefix = first == 0 ? string.Empty : command[tokenStarts[0]..(assignmentOnly ? end : tokenStarts[first])];
+            var argumentsStart = assignmentOnly ? end : tokenEnds[first];
+            result.Add(new LiteralCommand(
+                [.. tokens.Skip(first)],
+                separator,
+                command[argumentsStart..end],
+                [.. tokenEnds.Skip(first).Select(tokenEnd => tokenEnd - argumentsStart)],
+                [.. tokenStarts.Skip(first).Select(start => start - argumentsStart)],
+                prefix,
+                assignmentOnly,
+                [.. tokenExpansions.Skip(first)]));
+        }
 
         void FinishToken()
         {
@@ -384,11 +484,6 @@ internal static class ShellCommandPreparation
                 throw Denied();
             }
 
-            if (tokens.Count == 0)
-            {
-                argumentStart = index;
-            }
-
             if (redirectTarget)
             {
                 redirectTarget = false;
@@ -398,6 +493,7 @@ internal static class ShellCommandPreparation
                 tokens.Add(value);
                 tokenEnds.Add(index);
                 tokenStarts.Add(tokenStart);
+                tokenExpansions.Add(tokenHasExpansion);
             }
 
             if (tokens.Count > 1025)
@@ -407,7 +503,112 @@ internal static class ShellCommandPreparation
 
             token.Clear();
             started = false;
+            tokenHasExpansion = false;
         }
+    }
+
+    private static void ValidateSetupVariable(string name)
+    {
+        // Startup inputs must not add code or interpreter options outside command policy.
+        if (name.ToUpperInvariant() is "BASH_ENV" or "ENV" or "ZDOTDIR" or "SHELLOPTS" or "BASHOPTS")
+        {
+            throw Denied();
+        }
+    }
+
+    private static int ReadVariableEnd(string text, int start, string shell)
+    {
+        var cmd = shell == Cmd;
+        var powershell = shell is WindowsPowerShell or PowerShell;
+        var index = start + 1;
+        var closing = cmd ? text[start] : index < text.Length && text[index] == '{' ? '}' : '\0';
+        if (!cmd && closing != '\0')
+        {
+            index++;
+        }
+
+        var nameStart = index;
+        if (closing != '\0' && (cmd || powershell))
+        {
+            while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] is '_' or ':' or '-' or '.' or ' ' or '(' or ')'))
+            {
+                index++;
+            }
+
+            if (index == nameStart || index == text.Length || text[index] != closing)
+            {
+                throw Denied();
+            }
+
+            return index + 1;
+        }
+
+        if (!cmd && closing == '\0' && index < text.Length
+            && (powershell ? text[index] is '?' or '$' or '^' : text[index] is '?' or '$' or '#' or '@' or '*' or '!' or '-' || char.IsAsciiDigit(text[index])))
+        {
+            return index + 1;
+        }
+
+        if (index == text.Length || !(char.IsLetter(text[index]) || text[index] == '_'))
+        {
+            throw Denied();
+        }
+
+        while (index < text.Length && (char.IsLetterOrDigit(text[index]) || text[index] == '_' || (powershell && text[index] == ':')))
+        {
+            index++;
+        }
+
+        if (index == nameStart || (closing != '\0' && (index == text.Length || text[index++] != closing)))
+        {
+            throw Denied();
+        }
+
+        return index;
+    }
+
+    private static bool IsScalarAssignmentValue(string value, string shell)
+    {
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        if (value[0] == '$')
+        {
+            return ReadVariableEnd(value, 0, shell) == value.Length;
+        }
+
+        if (value[0] is not ('\'' or '"'))
+        {
+            return decimal.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _);
+        }
+
+        var quote = value[0];
+        for (var index = 1; index < value.Length; index++)
+        {
+            if (value[index] != quote)
+            {
+                continue;
+            }
+
+            if (quote == '\'' && index + 1 < value.Length && value[index + 1] == quote)
+            {
+                index++;
+                continue;
+            }
+
+            return index == value.Length - 1;
+        }
+
+        return false;
+    }
+
+    private static bool IsPosixAssignment(string token)
+    {
+        var equals = token.IndexOf('=');
+        return equals > 0 && (char.IsAsciiLetter(token[0]) || token[0] == '_')
+            && token.AsSpan(1, equals - 1).IndexOfAnyExcept("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_".AsSpan()) < 0;
     }
 
     private static bool IsPowerShellScript(string path) => Path.GetExtension(path).Equals(".ps1", StringComparison.OrdinalIgnoreCase);
@@ -487,7 +688,7 @@ internal static class ShellCommandPreparation
         }
 
         var operand = direct ? item.Tokens[0] : item.Tokens[index++];
-        if (!IsScript(operand) || powershell != IsPowerShellScript(operand))
+        if (item.TokenExpansions[direct ? 0 : index - 1] || !IsScript(operand) || powershell != IsPowerShellScript(operand))
         {
             throw Denied();
         }
@@ -554,6 +755,14 @@ internal static class ShellCommandPreparation
 
     private static UnauthorizedAccessException Denied() => new(DenialReasonCode);
 
-    /// <summary>Contains literal tokens and a validated sequence operator.</summary>
-    internal sealed record LiteralCommand(ImmutableArray<string> Tokens, string Separator, string RawArguments, ImmutableArray<int> TokenEnds, ImmutableArray<int> TokenStarts);
+    /// <summary>Contains source tokens, variable setup, and a validated sequence operator.</summary>
+    internal sealed record LiteralCommand(
+        ImmutableArray<string> Tokens,
+        string Separator,
+        string RawArguments,
+        ImmutableArray<int> TokenEnds,
+        ImmutableArray<int> TokenStarts,
+        string AssignmentPrefix,
+        bool IsAssignment,
+        ImmutableArray<bool> TokenExpansions);
 }

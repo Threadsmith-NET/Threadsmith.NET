@@ -4,6 +4,14 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario SC-SCRIPT-SOURCE-01 — Submitted script source
+
+1. Complete two permitted `csharp_script` calls with distinct source, including a child invocation and compilation/runtime failure results. Each live result has an initially collapsed **C# script** control and an independent **View full script…** action. Output and errors stay outside the preview.
+2. Expand source with empty, blank, CRLF/LF/CR, 20/21-line, long-line, and surrogate-boundary fixtures. The preview contains at most 20 logical lines and 8,192 source characters. Removed text has a visible truncation notice. Highlighting never alters the source text.
+3. Activate full source by pointer and keyboard while collapsed. Verify the standard modal shows all retained source, including more than normal scrollback. Resize, scroll, select, close, and confirm unchanged underlying draft/focus.
+4. Copy selections and the full script with tabs, trailing spaces, terminal controls, markup-like text, Unicode, and mixed line endings. Copy equals the original range or complete input. Clipboard byte-policy/platform failure is explicit; no truncated copy is reported as full. Rendering cannot inject terminal commands or source-defined actions.
+5. Confirm source actions remain bound to their own invocation, source caches are bounded by retained output, unavailable source is explicit, and old restored results render without active source controls. Opening never rereads a scratchpad file or executes code. Model results, serialized events, routine logs, headless behavior, and dependency direction stay unchanged.
+
 ## Scenario SC106-01 — Default-deny shell admission
 
 1. Use a disposable trusted repository and inert recording executables. Keep the ordinary outer executable ceiling and native-tool restrictions active.
@@ -26,8 +34,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 ## Scenario SC106-03 — Atomic compound admission
 
 1. Prepare a safe sequence and pipeline with inert executable markers. Include positive controls for supported literal quoting and argument preservation.
-2. Add one denied, unresolved, unsupported or dynamic stage at each position. Verify no stage reaches the launcher.
+2. Add one denied, unresolved, unsupported or runtime-calculated command stage at each position. Verify no stage reaches the launcher.
 3. Repeat through the existing manual, model-driven, eligible child and headless entry points. Retain ordinary trust, tool, hooks, activity, budget and cancellation gates; unattached/headless approval has no assumed consent.
+4. Use scalar PowerShell variable/environment setup, POSIX assignment statements/prefixes, and CMD variable references with permitted named commands. Verify shell expansion reaches native argv while executable binding, approval, argument-text restrictions, and whole-sequence denial still apply. Setup never runs before all named actions are admitted; command substitutions, script blocks, calculated executable/script names, and inline interpreter code remain unsupported. Variable state belongs only to that child shell; policy matches submitted references rather than expanded values.
 
 **Verifies:** One governed execution path and all-stage admission before effects.
 
@@ -1020,7 +1029,7 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 2. Without a positive repository `.gitignore` rule, observe disabled access and a warning before startup cleanup. Add the rule and confirm activation; global excludes and negations do not satisfy the requirement.
 3. Set legacy `scratchpad.path` to another directory and verify silent ignoring and preservation of that directory's contents, regardless of enablement.
 4. Restart, start a new session, switch repositories, and shut down with disposable contents; confirm cleanup remains confined to each repository's fixed folder. Links at the folder or its ancestors never redirect creation or cleanup, and links inside it never delete their targets.
-5. Confirm built-in search/read/write and writer availability checks apply. C# script files are writable only in the scratchpad; Python files are rejected. Execution retains its separate trust/tool/approval gates.
+5. Confirm built-in listing/search/read/write and writer availability checks apply. Explicit scratchpad listings return paths relative to the scratchpad root, while ordinary repository listings omit its contents. Listing retains tool denials, containment, link checks, cancellation, and result limits. C# script files are writable only in the scratchpad; Python files are rejected. Execution retains its separate trust/tool/approval gates.
 6. With scripting disabled, observe the instruction to ask the user to enable `csharp_script`. When enabled, read its packaged reference on demand, stream scratchpad or explicitly authorized inputs, and write results only in the scratchpad. External input folders survive session cleanup unchanged.
 7. Reject repository transitions during active work; cancel and join tracked execution before shutdown cleanup.
 

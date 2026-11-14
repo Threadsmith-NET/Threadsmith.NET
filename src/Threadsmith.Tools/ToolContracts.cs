@@ -538,6 +538,10 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
+    /// <summary>Gets optional live source, excluded from model and durable result serialization.</summary>
+    [JsonIgnore]
+    public ToolSourceDetail? SourceDetail { get; init; }
+
     /// <summary>Explicit live suspension; never a completed model-visible tool result.</summary>
     [JsonIgnore]
     public UserQuestionRequest? Suspension { get; init; }

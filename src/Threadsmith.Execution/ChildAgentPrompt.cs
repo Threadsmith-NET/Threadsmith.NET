@@ -273,6 +273,8 @@ internal sealed class ChildAgentPrompt
         }
 
         return registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
+                && registration.Implementation is ListFilesTool)
+            && registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
                 && registration.Implementation is SearchTextTool)
             && registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
                 && registration.Implementation is ReadFileTool)

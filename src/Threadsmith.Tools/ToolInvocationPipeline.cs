@@ -918,6 +918,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             cancellationToken, executionDeadline.Token);
         var executionStarted = _timeProvider.GetTimestamp();
         IReadOnlyList<string> observedConcepts = [];
+        ToolSourceDetail? sourceDetail = null;
         try
         {
             var remaining = executionContext.Deadline is { } expires
@@ -952,6 +953,19 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
             observedConcepts = input is IConceptToolInput conceptInput && ConfiguredTool.Unwrap(tool).GetType().Assembly == typeof(MemoriesTool).Assembly
                 ? MemoryConcepts.Normalize(conceptInput.Concepts).Where(concept => _sanitizer.Sanitize(concept) == concept).ToArray() : [];
+            if (ConfiguredTool.Unwrap(tool) is CSharpScriptTool && input is CSharpScriptInput script)
+            {
+                // The same immutable string is passed to the engine; never recover it from a file.
+                var retainSource = script.Code.Length <= ToolSourceDetail.MaximumCharacters;
+                sourceDetail = new ToolSourceDetail
+                {
+                    ToolInvocationId = invocationId,
+                    Language = "csharp",
+                    Availability = retainSource ? ToolSourceAvailability.Available : ToolSourceAvailability.RetentionLimitExceeded,
+                    Source = retainSource ? script.Code : null,
+                };
+            }
+
             var execution = await tool.ExecuteAsync(
                 input,
                 executionContext,
@@ -1002,7 +1016,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     isTruncated: true,
                     source,
                     authoritativeElapsedMilliseconds,
-                    concepts: observedConcepts);
+                    concepts: observedConcepts,
+                    sourceDetail: sourceDetail);
             }
 
             var resultJson = JsonOutputSanitizer.Sanitize(
@@ -1020,7 +1035,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     isTruncated: true,
                     source,
                     authoritativeElapsedMilliseconds,
-                    concepts: observedConcepts);
+                    concepts: observedConcepts,
+                    sourceDetail: sourceDetail);
             }
 
             string? modelResultContent = null;
@@ -1039,7 +1055,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                         isTruncated: true,
                         source,
                         authoritativeElapsedMilliseconds,
-                        concepts: observedConcepts);
+                        concepts: observedConcepts,
+                        sourceDetail: sourceDetail);
                 }
             }
 
@@ -1067,7 +1084,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                         isTruncated: true,
                         source,
                         authoritativeElapsedMilliseconds,
-                        concepts: observedConcepts);
+                        concepts: observedConcepts,
+                        sourceDetail: sourceDetail);
                 }
             }
 
@@ -1100,7 +1118,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
                         _presentationLimits.MaximumTransientActivityDetailCharacters))
-                { RunId = request.RunId },
+                { RunId = request.RunId, SourceDetail = sourceDetail },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
             request.Completion?.Record(succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, authoritativeElapsedMilliseconds);
@@ -1114,6 +1132,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 RetainedEvidenceContent = execution.RetainedEvidenceContent is { Length: <= ConversationReceiptChecks.MaximumEvidenceBytes } retained
                     ? JsonOutputSanitizer.SanitizeJsonOrText(retained, _sanitizer) : null,
                 Concepts = observedConcepts,
+                SourceDetail = sourceDetail,
                 Sources = execution.Sources,
                 Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,
@@ -1132,7 +1151,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt,
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
-                concepts: observedConcepts);
+                concepts: observedConcepts,
+                sourceDetail: sourceDetail);
         }
         catch (OperationCanceledException)
         {
@@ -1144,7 +1164,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt,
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
-                concepts: observedConcepts);
+                concepts: observedConcepts,
+                sourceDetail: sourceDetail);
             if (returnCancellationResult)
             {
                 return cancelledResult;
@@ -1165,7 +1186,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 source: source,
                 elapsedMilliseconds: elapsedMilliseconds,
                 transientError: exception.TransientError,
-                concepts: observedConcepts);
+                concepts: observedConcepts,
+                sourceDetail: sourceDetail);
         }
         catch (TimeoutException exception)
         {
@@ -1177,7 +1199,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt,
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
-                concepts: observedConcepts);
+                concepts: observedConcepts,
+                sourceDetail: sourceDetail);
         }
         catch (Exception exception)
         {
@@ -1206,7 +1229,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt,
                 source: source,
                 elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
-                concepts: observedConcepts);
+                concepts: observedConcepts,
+                sourceDetail: sourceDetail);
         }
     }
 
@@ -1384,7 +1408,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ToolActivitySource? source = null,
         long? elapsedMilliseconds = null,
         string? transientError = null,
-        IReadOnlyList<string>? concepts = null)
+        IReadOnlyList<string>? concepts = null,
+        ToolSourceDetail? sourceDetail = null)
     {
         request.Completion?.Record(ToolTelemetryStatus.Failed, elapsedMilliseconds);
         if (error == ShellCommandPreparation.DenialReasonCode
@@ -1428,7 +1453,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 Source: source,
                 ElapsedMilliseconds: elapsedMilliseconds,
                 Outcome: outcome)
-            { RunId = request.RunId },
+            { RunId = request.RunId, SourceDetail = sourceDetail },
             CancellationToken.None);
         await InvokeAfterHookAsync(
             request,
@@ -1438,6 +1463,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
         return new ToolInvocationResult
         {
+            SourceDetail = sourceDetail,
             Concepts = concepts ?? [],
             ToolInvocationId = invocationId,
             ToolId = request.ToolId,

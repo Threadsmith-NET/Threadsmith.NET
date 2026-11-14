@@ -217,9 +217,16 @@ internal sealed class ToggleModal : Modal
 
         _tree.HighlightStyle = _style(PresentationTextRole.SelectionHighlight).WithAttribute(CellAttributes.Reverse, true);
         _tree.RowStyle = _ => _style(PresentationTextRole.Default);
-        _text.Draw(frame, 0, 0, _request.Title + " — keyboard only", _style(PresentationTextRole.SelectionPrompt));
-        _text.Draw(frame, 0, 2, "Filter: " + _filter.Text + " | F2 details" + (SupportsActions ? "; F3 actions" : string.Empty), _style(PresentationTextRole.Muted));
-        var content = frame.CreateView(new Rect(0, 3, frame.Size.Width, Math.Max(1, frame.Size.Height - 5)));
+        var selected = _options.GetValueOrDefault(_tree.SelectedNode);
+        var notice = _notice == selected?.Reason ? "Arrows navigate; Space applies now; Esc closes" : _notice;
+        var content = ModalFrame.CreateBody(
+            frame,
+            _text,
+            _style,
+            _request.Title + " — keyboard only",
+            "Filter: " + _filter.Text + " | F2 details" + (SupportsActions ? "; F3 actions" : string.Empty),
+            notice,
+            _details is null ? selected?.Reason ?? "Space applies immediately; closing keeps changes" : "F2 returns; arrows/PgUp/PgDn scroll details");
         if (_details is not null)
         {
             _details.Render(content);
@@ -228,11 +235,6 @@ internal sealed class ToggleModal : Modal
         {
             _tree.Render(content);
         }
-
-        var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-        var notice = _notice == selected?.Reason ? "Arrows navigate; Space applies now; Esc closes" : _notice;
-        _text.Draw(frame, 0, frame.Size.Height - 2, notice, _style(PresentationTextRole.Status));
-        _text.Draw(frame, 0, frame.Size.Height - 1, _details is null ? selected?.Reason ?? "Space applies immediately; closing keeps changes" : "F2 returns; arrows/PgUp/PgDn scroll details", _style(PresentationTextRole.Muted));
     }
 
     /// <summary>Gets or sets cancellation of the current host operation.</summary>

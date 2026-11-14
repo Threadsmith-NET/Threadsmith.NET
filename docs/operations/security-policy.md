@@ -46,7 +46,7 @@ Native validation's explicit `limits.validation.timeoutMilliseconds` remains an 
 | `tools:parallel:failureMode` | Ordinary; `CompleteStarted` | Existing scheduler failure handling |
 | `tools:runProcess:defaultTimeoutSeconds`, `maxTimeoutSeconds` | Narrow; 30/60; effective default fits maximum | `RunProcessTool` |
 | `tools:readFile:allowedFolders` | Explicit read-only roots; empty by default; trusted sources and enforced narrowing | Shared file-read policy and C# worker |
-| `tools:config:csharp_script:allowed_assemblies` | Narrow comma-separated names; System.Linq, System.Collections, System.Collections.Generic | Existing script engine and worker |
+| `tools:config:csharp_script:allowed_assemblies` | Narrow comma-separated names; System.Linq, System.Collections, System.Collections.Generic, System.Text.Json | Existing script engine and worker |
 | `tools:config:csharp_script:timeout_ms`, `max_output_bytes`, `max_code_characters` | Narrow; 5000/65536/65536 | Script input/worker limits |
 | `tools:config:csharp_script:max_assemblies`, `max_assembly_name_characters`, `max_assembly_setting_characters` | Narrow; 32/128/4096 | Script validation |
 | `webFetch:maximumUrlCharacters`, `maximumRedirects`, `timeoutSeconds` | Narrow; 2048/3/15; zero redirects supported | Immutable `WebFetchOptions` captured for fetch and redirect admission |
@@ -95,4 +95,4 @@ Implementation status, exact test commands/results and unavailable platform cove
 
 ## C# scratchpad file access
 
-The optional `csharp_script` tool requires an active session scratchpad. Its file API reads the scratchpad and authorized repository inputs, plus explicit `tools.readFile.allowedFolders` grants from trusted permission configuration. This list defaults to empty and follows normal source validation, enforced restrictions, and child scope narrowing. `read_file` shares the same read grants; export write folders do not imply reads. Script outputs stay in the scratchpad and are deleted with the session. Python scripting is prohibited; containers are the planned future execution sandbox. See [C# scripting](csharp-scripting.md) for the on-demand API reference.
+The optional `csharp_script` tool requires an active session scratchpad. Its file API reads the scratchpad and authorized repository inputs, plus explicit `tools.readFile.allowedFolders` grants from trusted permission configuration. This list defaults to empty and follows normal source validation, enforced restrictions, and child scope narrowing. `read_file` shares the same read grants; export write folders do not imply reads. Script outputs stay in the scratchpad and are deleted with the session. Python scripting is prohibited; containers are the planned future execution sandbox. See [C# scripting](csharp-scripting-execution.md) for the on-demand API reference.

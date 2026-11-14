@@ -15,16 +15,18 @@ internal sealed class AgentViews
     private readonly Dictionary<AgentPresentationTarget, AgentView> _children = [];
     private readonly Func<PresentationTextRole, TUIKit.CellStyle> _resolveStyle;
     private readonly TuiResourceLimits _limits;
+    private readonly Action<ToolSourceDetail>? _sourceRequested;
     private SessionId _session;
     private long _childOrdinal;
 
     /// <summary>Initializes a new instance of the <see cref="AgentViews"/> class.</summary>
-    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null)
+    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null, Action<ToolSourceDetail>? sourceRequested = null)
     {
         _limits = limits ?? new();
         _limits.Validate();
         _resolveStyle = resolveStyle;
-        Main = new AgentView(null, new TranscriptView(_limits) { ResolveStyle = resolveStyle });
+        _sourceRequested = sourceRequested;
+        Main = new AgentView(null, new TranscriptView(_limits) { ResolveStyle = resolveStyle, SourceRequested = sourceRequested });
         Selected = Main;
         _ordered.Add(Main);
     }
@@ -80,7 +82,7 @@ internal sealed class AgentViews
         }
         else if (!snapshot.IsTerminal)
         {
-            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle }, ++_childOrdinal);
+            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle, SourceRequested = _sourceRequested }, ++_childOrdinal);
             _children.Add(snapshot.Target, view);
             _ordered.Insert(1, view);
             Revision++;

@@ -19,7 +19,7 @@ public sealed record ListFilesInput : IConceptToolInput
 
     private string _path = ".";
 
-    /// <summary>Repository-relative directory; omitted, null, or blank paths use the repository root.</summary>
+    /// <summary>Repository-relative directory, including an active scratchpad; omitted, null, or blank paths use the repository root.</summary>
     public string Path
     {
         get => _path;
@@ -77,10 +77,14 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var root = ToolPathRules.NormalizeAndValidate(input.Path, context.Invocation);
+        var caseContext = new RepositoryPathCaseContext(context.Invocation.RepositoryPath);
+        var root = ToolPathRules.NormalizeAndValidateForTool(input.Path, context.Invocation, Definition.Id, caseContext: caseContext);
+        var scratchpadListing = ToolPathRules.IsWithinScratchpad(root, context.Invocation, caseContext: caseContext);
+        var projectionRoot = scratchpadListing
+            ? context.Invocation.Scratchpad.RootPath ?? throw new UnauthorizedAccessException("The session scratchpad is unavailable.")
+            : context.Invocation.RepositoryPath;
         var maximumEntries = ResolveMaximumEntries(input);
         var files = new List<RepositoryFileEntry>();
-        var prohibitedPathCaseContext = new RepositoryPathCaseContext(context.Invocation.RepositoryPath);
         var truncated = false;
         var options = new EnumerationOptions
         {
@@ -91,12 +95,12 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         foreach (var path in Directory.EnumerateFiles(root, "*", options))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+            if (!scratchpadListing && ToolPathRules.IsWithinScratchpad(path, context.Invocation, caseContext: caseContext))
             {
                 continue;
             }
 
-            var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path)
+            var relative = Path.GetRelativePath(projectionRoot, path)
                 .Replace('\\', '/');
             if (relative.Split('/').Any(segment => segment is ".git" or "bin" or "obj")
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative))
@@ -104,7 +108,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
                 continue;
             }
 
-            if (ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, prohibitedPathCaseContext))
+            if (!scratchpadListing && ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, caseContext))
             {
                 continue;
             }

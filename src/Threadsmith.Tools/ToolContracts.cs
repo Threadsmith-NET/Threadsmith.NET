@@ -707,6 +707,10 @@ public sealed record ToolExecutionContext(
     /// <summary>Host clock used to interpret the absolute deadline.</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
+    /// <summary>Captured scripting input, excluded from durable and model output.</summary>
+    [JsonIgnore]
+    internal PreparedCSharpScriptSource? PreparedScriptSource { get; init; }
+
     /// <summary>Live active-time owner, excluded from durable and model output.</summary>
     [JsonIgnore]
     internal ActiveExecutionBudget? ActiveBudget { get; init; }

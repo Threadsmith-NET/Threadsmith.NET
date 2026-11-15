@@ -37,7 +37,12 @@ public static partial class ToolRuntimeTests
             0,
             "script-source",
             "csharp_script",
-            CreateContext(Path.GetFullPath(".")) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation, AllowedExecutables = ["dotnet"] },
+            CreateContext(Path.GetFullPath(".")) with
+            {
+                TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+                AllowedExecutables = ["dotnet"],
+                Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = Path.GetFullPath(".threadsmith/.scratchpad"), DisabledReason = ScratchpadDisabledReason.None },
+            },
             JsonSerializer.Serialize(new CSharpScriptInput { Code = source, Kind = "statement" })).Invocation;
 
         var result = await pipeline.InvokeAsync(request, TestContext.Current.CancellationToken);

@@ -159,7 +159,7 @@ Exclusions filter structured advisory output before bounded finding selection. R
 | `excludedDiagnosticIds` | `[]` | Exact globally excluded advisory diagnostic IDs; empty filters nothing. |
 | `maximumRetainedDiagnostics` | `0` | Unlimited by default; a positive value explicitly caps retained findings per project and aggregate candidate. |
 | `maximumReportedDiagnostics` | `0` | Unlimited by default; a positive value explicitly caps receipt/model findings. When both limits are positive, reporting must not exceed retention. |
-| `maximumCachedProjects` | `0` | Unlimited by default; a positive value explicitly caps cached project bases and carried project scope. |
+| `maximumCachedProjects` | `0` | No configured cap on project origin/analyzer state or carried scope; a positive value caps both. Compiler diagnostic reuse has a separate finite bound below, including when this is zero. |
 | `maximumOmissions` | `16` | Distinct omission descriptions. |
 | `maximumDiagnosticMessageCharacters` | `384` | Message UTF-16 units. |
 | `maximumDiagnosticPathCharacters` | `256` | Path UTF-16 units. |
@@ -175,6 +175,8 @@ Exclusions filter structured advisory output before bounded finding selection. R
 | `analyzers.coldStartBudgetMilliseconds` | `10000` | Legacy compatibility setting; automatic feedback does not impose a first-use deadline. |
 | `analyzers.maximumConcurrentOperations` | `1` | Physically running advisory operations, including abandoned work. Must not exceed compilation workers; when enabled, must leave at least one worker for other work. |
 | `analyzers.concurrentAnalysis` | `false` | Roslyn internal concurrency. Keep false while existing outer compilation workers own admission; the explicit harness can compare true. |
+
+Compiler diagnostic reuse has an additional optimization-only bound: at most 32 cached projects and 1,024 findings in each baseline/candidate evidence slot. Larger evidence is analyzed and reported normally but not cached. In-flight staging uses the same bounds and publishes only after all scoped work succeeds; old and staged generations can coexist until then. Positive `maximumCachedProjects` and `maximumRetainedDiagnostics` values can narrow retention further. Exceeding these optimization-only bounds causes recomputation, not reduced analysis coverage or diagnostic truncation. Initial diagnostic fingerprint counts remain in the existing project owner independently of optional compiler slots, preserving origin labels after accepted edits. The slot bounds do not bound that origin bookkeeping, Roslyn, analyzer state, current-result projections, or total process memory.
 
 Analyzer controls are captured at startup; restart after changes. Compiler and project-provided analyzer feedback are enabled by default. Disable analyzer feedback with `--set:limits:semantic:editAnalysis:analyzers:enabled=false` or `THREADSMITH_limits__semantic__editAnalysis__analyzers__enabled=false`. Automatic feedback runs each evaluated project's installed analyzers with its severities, suppressions, analyzer configuration and additional files. Host reporting exclusions still apply. Legacy diagnostic-ID and timing controls do not restrict automatic feedback. Whole-document results omit compilation-wide and other-file diagnostics; cancelled or failed work cannot establish a clean result.
 

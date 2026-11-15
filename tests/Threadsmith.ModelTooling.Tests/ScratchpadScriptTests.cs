@@ -12,7 +12,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Scoped file access through the real worker and shared reader policy.</summary>
-public sealed class ScratchpadScriptTests : IDisposable
+public sealed partial class ScratchpadScriptTests : IDisposable
 {
     private readonly string _root;
 
@@ -297,6 +297,18 @@ public sealed class ScratchpadScriptTests : IDisposable
             var input = Path.Combine(scope.RepositoryPath, "input.txt");
             await File.WriteAllTextAsync(input, "repository", TestContext.Current.CancellationToken);
             Assert.Equal(Path.Combine(repository, "input.txt"), ScriptFilePolicy.ValidateRead("input.txt", CreateContext(aliasedScope)));
+            var source = Path.Combine(repository, "source.csx");
+            await File.WriteAllTextAsync(source, "42", TestContext.Current.CancellationToken);
+            var process = new RecordingProcessManager();
+            await using var events = new DomainEventStream();
+            var pipeline = FileInputPipeline(events, process);
+            var first = await pipeline.InvokeAsync(FileRequest(aliasedScope, JsonSerializer.Serialize(new { scriptPath = source })), TestContext.Current.CancellationToken);
+            Assert.True(first.Succeeded, first.Error);
+            var output = JsonSerializer.Deserialize<CSharpScriptOutput>(first.ResultJson!)!;
+            var rerun = await pipeline.InvokeAsync(FileRequest(aliasedScope, JsonSerializer.Serialize(new { scriptPath = output.ScriptPath })), TestContext.Current.CancellationToken);
+            Assert.True(rerun.Succeeded, rerun.Error);
+            Assert.Equal("42", rerun.SourceDetail!.Source);
+
             var innerLink = Path.Combine(scope.RepositoryPath, "linked");
             Directory.CreateSymbolicLink(innerLink, scope.RepositoryPath);
             try

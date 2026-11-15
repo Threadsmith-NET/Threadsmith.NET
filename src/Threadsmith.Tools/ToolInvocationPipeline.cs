@@ -976,16 +976,19 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
             observedConcepts = input is IConceptToolInput conceptInput && ConfiguredTool.Unwrap(tool).GetType().Assembly == typeof(MemoriesTool).Assembly
                 ? MemoryConcepts.Normalize(conceptInput.Concepts).Where(concept => _sanitizer.Sanitize(concept) == concept).ToArray() : [];
-            if (ConfiguredTool.Unwrap(tool) is CSharpScriptTool && input is CSharpScriptInput script)
+            if (ConfiguredTool.Unwrap(tool) is CSharpScriptTool scriptTool && input is CSharpScriptInput script)
             {
-                // The same immutable string is passed to the engine; never recover it from a file.
-                var retainSource = script.Code.Length <= ToolSourceDetail.MaximumCharacters;
+                var prepared = await scriptTool.PrepareSourceAsync(script, executionContext, timeoutCancellation.Token);
+                executionContext = executionContext with { PreparedScriptSource = prepared };
+
+                // Retain and execute the same captured string; never reread the selected path.
+                var retainSource = prepared.Code.Length <= ToolSourceDetail.MaximumCharacters;
                 sourceDetail = new ToolSourceDetail
                 {
                     ToolInvocationId = invocationId,
                     Language = "csharp",
                     Availability = retainSource ? ToolSourceAvailability.Available : ToolSourceAvailability.RetentionLimitExceeded,
-                    Source = retainSource ? script.Code : null,
+                    Source = retainSource ? prepared.Code : null,
                 };
             }
 

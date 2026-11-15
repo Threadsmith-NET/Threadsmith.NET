@@ -3117,7 +3117,11 @@ public static partial class ToolRuntimeTests
                     ToolInvocationId.New(),
                     SessionId.New(),
                     RunId.New(),
-                    CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation }),
+                    CreateContext(repository) with
+                    {
+                        TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+                        Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = Path.Combine(repository, ".threadsmith", ".scratchpad"), DisabledReason = ScratchpadDisabledReason.None },
+                    }),
                 CancellationToken.None);
             Assert.Equal("stub", Assert.IsType<CSharpScriptOutput>(execution.Value).Output);
             var restored = new ToolStateManager(

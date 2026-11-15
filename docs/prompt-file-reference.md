@@ -68,7 +68,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-ChildAgent-HostPolicy.md` | Common child guidance for advertised tools, inherited authority without further delegation, shared-workspace coordination, and honest responses. | `None` |
 | `System-ChildAgent-Explorer.md` | Explorer role amendment for focused inspection and useful answers. | `None` |
-| `System-ChildAgent-Implementer.md` | Implementer role amendment for assigned changes and validation using advertised tools, with accurate completion and limitation reporting. | `None` |
+| `System-ChildAgent-Implementer.md` | Implementation Planner role amendment for codebase inspection and comprehensive change plans in ASD-STE100 Simplified Technical English (STE), reusing existing patterns and reporting missing information. | `None` |
 | `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for assigned test execution, evaluation of observed results, coverage improvements, and explicit execution limits. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
@@ -453,7 +453,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Script-kind enum, default, and on-demand execution reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
+| `Tool-csharp_script-Description.md` | Exclusive inline/file source selection, path resolution, saved-copy reruns, script kind, and on-demand execution reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family
 

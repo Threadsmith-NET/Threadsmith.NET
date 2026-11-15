@@ -133,6 +133,94 @@ public static partial class SourceEditAnalysisTests
         engine.DiscardEditCandidate(nextCommand.EffectId);
     }
 
+    /// <summary>Measures distinct DTO generations across two diagnostic-heavy projects and a rejected retry.</summary>
+    [Theory]
+    [InlineData(600)]
+    [InlineData(1200)]
+    public static async Task DiagnosticHeavyCompilerRetentionIsObservedAtPublication(int diagnosticsPerProject)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new TestSemanticSolution();
+        foreach (var relativePath in new[] { "Contracts/Services.cs", "App/Program.cs" })
+        {
+            var diagnosticSource = string.Join("\n", Enumerable.Range(0, diagnosticsPerProject)
+                .Select(index => $"class Retention{index} {{ MissingBaseline{index} value; }}"));
+            await File.AppendAllTextAsync(Path.Combine(fixture.Root, relativePath), "\n" + diagnosticSource, ct);
+        }
+
+        var observations = new List<(int CachedProjects, int StagedProjects, int EvidenceSets, int Findings)>();
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(
+            events,
+            NullLogger<SemanticEngine>.Instance,
+            TestPromptLoader.Instance,
+            resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false } } },
+            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
+        {
+            EditCompilerRetentionObserver = observations.Add,
+        };
+        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
+        await engine.LoadAsync(request, ct);
+        await engine.WaitForWarmAsync(ct);
+        const string relative = "Contracts/Services.cs";
+        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
+        var firstCommand = Command(request.SessionId, RunId.New(), request.WorkspaceId);
+        var first = await AnalyzeCompletedAsync(
+            engine, events, firstCommand, fixture.Root, Snapshot(relative, original, original + "\nclass FirstRetentionCandidate { MissingFirst value; }"), ct);
+        Assert.True(first.CompilerCompletedSuccessfully);
+        Assert.Equal(2, first.ProjectsInScope);
+        Assert.True(first.CurrentErrors >= 2 * diagnosticsPerProject);
+        Assert.False(first.FindingRetentionTruncated);
+        var firstSteady = observations[^1];
+        engine.DiscardEditCandidate(firstCommand.EffectId);
+        observations.Clear();
+        var secondCommand = Command(request.SessionId, firstCommand.RunId, request.WorkspaceId);
+        var retryText = original + "\nclass RetryRetentionCandidate { MissingRetry value; }";
+        var retrySnapshot = Snapshot(relative, original, retryText);
+        var retry = await AnalyzeCompletedAsync(engine, events, secondCommand, fixture.Root, retrySnapshot, ct);
+        Assert.True(retry.CompilerCompletedSuccessfully);
+        Assert.False(retry.FindingRetentionTruncated);
+        var retryPeak = observations.Max(item => item.Findings);
+        var retrySteady = observations[^1];
+        TestContext.Current.TestOutputHelper?.WriteLine($"diagnostics/project={diagnosticsPerProject}; first={firstSteady}; retry peak findings={retryPeak}; retry={retrySteady}");
+        if (diagnosticsPerProject < SemanticEngine.MaximumCompilerCachedFindingsPerSlot)
+        {
+            Assert.Equal(2, retrySteady.CachedProjects);
+            Assert.Equal(4, retrySteady.EvidenceSets);
+            Assert.True(retryPeak > firstSteady.Findings);
+            Assert.Equal(firstSteady.Findings, retrySteady.Findings);
+        }
+        else
+        {
+            // No truncation: the oversized findings remain fully reported, only reuse is bypassed.
+            Assert.Equal((0, 0, 0, 0), firstSteady);
+            Assert.Equal((0, 0, 0, 0), retrySteady);
+            Assert.Equal(0, retryPeak);
+            Assert.True(retry.Diagnostics.Count >= 2 * diagnosticsPerProject);
+            Assert.True(retry.ErrorComparisonAvailable);
+        }
+
+        // Accepted oversized edits must retain the same initial/introduced labels without slots.
+        engine.ConfirmEditApplied(secondCommand.EffectId);
+        await engine.RefreshDocumentsAsync([new(Path.Combine(fixture.Root, relative), retryText, retrySnapshot.Endpoints[0].AfterSha256!)], ct);
+        var followupCommand = Command(request.SessionId, firstCommand.RunId, request.WorkspaceId);
+        var followup = await AnalyzeCompletedAsync(engine, events, followupCommand, fixture.Root, Snapshot(relative, retryText, retryText + "\nclass RetentionFollowup { }"), ct);
+        Assert.True(followup.CompilerCompletedSuccessfully);
+        Assert.Equal(OrderCompilerDiagnostics(retry.Diagnostics), OrderCompilerDiagnostics(followup.Diagnostics));
+        Assert.Contains(followup.Diagnostics, item => item.Origin == "initial");
+        Assert.Contains(followup.Diagnostics, item => item.Code == "CS0246" && item.Origin == "introduced");
+        Assert.Equal(0, followup.NewErrors);
+        engine.DiscardEditCandidate(followupCommand.EffectId);
+    }
+
+    private static IOrderedEnumerable<SourceEditDiagnostic> OrderCompilerDiagnostics(IReadOnlyList<SourceEditDiagnostic> diagnostics) => diagnostics
+        .OrderBy(item => item.Project, StringComparer.Ordinal)
+        .ThenBy(item => item.File, StringComparer.Ordinal)
+        .ThenBy(item => item.Line)
+        .ThenBy(item => item.Column)
+        .ThenBy(item => item.Code, StringComparer.Ordinal)
+        .ThenBy(item => item.Message, StringComparer.Ordinal);
+
     private static void AssertEquivalentCompilerEvidence(SourceEditAnalysis expected, SourceEditAnalysis actual)
     {
         Assert.Equal(expected.ProjectsInScope, actual.ProjectsInScope);

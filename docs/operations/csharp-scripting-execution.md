@@ -2,13 +2,43 @@
 
 Read this reference when using `csharp_script`; reuse it while it remains in context.
 
+## Source selection and reruns
+
+Supply exactly one non-null source field: `code` for inline source or `scriptPath` for a readable regular `.csx` file. Both fields, neither field, and empty or whitespace-only selected values fail. Both fields also fail when one is blank. `kind` defaults to `expression`; send `kind: "statement"` again for statement reruns.
+
+| Input | Resolution |
+|---|---|
+| `saved.csx` | Active session scratchpad at `<repository>/.threadsmith/.scratchpad` |
+| `./saved.csx` | Repository root |
+| `scripts/check.csx` | Repository-relative file |
+| `.threadsmith/.scratchpad/saved.csx` | Explicit repository-relative scratchpad file |
+| Absolute path | Inside the repository and current read authority only |
+
+A missing bare filename does not fall back to a repository file. Windows accepts `/` and `\` separators; macOS and Linux use `/`. Use `/` in portable relative paths. Traversal cannot escape the repository. Drive-relative, device, alternate data stream, and URI paths are rejected. Prohibited paths, narrowed child read scope, and link/junction/reparse-point checks still apply. External read-folder grants authorize data reads, not external script source.
+
+File source must use strict UTF-8, with an optional UTF-8 BOM. Invalid encoding and excess byte/character limits fail before worker execution. The host captures the file once. Source detail, the saved execution copy, and the worker use that same captured text. Changes to the original after capture affect only later invocations.
+
+`ScriptPath` always identifies a new scratchpad execution copy, including failed worker results. It never identifies the original repository source. Run its absolute path or bare filename to repeat the captured source. Run the original repository path to capture its current contents. The source file is not overwritten. Selecting it grants no repository write authority.
+
+```json
+{"code":"1 + 1","kind":"expression"}
+```
+
+```json
+{"scriptPath":"script-previous-id.csx","kind":"expression"}
+```
+
+```json
+{"scriptPath":"scripts/check-data.csx","kind":"statement"}
+```
+
 ## Execution and results
 
 - Use `kind: "expression"` for a value or `kind: "statement"` for multiple statements. The default is `expression`. Return a final expression without a trailing semicolon, or use `return` inside a statement block.
 - `System` is imported automatically. Defaults also import and permit `System.Linq`, `System.Collections`, `System.Collections.Generic`, and `System.Text.Json`. Explicit `allowed_assemblies` configuration can restrict these APIs; imports do not grant permissions.
 - Console access is prohibited. The returned value is converted with `.ToString()`; collections are not automatically serialized. Return readable text with `string.Join`, or explicitly serialize supported data with `JsonSerializer.Serialize`.
 - Use `using (...) { ... }` to dispose resources. The current script compiler rejects top-level `using var` declarations.
-- Each call runs in a fresh, single-use worker, which may already be prewarmed. Variables do not persist between calls. The host saves the submitted `.csx` in the session scratchpad and returns its path.
+- Each call runs in a fresh, single-use worker, which may already be prewarmed. Variables do not persist between calls. For either input form, the host saves a unique `.csx` execution copy in the session scratchpad and returns its path.
 - Directives, direct file/process/network/reflection/native access, dynamic code, and unsafe constructs are prohibited. Follow the specific rejection message; do not repeat the same denied operation through another API.
 
 ## Files and limits

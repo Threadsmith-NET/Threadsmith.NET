@@ -978,6 +978,32 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         }
     }
 
+    /// <summary>Opens a regular file without following a final link and validates its handle path.</summary>
+    internal static FileStream OpenValidatedRead(string path, string? expectedPhysicalPath = null)
+    {
+        var stream = OpenFileWithoutFollowingLinks(path);
+        try
+        {
+            if ((File.GetAttributes(stream.SafeFileHandle) & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0
+                || !(expectedPhysicalPath is null
+                    ? string.Equals(
+                        Path.GetFullPath(GetOpenedPath(stream.SafeFileHandle)),
+                        Path.GetFullPath(path),
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+                    : Threadsmith.Core.RepositoryPathPolicy.PathsEqual(expectedPhysicalPath, GetOpenedPath(stream.SafeFileHandle))))
+            {
+                throw new UnauthorizedAccessException("File path could not be safely opened.");
+            }
+
+            return stream;
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>Gets the canonical store path.</summary>
     protected string StorePath { get; }
 
@@ -1006,16 +1032,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         string path,
         CancellationToken cancellationToken)
     {
-        await using var stream = OpenFileWithoutFollowingLinks(path);
-        if ((File.GetAttributes(stream.SafeFileHandle) & FileAttributes.ReparsePoint) != 0
-            || !string.Equals(
-                Path.GetFullPath(GetOpenedPath(stream.SafeFileHandle)),
-                Path.GetFullPath(path),
-                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-        {
-            throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
-        }
-
+        await using var stream = OpenValidatedRead(path);
         ValidateOpenedStore(stream);
         if (stream.Length > _limits.MaximumStoreBytes)
         {

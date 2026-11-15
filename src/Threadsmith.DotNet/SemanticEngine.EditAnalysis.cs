@@ -12,6 +12,12 @@ using Threadsmith.Core;
 /// <summary>Analyzes exact writer candidates through the existing compiler queue and promotes only verified inputs.</summary>
 public sealed partial class SemanticEngine
 {
+    /// <summary>Optimization-only project admission bound; never narrows analysis scope.</summary>
+    internal const int MaximumCompilerCachedProjects = 32;
+
+    /// <summary>Optimization-only finding admission bound per slot; never truncates diagnostic output.</summary>
+    internal const int MaximumCompilerCachedFindingsPerSlot = 1024;
+
     private static readonly string[] GraphReplacementOmissions =
     [
         "Graph replacement requires conservative evaluated-project coverage. Previous and initial error origins are unavailable across this replacement.",
@@ -34,6 +40,9 @@ public sealed partial class SemanticEngine
 
     /// <summary>Observes completed project computation before the compiler operation's publication fence.</summary>
     internal Func<Guid, CancellationToken, Task>? EditProjectAnalysisObserver { get; init; }
+
+    /// <summary>Observes distinct cached and staged compiler DTO retention at owned publication boundaries.</summary>
+    internal Action<(int CachedProjects, int StagedProjects, int EvidenceSets, int Findings)>? EditCompilerRetentionObserver { get; init; }
 
     /// <summary>Captures the exact current writer candidate for explicitly requested scoped analyzer measurements.</summary>
     internal Solution CaptureEditCandidateSnapshot(Guid effectId)
@@ -452,6 +461,7 @@ public sealed partial class SemanticEngine
 
             var syntaxOnlyFindings = syntax.Findings.Where(item => item.Unassigned).ToArray();
             var compilerBases = new Queue<(ProjectId ProjectId, EditDiagnosticBasis Basis)>();
+            var compilerOrigins = new Queue<(ProjectId ProjectId, Dictionary<string, int> Initial)>();
             foreach (var projectId in candidate.Projects)
             {
                 var result = await RunEditCompilerOperationAsync(candidate, async token =>
@@ -471,11 +481,13 @@ public sealed partial class SemanticEngine
                         return;
                     }
 
-                    // Stage only reusable DTOs within the existing project-cache bound.
+                    // Oversized evidence is computed and reported normally, but is not retained for reuse.
                     // Partial results remain visible, but unsuccessful work cannot seed or evict evidence.
-                    if (result.Basis is { } compiler)
+                    if (result.Basis is { } compiler
+                        && compiler.Baseline.Evidence.Findings.Length <= MaximumCompilerCachedFindingsPerSlot
+                        && compiler.Candidate.Evidence.Findings.Length <= MaximumCompilerCachedFindingsPerSlot)
                     {
-                        if (compilerBases.Count >= EditProjectCacheLimit)
+                        if (compilerBases.Count >= Math.Min(EditProjectCacheLimit, MaximumCompilerCachedProjects))
                         {
                             compilerBases.Dequeue();
                         }
@@ -483,7 +495,20 @@ public sealed partial class SemanticEngine
                         compilerBases.Enqueue((projectId, compiler));
                     }
 
-                    candidate.ProjectResults[projectId] = result with { Basis = null };
+                    // Origin bookkeeping is not an optional reuse optimization. Preserve it under
+                    // the existing configured project policy, independently of slot admission.
+                    if (result.Initial is { } initial)
+                    {
+                        if (compilerOrigins.Count >= EditProjectCacheLimit)
+                        {
+                            compilerOrigins.Dequeue();
+                        }
+
+                        compilerOrigins.Enqueue((projectId, initial));
+                    }
+
+                    ObserveEditCompilerRetention(compilerBases.Select(item => item.Basis));
+                    candidate.ProjectResults[projectId] = result with { Basis = null, Initial = null };
 
                     // Rebalance across projects so earlier warnings cannot displace later errors.
                     var retained = OrderEditFindings(candidate.ProjectResults.Values.SelectMany(item => item.Current))
@@ -525,12 +550,45 @@ public sealed partial class SemanticEngine
 
                 // All scoped operations crossed their completion fences. Publish evidence and
                 // success together; rejection retains baselines and exact promotion can reuse candidates.
-                foreach (var (projectId, compiler) in compilerBases)
+                foreach (var (projectId, initial) in compilerOrigins)
                 {
                     var retainedBasis = GetEditProjectBasis(projectId);
+                    _editDiagnosticBases[projectId] = retainedBasis with { CompilerInitial = initial };
+                }
+
+                foreach (var (projectId, compiler) in compilerBases)
+                {
+                    if (!_editDiagnosticBases.TryGetValue(projectId, out var retainedBasis))
+                    {
+                        // Optional slots may use free capacity, but cannot displace retained origins.
+                        if (_editDiagnosticBases.Count >= EditProjectCacheLimit)
+                        {
+                            continue;
+                        }
+
+                        retainedBasis = new();
+                    }
+
                     _editDiagnosticBases[projectId] = retainedBasis with { Compiler = compiler };
                 }
 
+                // Keep the optimization finite even when report retention and carried scope are unlimited.
+                // Strip only compiler slots: automatic analyzer evidence keeps its existing owner and policy.
+                var cachedCompilerProjects = _editDiagnosticBases.Where(item => item.Value.Compiler is not null).Select(item => item.Key).ToArray();
+                foreach (var projectId in cachedCompilerProjects.Take(Math.Max(0, cachedCompilerProjects.Length - MaximumCompilerCachedProjects)))
+                {
+                    var retainedBasis = _editDiagnosticBases[projectId] with { Compiler = null };
+                    if (retainedBasis == new EditProjectBasis())
+                    {
+                        _editDiagnosticBases.Remove(projectId);
+                    }
+                    else
+                    {
+                        _editDiagnosticBases[projectId] = retainedBasis;
+                    }
+                }
+
+                ObserveEditCompilerRetention([]);
                 candidate.Result = candidate.Result with
                 {
                     Revision = candidate.Result.Revision + 1,
@@ -648,9 +706,12 @@ public sealed partial class SemanticEngine
 
         var baselineVersion = await baselineProject.GetDependentVersionAsync(token);
         EditDiagnosticBasis? basis;
+        Dictionary<string, int>? initial;
         lock (_gate)
         {
-            basis = _editDiagnosticBases.GetValueOrDefault(id)?.Compiler;
+            var projectBasis = _editDiagnosticBases.GetValueOrDefault(id);
+            basis = projectBasis?.Compiler;
+            initial = projectBasis?.CompilerInitial;
         }
 
         var before = basis?.Baseline.Version == baselineVersion ? basis.Baseline.Evidence
@@ -663,11 +724,7 @@ public sealed partial class SemanticEngine
             : await GetEditProjectFindingsAsync(project, candidate.RepositoryPath, before, token);
         var beforeCounts = CountEditFindings(before.Findings.Where(item => item.Diagnostic.Severity == Core.DiagnosticSeverity.Error));
         var afterCounts = CountEditFindings(after.Findings.Where(item => item.Diagnostic.Severity == Core.DiagnosticSeverity.Error));
-        Dictionary<string, int>? initial;
-        lock (_gate)
-        {
-            initial = basis?.Initial ?? (!candidate.PreviouslyEdited.Contains(id) && !before.Truncated ? CountEditFindings(before.Findings) : null);
-        }
+        initial ??= !candidate.PreviouslyEdited.Contains(id) && !before.Truncated ? CountEditFindings(before.Findings) : null;
 
         var remainingInitial = initial is null ? null : new Dictionary<string, int>(initial, StringComparer.Ordinal);
         var preceding = CountEditFindings(before.Findings);
@@ -703,7 +760,8 @@ public sealed partial class SemanticEngine
             before.Filtered || after.Filtered,
             after.Truncated,
             omissions,
-            new(new(baselineVersion, before), new(version, after), initial));
+            new(new(baselineVersion, before), new(version, after)),
+            initial);
     }
 
     private async Task<EditDiagnosticEvidence> GetEditProjectFindingsAsync(Project project, string repositoryPath, EditDiagnosticEvidence? before, CancellationToken token)
@@ -910,6 +968,21 @@ public sealed partial class SemanticEngine
         return new();
     }
 
+    // Caller holds _gate. No source, Roslyn objects or additional evidence survive this observation.
+    private void ObserveEditCompilerRetention(IEnumerable<EditDiagnosticBasis> staged)
+    {
+        if (EditCompilerRetentionObserver is not { } observer)
+        {
+            return;
+        }
+
+        var cached = _editDiagnosticBases.Values.Select(item => item.Compiler).OfType<EditDiagnosticBasis>().ToArray();
+        var pending = staged.ToArray();
+        var evidence = cached.Concat(pending).SelectMany(item => new[] { item.Baseline.Evidence, item.Candidate.Evidence })
+            .Distinct(ReferenceEqualityComparer.Instance).Cast<EditDiagnosticEvidence>().ToArray();
+        observer((cached.Length, pending.Length, evidence.Length, evidence.Sum(item => item.Findings.Length)));
+    }
+
     private sealed record EditFinding(string Fingerprint, SourceEditDiagnostic Diagnostic, bool Unassigned = false, bool New = false);
 
     // Raw compiler error evidence remains internal; advisory exclusions never redefine validation success.
@@ -917,15 +990,15 @@ public sealed partial class SemanticEngine
 
     private sealed record EditCompilerSlot(VersionStamp Version, EditDiagnosticEvidence Evidence);
 
-    // Two bounded DTO slots share project eviction/reset ownership; initial origins do not rotate.
-    private sealed record EditDiagnosticBasis(EditCompilerSlot Baseline, EditCompilerSlot Candidate, Dictionary<string, int>? Initial);
+    // Optional bounded DTO slots; initial origins belong to the project owner, not slot eviction.
+    private sealed record EditDiagnosticBasis(EditCompilerSlot Baseline, EditCompilerSlot Candidate);
 
-    private sealed record EditProjectBasis(EditDiagnosticBasis? Compiler = null, EditAnalyzerBasis? AnalyzerBaseline = null,
+    private sealed record EditProjectBasis(EditDiagnosticBasis? Compiler = null, Dictionary<string, int>? CompilerInitial = null, EditAnalyzerBasis? AnalyzerBaseline = null,
         EditAnalyzerBasis? AnalyzerCandidate = null, Dictionary<string, int>? AnalyzerInitial = null,
         ImmutableHashSet<DocumentId>? AnalyzerInitialDocuments = null);
 
     private sealed record EditProjectResult(EditFinding[] Current, int Count, int Warnings, int New, int Resolved, bool ComparisonAvailable, bool Filtered, bool Truncated, IReadOnlyList<string> Omissions,
-        EditDiagnosticBasis? Basis = null);
+        EditDiagnosticBasis? Basis = null, Dictionary<string, int>? Initial = null);
 
     private sealed class EditCandidate
     {

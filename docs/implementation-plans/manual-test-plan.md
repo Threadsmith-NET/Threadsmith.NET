@@ -677,6 +677,10 @@ Retired: use MTP-257 for the retained TUIKit frontend.
 6. Set `timeout_ms` to `500` and execute `while (true) { }`.
 7. Attempt `System.IO.File.Exists("anything")`, `System.Net.Http.HttpClient`, process launch, reflection, and an assembly/namespace absent from `allowed_assemblies`.
 8. Disable `csharp_script` and retry invocation.
+9. In a disposable fully trusted repository with the tool and scratchpad enabled, run a non-secret inline script. Repeat it by returned absolute `ScriptPath` and bare filename. Resend `kind: statement` when required. Confirm each call returns its own execution copy.
+10. Prepare UTF-8 `.csx` files at the repository root, in a nested directory, and in the active scratchpad. Invoke `./root.csx`, `scripts/check.csx`, the in-repository absolute path, and the bare scratchpad filename. Confirm a missing bare filename never selects the repository-root file.
+11. Compare source detail and the saved copy with the selected source. Change the original after completion. Rerun the original path and the saved copy; only the original-path invocation sees the new source. Confirm the original file is never overwritten.
+12. Reject both/neither source fields, blanks, missing files, wrong extensions, directories, invalid UTF-8, and configured byte/character excess. Confirm no worker starts. Reject external source even with a read-folder grant, traversal, prohibited paths, links, and narrowed child-scope violations. Repeat parent/child and headless/interactive calls. Record platform and configured limits; report unavailable platforms as unverified.
 
 Expected:
 
@@ -684,7 +688,7 @@ Expected:
 - The script tool remains absent from model advertisement until explicitly enabled and remains subject to `tools:allow`/`tools:deny` plus `FullyTrustedAutomation` trust.
 - Each invocation uses a fresh tracked worker; expression/statement values are returned as bounded host-owned JSON with no state carried between invocations.
 - Oversized output is UTF-8 bounded and marked truncated. Timeout/cancellation kills the complete worker process tree and leaves no active child.
-- File, network, process, native, dynamic, reflection, directive, and non-allowlisted namespace access returns a bounded failure and causes no external side effect.
+- Direct file access outside the supplied `Scratchpad` API, network, process, native, dynamic, reflection, directive, and non-allowlisted namespace access returns a bounded failure. Authorized script-source selection does not widen worker permissions.
 - Disabling the tool immediately removes it from advertisement and resolution; unrelated repository configuration remains intact.
 
 ### MTP-030H - Remembered solution and empty-repository initialization

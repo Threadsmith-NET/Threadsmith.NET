@@ -94,6 +94,14 @@ public interface IManagedRepositoryMemoryService
         return snapshot.Entries.FirstOrDefault(entry => entry.Id == id);
     }
 
+    /// <summary>Reads the retrieval revision without materializing entries.</summary>
+    /// <returns>Null when direct lookup is unavailable and a snapshot is required, not when the repository is empty.</returns>
+    Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<long?>(null);
+    }
+
     /// <summary>Reads current entries without generating embeddings or changing usage.</summary>
     Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
         string repositoryIdentity,

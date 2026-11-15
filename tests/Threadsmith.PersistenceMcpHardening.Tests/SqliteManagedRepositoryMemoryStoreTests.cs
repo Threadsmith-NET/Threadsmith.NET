@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
@@ -13,6 +14,39 @@ using Xunit;
 /// <summary>Real SQLite contracts for explicit memories, snapshots, revisions, eviction and migration.</summary>
 public sealed class SqliteManagedRepositoryMemoryStoreTests
 {
+    /// <summary>Service revision reads preserve repository identity, cancellation, query failure and collection preview semantics.</summary>
+    [Fact]
+    public async Task Service_revision_lookup_preserves_store_capabilities()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var saved = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("committed guidance") with
+        {
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+        }, Model, Embedding, new(), ct)).Entry);
+        var service = new RepositoryMemoryService(fixture.Store, new UnusedEmbeddingGenerator(), new SecretOutputSanitizer());
+        Assert.Equal(0L, await service.GetRevisionAsync("other-repo", ct));
+        var baseline = await service.GetSnapshotAsync("repo", ct);
+        Assert.Equal(baseline.Revision, await service.GetRevisionAsync("repo", ct));
+        Assert.True(baseline.Revision > 0);
+        using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        await cancelled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.GetRevisionAsync("repo", cancelled.Token));
+
+        var collection = new RepositoryMemoryCollection(baseline, replace: false, checkpoint: 0);
+        collection.SetPrepared([saved with { Text = "prepared guidance", ContentHash = new string('b', 64), Revision = saved.Revision + 1 }]);
+        using var previewStore = Assert.IsType<SqliteManagedRepositoryMemoryStore>(fixture.Store.ForCollection(collection));
+        var previewService = new RepositoryMemoryService(previewStore, new UnusedEmbeddingGenerator(), new SecretOutputSanitizer());
+        Assert.Null(await previewService.GetRevisionAsync("repo", ct));
+        var preview = await previewService.GetSnapshotAsync("repo", ct);
+        Assert.Equal("prepared guidance", Assert.Single(preview.Entries).Text);
+        Assert.Equal("committed guidance", Assert.Single((await service.GetSnapshotAsync("repo", ct)).Entries).Text);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => previewService.GetRevisionAsync("repo", cancelled.Token));
+
+        await fixture.ExecuteAsync("DROP TABLE managed_memory_repositories;");
+        await Assert.ThrowsAsync<SqliteException>(() => service.GetRevisionAsync("repo", ct));
+    }
+
     /// <summary>Pending changes are retained while only changed support flags invalidate retrieval.</summary>
     [Fact]
     public async Task Observations_only_advance_retrieval_revision_when_support_flags_change()
@@ -964,6 +998,13 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
             await _cancellation.CancelAsync();
             cancellationToken.ThrowIfCancellationRequested();
         }
+    }
+
+    private sealed class UnusedEmbeddingGenerator : ITextEmbeddingGenerator
+    {
+        public TextEmbeddingModelDescriptor Model => throw new NotSupportedException();
+
+        public Task<TextEmbeddingResult> GenerateAsync(string text, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class MemoryDatabase : IAsyncDisposable

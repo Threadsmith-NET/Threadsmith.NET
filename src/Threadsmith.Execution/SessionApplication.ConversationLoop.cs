@@ -406,7 +406,8 @@ public sealed partial class SessionApplication
             {
                 try
                 {
-                    revision = (await _repositoryMemories.GetSnapshotAsync(identity, cancellationToken)).Revision;
+                    revision = await _repositoryMemories.GetRevisionAsync(identity, cancellationToken)
+                        ?? (await _repositoryMemories.GetSnapshotAsync(identity, cancellationToken)).Revision;
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {

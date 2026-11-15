@@ -736,6 +736,41 @@ public static partial class Milestone5Tests
         Assert.Equal(501, risk.TotalLinesChanged);
     }
 
+    /// <summary>Configuration rejected by artifact writes remains risky through the governed mutation path.</summary>
+    [Theory]
+    [InlineData("appsettings.json", true)]
+    [InlineData(".config/dotnet-tools.json", true)]
+    [InlineData("package.json", true)]
+    [InlineData(".github/actions/build/action.yml", true)]
+    [InlineData("App.runtimeconfig.dev.json", true)]
+    [InlineData("compose.override.yaml", true)]
+    [InlineData("docker-compose.override.yml", true)]
+    [InlineData("reports/data.json", false)]
+    [InlineData("reports/data.yaml", false)]
+    public static async Task MutationRiskCalculator_UsesSharedConfigurationClassification(string path, bool configuration)
+    {
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            ["README.md"] = "baseline",
+        });
+        var mutation = new Mutation
+        {
+            MutationId = MutationId.New(),
+            Type = MutationType.CreateFile,
+            RelativePath = path,
+            ReplacementText = "new file",
+        };
+        var set = CreateMutationSet(repository, [mutation]);
+        var preview = new MutationPreview(set.MutationSetId, "diff", [], 1, 0);
+
+        var risk = MutationRiskCalculator.Calculate(set, preview, repository.Root);
+        var policy = new MutationApprovalPolicyService();
+        Assert.Equal(configuration, risk.HasConfigChanges);
+        Assert.True(policy.RequiresApproval(risk));
+        await policy.SetPolicyAsync(MutationApprovalPolicy.ReviewRisky, TestContext.Current.CancellationToken);
+        Assert.Equal(configuration, policy.RequiresApproval(risk));
+    }
+
     /// <summary>Policy replacement finds configuration keys case-insensitively and preserves their original spelling.</summary>
     [Fact]
     public static async Task MutationApprovalPolicy_Replacement_HandlesDifferentlyCasedKeys()

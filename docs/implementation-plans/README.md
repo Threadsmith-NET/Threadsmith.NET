@@ -246,6 +246,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-exact-tool-invocation-limits.md](maintenance-exact-tool-invocation-limits.md) | Configurable limits for repeated exact tool invocations |
 | Maintenance | [maintenance-openrouter-fallbacks-and-provider-errors.md](maintenance-openrouter-fallbacks-and-provider-errors.md) | Ordered OpenRouter fallbacks and useful failure details from all model providers |
 | Maintenance | [plan-122-user-repository-policy-settings.md](plan-122-user-repository-policy-settings.md) | User-owned repository command rules, executable permissions, and file access grants |
+| Maintenance | [Threadsmith.NET: Performance Implementation Plans](threadsmith-performance-implementation-plans.md) | Memory revision lookup, file-list traversal, compiler baseline reuse, and phase measurements |
 
 ## Update discipline
 

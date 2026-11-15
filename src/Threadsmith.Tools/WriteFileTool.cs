@@ -6,7 +6,7 @@ using Threadsmith.Core;
 
 /// <summary>Creates a text artifact from new content or the previous archived assistant answer.</summary>
 public sealed record WriteFileInput(
-    [property: Description("Repository-relative or absolute destination inside an allowed folder.")] string Path,
+    [property: Description("Repository-relative or absolute artifact destination; external folders require a trusted grant.")] string Path,
     [property: Description("Exact text to write. Omit when useLastResponse is true.")] string? Content = null,
     [property: Description("Copy the latest archived assistant response from this session without regenerating it.")] bool UseLastResponse = false,
     [property: Description("Replace an existing file only when the user requested replacement. Defaults to false.")] bool Overwrite = false,
@@ -19,7 +19,7 @@ public sealed record WriteFileOutput(string Path, int BytesWritten, Conversation
     public ImageArtifact? Artifact { get; init; }
 }
 
-/// <summary>Writes bounded UTF-8 artifacts directly inside configured folders.</summary>
+/// <summary>Writes bounded UTF-8 artifacts within repository scope or trusted external folders.</summary>
 public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
 {
     private readonly ToolLimits _limits;
@@ -127,7 +127,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         return new ToolExecution<WriteFileOutput>(new WriteFileOutput(destination, bytes.Length, sourceMessageId) { Artifact = artifact }, [], false);
     }
 
-    /// <summary>Checks the compiled write capability's allowlist before pipeline admission and immediately before I/O.</summary>
+    /// <summary>Checks repository scope or external grants before pipeline admission and immediately before I/O.</summary>
     internal string ValidatePath(string path, ToolInvocationContext context)
     {
         var repository = Path.GetFullPath(context.RepositoryPath);
@@ -148,6 +148,10 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         if (context.SecurityPolicy is { } policy)
         {
             context.PolicyBinding?.Validate(policy);
+            if (!RepositoryPathPolicy.PathsEqual(repository, policy.RepositoryPath, caseContext: caseContext))
+            {
+                throw new UnauthorizedAccessException("write_file policy belongs to another repository.");
+            }
         }
 
         AuthorityControlPathGuard.Validate(destination, repository, context.SecurityPolicy?.ControlPaths, context.SecurityPolicy?.ControlDirectories);
@@ -164,16 +168,25 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         IReadOnlyList<string> folders = context.SecurityPolicy is { } effective ? effective.WriteFolders : _configuration.GetAllowedFolders(repository);
-        var grantingRoot = scratchpadDestination ? null : folders.Select(folder => Path.GetFullPath(folder, repository))
+
+        // Reuse source-edit scope inside the repository; export grants cannot widen that scope.
+        var roots = withinRepository
+            ? context.SecurityPolicy?.MutationRoots ?? [repository]
+            : folders;
+        var grantingRoot = scratchpadDestination ? null : roots.Select(root => Path.GetFullPath(root, repository))
             .FirstOrDefault(root => RepositoryPathPolicy.ContainsPath(root, destination, caseContext: caseContext)
-                && !RepositoryPathPolicy.PathsEqual(root, destination, caseContext: caseContext));
+                && (!RepositoryPathPolicy.PathsEqual(root, destination, caseContext: caseContext) || withinRepository));
         if (!scratchpadDestination && grantingRoot is null)
         {
-            throw new UnauthorizedAccessException($"write_file destination is outside {WriteFileConfiguration.AllowedFoldersKey} (default: .inbox). No file was written.");
+            throw new UnauthorizedAccessException(withinRepository
+                ? "write_file destination is outside the authorized repository mutation scope. No file was written."
+                : $"External write_file destinations require a trusted {WriteFileConfiguration.AllowedFoldersKey} grant. No file was written.");
         }
 
         var relative = Path.GetRelativePath(repository, destination).Replace('\\', '/');
-        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repository, caseContext))
+        if (!scratchpadDestination
+            && (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repository, caseContext)
+                || RepositoryPathPolicy.IsProhibited(relative, context.SecurityPolicy?.ProhibitedPaths ?? [], repository, caseContext)))
         {
             throw new UnauthorizedAccessException("write_file destination matches a prohibited path.");
         }
@@ -200,6 +213,13 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         var authorityRoot = withinRepository
             ? repository
             : grantingRoot ?? throw new UnauthorizedAccessException("No folder grants this write.");
+        var authorityRelative = Path.GetRelativePath(authorityRoot, destination).Replace('\\', '/');
+        if (ProjectConfigurationPathPolicy.IsConfigurationPath(authorityRelative)
+            || RepositoryPathPolicy.IsProhibited(authorityRelative, ["**/.github/workflows/**"], authorityRoot, caseContext))
+        {
+            throw new UnauthorizedAccessException("Use edit_source and the governed mutation workflow for project, tool, build, and runtime configuration. No file was written.");
+        }
+
         ScopedFilePaths.RejectLinks(destination, authorityRoot, allowMissing: true, caseContext);
 
         return destination;

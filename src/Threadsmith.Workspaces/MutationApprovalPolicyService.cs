@@ -36,14 +36,7 @@ public static class MutationRiskCalculator
         {
             var fileName = Path.GetFileName(relativePath);
             var extension = Path.GetExtension(relativePath);
-            var isConfig = extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
-                || extension.Equals(".config", StringComparison.OrdinalIgnoreCase)
-                || (fileName.StartsWith("appsettings", StringComparison.OrdinalIgnoreCase)
-                    && extension.Equals(".json", StringComparison.OrdinalIgnoreCase))
-                || fileName.StartsWith("Directory.Build.", StringComparison.OrdinalIgnoreCase);
+            var isConfig = ProjectConfigurationPathPolicy.IsConfigurationPath(relativePath);
             configChanges |= isConfig;
             dependencyChanges |= fileName.Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase)
                 || fileName.Equals("packages.config", StringComparison.OrdinalIgnoreCase)

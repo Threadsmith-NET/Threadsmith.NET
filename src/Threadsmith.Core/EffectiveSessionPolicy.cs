@@ -50,7 +50,7 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets mandatory tool approval requirements.</summary>
     public ImmutableArray<string> ReviewTools { get; init; } = [];
 
-    /// <summary>Gets normalized direct artifact write roots.</summary>
+    /// <summary>Gets normalized external artifact export grants, independent of repository mutation scope.</summary>
     public ImmutableArray<string> WriteFolders { get; init; } = [];
 
     /// <summary>Gets normalized additional read-only roots.</summary>
@@ -59,7 +59,7 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets normalized source-edit roots admitted by trusted policy and repository restrictions.</summary>
     public ImmutableArray<string> EditableRoots { get; init; } = [];
 
-    /// <summary>Gets host-owned source mutation roots, narrowed by child assignment scope independently of discovery configuration.</summary>
+    /// <summary>Gets host-owned repository source-edit and artifact-write roots, narrowed by child assignment scope independently of discovery configuration.</summary>
     public ImmutableArray<string> MutationRoots { get; init; } = [];
 
     /// <summary>Gets inherited repository path prohibitions.</summary>

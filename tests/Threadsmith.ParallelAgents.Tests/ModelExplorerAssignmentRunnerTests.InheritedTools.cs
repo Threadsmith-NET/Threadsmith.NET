@@ -88,7 +88,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 RepositoryPath = repository,
                 MaximumTrust = RepositoryTrustLevel.FullyTrustedAutomation,
                 ReadFolders = [repository],
-                WriteFolders = [Path.Combine(repository, ".inbox")],
+                MutationRoots = [repository],
+                WriteFolders = [],
                 AllowedExecutables = [shell, "dotnet"],
                 AllowedNetworkHosts = ["example.test"],
                 RequireShellApproval = false,
@@ -233,7 +234,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }
 
             Assert.True(result.Succeeded, result.Error ?? result.ModelResultContent);
-            Assert.Equal("child artifact", await File.ReadAllTextAsync(Path.Combine(repository, ".inbox/child.md"), TestContext.Current.CancellationToken));
+            Assert.Equal("child artifact", await File.ReadAllTextAsync(Path.Combine(repository, "docs/child.md"), TestContext.Current.CancellationToken));
             var process = Assert.Single(processes.Requests);
             Assert.NotEqual(rootRunId, process.RunId);
             Assert.Equal(repository, Path.TrimEndingDirectorySeparator(process.WorkingDirectory));
@@ -373,7 +374,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             var call = request.ToolContinuationRound switch
             {
                 0 => new ToolRequestModelOutput("run_process", "{\"command\":\"dotnet test\"}"),
-                1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/child.md\",\"content\":\"child artifact\"}"),
+                1 => new ToolRequestModelOutput("write_file", "{\"path\":\"docs/child.md\",\"content\":\"child artifact\"}"),
                 _ => null,
             };
             yield return new ModelChunk

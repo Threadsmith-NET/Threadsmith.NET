@@ -15,7 +15,7 @@ The built-in tool registry includes:
 | `read_file` | `TrustedRead` | None | Bounded text, image and PDF read (default input-file limit 5 MiB). |
 | `memories` | `TrustedRead` | None | Explicit add/update/remove/list for local repository notes; bounded complete-input embeddings and best-effort recall. |
 | `edit_source` | `TrustedMutation` | Exact mutation policy/review | Ordered source changes with exact anchors, shared transactional writes, durable receipts and advisory compiler feedback. Parent conversation only. |
-| `write_file` | `TrustedRead` | None | Direct UTF-8 report/data output inside `tools.writeFile.allowedFolders` (default `.inbox`); default content limit 1 MiB. |
+| `write_file` | `TrustedRead` | None | Direct UTF-8 report/data output within repository mutation scope or the active scratchpad; external destinations require trusted folder grants. Default content limit 1 MiB; `.inbox` is the recommended report location. |
 | `search` | `TrustedRead` | None | Bounded plain-text or timeout-limited regular-expression search. Installed releases use their RID-matched bundled `tools/rg(.exe)` for whole-repository literal searches; source-development launches may resolve `rg` from `PATH`. The fast path respects repository ignore files and falls back to the confined managed scanner when unavailable or when host pre-read path filtering is required. Generated/Git/reparse-point subtrees, SQLite databases, oversized files, and files that become locked or inaccessible are excluded as applicable. Use semantic tools for declarations, references, and implementations. |
 | `git_status` | `TrustedRead` | None | Bounded Git branch and working-tree status. |
 | `find_symbol` | `TrustedBuild` | None | Compiler-backed symbol declarations. |
@@ -106,7 +106,7 @@ While a tool runs, its owner’s output pane shows a live block with an independ
 
 `write_file` creates text artifacts directly during a conversation. It avoids change planning, mutation proposals, builds, and tests. For an existing answer, use `{"path":".inbox/report.md","useLastResponse":true}`: the host copies the latest archived assistant answer from the current session exactly. Missing/removed answer bodies produce an error instead of a substituted report. For new content, supply `content` instead of `useLastResponse`.
 
-Configure grants in designated machine or user `config.json`; repository/session arrays only narrow them:
+Repository artifacts need no folder grant. To grant external export destinations, set the folder list in designated machine or user configuration, or under `settings` in the user-owned [repository permission file](repository-permissions.md):
 
 ```json
 {
@@ -118,7 +118,7 @@ Configure grants in designated machine or user `config.json`; repository/session
 }
 ```
 
-The default list is `[".inbox"]`. Other destinations require trusted folder grants. Relative and absolute paths are accepted within granted folders. Trusted arrays replace lower trusted arrays; explicit machine enforcement restricts the result. Repository and session permission arrays are ignored. `[]` permits no ordinary artifact writes; the active session scratchpad retains its implicit grant. Null is invalid. Relative folders resolve under the active repository. External folders require deliberate trusted absolute grants. Reopen the repository or restart after policy edits. See [Configuration authority](security-policy.md) for ownership and reload boundaries.
+Supported artifacts inside the active repository use existing host-owned `MutationRoots`, narrowed by child assignment scope, independently of `tools.writeFile.allowedFolders`. The compatibility default `[".inbox"]` and an explicit empty list do not limit repository writes. `.inbox` remains the recommended report location. The active session scratchpad retains its separate implicit grant. External destinations require trusted absolute folder grants; `[]` denies external exports only. Trusted arrays replace lower trusted arrays; explicit machine enforcement restricts export grants. Checked-in repository and repository-owned session permission arrays cannot grant access. Null is invalid. Relative folders resolve under the active repository. Reopen the repository or restart after policy edits. See [Configuration authority](security-policy.md) for ownership and reload boundaries.
 
 Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. `AuthorityControlPathGuard` rejects authority-control files, secret stores, and configured control paths even under an allowed folder. Explicit prohibited paths and symlink/junction traversal are also rejected. Git metadata and `AGENTS.md` instructions are also rejected for ordinary artifact writes, even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
 
@@ -160,7 +160,7 @@ PDF reads render selectable text, scans and diagrams as ordinary image artifacts
 
 While a read runs, activity shows its path. Completion shows actual delivered line ranges for text and original bytes read for images/PDFs. The durable result carries `BytesRead`, so replay uses the same display. Unsupported binary formats fail without claiming a line range or bytes successfully read.
 
-`write_file.artifactId` exports an authorized PNG/JPEG artifact through the existing allowed-folder/temp-file path. It is exclusive with `content` and `useLastResponse`, requires a MIME-matching image extension, retains explicit overwrite policy and verifies exact-byte integrity. It neither accepts arbitrary digests as authority nor downloads model-provided URLs. Child export checks the current assignment's admitted reference set.
+`write_file.artifactId` exports an authorized PNG/JPEG artifact through the same repository/scratchpad or trusted external-folder authorization and atomic temporary-file publication path. It is exclusive with `content` and `useLastResponse`, requires a MIME-matching image extension, retains explicit overwrite policy and verifies exact-byte integrity. It neither accepts arbitrary digests as authority nor downloads model-provided URLs. Child export checks the current assignment's admitted reference set.
 
 Current and retained historical user messages include an ordered `attachments` metadata array beside their image parts. Each entry provides `artifactId`, `mediaType`, `width`, `height`, and `byteLength`, allowing `write_file.artifactId` to save a pasted image without a separate lookup or another file read. Text-only messages retain their existing content.
 

@@ -94,7 +94,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             await Assert.ThrowsAsync<MutationPolicyException>(() => workspace.StageAsync(rejected, token));
         }
 
-        // Even a broad direct-write grant cannot rewrite policy or secret stores.
+        // Ordinary artifacts reuse repository scope, independent of legacy discovery and export roots.
         var configuration = new ConfigurationBuilder().Build();
         var write = new WriteFileTool(new WriteFileConfiguration(configuration, configuration, _paths.RepositoryRoot), new UnusedConversationStore(), TestPromptLoader.Instance);
         var context = new ToolInvocationContext
@@ -102,9 +102,17 @@ public sealed partial class SecurityPolicyConfigurationTests
             RepositoryPath = _paths.RepositoryRoot,
             RequestedBy = "model:regression",
             TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            SecurityPolicy = policy with { WriteFolders = [_root] },
+            SecurityPolicy = policy with { WriteFolders = [] },
         };
         var execution = new ToolExecutionContext(ToolInvocationId.New(), session, RunId.New(), context);
+        var artifact = new WriteFileInput("docs/implementation-plans/artifact.md", "repository artifact");
+        Assert.True(new DefaultPolicyEngine().Evaluate(write, artifact, context).IsAllowed);
+        var saved = await write.ExecuteAsync(artifact, execution, token);
+        Assert.Equal("repository artifact", await File.ReadAllTextAsync(saved.Value.Path, token));
+
+        // Even a broad export grant cannot rewrite policy or secret stores.
+        context = context with { SecurityPolicy = policy with { WriteFolders = [_root] } };
+        execution = execution with { Invocation = context };
         foreach (var path in policy.ControlPaths.Where(path => RepositoryPathPolicy.ContainsPath(_root, path)))
         {
             var input = new WriteFileInput(path, "blocked") { Overwrite = true };

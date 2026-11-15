@@ -41,28 +41,71 @@ public static class WriteFileTests
         Assert.Empty(Directory.GetFiles(Path.Combine(fixture.Repository, ".inbox/nested"), "*.tmp"));
     }
 
-    /// <summary>Default artifact grants cannot replace project or workflow configuration.</summary>
+    /// <summary>TrustedRead artifact writes cannot bypass ReviewAll for configuration creation or replacement.</summary>
     [Theory]
     [InlineData("global.json")]
     [InlineData(".github/workflows/build.yml")]
     [InlineData(".github/workflows/build.yaml")]
+    [InlineData("appsettings.json")]
+    [InlineData("src/App/appsettings.Development.json")]
+    [InlineData("src/App/APPSETTINGS.PRODUCTION.JSON")]
+    [InlineData(".config/dotnet-tools.json")]
+    [InlineData("nested/.config/tools.json")]
+    [InlineData("package.json")]
+    [InlineData("nested/package-lock.json")]
+    [InlineData(".github/actions/build/action.yml")]
+    [InlineData("nested/.github/actions/build/action.yaml")]
+    [InlineData(".vscode/tasks.json")]
+    [InlineData(".devcontainer/devcontainer.json")]
+    [InlineData("src/App/Properties/launchSettings.json")]
+    [InlineData("docker-compose.yml")]
+    [InlineData("pom.xml")]
+    [InlineData("src/App/tool.config.json")]
+    [InlineData("src/App/App.runtimeconfig.json")]
+    [InlineData("src/App/App.runtimeconfig.dev.json")]
+    [InlineData("compose.override.yaml")]
+    [InlineData("docker-compose.override.yml")]
+    [InlineData(".github/workflows/notes.md")]
     public static async Task DefaultFolders_CannotReplaceProjectConfiguration(string path)
     {
         using var fixture = new Fixture();
         var ct = TestContext.Current.CancellationToken;
         var destination = Path.GetFullPath(path, fixture.Repository);
         Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = fixture.Repository,
+            Fingerprint = "configuration-regression",
+            MutationRoots = [fixture.Repository],
+            MutationDefault = MutationApprovalPolicy.ReviewAll,
+            MutationCeiling = MutationApprovalPolicy.ReviewAll,
+        };
+        var context = fixture.Context with { Invocation = fixture.Context.Invocation with { SecurityPolicy = policy } };
+        var tool = fixture.Tool();
+        await using var events = new DomainEventStream();
+        var pipeline = CreatePipeline(events, tool);
+
+        foreach (var target in new[] { path, destination })
+        {
+            var input = new WriteFileInput(target, "new configuration");
+            var creation = await InvokeAsync(pipeline, context, input);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, creation.ErrorClassification);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, ct));
+            Assert.False(File.Exists(destination));
+        }
+
         const string original = "existing configuration\n";
         await File.WriteAllTextAsync(destination, original, ct);
-        await using var events = new DomainEventStream();
-        var pipeline = CreatePipeline(events, fixture.Tool());
-
-        var relative = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(path, "replacement", Overwrite: true));
-        var absolute = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(destination, "replacement", Overwrite: true));
-
-        Assert.Equal(ToolErrorClassification.PolicyDenied, relative.ErrorClassification);
-        Assert.Equal(ToolErrorClassification.PolicyDenied, absolute.ErrorClassification);
-        Assert.Equal(original, await File.ReadAllTextAsync(destination, ct));
+        foreach (var target in new[] { path, destination })
+        {
+            var input = new WriteFileInput(target, "replacement", Overwrite: true);
+            var replacement = await InvokeAsync(pipeline, context, input);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, replacement.ErrorClassification);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, ct));
+            Assert.Equal(original, await File.ReadAllTextAsync(destination, ct));
+        }
     }
 
     /// <summary>Explicit broad grants never authorize Git metadata or instruction replacement.</summary>
@@ -98,13 +141,95 @@ public static class WriteFileTests
         Assert.Equal(original, await File.ReadAllTextAsync(destination, ct));
     }
 
-    /// <summary>Traversal and similarly prefixed siblings cannot escape the configured folder.</summary>
+    /// <summary>Export grants cannot bypass the configuration boundary.</summary>
     [Theory]
-    [InlineData("report.md")]
-    [InlineData(".inbox-other/report.md")]
-    [InlineData(".inbox/../report.md")]
-    [InlineData("docs/implementation-plans/feature.md")]
-    [InlineData(".threadsmith/notes.md")]
+    [InlineData("appsettings.json")]
+    [InlineData(".config/dotnet-tools.json")]
+    [InlineData("package.json")]
+    [InlineData(".github/actions/build/action.yml")]
+    public static async Task ExternalGrant_CannotWriteConfiguration(string path)
+    {
+        using var fixture = new Fixture();
+        var ct = TestContext.Current.CancellationToken;
+        var folder = Path.Combine(fixture.Root, "external");
+        var destination = Path.GetFullPath(path, folder);
+        var configuration = JsonConfig(JsonSerializer.Serialize(
+            new { tools = new { writeFile = new { allowedFolders = new[] { folder } } } }));
+        var tool = fixture.Tool(configuration);
+        await using var events = new DomainEventStream();
+        var pipeline = CreatePipeline(events, tool);
+
+        var input = new WriteFileInput(destination, "configuration");
+        var creation = await InvokeAsync(pipeline, fixture.Context, input);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, creation.ErrorClassification);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, fixture.Context, ct));
+        Assert.False(Directory.Exists(folder));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        await File.WriteAllTextAsync(destination, "original", ct);
+        input = input with { Overwrite = true };
+        var replacement = await InvokeAsync(pipeline, fixture.Context, input);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, replacement.ErrorClassification);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, fixture.Context, ct));
+        Assert.Equal("original", await File.ReadAllTextAsync(destination, ct));
+    }
+
+    /// <summary>Checkout and export ancestors do not turn ordinary structured reports into configuration.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ConfigurationAncestor_DoesNotDenyArtifacts(bool external)
+    {
+        using var fixture = new Fixture(configurationAncestor: true);
+        var folder = external ? Path.Combine(fixture.Root, ".vscode", "exports") : fixture.Repository;
+        var tool = fixture.Tool(JsonConfig(JsonSerializer.Serialize(
+            new { tools = new { writeFile = new { allowedFolders = new[] { folder } } } })));
+        await using var events = new DomainEventStream();
+        var pipeline = CreatePipeline(events, tool);
+
+        foreach (var extension in new[] { "json", "yaml", "xml" })
+        {
+            var destination = Path.Combine(folder, "reports", "data." + extension);
+            var result = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(destination, "report"));
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Equal("report", await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
+        }
+
+        var denied = await InvokeAsync(
+            pipeline,
+            fixture.Context,
+            new WriteFileInput(Path.Combine(folder, ".config", "dotnet-tools.json"), "denied"));
+        Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
+    }
+
+    /// <summary>Repository artifacts do not require an output-folder grant.</summary>
+    [Theory]
+    [InlineData("report.md", false)]
+    [InlineData("reports/data.json", false)]
+    [InlineData("reports/data.yaml", false)]
+    [InlineData("reports/data.yml", true)]
+    [InlineData("reports/data.xml", false)]
+    [InlineData(".inbox-other/report.md", false)]
+    [InlineData(".inbox/../report.md", false)]
+    [InlineData("docs/implementation-plans/feature.md", false)]
+    [InlineData("docs/implementation-plans/feature.md", true)]
+    [InlineData(".threadsmith/notes.md", false)]
+    public static async Task RepositoryArtifacts_AreImplicitlyAllowed(string path, bool absolute)
+    {
+        using var fixture = new Fixture();
+        await using var events = new DomainEventStream();
+        var destination = Path.GetFullPath(path, fixture.Repository);
+        var result = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool()),
+            fixture.Context,
+            new WriteFileInput(absolute ? destination : path, "report"));
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("report", await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Traversal and similarly prefixed siblings cannot escape the repository without a grant.</summary>
+    [Theory]
     [InlineData("../outside/report.md")]
     [InlineData("../repo-other/report.md")]
     [InlineData(".inbox/../../outside/report.md")]
@@ -120,23 +245,100 @@ public static class WriteFileTests
         Assert.Empty(Directory.GetFiles(fixture.Root, "*", SearchOption.AllDirectories));
     }
 
-    /// <summary>Explicit folder restrictions deny destinations outside their grants.</summary>
+    /// <summary>Export restrictions do not revoke implicit repository authority.</summary>
     [Theory]
     [InlineData("[]")]
     [InlineData("[\".inbox\"]")]
-    public static async Task ExplicitFolderRestrictions_AreRetained(string folders)
+    public static async Task ExportRestrictions_DoNotLimitRepositoryWrites(string folders)
     {
         using var fixture = new Fixture();
         var configuration = JsonConfig("{\"tools\":{\"writeFile\":{\"allowedFolders\":" + folders + "}}}");
         await using var events = new DomainEventStream();
 
-        var result = await InvokeAsync(CreatePipeline(events, fixture.Tool(configuration)), fixture.Context, new WriteFileInput("docs/report.md", "denied"));
+        var pipeline = CreatePipeline(events, fixture.Tool(configuration));
+        var result = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput("docs/report.md", "report"));
+        var external = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput("../outside/report.md", "denied"));
 
-        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
-        Assert.False(File.Exists(Path.Combine(fixture.Repository, "docs/report.md")));
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Equal("report", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, "docs/report.md"), TestContext.Current.CancellationToken));
+        Assert.Equal(ToolErrorClassification.PolicyDenied, external.ErrorClassification);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "outside")));
     }
 
-    /// <summary>A trusted relative folder grant allows report output outside the default folder.</summary>
+    /// <summary>Effective repository scope cannot be widened by broad export grants or discovery roots.</summary>
+    [Theory]
+    [InlineData("docs/report.md", true)]
+    [InlineData("docs/single.md", true)]
+    [InlineData("other/report.md", false)]
+    [InlineData("docs/private/report.md", false)]
+    [InlineData("docs-other/report.md", false)]
+    public static async Task RepositoryWrites_UseEffectiveMutationScope(string path, bool allowed)
+    {
+        using var fixture = new Fixture();
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = fixture.Repository,
+            Fingerprint = "test",
+            MutationRoots = [Path.Combine(fixture.Repository, "docs")],
+            EditableRoots = [Path.Combine(fixture.Repository, "src")],
+            WriteFolders = [fixture.Root],
+            ProhibitedPaths = ["docs/private/**"],
+        };
+        var context = fixture.Context with { Invocation = fixture.Context.Invocation with { SecurityPolicy = policy } };
+        var tool = fixture.Tool();
+        await using var events = new DomainEventStream();
+        var input = new WriteFileInput(path, "report");
+        var result = await InvokeAsync(CreatePipeline(events, tool), context, input);
+
+        Assert.Equal(allowed, result.Succeeded);
+        if (allowed)
+        {
+            Assert.Equal("report", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, path), TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken));
+        }
+
+        var revoked = context with { Invocation = context.Invocation with { SecurityPolicy = policy with { MutationRoots = [] } } };
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(new WriteFileInput("docs/revoked.md", "denied"), revoked, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Implicit repository access preserves assignment scope and read-only restrictions.</summary>
+    [Theory]
+    [InlineData(true, "docs/report.md", true)]
+    [InlineData(true, "other/report.md", false)]
+    [InlineData(false, "docs/report.md", false)]
+    public static async Task RepositoryWrites_RespectChildScope(bool allowDirectWrites, string path, bool allowed)
+    {
+        using var fixture = new Fixture();
+        var context = fixture.Context with
+        {
+            Invocation = fixture.Context.Invocation with
+            {
+                IsChildAgent = true,
+                AllowDirectWrites = allowDirectWrites,
+                ApprovedRoots = ["docs"],
+            },
+        };
+        var tool = fixture.Tool();
+        await using var events = new DomainEventStream();
+        var input = new WriteFileInput(path, "report");
+        var result = await InvokeAsync(CreatePipeline(events, tool), context, input);
+
+        Assert.Equal(allowed, result.Succeeded);
+        if (!allowed)
+        {
+            Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken));
+            Assert.Empty(Directory.GetFiles(fixture.Root, "*", SearchOption.AllDirectories));
+        }
+    }
+
+    /// <summary>A trusted relative folder grant remains compatible with repository output.</summary>
     [Fact]
     public static async Task RelativeAllowlist_AllowsConfiguredReportFolder()
     {
@@ -587,10 +789,12 @@ public static class WriteFileTests
         var nextContext = fixture.Context with { Invocation = fixture.Context.Invocation with { RepositoryPath = nextRepository } };
         var denied = await InvokeAsync(pipeline, nextContext, new WriteFileInput(Path.Combine(external, "report.md"), "denied"));
         var stale = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(Path.Combine(external, "stale.md"), "denied"));
-        var allowed = await InvokeAsync(pipeline, nextContext, new WriteFileInput(".inbox/report.md", "next repository"));
+        var staleRepository = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput("docs/stale.md", "denied"));
+        var allowed = await InvokeAsync(pipeline, nextContext, new WriteFileInput("docs/report.md", "next repository"));
 
         Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
         Assert.Equal(ToolErrorClassification.PolicyDenied, stale.ErrorClassification);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, staleRepository.ErrorClassification);
         Assert.True(allowed.Succeeded, allowed.Error);
         Assert.False(Directory.Exists(external));
     }
@@ -645,7 +849,7 @@ public static class WriteFileTests
         var external = Directory.CreateDirectory(Path.Combine(fixture.Root, "external")).FullName;
         var grant = exactDestinationBeforeExternalGrant
             ? Directory.CreateDirectory(Path.Combine(fixture.Root, "grant")).FullName : fixture.Repository;
-        var link = Path.Combine(grant, ".inbox");
+        var link = Path.Combine(grant, "docs");
         if (OperatingSystem.IsWindows())
         {
             var start = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -815,10 +1019,10 @@ public static class WriteFileTests
 
     private sealed class Fixture : IDisposable
     {
-        public Fixture()
+        public Fixture(bool configurationAncestor = false)
         {
             Root = Directory.CreateDirectory(Path.Combine(TestTemporaryPath.PhysicalPath(), "threadsmith-write-tests-" + Guid.NewGuid().ToString("N"))).FullName;
-            Repository = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
+            Repository = Directory.CreateDirectory(Path.Combine(Root, configurationAncestor ? ".config/repo" : "repo")).FullName;
             Context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
             {
                 RepositoryPath = Repository,

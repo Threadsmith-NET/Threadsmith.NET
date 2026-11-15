@@ -2,7 +2,7 @@
 
 Stable conversation and direct-edit assets describe exact authorization, ordered source operations and advisory versioned compiler feedback. Explicitly requested build/test validation remains authoritative; response completion does not invoke it.
 
-`Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-ConversationGuidance.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
+`Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-ConversationGuidance.md` route report/data saves through the direct artifact writer. `useLastResponse:true` copies the previous archived answer without regeneration. The write-tool description distinguishes implicit repository access through host-owned `MutationRoots`, narrowed by child scope, from the separate active-scratchpad grant and trusted external grants in `tools.writeFile.allowedFolders`. The compatibility default `[".inbox"]` does not limit repository writes; an empty list denies external exports only. `.inbox` remains the recommended report location. These assets cannot change code-owned authority or bypass safety checks.
 
 This guide explains how Threadsmith uses the editable Markdown files in the deployed `prompts/` directory. It lists the complete shipped catalog by category and defines every case-sensitive `{{Placeholder}}` that Threadsmith may substitute.
 
@@ -624,7 +624,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 |---|---|---|
 | `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of current-run source evidence and retained same-session check/diff observations authorized by intact host receipts in the final request. | `None` |
-| `Tool-write_file-Description.md` | Direct artifact-write guidance, `.inbox` default, configured destinations, and Git-metadata/instruction-file safety boundaries. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
+| `Tool-write_file-Description.md` | Direct artifact-write guidance, implicit repository mutation scope and scratchpad access, trusted external grants, `.inbox` recommendation, and safety boundaries. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
 
@@ -955,7 +955,7 @@ Representative-change investigation: `Context-RepositoryIntelligenceCollection.m
 
 Scenario boundary verification: final coverage review starts with a distinct evidence check before further investigation. `Context-RepositoryIntelligenceCoverage.md` and `Context-RepositoryIntelligenceCollection.md` require the model to compare the original scenario question's promised boundaries with existing source evidence and accepted hints, record a compact account in the existing conclusion, and reopen specific gaps or required follow-ups. `Context-ChildAgent-IntelligenceInvestigation.md` supports a focused verification assignment. This adds no schema, autonomous reviewer, or host semantic-coverage gate; existing review delivery, checkpoints, and publication validation are reused.
 
-The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`auto`, `text`, `image`, `pdf`), typed PNG/JPEG evidence, bounded rendered PDF pages with continuation, and the rejection of text ranges/snapshots for images and PDFs. `Tool-write_file-Description.md` additionally describes mutually exclusive `artifactId` export using existing allowed folders and matching image extensions. The two tool filenames and placeholder contracts are unchanged; `MaximumContentBytes` retains its text-byte meaning, while fixed image bounds remain code-owned. No asset can enable a provider capability or grant artifact access.
+The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`auto`, `text`, `image`, `pdf`), typed PNG/JPEG evidence, bounded rendered PDF pages with continuation, and the rejection of text ranges/snapshots for images and PDFs. `Tool-write_file-Description.md` additionally describes mutually exclusive `artifactId` export using the same repository/scratchpad or trusted external-folder authorization and matching image extensions. The two tool filenames and placeholder contracts are unchanged; `MaximumContentBytes` retains its text-byte meaning, while fixed image bounds remain code-owned. No asset can enable a provider capability or grant artifact access.
 
 `Context-ImageOnlyUserMessage.md` (Execution; no tokens) labels an admitted user turn containing images and no text when constructing task intent. It supplies wording only; attachment validation, identity, selection and authority remain code-owned.
 

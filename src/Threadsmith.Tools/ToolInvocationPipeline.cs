@@ -373,7 +373,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var admittedAt = _timeProvider.GetUtcNow();
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var tasks = new List<Task<ToolBatchResult>>(requests.Count);
-        Task previousWave = Task.CompletedTask;
+        var previousWave = Task.CompletedTask;
         foreach (var wave in waves)
         {
             var prerequisite = previousWave;

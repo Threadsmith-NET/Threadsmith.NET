@@ -240,7 +240,7 @@ internal static class SecurityPolicyConfigurationLoader
 
         ImmutableArray<string> ResolveList(string key, string[]? defaults, bool pathsAreRoots = false)
         {
-            string[]? value = defaults;
+            var value = defaults;
             foreach (var source in trusted)
             {
                 if (ReadList(source, key) is { } configured)

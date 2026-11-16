@@ -118,9 +118,10 @@ csharp_prefer_simple_using_statement = true:error
 csharp_style_prefer_async_using = true:error
 
 # G-15: prefer var for local variables whenever C# can infer the type.
-csharp_style_var_for_built_in_types = true:suggestion
+# Keep explicit types when required, including collection-expression target typing (G-16).
+csharp_style_var_for_built_in_types = true:error
 csharp_style_var_when_type_is_apparent = true:error
-csharp_style_var_elsewhere = true:suggestion
+csharp_style_var_elsewhere = true:error
 
 # Modern, behavior-preserving expression forms.
 csharp_prefer_braces = true:error
@@ -179,7 +180,7 @@ dotnet_diagnostic.SA1124.severity = error
 # severities make violations errors in supporting IDEs, dotnet format, and
 # build hosts that enable code-style analysis.
 dotnet_diagnostic.IDE0003.severity = error
-dotnet_diagnostic.IDE0007.severity = suggestion
+dotnet_diagnostic.IDE0007.severity = error
 dotnet_diagnostic.IDE0008.severity = none
 dotnet_diagnostic.IDE0016.severity = error
 dotnet_diagnostic.IDE0017.severity = error

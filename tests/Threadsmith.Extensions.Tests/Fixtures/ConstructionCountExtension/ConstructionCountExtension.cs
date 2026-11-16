@@ -91,7 +91,7 @@ public sealed class ConstructionCountTool : IToolCapability
         ExtensionToolInvocationContext context,
         CancellationToken cancellationToken = default)
     {
-        string resultJson = JsonSerializer.Serialize(new { count = ConstructionCountExtension.ConstructionCount });
+        var resultJson = JsonSerializer.Serialize(new { count = ConstructionCountExtension.ConstructionCount });
         return Task.FromResult(new ExtensionToolResult
         {
             Succeeded = true,

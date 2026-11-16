@@ -330,7 +330,13 @@ dotnet_diagnostic.SA1202.severity = error
 # Preserve private-helper locality after CA1822 marks helpers static.
 dotnet_diagnostic.SA1204.severity = none
 dotnet_diagnostic.SA1206.severity = none
+# G-7 prefers _camelCase for private static fields (including readonly fields)
+# and constants; PascalCase remains permitted. These rules cannot express both alternatives
+# or limit the exception to those fields; field naming still requires review.
+dotnet_diagnostic.SA1303.severity = none
+dotnet_diagnostic.SA1306.severity = none
 dotnet_diagnostic.SA1309.severity = none
+dotnet_diagnostic.SA1311.severity = none
 dotnet_diagnostic.SA1313.severity = none
 # Threadsmith uses idiomatic camelCase tuple element names.
 dotnet_diagnostic.SA1316.severity = none

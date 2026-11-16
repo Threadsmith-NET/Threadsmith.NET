@@ -9,7 +9,11 @@
     <!-- Layout / ordering -->
     <Rule Id="SA1124" Action="Error" />
     <Rule Id="SA1200" Action="None" />
+    <!-- G-7 prefers _camelCase for private static fields and constants; PascalCase remains permitted. -->
+    <Rule Id="SA1303" Action="None" />
+    <Rule Id="SA1306" Action="None" />
     <Rule Id="SA1309" Action="None" />
+    <Rule Id="SA1311" Action="None" />
     <Rule Id="SA1101" Action="None" />
   </Rules>
   <Rules AnalyzerId="Roslynator.Analyzers" RuleNamespace="Roslynator.Analyzers">

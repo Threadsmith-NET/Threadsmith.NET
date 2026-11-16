@@ -24,7 +24,7 @@
       NoWarn. This prevents clean parallel builds from intermittently applying analyzer defaults when
       an MSBuild/Roslyn node misses analyzer-config severity data; enabled StyleCop rules remain errors.
     -->
-    <NoWarn>$(NoWarn);SA1000;SA1009;SA1010;SA1011;SA1101;SA1200;SA1201;SA1204;SA1206;SA1309;SA1313;SA1316;SA1402;SA1518;SA1602;SA1611;SA1615;SA1618;SA1623;SA1633;SA1649</NoWarn>
+    <NoWarn>$(NoWarn);SA1000;SA1009;SA1010;SA1011;SA1101;SA1200;SA1201;SA1204;SA1206;SA1303;SA1306;SA1309;SA1311;SA1313;SA1316;SA1402;SA1518;SA1602;SA1611;SA1615;SA1618;SA1623;SA1633;SA1649</NoWarn>
 
     <!-- Deterministic + source-linked builds. -->
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>

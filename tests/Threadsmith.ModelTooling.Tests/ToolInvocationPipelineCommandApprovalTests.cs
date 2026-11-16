@@ -1,10 +1,13 @@
 namespace Threadsmith.ModelTooling.Tests;
 
+using System.Collections.Immutable;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Policies.Commands;
 using Threadsmith.Policies.Contracts;
+using Threadsmith.Policies.Evaluation;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -26,7 +29,7 @@ public static class ToolInvocationPipelineCommandApprovalTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var repository = Path.GetFullPath(".");
         var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
-        var policy = ShellCommandPolicyTests.Policy(repository, shell);
+        var policy = Policy(repository, shell);
         var snapshot = policy.CommandPolicies[shell];
         policy = policy with
         {
@@ -83,7 +86,7 @@ public static class ToolInvocationPipelineCommandApprovalTests
             RunId = RunId.New(),
             ToolId = "run_process",
             ArgumentsJson = JsonSerializer.Serialize(new RunProcessInput { Command = "dotnet --version", WorkingDirectory = repository }),
-            Context = ShellCommandPolicyTests.Context(repository, policy),
+            Context = Context(repository, policy),
         };
 
         if (exit == "waiting-cancel")
@@ -132,6 +135,32 @@ public static class ToolInvocationPipelineCommandApprovalTests
         Assert.Equal(choice == PolicyApprovalChoice.Session ? 1 : 0, coordinator.Grants.InspectSession().Count);
         Assert.Equal(exit is "success" or "waiting-cancel" ? 1 : 0, manager.Launches);
     }
+
+    private static EffectiveSessionPolicy Policy(string repository, string shell)
+    {
+        var platform = OperatingSystem.IsWindows() ? "windows" : OperatingSystem.IsMacOS() ? "macos" : "linux";
+        return new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            Fingerprint = "fixture-policy",
+            RepositoryPath = repository,
+            MaximumTrust = RepositoryTrustLevel.TrustedBuild,
+            ReadFolders = [repository],
+            AllowedExecutables = [shell, "git", "dotnet"],
+            CommandPolicies = ImmutableDictionary<string, PolicySnapshot>.Empty.Add(shell, PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, platform, shell)),
+        };
+    }
+
+    private static ToolInvocationContext Context(string repository, EffectiveSessionPolicy policy) => new()
+    {
+        RepositoryPath = repository,
+        RequestedBy = "fixture",
+        TrustLevel = RepositoryTrustLevel.TrustedBuild,
+        ApprovedRoots = [repository],
+        AllowedExecutables = policy.AllowedExecutables,
+        SecurityPolicy = policy,
+    };
 
     private sealed class AdmissionBudget : IBudget
     {

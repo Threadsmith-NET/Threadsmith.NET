@@ -75,7 +75,7 @@ public static class PolicyReviewRegressionTests
         var broken = Rule("broken") with { Matchers = matchers };
         snapshot = enforced ? snapshot with { Enforced = [broken] } : snapshot with { Rules = [broken] };
 
-        var decision = PolicyEvaluator.Evaluate(snapshot, Facts());
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts());
 
         Assert.False(decision.IsAllowed);
         Assert.Equal(PolicyReasons.AnalysisError, decision.ReasonCode);
@@ -124,12 +124,12 @@ public static class PolicyReviewRegressionTests
                 var facts = new CommandFacts(platform, shell, spelling, kind == "shell-command" ? string.Empty : Path.GetFullPath(spelling), kind, [], Path.GetFullPath("."));
 
                 // Act / Assert.
-                var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+                var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
                 Assert.False(decision.IsAllowed);
                 Assert.False(decision.RequiresApproval);
                 Assert.Empty(decision.Choices);
                 Assert.Equal(PolicyReasons.Conflict, decision.ReasonCode);
-                Assert.True(PolicyEvaluator.Evaluate(snapshot, facts with { ExecutableName = "fixture-safe" }).IsAllowed);
+                Assert.True(TestPolicyEvaluation.Evaluate(snapshot, facts with { ExecutableName = "fixture-safe" }).IsAllowed);
             }
         }
     }
@@ -154,7 +154,7 @@ public static class PolicyReviewRegressionTests
             Assert.Equal(enforcedCount, snapshot.Enforced.Length);
             Assert.Equal(ordinaryCount + baseline.Common.Rules.Length + 1, snapshot.Rules.Length);
         });
-        Assert.True(PolicyEvaluator.Evaluate(snapshots["linux/bash"], Facts()).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(snapshots["linux/bash"], Facts()).IsAllowed);
 
         var last = ordinaryCount > 0 ? ordinary[^1] : enforced[^1];
         var broken = last with { Matchers = [new PolicyMatcher { Type = (PolicyMatcherType)int.MaxValue }] };
@@ -175,7 +175,7 @@ public static class PolicyReviewRegressionTests
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var action = 0; action < 64; action++)
         {
-            var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+            var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
             Assert.Equal(PolicyReasons.Unmatched, decision.ReasonCode);
         }
 

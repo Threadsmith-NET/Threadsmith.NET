@@ -63,7 +63,9 @@ internal sealed class OpenRouterResponsesStream
             var status = String(result, "status");
             var isError = type is "response.failed" or "response.incomplete" or "error" || status is "failed" or "incomplete" || result["error"] is not null;
             var rateLimited = ModelStreamRetry.IsRateLimitError(result);
-            var retryable = rateLimited || String(result, "error_type") is "provider_unavailable" or "provider_overloaded";
+            var overloaded = ModelStreamRetry.IsOverloadError(result)
+                || String(result, "error_type") is "provider_unavailable" or "provider_overloaded";
+            var retryable = rateLimited || overloaded;
             if (result["usage"] is JsonObject report)
             {
                 var nextUsage = OpenRouterResponsesUsage.Read(report, request, _profile, Math.Max(characters, OutputCharacters(result)));
@@ -93,7 +95,7 @@ internal sealed class OpenRouterResponsesStream
                 {
                     throw new TransientModelException(ProviderErrorDetails.PreferMessage(
                         ErrorDetails(result), "The provider could not complete the request."))
-                    { IsRateLimit = rateLimited };
+                    { IsRateLimit = rateLimited, IsOverloaded = overloaded };
                 }
 
                 if ((type == "response.incomplete" || status == "incomplete")

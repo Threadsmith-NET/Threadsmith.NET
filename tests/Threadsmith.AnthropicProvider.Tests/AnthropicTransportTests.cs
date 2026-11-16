@@ -199,7 +199,7 @@ public sealed class AnthropicTransportTests
             return Task.FromResult(Response(new MemoryStream(Encoding.UTF8.GetBytes(TestAnthropic.TextStream()))));
         });
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
         var request = TestAnthropic.Request() with { SubmissionObserver = () => submissions++, IncludeReasoningText = true };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()

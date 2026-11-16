@@ -72,7 +72,7 @@ public static class PolicyMatcherCatalogTests
             var facts = new CommandFacts(platform, "bash", "git", Path.GetFullPath("git"), "external", ["status"], directory);
 
             // Act.
-            var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+            var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
 
             // Assert.
             Assert.Equal(directory == root + "-sibling", decision.IsAllowed);

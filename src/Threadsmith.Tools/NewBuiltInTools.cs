@@ -86,7 +86,10 @@ public sealed record CSharpScriptInput : IConceptToolInput
     public IReadOnlyList<string>? Concepts { get; init; }
 
     /// <summary>C# expression or statement sequence.</summary>
-    public required string Code { get; init; }
+    public string? Code { get; init; }
+
+    /// <summary>Readable repository-contained .csx source; exclusive with Code.</summary>
+    public string? ScriptPath { get; init; }
 
     /// <summary>Input form: <c>expression</c> or <c>statement</c>.</summary>
     public string Kind { get; init; } = "expression";
@@ -346,16 +349,19 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
 public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutput>
 {
     private readonly int _maximumCodeCharacters;
+    private readonly int _maximumWriteBytes;
     private readonly ToolDefinition _definition;
     private readonly ICSharpScriptEngine _engine;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptTool"/> class.</summary>
-    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader, int maximumCodeCharacters = 65536)
+    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader, int maximumCodeCharacters = 65536, int maximumWriteBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(promptLoader);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCodeCharacters);
         _maximumCodeCharacters = maximumCodeCharacters;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWriteBytes);
+        _maximumWriteBytes = maximumWriteBytes;
         _definition = ToolDefinitionFactory.WithStringEnum(
             ToolDefinitionFactory.Create<CSharpScriptInput, CSharpScriptOutput>(
                 "csharp_script",
@@ -375,6 +381,10 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
             "expression",
             "expression",
             "statement");
+        _definition = ToolDefinitionFactory.WithPropertyDescriptions(
+            _definition,
+            ("code", "Inline source. Supply exactly one non-null, nonblank source: code or scriptPath."),
+            ("scriptPath", "Repository-contained .csx file. Exclusive with code. Bare names select the active scratchpad; paths with directories select from the repository root."));
         _engine = engine;
     }
 
@@ -387,21 +397,63 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        var source = context.PreparedScriptSource ?? await PrepareSourceAsync(input, context, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (context.Invocation.SecurityPolicy is { } policy)
+        {
+            context.Invocation.PolicyBinding?.Validate(policy);
+        }
+
         var kind = Enum.Parse<ScriptKind>(input.Kind, ignoreCase: true);
-        var output = await _engine.ExecuteAsync(
-            input.Code,
-            kind,
-            context,
-            cancellationToken);
-        return new ToolExecution<CSharpScriptOutput>(output, output.ScriptPath is { } path ? [new ToolProvenanceSource("file", path)] : [], output.IsTruncated);
+        var output = await _engine.ExecuteAsync(source.Code, kind, context, cancellationToken);
+        var sources = new List<ToolProvenanceSource>();
+        if (source.SourcePath is { } original)
+        {
+            sources.Add(new ToolProvenanceSource("file", original));
+        }
+
+        if (output.ScriptPath is { } path)
+        {
+            sources.Add(new ToolProvenanceSource("file", path));
+        }
+
+        return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated);
+    }
+
+    /// <summary>Captures one immutable source after tool admission.</summary>
+    internal async Task<PreparedCSharpScriptSource> PrepareSourceAsync(
+        CSharpScriptInput input,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        ValidateInput(input);
+        cancellationToken.ThrowIfCancellationRequested();
+        var scope = ScriptFilePolicy.CreateScope(context.Invocation, _maximumWriteBytes);
+        var maximumCharacters = context.Invocation.SecurityPolicy is { } policy
+            ? policy.ResourceLimits["tools:config:csharp_script:max_code_characters"] : _maximumCodeCharacters;
+        var source = input.Code is { } code
+            ? new PreparedCSharpScriptSource(code, null)
+            : await ScriptFilePolicy.ReadSourceAsync(input.ScriptPath ?? throw new ToolArgumentValidationException("scriptPath is required."), context.Invocation, scope, maximumCharacters, cancellationToken);
+        if (source.Code.Length > maximumCharacters)
+        {
+            throw new ToolArgumentValidationException($"code is limited to {maximumCharacters} characters.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(source.Code);
+        return source;
     }
 
     /// <inheritdoc />
     protected override void ValidateInput(CSharpScriptInput input)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(input.Code);
+        if ((input.Code is null) == (input.ScriptPath is null))
+        {
+            throw new ToolArgumentValidationException("Supply exactly one of code or scriptPath.");
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(input.Code ?? input.ScriptPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Kind);
-        if (input.Code.Length > _maximumCodeCharacters)
+        if (input.Code?.Length > _maximumCodeCharacters)
         {
             throw new ToolArgumentValidationException($"code is limited to {_maximumCodeCharacters} characters.");
         }

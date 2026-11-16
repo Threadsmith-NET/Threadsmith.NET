@@ -2,7 +2,7 @@
 
 The maintained `review` skill supports `mode: "pullRequest"`, `url`, and an optional configured `provider` ID. The host selects the account using configured URL patterns; the model asks for an account only when the tool reports ambiguity. Natural-language invocation and `/skills use` follow the same procedure and five reviewer roles. PR mode uses one `kind:"diff"` call in the lead review to capture inventory and diff, then supplies the completed snapshot ID to specialists for bounded reads. Ordinary changed-file requests use `kind:"inventory"`. See [provider setup, cache and refresh](pr-fetch.md) and [review examples](../code-review.md#review-a-pull-request). PR mode requires the enabled parent-only `pr_fetch` tool and its ordinary network/Secrets permissions; it does not fall back to branch comparison.
 
-Threadsmith skills are host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
+Threadsmith skills are host-owned declarative procedure packages. Skills are untrusted package content, not executable plugins, autonomous agents, or direct tools. Native packages may include inert C# script assets used only through the ordinary `csharp_script` tool. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
 
 ## Native contracts and clarification
 
@@ -12,6 +12,14 @@ Required-tool availability does not bypass policy, consent, MCP approval, trust,
 
 On an interactive surface, a procedure can use the existing `ask_user` tool and receive the answer in its own model history. Manual and model-driven invocation share the ordinary question coordinator and tool lifecycle. Human waiting releases source execution admission and does not consume enclosing automated execution budgets; cancellation still works. Resumption revalidates policy, repository identity and tool registration. A declined answer is reported as such, not invented. Noninteractive and child callers cannot acquire question authority through a dependency. To avoid sibling execution during a human wait, both `ask_user` and `invoke_skill` must be sole model-batch calls.
 
+## Optional native packaged scripts
+
+Native manifests can declare multiple `kind: "script"` assets at flat `scripts/<filename>.csx` paths. Names are case-insensitively unique; declared lengths, hashes, package confinement, and normal verification apply. See [the authoring contract](../skill-authoring.md#optional-native-packaged-scripts).
+
+Repository-contained scripts use repository-relative source paths. External scripts are copied only when a procedure first runs, under `skill-scripts/<session-id>/<package-digest>/` in the active session scratchpad. Copies are reused without overwrite for the session; normal scratchpad cleanup removes them. Script preparation verifies bytes once per workflow request and package digest, reusing only paths/metadata across steps and iterations. A new invocation or resume rechecks integrity. Each step still checks current read authority, and each selected script's captured execution bytes must match its package length/hash before source evidence or worker execution. Preparation admits at most 4 MiB of aggregate declared script bytes and checks available effective C# source limits before copying. Disabled, unavailable, or external-to-repository scratchpads block external script staging with a reason. Nothing is copied at startup.
+
+The procedure model receives `name`/`scriptPath` entries in host-context JSON, not automatically injected script bodies. It selects a filename and passes the supplied path to the ordinary [C# scripting tool](csharp-scripting-execution.md). Staging never runs scripts. Tool dependencies, source limits, cancellation, policy, trust, and approvals remain authoritative; packaging adds no imports, dependency restore, execution authority, or alternate runner. Claude-style resource handling is unchanged.
+
 ## Command policy authoring
 
 The maintained `command-policy-authoring` package uses only required `validate_command_policy` and `ask_user` dependencies, with inheritance disabled. Use ordinary inspection, manual, model-driven, and headless entry points. It revises drafts and asks necessary questions within one execution. Only `request` is required initially; omitted `workingDirectory` uses the host repository root, not process cwd or an implicit policy restriction.
@@ -20,7 +28,7 @@ A necessary unavailable answer must not be guessed. Required-tool admission stil
 
 ## Catalog scopes and discovery
 
-Threadsmith discovers bounded `skill.json` metadata in deterministic organization, machine, user, repository, and host-maintained catalogs. Startup and `/skills refresh` read manifests only. Instruction, schema, and reference bodies remain unopened until explicit verification/invocation.
+Threadsmith discovers bounded `skill.json` metadata in deterministic organization, machine, user, repository, and host-maintained catalogs. Startup and `/skills refresh` read manifests only. Instruction, schema, reference, and script bodies remain unopened until explicit verification/invocation.
 
 Default locations:
 

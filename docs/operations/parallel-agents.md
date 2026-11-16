@@ -43,8 +43,8 @@ Omitting `role` preserves `explorer` behavior. Role names are exact and case-sen
 
 | Role | Instruction focus |
 |---|---|
-| `explorer` | Answer concrete codebase questions: locate implementations, trace execution or data flow, identify relevant files and contracts, or gather evidence for planning. Return source references and uncertainties. This is the default; use implementer for changes and specialist reviewers for their review tasks. |
-| `implementer` | Carry out the assigned implementation using available tools, or propose changes when execution is unavailable. |
+| `explorer` | Answer concrete codebase questions: locate implementations, trace execution or data flow, identify relevant files and contracts, or gather evidence for planning. Return source references and uncertainties. This is the default; use implementer to plan changes and specialist reviewers for their review tasks. |
+| `implementer` | Act as an Implementation Planner: inspect the codebase and dependencies, then produce a comprehensive change plan in ASD-STE100 Simplified Technical English (STE). Reuse existing patterns and code; report missing information rather than assume it. |
 | `securityReviewer` | Review security risks and possible mitigations. |
 | `testReviewer` | Review test coverage and useful assertions. |
 | `performanceReviewer` | Review performance behavior and possible measurements. |

@@ -1,0 +1,1 @@
+Reportable diagnostic retention is bounded; before/after comparison is unavailable.

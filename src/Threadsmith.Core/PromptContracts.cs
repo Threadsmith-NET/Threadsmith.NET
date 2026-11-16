@@ -255,6 +255,12 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextSourceEditOmittedProjectCoverage prompt asset.</summary>
     public const string ContextSourceEditOmittedProjectCoverage = "Context-SourceEdit-OmittedProjectCoverage.md";
 
+    /// <summary>Unavailable before/after compiler comparison when diagnostic retention is bounded.</summary>
+    public const string ContextSourceEditCompilerRetentionBounded = "Context-SourceEdit-CompilerRetentionBounded.md";
+
+    /// <summary>Unknown compiler origins after bounded retention or reset, independent of before/after error comparison.</summary>
+    public const string ContextSourceEditCompilerOriginsUnavailable = "Context-SourceEdit-CompilerOriginsUnavailable.md";
+
     /// <summary>Gets the current memory snapshot wrapper appended at a replay-compatible continuation boundary.</summary>
     public const string ContextRepositoryMemoryRefresh = "Context-RepositoryMemory-Refresh.md";
 
@@ -1083,6 +1089,8 @@ public static class PromptFileNames
         ContextSourceEditMembershipRefresh,
         ContextSourceEditNewSourceParseOptions,
         ContextSourceEditOmittedProjectCoverage,
+        ContextSourceEditCompilerRetentionBounded,
+        ContextSourceEditCompilerOriginsUnavailable,
 
         ContextRepositoryMemoryRefresh,
         ContextExecutionOutcome,
@@ -1481,6 +1489,8 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextSourceEditMembershipRefresh,
             PromptFileNames.ContextSourceEditNewSourceParseOptions,
             PromptFileNames.ContextSourceEditOmittedProjectCoverage,
+            PromptFileNames.ContextSourceEditCompilerRetentionBounded,
+            PromptFileNames.ContextSourceEditCompilerOriginsUnavailable,
         ]);
 
         var skillAssets = new HashSet<string>(StringComparer.Ordinal)

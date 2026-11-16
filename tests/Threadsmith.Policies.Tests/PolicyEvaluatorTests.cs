@@ -20,7 +20,7 @@ public static class PolicyEvaluatorTests
     public static void OutcomesHaveExactChoices(PolicyOutcome outcome, bool allowed, bool approval, int choices)
     {
         var snapshot = Compile(Rule("only", outcome));
-        var decision = PolicyEvaluator.Evaluate(snapshot, Facts("git"));
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts("git"));
         Assert.Equal(allowed, decision.IsAllowed);
         Assert.Equal(approval, decision.RequiresApproval);
         Assert.Equal(choices, decision.Choices.Length);
@@ -45,7 +45,7 @@ public static class PolicyEvaluatorTests
             foreach (var shell in profile.Shells.Keys)
             {
                 var snapshot = PolicyCompiler.Compile(defaults, null, null, platform, shell);
-                var decision = PolicyEvaluator.Evaluate(snapshot, Facts(executable, arguments) with { Platform = platform, Shell = shell });
+                var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts(executable, arguments) with { Platform = platform, Shell = shell });
                 Assert.True(decision.IsAllowed, decision.ReasonCode);
                 Assert.False(decision.RequiresApproval);
             }
@@ -72,7 +72,7 @@ public static class PolicyEvaluatorTests
     public static void SelectedExecutionTextAndHttpCommandsDeny(string executable, params string[] arguments)
     {
         var snapshot = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts(executable, arguments)).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts(executable, arguments)).IsAllowed);
     }
 
     [Fact]
@@ -80,11 +80,11 @@ public static class PolicyEvaluatorTests
     {
         var first = Rule("first", PolicyOutcome.Allow);
         var second = Rule("second", PolicyOutcome.Allow);
-        Assert.True(PolicyEvaluator.Evaluate(Compile(first, second), Facts("git")).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(Compile(first, second), Facts("git")).IsAllowed);
         var conflict = second with { Policy = PolicyOutcome.AlwaysDeny };
-        Assert.Equal("PolicyConflict", PolicyEvaluator.Evaluate(Compile(first, conflict), Facts("git")).ReasonCode);
+        Assert.Equal("PolicyConflict", TestPolicyEvaluation.Evaluate(Compile(first, conflict), Facts("git")).ReasonCode);
         var exception = conflict with { Overrides = [first.Id] };
-        Assert.Equal(PolicyOutcome.AlwaysDeny, PolicyEvaluator.Evaluate(Compile(first, exception), Facts("git")).Outcome);
+        Assert.Equal(PolicyOutcome.AlwaysDeny, TestPolicyEvaluation.Evaluate(Compile(first, exception), Facts("git")).Outcome);
     }
 
     [Fact]
@@ -92,7 +92,7 @@ public static class PolicyEvaluatorTests
     {
         var basis = Rule("basis", PolicyOutcome.AlwaysDeny);
         var exception = Rule("exception", PolicyOutcome.Allow) with { Overrides = [basis.Id] };
-        Assert.Equal(PolicyEvaluator.Evaluate(Compile(basis, exception), Facts("git")).RuleFingerprint, PolicyEvaluator.Evaluate(Compile(exception, basis), Facts("git")).RuleFingerprint);
+        Assert.Equal(TestPolicyEvaluation.Evaluate(Compile(basis, exception), Facts("git")).RuleFingerprint, TestPolicyEvaluation.Evaluate(Compile(exception, basis), Facts("git")).RuleFingerprint);
     }
 
     [Theory]
@@ -106,7 +106,7 @@ public static class PolicyEvaluatorTests
         var snapshot = Compile(basis, replacement);
 
         // Act.
-        var decision = PolicyEvaluator.Evaluate(snapshot, Facts("git", "prefix-blocked-suffix"));
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "prefix-blocked-suffix"));
 
         // Assert.
         Assert.False(decision.IsAllowed);
@@ -114,7 +114,7 @@ public static class PolicyEvaluatorTests
         Assert.Empty(decision.Choices);
         Assert.Equal(PolicyOutcome.AlwaysDeny, decision.Outcome);
         Assert.Contains(basis.Id, decision.RuleIds);
-        Assert.True(PolicyEvaluator.Evaluate(snapshot, Facts("git", "other", "--unknown")).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "other", "--unknown")).IsAllowed);
     }
 
     [Theory]
@@ -133,15 +133,15 @@ public static class PolicyEvaluatorTests
         var snapshot = Compile(Rule("search", PolicyOutcome.Allow) with { DenyArgumentsMatching = [pattern] });
 
         // Act / Assert.
-        Assert.Equal(allowed, PolicyEvaluator.Evaluate(snapshot, Facts("git", arguments)).IsAllowed);
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts("unmatched", arguments)).IsAllowed);
+        Assert.Equal(allowed, TestPolicyEvaluation.Evaluate(snapshot, Facts("git", arguments)).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("unmatched", arguments)).IsAllowed);
     }
 
     [Fact]
     public static void ArgumentsAreUnrestrictedWithoutDenyExpressions()
     {
         var snapshot = Compile(Rule("all-arguments", PolicyOutcome.Allow));
-        Assert.True(PolicyEvaluator.Evaluate(snapshot, Facts("git", "unknown", "--flag", "--flag", "path with spaces")).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "unknown", "--flag", "--flag", "path with spaces")).IsAllowed);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public static class PolicyEvaluatorTests
     {
         var machine = Document(new PolicyProfile { Enforced = [Rule("constraint", PolicyOutcome.Allow)], Shells = ImmutableDictionary<string, PolicyProfile>.Empty.Add("bash", new PolicyProfile()) });
         var snapshot = PolicyCompiler.Compile(new PolicyDocument(), machine, null, "linux", "bash");
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts("git")).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("git")).IsAllowed);
         Assert.Throws<InvalidDataException>(() => PolicyCompiler.Compile(new PolicyDocument(), null, machine, "linux", "bash"));
     }
 
@@ -159,8 +159,8 @@ public static class PolicyEvaluatorTests
         var constraint = Rule("constraint", PolicyOutcome.Allow) with { DenyArgumentsMatching = ["private/path"] };
         var machine = Document(new PolicyProfile { RequireEnforcedMatch = true, Enforced = [constraint] });
         var snapshot = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), machine, null, "linux", "bash");
-        Assert.True(PolicyEvaluator.Evaluate(snapshot, Facts("git", "status", "--unknown")).IsAllowed);
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts("git", "add", "private/path/file")).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "status", "--unknown")).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "add", "private/path/file")).IsAllowed);
     }
 
     [Fact]

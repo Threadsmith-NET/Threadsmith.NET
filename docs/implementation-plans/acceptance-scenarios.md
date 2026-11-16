@@ -4,13 +4,21 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario SC-SCRIPT-FILE-01 — Script file input
+
+1. Run inline expression and statement source. Repeat each by returned absolute `ScriptPath` and bare filename, resending the required kind. Each call returns a distinct execution copy without shared variables.
+2. Run `./root.csx`, a nested repository-relative file, and an in-repository absolute file. Bare names select only the active scratchpad; a missing bare name never falls back to the repository.
+3. Verify the repository source is unchanged. Source detail, saved copy, and execution agree with the captured text. Editing the original does not alter earlier evidence or saved-copy reruns.
+4. Reject exclusive-choice violations, missing files, wrong extensions, directories, invalid UTF-8, excess size, and denied reads before worker execution.
+5. Reject external source even with external read grants, traversal escapes, prohibited paths, links, and out-of-scope child reads. Parent/child and headless/interactive calls use the same policy and preparation with unchanged worker restrictions.
+
 ## Scenario SC-SCRIPT-SOURCE-01 — Submitted script source
 
 1. Complete two permitted `csharp_script` calls with distinct source, including a child invocation and compilation/runtime failure results. Each live result has an initially collapsed **C# script** control and an independent **View full script…** action. Output and errors stay outside the preview.
 2. Expand source with empty, blank, CRLF/LF/CR, 20/21-line, long-line, and surrogate-boundary fixtures. The preview contains at most 20 logical lines and 8,192 source characters. Removed text has a visible truncation notice. Highlighting never alters the source text.
 3. Activate full source by pointer and keyboard while collapsed. Verify the standard modal shows all retained source, including more than normal scrollback. Resize, scroll, select, close, and confirm unchanged underlying draft/focus.
 4. Copy selections and the full script with tabs, trailing spaces, terminal controls, markup-like text, Unicode, and mixed line endings. Copy equals the original range or complete input. Clipboard byte-policy/platform failure is explicit; no truncated copy is reported as full. Rendering cannot inject terminal commands or source-defined actions.
-5. Confirm source actions remain bound to their own invocation, source caches are bounded by retained output, unavailable source is explicit, and old restored results render without active source controls. Opening never rereads a scratchpad file or executes code. Model results, serialized events, routine logs, headless behavior, and dependency direction stay unchanged.
+5. Confirm source actions remain bound to their own invocation, source caches are bounded by retained output, unavailable source is explicit, and old restored results render without active source controls. For inline and file-based invocations, opening never rereads the source or execution copy, or executes code. Model results, serialized events, routine logs, headless behavior, and dependency direction stay unchanged.
 
 ## Scenario SC106-01 — Default-deny shell admission
 

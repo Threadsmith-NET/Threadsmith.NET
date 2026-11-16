@@ -67,7 +67,7 @@ public static class PolicyConfigurationServiceTests
         // Arrange: a rule edit made an inherited record stale for this exact context.
         var baseline = ShippedCommandPolicy.CreateDefaults();
         var identity = PolicyJson.Fingerprint("context");
-        var decision = PolicyEvaluator.Evaluate(
+        var decision = TestPolicyEvaluation.Evaluate(
             PolicyCompiler.Compile(baseline, null, null, CommandPolicyNames.Linux, CommandPolicyNames.Bash),
             new CommandFacts(CommandPolicyNames.Linux, CommandPolicyNames.Bash, "git", Path.GetFullPath("git"), CommandPolicyNames.External, ["status"], Path.GetFullPath(".")));
         decision = decision with { Outcome = PolicyOutcome.ApprovalRequired, RequiresApproval = true };

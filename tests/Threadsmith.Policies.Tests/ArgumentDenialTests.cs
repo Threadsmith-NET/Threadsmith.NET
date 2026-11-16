@@ -64,8 +64,8 @@ public static class ArgumentDenialTests
 
         // Assert.
         Assert.Equal(rule.DenyArgumentsMatching, Assert.Single(user.Common.Rules).DenyArgumentsMatching);
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts("add", "private/path/file")).IsAllowed);
-        Assert.True(PolicyEvaluator.Evaluate(snapshot, Facts("fetch", "--upload-pack=chosen")).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("add", "private/path/file")).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(snapshot, Facts("fetch", "--upload-pack=chosen")).IsAllowed);
         Assert.NotEqual(PolicyCompiler.Compile(baseline, null, null, "linux", "bash").Fingerprint, snapshot.Fingerprint);
     }
 
@@ -78,7 +78,7 @@ public static class ArgumentDenialTests
         var pattern = Assert.Single(patterns);
         Assert.Equal(RegexOptions.NonBacktracking | RegexOptions.CultureInvariant, pattern.Options);
         Assert.Equal(TimeSpan.FromMilliseconds(100), pattern.MatchTimeout);
-        Assert.Matches(pattern, "prefix blocked suffix");
+        Assert.True(new PolicyMatcherCatalog(Regex.InfiniteMatchTimeout).DeniesArguments(rule, "prefix blocked suffix"));
         Assert.Same(patterns, method.Invoke(null, [rule]));
         Assert.NotSame(patterns, method.Invoke(null, [rule with { DenyArgumentsMatching = ["other"] }]));
     }
@@ -87,7 +87,7 @@ public static class ArgumentDenialTests
     public static void RememberedGrantCannotAuthorizeAnArgumentDenial()
     {
         var snapshot = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
-        var decision = PolicyEvaluator.Evaluate(snapshot, Facts("fetch", "--upload-pack=chosen"));
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts("fetch", "--upload-pack=chosen"));
         var authority = new PolicyGrantAuthority();
         snapshot = snapshot with { AlwaysAllow = [new PolicyGrant("saved", "identity", decision.RuleFingerprint)] };
         Assert.False(authority.HasRemembered(decision, snapshot, "identity", out _));
@@ -104,7 +104,7 @@ public static class ArgumentDenialTests
             Common = closedSet ? new PolicyProfile { RequireEnforcedMatch = true } : new PolicyProfile { Enforced = [rule] },
         };
         var snapshot = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), machine, null, "linux", "bash");
-        Assert.False(PolicyEvaluator.Evaluate(snapshot, Facts("status")).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("status")).IsAllowed);
     }
 
     [Fact]

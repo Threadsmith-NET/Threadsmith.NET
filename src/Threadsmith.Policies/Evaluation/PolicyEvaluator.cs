@@ -9,11 +9,14 @@ using Threadsmith.Policies.Matching;
 /// <summary>Resolves one action through ordinary rules, explicit exceptions and machine constraints.</summary>
 public static class PolicyEvaluator
 {
+    private static readonly PolicyMatcherCatalog DefaultMatcher = new();
+
     /// <summary>Evaluates a compiled snapshot. Matching errors deny rather than selecting a broader rule.</summary>
-    public static PolicyDecision Evaluate(PolicySnapshot snapshot, CommandFacts facts)
+    public static PolicyDecision Evaluate(PolicySnapshot snapshot, CommandFacts facts, IPolicyMatcher? matcher = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(facts);
+        matcher ??= DefaultMatcher;
         try
         {
             if (facts.Platform != snapshot.Platform || facts.Shell != snapshot.Shell)
@@ -23,10 +26,10 @@ public static class PolicyEvaluator
 
             _ = PolicyMatcherCatalog.ValidateFacts(facts);
             var plan = PolicyEvaluationPlan.For(snapshot);
-            var matching = plan.Ordinary(facts).Where(rule => PolicyMatcherCatalog.MatchesValidated(rule.Matchers, facts)).ToArray();
-            var constraints = plan.Enforced(facts).Where(rule => PolicyMatcherCatalog.MatchesValidated(rule.Matchers, facts)).ToArray();
+            var matching = plan.Ordinary(facts).Where(rule => MatchesValidated(matcher, rule.Matchers, facts)).ToArray();
+            var constraints = plan.Enforced(facts).Where(rule => MatchesValidated(matcher, rule.Matchers, facts)).ToArray();
             var arguments = string.Join(' ', facts.Arguments);
-            var argumentDenials = matching.Concat(constraints).Where(rule => PolicyMatcherCatalog.DeniesArguments(rule, arguments)).ToArray();
+            var argumentDenials = matching.Concat(constraints).Where(rule => matcher.DeniesArguments(rule, arguments)).ToArray();
             if (argumentDenials.Length > 0)
             {
                 return new PolicyDecision(
@@ -96,6 +99,9 @@ public static class PolicyEvaluator
         PolicyOutcome.ApprovalRequired => [PolicyApprovalChoice.Once, PolicyApprovalChoice.Session, PolicyApprovalChoice.Always, PolicyApprovalChoice.Deny],
         _ => [],
     };
+
+    private static bool MatchesValidated(IPolicyMatcher matcher, ImmutableArray<PolicyMatcher> nodes, CommandFacts facts) =>
+        matcher is PolicyMatcherCatalog catalog ? catalog.MatchesValidated(nodes, facts) : matcher.Matches(nodes, facts);
 
     private static int Rank(PolicyOutcome outcome) => outcome switch
     {

@@ -86,13 +86,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         var maximumEntries = ResolveMaximumEntries(input);
         var files = new List<RepositoryFileEntry>();
         var truncated = false;
-        var options = new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.ReparsePoint,
-        };
-        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+        foreach (var path in EnumerateFiles(root))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!scratchpadListing && ToolPathRules.IsWithinScratchpad(path, context.Invocation, caseContext: caseContext))
@@ -128,6 +122,30 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
             output,
             [new ToolProvenanceSource("directory", root)],
             truncated));
+    }
+
+    /// <summary>Enumerates files without descending into the exact directory names excluded by listing.</summary>
+    internal static FileSystemEnumerable<string> EnumerateFiles(string root)
+    {
+        return new FileSystemEnumerable<string>(
+            root,
+            static (ref entry) => entry.ToFullPath(),
+            new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+            })
+        {
+            ShouldIncludePredicate = static (ref entry) => !entry.IsDirectory,
+            ShouldRecursePredicate = static (ref entry) =>
+            {
+                var name = entry.FileName;
+                return !name.SequenceEqual(".git")
+                    && !name.SequenceEqual("bin")
+                    && !name.SequenceEqual("obj");
+            },
+        };
     }
 
     /// <inheritdoc />

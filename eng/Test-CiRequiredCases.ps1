@@ -15,16 +15,16 @@ $required = @{
     'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Hung_stdio_server_process_is_killed_within_drain_timeout' = 1
     'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Failed_stdio_handshake_terminates_spawned_process' = 1
     'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.StopAsync_RemainingDeadlineOverridesOriginalSdkShutdownTimeout' = 1
-    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization' = 1
-    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches' = 1
-    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively' = 1
-    'Threadsmith.ModelTooling.Tests.WriteFileTests.Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles' = 1
-    'Threadsmith.ModelTooling.Tests.ShellScriptPolicyTests.RequiredPlatformScriptsUseGovernedFileInvocations' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.WriteFileTests.Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.ShellScriptPolicyTests.RequiredPlatformScriptsUseGovernedFileInvocations' = 1
     'Threadsmith.Architecture.Tests.SecurityPolicyConfigurationTests.AlwaysScriptApprovalDoesNotFollowShadowsArgumentsOrInterpreterForms' = 1
     'Threadsmith.ParallelAgents.Tests.Plan91DelegationToolTests.IntelligenceInvestigators_AreNarrowAndCannotSupplyParentReceipts' = 1
     'Threadsmith.NativeTools.Tests.Plan41InventoryToolTests.GitQueries_LogicalRootAlias_PreservesWorktreeBoundary' = 2
-    'Threadsmith.ModelTooling.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryIsRepositoryConfined' = 1
-    'Threadsmith.ModelTooling.Tests.Milestone3Tests.SemanticFixtures_BuildOutputLocksRemainLocalToOwner' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryIsRepositoryConfined' = 1
+    'Threadsmith.ModelTooling.Integration.Tests.Milestone3TestsSemanticFixtures_BuildOutputLocksRemainLocalToOwner.SemanticFixtures_BuildOutputLocksRemainLocalToOwner' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.ApplicationCompositionContext_NoLongerExists' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.ApplicationCompositionInputs_HasFiveCohesiveSubRecords' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.InputBundles_AreImmutableSealedRecordsWithInitOnlyProperties' = 1
@@ -50,7 +50,7 @@ else {
         'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ClaudeCatalog_Activate_RejectsNestedDirectoryLink',
         'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ClaudeCatalog_Activate_RejectsLinkedResourceFile',
         'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ActiveModels_LinkedSettingsDirectory_IsRejected',
-        'Threadsmith.ModelTooling.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryRejectsLinkedDirectory'
+        'Threadsmith.ModelTooling.Integration.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryRejectsLinkedDirectory'
     )) {
         $required[$method] = 1
     }

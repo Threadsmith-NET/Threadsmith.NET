@@ -185,8 +185,9 @@ internal sealed class AnthropicModelProvider : IModelProvider
                     using var document = JsonDocument.Parse(payload);
                     var details = ProviderErrorDetails.Format(document.RootElement, _apiKey);
                     var rateLimit = sse.ErrorType == global::Anthropic.Models.ErrorType.RateLimitError;
-                    return rateLimit
-                        ? new TransientModelException(ProviderErrorDetails.PreferMessage(details, "Anthropic stream reported a rate limit (code 429).")) { IsRateLimit = true }
+                    var overloaded = ModelStreamRetry.IsOverloadError(document.RootElement);
+                    return rateLimit || overloaded
+                        ? new TransientModelException(ProviderErrorDetails.PreferMessage(details, "Anthropic stream reported temporary provider unavailability.")) { IsRateLimit = rateLimit, IsOverloaded = overloaded }
                         : new ModelProviderException(ProviderErrorDetails.PreferMessage(details, "Anthropic returned an invalid or unsupported response."));
                 }
                 catch (JsonException)
@@ -200,7 +201,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
                 var status = (int)http.StatusCode;
                 var retry = status is 408 or 409 or 429 or (>= 500 and <= 599);
                 Exception safe = retry
-                    ? new TransientModelException(ProviderErrorDetails.PreferMessage(http.Details, $"Anthropic request failed with retryable HTTP status {status}. ")) { IsRateLimit = status == 429, RetryAfter = http.RetryAfter }
+                    ? new TransientModelException(ProviderErrorDetails.PreferMessage(http.Details, $"Anthropic request failed with retryable HTTP status {status}. ")) { IsRateLimit = status == 429, IsOverloaded = status is 503 or 529, RetryAfter = http.RetryAfter }
                     : new ModelProviderException(ProviderErrorDetails.PreferMessage(http.Details, $"Anthropic request was rejected with HTTP status {status}. "));
                 return safe;
             }

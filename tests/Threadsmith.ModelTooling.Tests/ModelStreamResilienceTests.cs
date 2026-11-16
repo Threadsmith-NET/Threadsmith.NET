@@ -10,10 +10,13 @@ public static class ModelStreamResilienceTests
 {
     /// <summary>Configured attempts and exponential delays are enforced by the pipeline.</summary>
     [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    [InlineData(8)]
-    public static async Task PipelineOwnsAttemptLimitBackoffAndOneBusyNotice(int maximumAttempts)
+    [InlineData(1, false)]
+    [InlineData(3, false)]
+    [InlineData(8, false)]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    [InlineData(8, true)]
+    public static async Task PipelineOwnsAttemptLimitBackoffAndOneBusyNotice(int maximumAttempts, bool overloaded)
     {
         var clock = new RecordingClock();
         var attempts = 0;
@@ -39,7 +42,7 @@ public static class ModelStreamResilienceTests
             await Task.CompletedTask;
             if (attempt > 0)
             {
-                throw new TransientModelException("rate limited") { IsRateLimit = true };
+                throw new TransientModelException("provider busy") { IsRateLimit = !overloaded, IsOverloaded = overloaded };
             }
 
             yield break;

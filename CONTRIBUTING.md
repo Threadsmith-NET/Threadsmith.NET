@@ -114,6 +114,15 @@ Use `--include` with the changed file paths to focus whitespace and analyzer che
 
 Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
 
+Before submitting new or changed tests, review these sources of local/CI differences:
+
+- **Hidden deadlines:** trace nested regex, SDK, process, and compiler dependencies. An outer fake clock cannot freeze an API's private clock. Functional policy tests use the real matcher with an instance-owned infinite match timeout; separate tests check the production 100 ms configuration and injected timeout denial.
+- **Completion identity:** match the operation, producer, and phase. Compiler and analyzer completion can share an edit ID. Force the competing completion order with barriers and assert the required final result.
+- **Fixture ownership:** use unique temporary roots, join background work before cleanup, and avoid process-wide environment/current-directory mutations. Do not depend on installed tools, developer caches, file enumeration order, path casing, line endings, or culture unless those are explicit test inputs.
+- **Validation coverage:** run the affected project and the full solution with CI's parallelism after the final edit. Record OS, SDK, commands, and outcomes. A focused local pass cannot establish cross-platform success; only the exact submitted revision's three-platform CI can do that.
+
+For each CI failure, retain the failing test name and assertion/exception, identify the hidden assumption, and add deterministic coverage of that assumption where practical. Distinguish a confirmed cause from an inference when the logs lack detail. Do not disable parallelism, skip the case, loosen its expected result, or rerun unchanged code as a substitute for a fix.
+
 Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, inspect the current `.github/workflows/` checks and run the same product build and test commands used by CI:
 
 Run the packaged-documentation preflight before every PR or follow-up push, including documentation-only changes:
@@ -143,6 +152,14 @@ dotnet restore src/Threadsmith.sln
 dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
 ```
+
+For the fast model/tool contract suite, run:
+
+```powershell
+dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build
+```
+
+The target is under 30 seconds for test execution after building. Real shell, scripting-worker, PDF, and MSBuild/Roslyn workspace checks live in `tests/Threadsmith.ModelTooling.Integration.Tests`. Run that project for changes to those integration paths. Both projects remain in the solution and run in the normal CI test step; the fast command does not replace integration validation. Test timing reports are diagnostic evidence, not per-test timeout assertions.
 
 Also run checks owned by the area you changed:
 

@@ -1,6 +1,6 @@
 # Implementation plan: Run C# scripts from files
 
-**Status:** Draft for review. Implementation has not started.
+**Status:** Implemented. Windows automated validation is complete. Cross-platform and manual verification remain outstanding.
 **Delivery track:** Maintenance extension to the existing scripting capability.
 **Prerequisites:** Keep the current scratchpad, tool policy, worker process, and source-detail contracts. Read root `AGENTS.md`, planning governance, and the C# guardrails before implementation.
 **Writing style:** Simplified Technical English. Use short instructions and defined terms.
@@ -9,7 +9,7 @@
 
 Let `csharp_script` accept inline code or the name of a `.csx` file. Let the model run an existing script without sending its source again. Permit scripts stored in the repository. Keep the existing execution and permission checks.
 
-This draft is in `.inbox` for review. It does not change milestone status. If adopted into the planning package, add its navigation entry and follow the planning governance rules.
+This maintenance document is part of the planning package. It does not change milestone status. Observable behavior is owned by SC-SCRIPT-FILE-01 and SC-SCRIPT-SOURCE-01. Manual verification is in MTP-030G.
 
 ## 2. Architectural context
 
@@ -46,7 +46,7 @@ Do not use shell execution to run a `.csx` file. Do not add a second worker or c
 - No new repository write authority for scripts.
 - No changes to scratchpad cleanup.
 
-## 5. Current state
+## 5. Starting state
 
 `CSharpScriptInput` requires `Code`. It also accepts `Kind` and `Concepts`. `Kind` defaults to `expression`.
 
@@ -222,7 +222,7 @@ No persistent-state migration is expected. Keep the output field meaning unchang
 
 Update `docs/operations/csharp-scripting-execution.md` with examples and path rules. Update `docs/operations/tools.md` where it describes the input contract. Update `docs/operations/prompts.md` and `docs/prompt-file-reference.md` for the changed tool argument instructions. Keep the existing prompt filename and token contract unless a separate need is found.
 
-Update the owning acceptance scenario and manual scripting procedure for the new observable behavior. Do not reopen completed milestone contracts or change milestone status for this draft.
+Update the owning acceptance scenario and manual scripting procedure for the new observable behavior. Do not reopen completed milestone contracts or change milestone status for this maintenance item.
 
 Suggested tool description text:
 
@@ -232,4 +232,20 @@ Suggested tool description text:
 
 No user decision is required before implementation. This plan selects `scriptPath`, permits in-repository absolute paths, uses explicit `./` for repository-root files, and preserves a saved execution copy for every call.
 
-The implementer must choose the smallest source-preparation extension after inspecting existing pipeline patterns. That choice must preserve one source snapshot and one execution path.
+The implementation uses an internal immutable source snapshot in the existing execution context. The pipeline prepares it after admission and uses it for source detail and the existing engine. Direct typed calls use the same preparation method. The safe-open checks are shared with the existing file-secret reader. The host passes the same configured byte limit to preparation and the engine.
+
+## 18. Validation record
+
+Final Windows validation:
+
+- `dotnet restore src/Threadsmith.sln` passed.
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` passed with no warnings or errors.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` passed: 6,512 passed, 0 failed, 92 skipped. This includes architecture, schema, prompt, policy, scripting, and secret-reader regression coverage.
+- With `THREADSMITH_SCRIPT_INTEGRATION=1`, `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-class '*CSharpScriptConversationTests*'` passed: 7 passed, 0 failed, 0 skipped.
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include <changed C# paths>` passed for all changed C# files. Later changes were rechecked for the affected paths.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` passed.
+- `git diff --check` passed. Scoped background compiler/analyzer feedback has no task-related unresolved finding. Existing unrelated suggestions were not changed.
+
+Adversarial runtime and test reviews are clean within their stated scope after corrections. Review found and corrected trusted linked-ancestor handling and ordinary UNC path rejection. A final integration check also aligned source capture with the configured saved-copy byte budget. Regression coverage includes those boundaries.
+
+Limits: this Windows runner cannot create symbolic links, so the three scripting link cases were skipped. UNC grammar is tested, but execution on a live UNC share is unverified. macOS, Linux, real-terminal procedures, and the manual parent/child scenarios were not run. Other suite skips cover unavailable platforms, optional assets, live services, or opt-in measurements. No PR was opened and no remote CI result is claimed.

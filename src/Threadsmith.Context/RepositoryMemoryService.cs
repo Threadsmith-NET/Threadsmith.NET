@@ -61,6 +61,12 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
     }
 
     /// <inheritdoc />
+    public Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return _store.GetRevisionAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
         string repositoryIdentity,
         CancellationToken cancellationToken = default)

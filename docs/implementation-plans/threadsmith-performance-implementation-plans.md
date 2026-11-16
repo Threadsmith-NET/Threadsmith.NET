@@ -1,6 +1,6 @@
 # Threadsmith.NET: Performance Implementation Plans
 
-**Status:** Proposed. No application changes have been made.
+**Status:** Groups A, B, and C implemented and reviewed. Group D remains proposed and is explicitly deferred. Windows validation is recorded below; Linux and macOS validation remains outstanding.
 
 **Delivery track:** Maintenance.
 
@@ -36,7 +36,7 @@ Suggested delivery order: A, B, C, then D. Plan D measurements can start in para
 
 # Plan A: Read the memory revision without loading all memories
 
-**Status:** Proposed. **Delivery track:** Maintenance. **Prerequisites:** Shared rules only.
+**Status:** Implemented. **Delivery track:** Maintenance. **Prerequisites:** Shared rules only.
 
 ## 1. Objective
 
@@ -135,7 +135,7 @@ None. Follow the current repository convention for optional interface capabiliti
 
 # Plan B: Stop file-list traversal at excluded directories
 
-**Status:** Proposed. **Delivery track:** Maintenance. **Prerequisites:** Shared rules only.
+**Status:** Implemented. **Delivery track:** Maintenance. **Prerequisites:** Shared rules only.
 
 ## 1. Objective
 
@@ -229,7 +229,7 @@ None. Use the same exclusion semantics as the current implementation.
 
 # Plan C: Retain compiler baseline evidence across rejected edits
 
-**Status:** Proposed. **Delivery track:** Maintenance. **Prerequisites:** Shared rules and the existing source-edit lifecycle tests.
+**Status:** Implemented. **Delivery track:** Maintenance. **Prerequisites:** Shared rules and the existing source-edit lifecycle tests.
 
 ## 1. Objective
 
@@ -452,6 +452,59 @@ git diff --check
 8. If publication is separately authorized, inspect current CI and use the repository's required documentation preflight and PR submission script. Do not claim completion while required CI is pending.
 
 If these plans are added to the repository, use the Maintenance track and add navigation links only. Do not reopen completed milestones or copy completion notes across historical documents.
+
+# Groups A–C implementation record
+
+Implemented on `perf/groups-a-b-c` from checkout revision `687c6e2c642a35a17b57a66a07b385183e587cae`. No commits, pushes, or PR submission are part of this work. Group D has not been implemented.
+
+- **A:** The optional service revision query forwards to the existing store. Both freshness boundaries remain; `null` still takes the snapshot path. Counting conversation tests cover stable and changed revisions, post-hook mutation, nullable fallback and query failure. A real SQLite service test covers repository selection, cancellation, query failure and prepared collection snapshots without committing preview contents. A stable two-round fixture now performs four revision lookups and zero freshness snapshot reads on supported stores; unsupported stores perform four snapshot reads.
+- **B:** One streaming `FileSystemEnumerable` prunes only exact lowercase `.git`, `bin`, and `obj` child directories. The existing defensive output filters, authorization and projection remain. Predicate and tool fixtures cover descendant visits, case variants, explicit excluded roots, entry limits, scratchpads and cancellation.
+- **C:** Each bounded project entry retains baseline and candidate compiler DTO evidence with exact dependent versions; initial-origin bookkeeping stays separate. Compiler DTOs are staged within the project-cache bound. Shared-cache publication and compiler success occur together under the existing gate only after every scoped project completes and the candidate remains current. Deterministic tests cover rejection, promotion, filtering/truncation equivalence against cold evidence, reset, eviction, changed dependencies, failed operations, discard and supersession with late actual completion. A rejected retry avoids one baseline diagnostic pass per retained scoped project: the two-project fixture drops from four passes to two. Evicted evidence is recomputed. No total compilation-time claim is made.
+
+Initial fresh-context production and test reviews found no supported functional defects after acceptance-evidence gaps were addressed. A later code-review-skill review (`.inbox/review-20261115-182656330Z.md`) identified a valid P2 lifecycle defect: an earlier project's evidence was published before the whole analysis succeeded. The follow-up below supersedes that earlier clean-review assessment for this boundary. No new cache framework or scheduling path was introduced.
+
+## Initial validation and limits
+
+Environment: Windows x64, SDK `10.0.404` selected by `global.json` patch roll-forward. The pinned ripgrep fixture was staged with `pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot artifacts/test-ripgrep`.
+
+- `dotnet restore src/Threadsmith.sln` — passed.
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` — passed, zero warnings/errors on the final functional implementation.
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-class "*SourceEditAnalysisTests"` — 41 passed.
+- `dotnet test --project tests/Threadsmith.ExecutionOrchestration.Tests/Threadsmith.ExecutionOrchestration.Tests.csproj --configuration Debug --no-build` — 31 passed.
+- `dotnet test --project tests/Threadsmith.PersistenceMcpHardening.Tests/Threadsmith.PersistenceMcpHardening.Tests.csproj --configuration Debug --no-build` — 132 passed.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` — 6,467 passed, 90 skipped, zero failures; includes architecture, memory binding, source-edit and analyzer-reuse suites.
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore` — failed on unchanged repository files. The same command restricted with `--include` to all changed C# files passed. Unrelated formatting was not changed.
+- `git diff --check` — passed.
+- `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` — passed.
+- Completed changed-document background analyzer feedback reported no new findings. Existing unrelated suggestions remain; scoped feedback is not a whole-project analyzer check. No duplicate standalone analyzer run was requested.
+
+Linux/macOS and unavailable Windows symbolic-link/inaccessible-directory cases are not validated by these results. Live-provider and opt-in cases remain skipped. No CI run or cross-platform success is claimed.
+
+## P2 compiler publication follow-up
+
+The defect was confirmed with deterministic first/second-project barriers. Before the production fix, five new cases failed: later-project failure, discard and supersession seeded reusable evidence, and later-project failure/discard evicted prior successful evidence. The original three first-project termination cases passed.
+
+Compiler bases now remain local until the entire compiler analysis succeeds. A queue bounded by `MaximumCachedProjects` retains only publishable DTO entries; partial diagnostic feedback remains available. Final publication uses the existing shared cache owner, preserves current analyzer fields, and occurs under the same gate as candidate validation and the compiler-success transition. Failed, discarded or superseded analyses neither publish compiler entries nor evict successful compiler evidence. Previously cached entries remain readable during computation; the constrained-cache diagnostic-pass assertion was updated for this deferred eviction.
+
+A fresh focused adversarial review found no additional supported defect. It assessed cancellation, supersession, promotion, bounded staging and analyzer coexistence from source. The focused cache regressions disable analyzers; direct deadline-expiry and promotion-during-staging regressions were not added. Existing lifecycle/analyzer suites were included in the full run below.
+
+Current Windows validation after the fix:
+
+- `dotnet restore src/Threadsmith.sln` — passed.
+- `dotnet build tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-restore` — passed; generated the focused test binaries.
+- `dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build --filter-class "*SourceEditAnalysisTests"` — 46 passed, zero failures/skips. The supported `--project`/Microsoft.Testing.Platform invocation ran successfully; the earlier review's handshake failure did not recur with this invocation.
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` — passed, zero reported warnings/errors.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` — 6,472 passed, 90 skipped, zero failures.
+- `dotnet format whitespace src/Threadsmith.sln --verify-no-changes --no-restore --include src/Threadsmith.DotNet/SemanticEngine.EditAnalysis.cs tests/Threadsmith.ModelTooling.Tests/SourceEditAnalysisTests.CompilerLifecycle.cs tests/Threadsmith.ModelTooling.Tests/SourceEditAnalysisTests.CompilerEvidence.cs` — passed.
+- Completed changed-document background compiler/analyzer feedback reported no new findings after the task-related layout findings were corrected. Unrelated existing suggestions remain; scoped results do not cover compilation-wide analyzer diagnostics.
+
+No CI or Linux/macOS checks were run. Skipped opt-in/platform cases remain unverified. Group D remains unimplemented; no commit, push or PR was requested.
+
+## Group B measurement
+
+The explicit `ListFilesTraversalTests.MeasureBuiltRepositoryTraversal` test uses `THREADSMITH_LIST_TRAVERSAL_REPOSITORY` to select an existing built repository. Run with `--explicit only --filter-method "*MeasureBuiltRepositoryTraversal" --output Detailed`. It compares raw file enumeration plus the existing segment filter at a 10,000-file limit, excluding authorization, metadata and scratchpad projection. One warmup and seven warm samples run per variant, baseline first; caches are not flushed. Timings are observations, not pass/fail assertions.
+
+On this built checkout on the same Windows machine, both variants returned 10,000 files. Baseline predicate visits were 13,202 per sample; pruning reduced them to 12,239. Initial observed median durations were 91.636 ms before and 76.588 ms after (ranges 86.730–97.050 ms and 73.783–77.598 ms). These are narrow warm-enumeration measurements, not an end-to-end tool speedup or a Group D measurement. The test's initial output label incorrectly called the samples interleaved; only that label was corrected to match the actual baseline-first sampling.
 
 # Source map
 

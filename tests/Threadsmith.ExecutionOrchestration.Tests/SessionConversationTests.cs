@@ -33,7 +33,7 @@ public sealed partial class SessionConversationTests
 
         public ConceptMemory Memory { get; }
 
-        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches, bool intelligenceOnly = false)
+        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches, bool intelligenceOnly = false, IHookCoordinator? hooks = null)
         {
             var ct = TestContext.Current.CancellationToken;
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
@@ -92,6 +92,7 @@ public sealed partial class SessionConversationTests
                 evidenceStore: evidence,
                 toolRegistry: registry,
                 conversationStore: store,
+                hooks: hooks,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance,
                 repositoryMemories: memory,

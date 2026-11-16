@@ -271,6 +271,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                         throw new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"Model endpoint remained unavailable after {attempt} attempts (HTTP {(int)statusCode})."))
                         {
                             IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
+                            IsOverloaded = statusCode == HttpStatusCode.ServiceUnavailable || (int)statusCode == 529,
                             RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
                         };
                     }
@@ -404,9 +405,11 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 }
 
                 var rateLimited = envelope.Error is { } rateLimitError && ModelStreamRetry.IsRateLimitError(rateLimitError);
+                var overloaded = envelope.Error is { } overloadError && ModelStreamRetry.IsOverloadError(overloadError);
+                var retryable = rateLimited || overloaded;
 
                 if (envelope.Usage is { } reportedUsage
-                    && (!rateLimited || reportedUsage.PromptTokens != 0 || reportedUsage.CompletionTokens != 0
+                    && (!retryable || reportedUsage.PromptTokens != 0 || reportedUsage.CompletionTokens != 0
                         || reportedUsage.Cost is not null || reportedUsage.PromptTokenDetails is not null
                         || reportedUsage.CacheReadInputTokens is not null || reportedUsage.CacheCreationInputTokens is not null
                         || reportedUsage.CompletionTokenDetails.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null)))
@@ -431,7 +434,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                         EstimateTokenCount(completionCharacters));
                     yield return new ModelChunk
                     {
-                        IsInterruptedUsage = rateLimited,
+                        IsInterruptedUsage = retryable,
                         Usage = NormalizeUsage(
                             new ModelUsage(
                             inputCount,
@@ -450,10 +453,10 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
                 ValidateResponseIdentity(envelope.Model, envelope.Provider);
 
-                if (rateLimited)
+                if (retryable)
                 {
-                    throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(envelope.Error ?? default, _apiKey, envelope.Provider, envelope.RequestId, envelope.Id), "The model endpoint reported a rate limit inside the response stream (code 429)."))
-                    { IsRateLimit = true };
+                    throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(envelope.Error ?? default, _apiKey, envelope.Provider, envelope.RequestId, envelope.Id), "The model endpoint reported temporary provider unavailability inside the response stream."))
+                    { IsRateLimit = rateLimited, IsOverloaded = overloaded };
                 }
 
                 if (envelope.Error is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } error)

@@ -401,7 +401,8 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
         foreach (var asset in metadata.Assets)
         {
             SkillPathPolicy.ValidateRelativePath(asset.Path, options.MaximumPathCharacters);
-            if (!paths.Add(asset.Path)
+            SkillScriptAssets.ValidateMetadata(asset);
+            if (!paths.Add(asset.Path.Replace('\\', '/'))
                 || asset.Bytes < 0
                 || asset.Bytes > options.MaximumAssetBytes
                 || !Sha256Regex().IsMatch(asset.Sha256)

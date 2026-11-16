@@ -276,16 +276,7 @@ public sealed class SkillContentLoader : ISkillContentLoader
         {
             var asset = candidate.Metadata.Assets.Single(item =>
                 string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
-            var fullPath = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-            var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
-            if (bytes.LongLength != asset.Bytes
-                || !string.Equals(
-                    Convert.ToHexStringLower(SHA256.HashData(bytes)),
-                    asset.Sha256,
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException("Skill content changed after verification.");
-            }
+            var bytes = await SkillAssetContent.ReadAsync(candidate.Provenance.PackageRoot, asset, cancellationToken);
 
             var content = _sanitizer.Sanitize(StrictUtf8.GetString(bytes));
             var tokens = Threadsmith.Context.TokenEstimator.Estimate(content);

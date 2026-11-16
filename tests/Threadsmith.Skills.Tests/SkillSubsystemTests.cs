@@ -1690,6 +1690,8 @@ public sealed partial class SkillSubsystemTests
     {
         public string Output { get; init; } = "{\"summary\":\"ok\"}";
 
+        public Action<ModelStreamRequest>? OnRequest { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1698,6 +1700,7 @@ public sealed partial class SkillSubsystemTests
         {
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
+            OnRequest?.Invoke(request);
             await Task.Yield();
             yield return new ModelChunk { Text = Output };
         }

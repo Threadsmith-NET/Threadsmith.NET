@@ -144,6 +144,8 @@ public sealed partial class SessionConversationTests
         Assert.DoesNotContain(originalText, snapshots[1].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal(!remove, snapshots[1].GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal));
         Assert.All(memory.Requests, request => Assert.Empty(request.RetainedMemories));
+        Assert.Equal(6, memory.RevisionReads);
+        Assert.Equal(0, memory.SnapshotReads);
     }
 
     /// <summary>Concepts and admitted memory belong to one ordinary run and reset for the next request.</summary>
@@ -181,14 +183,17 @@ public sealed partial class SessionConversationTests
     }
 
     /// <summary>Shadow collects hints without introducing non-baseline retrieval or replay rewrites.</summary>
-    [Fact]
-    public async Task ShadowWithoutDiscovery_PreservesFrozenContinuation()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ShadowWithoutDiscovery_PreservesFrozenContinuation(bool directRevisionAvailable)
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler();
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
+        scenario.Memory.DirectRevisionAvailable = directRevisionAvailable;
         scenario.Memory.FilterMode = SituationalConceptFilterMode.Shadow;
         scenario.Memory.ExpansionEnabled = false;
         var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect repository"), ct);
@@ -197,6 +202,8 @@ public sealed partial class SessionConversationTests
         Assert.Single(scenario.Memory.Requests);
         Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
         Assert.Equal(provider.Requests[0].HistoryRewriteGeneration, provider.Requests[1].HistoryRewriteGeneration);
+        Assert.Equal(4, scenario.Memory.RevisionReads);
+        Assert.Equal(directRevisionAvailable ? 0 : 4, scenario.Memory.SnapshotReads);
     }
 
     /// <summary>Repeated hints do not rebuild context after eligibility has stabilized.</summary>
@@ -216,8 +223,125 @@ public sealed partial class SessionConversationTests
         Assert.Equal(2, scenario.Memory.Requests.Count);
     }
 
+    /// <summary>The post-hook freshness boundary rebuilds stale memory before provider dispatch.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BeforeModelRequestMemoryMutation_RebuildsRequestBeforeDispatch(bool directRevisionAvailable)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var handler = new MemoryReplayHandler();
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new MemoryReplayProvider(client);
+        var hooks = new MemoryMutationHooks();
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, hooks: hooks);
+        scenario.Memory.DirectRevisionAvailable = directRevisionAvailable;
+        var originalText = scenario.Memory.Entry.Text;
+        const string updatedText = "Updated cancellation guidance from the before-request hook.";
+        hooks.BeforeRequest = invocation =>
+        {
+            // Round one discovers the concept; round two has assembled the original memory.
+            if (invocation == 2)
+            {
+                scenario.Memory.Entry = scenario.Memory.Entry with { Text = updatedText, Revision = 2 };
+            }
+        };
+
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(3, hooks.BeforeRequestCount);
+        Assert.Equal(3, scenario.Memory.Requests.Count);
+        Assert.Equal(6, scenario.Memory.RevisionReads);
+        Assert.Equal(directRevisionAvailable ? 0 : 6, scenario.Memory.SnapshotReads);
+        var currentSnapshot = provider.Requests[1].Messages.Last(message => message.SectionId == "repository-memory").GetModelVisibleContent();
+        Assert.Contains(updatedText, currentSnapshot, StringComparison.Ordinal);
+        Assert.DoesNotContain(originalText, currentSnapshot, StringComparison.Ordinal);
+    }
+
+    /// <summary>Revision lookup failure retains the established retrieval fallback without inventing a revision.</summary>
+    [Fact]
+    public async Task RevisionLookupFailureRetainsRetrievalFallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var handler = new MemoryReplayHandler();
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new MemoryReplayProvider(client);
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
+        scenario.Memory.RevisionFailure = new InvalidOperationException("Injected revision lookup failure.");
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect cancellation"), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Equal(4, scenario.Memory.RevisionReads);
+        Assert.Equal(0, scenario.Memory.SnapshotReads);
+        Assert.Contains(provider.Requests[1].Messages, message => message.SectionId == "repository-memory"
+            && message.GetModelVisibleContent().Contains(scenario.Memory.Entry.Text, StringComparison.Ordinal));
+    }
+
+    private sealed class MemoryMutationHooks : IHookCoordinator
+    {
+        public Action<int>? BeforeRequest { get; set; }
+
+        public int BeforeRequestCount { get; private set; }
+
+        public IReadOnlyList<HookHandlerDescriptor> Handlers => [];
+
+        public HookHandlerDescriptor? GetHandler(HookHandlerId handlerId) => null;
+
+        public bool SetEnabled(HookHandlerId handlerId, bool enabled) => false;
+
+        public Task<HookBoundaryDecision> InvokeAsync(
+            HookPoint point,
+            SessionId sessionId,
+            RunId? runId,
+            string? repositoryIdentity,
+            Guid operationId,
+            int generation,
+            IReadOnlyDictionary<string, string>? payload = null,
+            IReadOnlyList<ExecutionArtifactReference>? artifacts = null,
+            IReadOnlyList<string>? callChain = null,
+            RepositoryStorageBinding? storageBinding = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (point == HookPoint.BeforeModelRequest)
+            {
+                BeforeRequestCount++;
+                BeforeRequest?.Invoke(BeforeRequestCount);
+            }
+
+            return Task.FromResult(new HookBoundaryDecision(HookDecisionKind.Continue, [], []));
+        }
+
+        public Task<HookBoundaryDecision> InvokeHandlerAsync(
+            HookHandlerId handlerId,
+            HookPoint point,
+            SessionId sessionId,
+            RunId? runId,
+            string? repositoryIdentity,
+            Guid operationId,
+            int generation,
+            IReadOnlyDictionary<string, string>? payload = null,
+            IReadOnlyList<ExecutionArtifactReference>? artifacts = null,
+            IReadOnlyList<string>? callChain = null,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+    }
+
     private sealed class ConceptMemory : IManagedRepositoryMemoryService, IHybridRepositoryMemoryRetriever, IRepositoryMemoryOptionsProvider, IRepositoryIntelligenceStatusProvider
     {
+        public bool DirectRevisionAvailable { get; set; } = true;
+
+        public Exception? RevisionFailure { get; set; }
+
+        public int RevisionReads { get; private set; }
+
+        public int SnapshotReads { get; private set; }
+
         public SituationalConceptFilterMode FilterMode { get; set; }
 
         public bool ExpansionEnabled { get; set; } = true;
@@ -267,8 +391,18 @@ public sealed partial class SessionConversationTests
             return Task.FromResult(new RepositoryMemoryRetrievalResult(Matches && request.Concepts.Contains("cancellation") ? [new(Entry, 1, null, null, null)] : [], [], Entry.Revision));
         }
 
+        public Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RevisionReads++;
+            return RevisionFailure is { } failure ? Task.FromException<long?>(failure)
+                : Task.FromResult<long?>(DirectRevisionAvailable ? Entry.Revision : null);
+        }
+
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            SnapshotReads++;
             return Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, Entry.Revision, Matches ? [Entry] : [], [], []));
         }
 

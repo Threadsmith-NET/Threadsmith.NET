@@ -538,6 +538,10 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 cancellationToken);
             var boundedPlan = plan with
             {
+                ScriptAssets = candidate.Metadata.Assets
+                    .Where(asset => asset.Kind.Equals("script", StringComparison.OrdinalIgnoreCase))
+                    .Select(asset => new SkillScriptSource(candidate.Provenance.PackageRoot, asset))
+                    .ToArray(),
                 EffectiveBudget = plan.EffectiveBudget with
                 {
                     ContentTokens = remainingContentTokens,

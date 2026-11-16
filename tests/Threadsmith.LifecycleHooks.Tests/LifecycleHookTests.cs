@@ -517,7 +517,8 @@ public sealed class LifecycleHookTests
             HookInvocationEnvelope envelope,
             CancellationToken cancellationToken = default)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan);
+            // Deliberately ignore cancellation to exercise the host's non-cooperative hook bound.
+            await Task.Delay(Timeout.InfiniteTimeSpan, CancellationToken.None);
             return new HookAcknowledgeResult();
         }
     }

@@ -149,7 +149,7 @@ public sealed partial class SemanticEngine
         private readonly ILogger _logger;
         private Task _callbacks = Task.CompletedTask;
 
-        public CompilerOperationCancellation(CancellationToken caller, CancellationToken deadline, ILogger logger)
+        public CompilerOperationCancellation(ILogger logger, CancellationToken caller = default, CancellationToken deadline = default)
         {
             _logger = logger;
             Token = _source.Token;

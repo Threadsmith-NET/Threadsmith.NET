@@ -171,7 +171,7 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_Roslyn59_LoadsModern
         var staticExtension = await registry.FindSymbolsAsync(request.WorkspaceId, "Create", TestContext.Current.CancellationToken);
         var fieldBackedType = await registry.FindSymbolsAsync(request.WorkspaceId, "FieldBackedValue", TestContext.Current.CancellationToken);
         var generatedDocuments = await queries.QueryGeneratedCodeAsync(request.WorkspaceId, new GeneratedCodeQuery { IncludeContent = true }, TestContext.Current.CancellationToken);
-        var codeExplore = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.GeneratedByRoslyn59", ExactSymbolAnchors = ["T:SmallSolution.Contracts.GeneratedByRoslyn59"], }, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+        var codeExplore = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.GeneratedByRoslyn59", ExactSymbolAnchors = ["T:SmallSolution.Contracts.GeneratedByRoslyn59"], }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
         Assert.Contains(load.Projects, project => project.Name == "Contracts" && project.TargetFrameworks.Contains("net10.0", StringComparer.Ordinal) && project.TargetFrameworks.Contains("net9.0", StringComparer.Ordinal));
         Assert.NotEmpty(extensionProperty);
@@ -206,7 +206,7 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_TruncatedGeneratedSourc
         var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         await registry.LoadAsync(request, TestContext.Current.CancellationToken);
         await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
-        var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.GeneratedByRoslyn59", ExactSymbolAnchors = ["T:SmallSolution.Contracts.GeneratedByRoslyn59"], Limits = new CodeExploreLimits { MaximumPerFileSourceCharacters = perFileBudget, MaximumSourceCharacters = totalBudget, }, }, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+        var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.GeneratedByRoslyn59", ExactSymbolAnchors = ["T:SmallSolution.Contracts.GeneratedByRoslyn59"], Limits = new CodeExploreLimits { MaximumPerFileSourceCharacters = perFileBudget, MaximumSourceCharacters = totalBudget, }, }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
         Assert.NotEmpty(result.FileSections);
         Assert.All(result.FileSections, section =>
         {
@@ -261,7 +261,7 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
             await TestAnalyzerBarrier.WaitForConnectionAsync(pipe, registry.GetEngine(load.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
             var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var beforeWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
-            var truncated = await queries.QueryCodeExploreAsync(load.WorkspaceId, new CodeExploreRequest { Query = "Contracts/Decoy.cs", PathAnchors = [new CodeExplorePathAnchor { Path = "Contracts/Decoy.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }], Limits = new CodeExploreLimits { MaximumSourceCharacters = 1, MaximumPerFileSourceCharacters = 1 }, }, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+            var truncated = await queries.QueryCodeExploreAsync(load.WorkspaceId, new CodeExploreRequest { Query = "Contracts/Decoy.cs", PathAnchors = [new CodeExplorePathAnchor { Path = "Contracts/Decoy.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }], Limits = new CodeExploreLimits { MaximumSourceCharacters = 1, MaximumPerFileSourceCharacters = 1 }, }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
             var continuation = Assert.Single(truncated.ContinuationTargets);
             var request = new CodeExploreRequest
             {
@@ -274,7 +274,7 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
                 },
             };
             using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            var pendingQuery = queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), queryCancellation.Token);
+            var pendingQuery = queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), cancellationToken: queryCancellation.Token);
             Assert.False(pendingQuery.IsCompleted);
             await queryCancellation.CancelAsync();
 #pragma warning disable VSTHRD003 // The test owns the query task and joins its explicitly cancelled waiter.
@@ -286,11 +286,11 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
             var afterWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
             Assert.True(afterWarm.Generation > beforeWarm.Generation);
             Assert.Equal(beforeWarm.SourceGeneration, afterWarm.SourceGeneration);
-            var replayed = await queries.QueryCodeExploreAsync(load.WorkspaceId, new CodeExploreRequest { Query = continuation.Anchor, PathAnchors = [new CodeExplorePathAnchor { Path = continuation.FilePath ?? continuation.Anchor, Line = continuation.StartLine, EndLine = continuation.EndLine, SelectionMode = continuation.SelectionMode ?? CodeExplorePathSelectionMode.ExactLineRange, ExpectedFileSha256 = continuation.ExpectedFileSha256, ExpectedWorkspaceGeneration = continuation.WorkspaceGeneration, }, ], }, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+            var replayed = await queries.QueryCodeExploreAsync(load.WorkspaceId, new CodeExploreRequest { Query = continuation.Anchor, PathAnchors = [new CodeExplorePathAnchor { Path = continuation.FilePath ?? continuation.Anchor, Line = continuation.StartLine, EndLine = continuation.EndLine, SelectionMode = continuation.SelectionMode ?? CodeExplorePathSelectionMode.ExactLineRange, ExpectedFileSha256 = continuation.ExpectedFileSha256, ExpectedWorkspaceGeneration = continuation.WorkspaceGeneration, },], }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(truncated.WorkspaceGeneration, replayed.WorkspaceGeneration);
             Assert.NotEmpty(replayed.FileSections);
             Assert.All(replayed.FileSections, section => Assert.Equal(CodeExploreSourceCompleteness.Complete, section.Source.Completeness));
-            var result = await queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+            var result = await queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Contains(result.ResolvedAnchors, resolution => resolution.Outcome == (anchor == "Owner" ? CodeExploreResolutionOutcome.Ambiguous : CodeExploreResolutionOutcome.Resolved));
             Assert.NotEmpty(result.FileSections);
         }
@@ -342,7 +342,7 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_PhysicalGeneratedLookin
             Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
             await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
             await File.WriteAllTextAsync(sourcePath, "namespace SmallSolution.Contracts; public sealed class PhysicalGenerated { public int Value => 2; }", TestContext.Current.CancellationToken);
-            var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.PhysicalGenerated", ExactSymbolAnchors = ["T:SmallSolution.Contracts.PhysicalGenerated"], }, new FixtureSourceReader(temporaryRoot), TestContext.Current.CancellationToken);
+            var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.PhysicalGenerated", ExactSymbolAnchors = ["T:SmallSolution.Contracts.PhysicalGenerated"], }, new FixtureSourceReader(temporaryRoot), cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotEmpty(result.FileSections);
             Assert.All(result.FileSections, section =>
             {
@@ -395,7 +395,7 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_LoadMeasurement_Clas
         await using (var events = new DomainEventStream())
         await using (var engine = new SemanticEngine(events, textLogger, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)))
         {
-            var request = CreateLoadRequest(root)with
+            var request = CreateLoadRequest(root) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
             };
@@ -812,7 +812,7 @@ public sealed class Plan117RoslynUpgradeTestsStagedCodeExplorePerformanceEvidenc
 
             var queryStarted = Stopwatch.GetTimestamp();
             var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "Explain the selected implementation", PathAnchors = [new CodeExplorePathAnchor { Path = path }], Limits = new CodeExploreLimits { TimeoutMilliseconds = 60000 }, }, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+            var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "Explain the selected implementation", PathAnchors = [new CodeExplorePathAnchor { Path = path }], Limits = new CodeExploreLimits { TimeoutMilliseconds = 60000 }, }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
             var queryMs = Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds;
             var selectionToResultMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             Assert.NotEmpty(result.FileSections);

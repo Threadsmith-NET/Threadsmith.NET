@@ -34,7 +34,7 @@ public abstract class Milestone3Tests
         Assert.Equal(JsonValueKind.Array, root.GetProperty("results").ValueKind);
         Assert.Equal(JsonValueKind.False, root.GetProperty("truncated").ValueKind);
         var item = root.GetProperty("results").EnumerateArray().First();
-        Assert.Equal(["symbolId", "name", "kind", "path", "line"], [..item.EnumerateObject().Select(static property => property.Name)]);
+        Assert.Equal(["symbolId", "name", "kind", "path", "line"], [.. item.EnumerateObject().Select(static property => property.Name)]);
         if (symbolId is not null)
         {
             Assert.Equal(symbolId, item.GetProperty("symbolId").GetString());
@@ -308,7 +308,7 @@ public abstract class Milestone3Tests
 
     private protected sealed class UnusedCodeExploreService : ICodeExploreService
     {
-        public Task<CodeExploreResult> QueryCodeExploreAsync(WorkspaceId workspaceId, CodeExploreRequest request, ICodeExploreSourceReader sourceReader, CancellationToken cancellationToken = default, ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        public Task<CodeExploreResult> QueryCodeExploreAsync(WorkspaceId workspaceId, CodeExploreRequest request, ICodeExploreSourceReader sourceReader, ModelVisibleSourceFrontier? visibleSourceFrontier = null, CancellationToken cancellationToken = default)
         {
             return Task.FromException<CodeExploreResult>(new InvalidOperationException("The schema projection test must not execute code exploration."));
         }
@@ -390,7 +390,7 @@ public sealed class Milestone3TestsModelCatalog_OutputCapacityAtContextWindow_Is
     [Fact]
     public static void ModelCatalog_OutputCapacityAtContextWindow_IsRejected()
     {
-        var profile = CreateProfile(_capableProfileId, "invalid-capacity", toolCalls: true, combinedCost: 0)with
+        var profile = CreateProfile(_capableProfileId, "invalid-capacity", toolCalls: true, combinedCost: 0) with
         {
             ContextWindow = 4_096,
             MaximumOutputTokens = 4_096,
@@ -857,7 +857,7 @@ public sealed class Milestone3TestsModelProfileConfiguration_LoadsConfiguredCata
         Assert.Equal(_cheapProfileId, profile.Id);
         Assert.Equal("secrets:models:example", profile.SecretKeyReference);
         Assert.Equal([WorkloadClass.Summary], profile.IntendedWorkloadClasses);
-        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { SecretKeyReference = "embedded-api-key" }, ]));
+        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { SecretKeyReference = "embedded-api-key" },]));
     }
 }
 
@@ -869,8 +869,8 @@ public sealed class Milestone3TestsModelCatalog_RequiresHttpsExceptForLoopback :
     public static void ModelCatalog_RequiresHttpsExceptForLoopback()
     {
         var profile = CreateProfile(_capableProfileId, "endpoint", toolCalls: true, combinedCost: 1);
-        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") }, ]));
-        var loopback = new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://localhost:11434/v1/chat/completions") }, ]);
+        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") },]));
+        var loopback = new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://localhost:11434/v1/chat/completions") },]);
         Assert.Single(loopback.Profiles);
     }
 }
@@ -884,9 +884,9 @@ public sealed class Milestone3TestsModelCatalog_AllowsHttpWhenEnforcementDisable
     {
         var profile = CreateProfile(_capableProfileId, "endpoint", toolCalls: true, combinedCost: 1);
         // Default: non-loopback HTTP rejected
-        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") }, ]));
+        Assert.Throws<ArgumentException>(() => new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") },]));
         // With enforcement disabled: non-loopback HTTP accepted
-        var catalog = new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") }, ], enforceHttps: false);
+        var catalog = new ConfiguredModelCatalog([profile with { Endpoint = new Uri("http://models.example/v1/chat/completions") },], enforceHttps: false);
         Assert.Single(catalog.Profiles);
     }
 }
@@ -1040,9 +1040,9 @@ public sealed class Milestone3TestsModelWireEstimator_IgnoresHostOnlyContentPart
     [Fact]
     public static void ModelWireEstimator_IgnoresHostOnlyContentParts()
     {
-        var visibleOnly = CreateRequestWithHostOnlySidecar("visible", string.Empty)with
+        var visibleOnly = CreateRequestWithHostOnlySidecar("visible", string.Empty) with
         {
-            Messages = [CreateToolResultMessageWithHostOnlySidecar("visible", null), ],
+            Messages = [CreateToolResultMessageWithHostOnlySidecar("visible", null),],
         };
         var withHidden = CreateRequestWithHostOnlySidecar("visible", new string('h', 10_000));
         var visibleEstimate = ModelWireEstimator.Estimate(visibleOnly.Messages, visibleOnly.Tools, visibleOnly.ToolTransportMode, stablePrefixMessageCount: 0, outputReserveTokens: 0);
@@ -1066,7 +1066,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ModelTools_AreSentAsFunctionDef
         });
         var profile = CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1);
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = false, Tools = [new ModelToolDefinition { Name = "inspect_file", Description = "Propose governed work.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"file\":{\"type\":\"object\",\"description\":\"The file to inspect.\"}}}", PreferStrictArguments = true, }, ], });
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = false, Tools = [new ModelToolDefinition { Name = "inspect_file", Description = "Propose governed work.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"file\":{\"type\":\"object\",\"description\":\"The file to inspect.\"}}}", PreferStrictArguments = true, },], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         var tool = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray());
@@ -1107,7 +1107,7 @@ public sealed class Milestone3TestsOpenAiAdapter_CodeExploreArgumentDescriptions
         var nativeProperties = nativeSchema.RootElement.GetProperty("properties");
         var queryDescription = nativeProperties.GetProperty("query").GetProperty("description").GetString();
         var maxFilesDescription = nativeProperties.GetProperty("maxFiles").GetProperty("description").GetString();
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = tool.Definition.Id, Description = tool.Definition.Description, ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema, PreferStrictArguments = tool.Definition.PreferStrictArguments, }, ], });
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = tool.Definition.Id, Description = tool.Definition.Description, ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema, PreferStrictArguments = tool.Definition.PreferStrictArguments, },], });
         Assert.NotNull(requestBody);
         using var request = JsonDocument.Parse(requestBody);
         var function = Assert.Single(request.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
@@ -1131,7 +1131,7 @@ public sealed class Milestone3TestsOpenAiAdapter_AdjacentSystemMessages_AreMerge
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "system-merge", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "ignored when structured messages are present", Messages = [CreateStructuredMessage(ModelMessageRole.System, "host-policy", "Host policy."), CreateStructuredMessage(ModelMessageRole.System, "conversation-policy", "Phase policy."), CreateStructuredMessage(ModelMessageRole.Developer, "context", "Use available tools."), CreateStructuredMessage(ModelMessageRole.User, "request", "Inspect the repository."), ], });
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "ignored when structured messages are present", Messages = [CreateStructuredMessage(ModelMessageRole.System, "host-policy", "Host policy."), CreateStructuredMessage(ModelMessageRole.System, "conversation-policy", "Phase policy."), CreateStructuredMessage(ModelMessageRole.Developer, "context", "Use available tools."), CreateStructuredMessage(ModelMessageRole.User, "request", "Inspect the repository."),], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         var messages = document.RootElement.GetProperty("messages").EnumerateArray().ToArray();
@@ -1160,7 +1160,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ProviderUnsafeToolNames_AreAlia
             return Response(HttpStatusCode.OK, stream);
         });
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "search sectors", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = "greenstreet-cre:search_sectors", Description = "Search Green Street sectors.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}", }, ], });
+        var chunks = await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "search sectors", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = "greenstreet-cre:search_sectors", Description = "Search Green Street sectors.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}", },], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         var function = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
@@ -1186,7 +1186,7 @@ public sealed class Milestone3TestsOpenAiAdapter_OrdinaryToolSchema_OmitsStrictA
         });
         var profile = CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1);
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = true, Tools = [new ModelToolDefinition { Name = "read_file", Description = "Read one bounded file range.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"maximumLines\":{\"type\":\"integer\"}},\"required\":[\"path\"],\"additionalProperties\":false}", }, ], });
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = true, Tools = [new ModelToolDefinition { Name = "read_file", Description = "Read one bounded file range.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"maximumLines\":{\"type\":\"integer\"}},\"required\":[\"path\"],\"additionalProperties\":false}", },], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
@@ -1214,12 +1214,12 @@ public sealed class Milestone3TestsOpenAiAdapter_GitToolSchemas_AreStrictStringE
         var profile = CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1);
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var git = new UnusedGitQueryService();
-        ToolDefinition[] definitions = [new GitLogTool(git, TestPromptLoader.Instance).Definition, new GitDiffTool(git, TestPromptLoader.Instance).Definition, ];
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = true, Tools = [..definitions.Select(definition => new ModelToolDefinition { Name = definition.Id, Description = definition.Description, ArgumentsJsonSchema = definition.InputSchema.JsonSchema, PreferStrictArguments = true, })], });
+        ToolDefinition[] definitions = [new GitLogTool(git, TestPromptLoader.Instance).Definition, new GitDiffTool(git, TestPromptLoader.Instance).Definition,];
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, AllowMultipleToolCalls = true, Tools = [.. definitions.Select(definition => new ModelToolDefinition { Name = definition.Id, Description = definition.Description, ArgumentsJsonSchema = definition.InputSchema.JsonSchema, PreferStrictArguments = true, })], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
-        JsonElement[] tools = [..document.RootElement.GetProperty("tools").EnumerateArray()];
+        JsonElement[] tools = [.. document.RootElement.GetProperty("tools").EnumerateArray()];
         Assert.Equal(2, tools.Length);
         var gitLog = tools.Single(tool => tool.GetProperty("function").GetProperty("name").GetString() == "git_log").GetProperty("function");
         Assert.True(gitLog.GetProperty("strict").GetBoolean());
@@ -1249,7 +1249,7 @@ public sealed class Milestone3TestsOpenAiAdapter_NonProjectableToolSchema_OmitsS
         });
         var profile = CreateProfile(_capableProfileId, "tools", toolCalls: true, combinedCost: 1);
         var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = "dynamic_tool", Description = "Use a dynamic object schema.", ArgumentsJsonSchema = "{\"type\":\"object\",\"additionalProperties\":true}", PreferStrictArguments = true, }, ], });
+        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = "dynamic_tool", Description = "Use a dynamic object schema.", ArgumentsJsonSchema = "{\"type\":\"object\",\"additionalProperties\":true}", PreferStrictArguments = true, },], });
         Assert.NotNull(requestBody);
         using var document = JsonDocument.Parse(requestBody);
         var function = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
@@ -1271,7 +1271,7 @@ public sealed class Milestone3TestsOpenAiAdapter_SensitiveRequest_RequiresAllowe
             sends++;
             return Task.FromResult(Response(HttpStatusCode.OK, "data: [DONE]\n"));
         });
-        var profile = CreateProfile(_capableProfileId, "prohibited", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "prohibited", toolCalls: true, combinedCost: 1) with
         {
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
         };
@@ -1326,13 +1326,13 @@ public sealed class Milestone3TestsConfiguredModelProvider_SensitiveRequest_Sele
             requestedEndpoint = request.RequestUri;
             return Task.FromResult(Response(HttpStatusCode.OK, "data: [DONE]\n"));
         });
-        var prohibited = CreateProfile(_cheapProfileId, "prohibited", toolCalls: false, combinedCost: 1)with
+        var prohibited = CreateProfile(_cheapProfileId, "prohibited", toolCalls: false, combinedCost: 1) with
         {
             Endpoint = new Uri("https://prohibited.example/v1/chat/completions"),
             IntendedWorkloadClasses = [],
             SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
         };
-        var allowed = CreateProfile(_capableProfileId, "allowed", toolCalls: true, combinedCost: 4)with
+        var allowed = CreateProfile(_capableProfileId, "allowed", toolCalls: true, combinedCost: 4) with
         {
             Endpoint = new Uri("https://allowed.example/v1/chat/completions"),
             IntendedWorkloadClasses = [],
@@ -1357,7 +1357,7 @@ public sealed class Milestone3TestsModelSelection_EnforcesCapabilitiesConstraint
     [Fact]
     public static void ModelSelection_EnforcesCapabilitiesConstraintsAndConfiguredUniverse()
     {
-        var catalog = new ConfiguredModelCatalog([CreateProfile(_cheapProfileId, "cheap", toolCalls: false, combinedCost: 1), CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 4), ]);
+        var catalog = new ConfiguredModelCatalog([CreateProfile(_cheapProfileId, "cheap", toolCalls: false, combinedCost: 1), CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 4),]);
         var policy = new DefaultModelSelectionPolicy(catalog);
         var request = new ModelSelectionRequest
         {
@@ -1711,7 +1711,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ClassifiesRetryableAndPermanent
             attempts++;
             return Task.FromResult(attempts == 1 ? Response(HttpStatusCode.ServiceUnavailable, string.Empty) : Response(HttpStatusCode.OK, "data: [DONE]\n"));
         });
-        var profile = CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1) with
         {
             Timeout = TimeSpan.Zero,
             RetryPolicy = new ModelRetryPolicy
@@ -1741,7 +1741,7 @@ public sealed class Milestone3TestsOpenAiAdapter_NameResolutionFailure_IsRetried
             attempts++;
             return attempts == 1 ? Task.FromException<HttpResponseMessage>(new HttpRequestException(HttpRequestError.NameResolutionError, "temporary DNS failure", null)) : Task.FromResult(Response(HttpStatusCode.OK, "data: [DONE]\n"));
         });
-        var profile = CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1) with
         {
             RetryPolicy = new ModelRetryPolicy
             {
@@ -1810,7 +1810,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ProfileTimeout_IsNormalizedAsPr
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
-        var profile = CreateProfile(_capableProfileId, "timeout", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "timeout", toolCalls: true, combinedCost: 1) with
         {
             Timeout = TimeSpan.FromMilliseconds(50),
         };
@@ -1909,7 +1909,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ReasoningEffort_SentForReasonin
             nonReasoningRequestBody = await request.Content!.ReadAsStringAsync(ct);
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
-        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1)with
+        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Medium],
         };
@@ -1938,7 +1938,7 @@ public sealed class Milestone3TestsOpenAiAdapter_UnsupportedReasoningLevel_Clamp
             requestBody = await request.Content!.ReadAsStringAsync(ct);
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
-        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1)with
+        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low],
         };
@@ -1962,7 +1962,7 @@ public sealed class Milestone3TestsOpenAiAdapter_ReasoningEffortNone_DisablesThi
             requestBody = await request.Content!.ReadAsStringAsync(ct);
             return Response(HttpStatusCode.OK, "data: [DONE]\n");
         });
-        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1)with
+        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High],
         };
@@ -2140,11 +2140,11 @@ public sealed class Milestone3TestsModelCatalog_RejectsDuplicatesAndAcceptsCusto
     [Fact]
     public static void ModelCatalog_RejectsDuplicatesAndAcceptsCustomReasoningLevels()
     {
-        var duplicate = CreateProfile(_capableProfileId, "duplicate", toolCalls: true, combinedCost: 1)with
+        var duplicate = CreateProfile(_capableProfileId, "duplicate", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.None],
         };
-        var custom = CreateProfile(_capableProfileId, "custom", toolCalls: true, combinedCost: 1)with
+        var custom = CreateProfile(_capableProfileId, "custom", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.None, new ReasoningLevel("adaptive")],
         };
@@ -2160,7 +2160,7 @@ public sealed class Milestone3TestsModelCatalog_RejectsUnsupportedDefaultReasoni
     [Fact]
     public static void ModelCatalog_RejectsUnsupportedDefaultReasoningLevel()
     {
-        var profile = CreateProfile(_capableProfileId, "bad-default", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "bad-default", toolCalls: true, combinedCost: 1) with
         {
             DefaultReasoningLevel = ReasoningLevel.High,
             SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low],
@@ -2176,7 +2176,7 @@ public sealed class Milestone3TestsModelCatalog_RejectsProfileWithoutNoneInSuppo
     [Fact]
     public static void ModelCatalog_RejectsProfileWithoutNoneInSupportedReasoningLevels()
     {
-        var profile = CreateProfile(_capableProfileId, "no-none", toolCalls: true, combinedCost: 1)with
+        var profile = CreateProfile(_capableProfileId, "no-none", toolCalls: true, combinedCost: 1) with
         {
             SupportedReasoningLevels = [ReasoningLevel.Medium],
         };

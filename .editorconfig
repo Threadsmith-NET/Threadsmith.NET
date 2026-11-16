@@ -288,6 +288,14 @@ dotnet_naming_style.t_pascal_case.required_prefix = T
 dotnet_naming_style.t_pascal_case.capitalization = pascal_case
 
 # ---------------------------------------------------------------------------
+# .NET cancellation analyzers (G-13)
+# ---------------------------------------------------------------------------
+
+# Forward available cancellation tokens and place cancellation parameters last.
+dotnet_diagnostic.CA2016.severity = error
+dotnet_diagnostic.CA1068.severity = error
+
+# ---------------------------------------------------------------------------
 # .NET performance analyzer compatibility
 # ---------------------------------------------------------------------------
 

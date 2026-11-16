@@ -1132,6 +1132,6 @@ public interface ICodeExploreService
         WorkspaceId workspaceId,
         CodeExploreRequest request,
         ICodeExploreSourceReader sourceReader,
-        CancellationToken cancellationToken = default,
-        ModelVisibleSourceFrontier? visibleSourceFrontier = null);
+        ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+        CancellationToken cancellationToken = default);
 }

@@ -49,7 +49,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.FileSections.Count > 0 || result.Availability is { IsRetryable: true });
         Assert.Contains("dtos", result.QueryInterpretation?.Terms ?? []);
@@ -78,7 +78,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.FileSections);
         Assert.Equal(CodeExploreAvailabilityStatus.NoMatchingDeclarations, result.Availability?.Status);
@@ -103,7 +103,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(result.FileSections);
         Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
@@ -127,7 +127,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertToolSurfaceSelected(result);
         AssertPrivateHelperClusterIsBounded(result);
@@ -152,7 +152,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSelectedToolFamily(result, "CodeExploreTool");
         AssertSelectedToolFamily(result, "FindSymbolTool");
@@ -187,7 +187,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 1, maximumFiles: 1),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSelectedSymbolContaining(result, "FormatWidget", "Method");
     }
@@ -207,7 +207,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 2),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSelectedSymbolContaining(result, "NormalizeWidget", "Method");
         AssertSelectedSymbolContaining(result, "ValidateWidget", "Method");
@@ -229,7 +229,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSelectedSymbol(result, "Threadsmith.App.WidgetService", "NamedType");
         Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
@@ -254,7 +254,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var candidate = Assert.Single(result.CandidateSummaries ?? [], summary =>
             string.Equals(summary.Symbol?.DisplayName, "Threadsmith.App.WidgetService", StringComparison.Ordinal));
@@ -281,7 +281,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
         Assert.Empty(result.CandidateSummaries ?? []);
@@ -381,7 +381,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 1),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal("CodeExploreTool.cs", Assert.Single(result.FileSections).FilePath);
         Assert.False(result.Coverage.SymbolResolutionComplete);
@@ -406,7 +406,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 fixture.WorkspaceId,
                 new CodeExploreRequest { Query = query, Limits = CreateAgentQuestionLimits() },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Equal("src/My Tests/Foo.cs", Assert.Single(result.FileSections).FilePath);
         }
@@ -434,7 +434,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                     Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
                 },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Contains(result.CandidateSummaries ?? [], summary =>
                 summary.Selected
@@ -475,7 +475,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                     Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
                 },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             AssertSelectedToolFamily(result, testCase.ContainingTypeName);
             AssertNoOtherSelectedSemanticToolFamily(result, testCase.ContainingTypeName);
@@ -504,7 +504,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                     Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
                 },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             AssertSelectedToolFamily(result, "FindReferencesTool");
             AssertNoOtherSelectedSemanticToolFamily(result, "FindReferencesTool");
@@ -526,7 +526,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         AssertSelectedToolFamily(result, "FindReferencesTool");
         AssertSelectedToolFamily(result, "CallHierarchyTool");
@@ -555,7 +555,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                     Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
                 },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
                 IsToolCapabilitySelectionReason(summary.Reason));
@@ -586,7 +586,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                     Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
                 },
                 fixture.CreateSourceReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.NotEmpty(result.CandidateSummaries ?? []);
             Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
@@ -611,7 +611,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Contains(result.ResolvedAnchors, resolution =>
             resolution.Outcome == CodeExploreResolutionOutcome.Resolved
@@ -641,7 +641,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
                 Limits = new CodeExploreLimits { MaximumFiles = 8 },
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(result.FileSections);
         Assert.Contains(result.CandidateSummaries ?? [], summary =>
@@ -692,7 +692,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
             fixture.WorkspaceId,
             new CodeExploreRequest { Query = query },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         Assert.True(
             JsonSerializer.SerializeToUtf8Bytes(unbounded).Length > maximumSerializedResultBytes,
             "The fixture must exceed the model-derived result ceiling so this test exercises trimming.");

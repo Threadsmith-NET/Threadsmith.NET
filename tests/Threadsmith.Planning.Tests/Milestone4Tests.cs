@@ -2385,8 +2385,8 @@ public static class Milestone4Tests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             WasCalled = true;
             throw new InvalidOperationException("The no-workspace branch should not call the semantic service.");

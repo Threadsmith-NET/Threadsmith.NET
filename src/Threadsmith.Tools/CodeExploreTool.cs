@@ -99,8 +99,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             workspaceId,
             effectiveInput,
             sourceReader,
-            cancellationToken,
-            context.Invocation.VisibleSourceFrontier);
+            context.Invocation.VisibleSourceFrontier,
+            cancellationToken);
         result = ApplyBudgetSource(result, budgetSource);
         result = Confine(result, context.Invocation);
         result = BoundResultForModelBudget(result, context.Invocation);

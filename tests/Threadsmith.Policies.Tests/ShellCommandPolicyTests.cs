@@ -20,8 +20,8 @@ public static class ShellCommandPolicyTests
         var facts = Facts();
         var snapshot = Snapshot(facts, Rule("command", "Write-Output", outcome));
 
-        var shell = PolicyEvaluator.Evaluate(snapshot, facts);
-        var external = PolicyEvaluator.Evaluate(snapshot, facts with
+        var shell = TestPolicyEvaluation.Evaluate(snapshot, facts);
+        var external = TestPolicyEvaluation.Evaluate(snapshot, facts with
         {
             CommandKind = CommandPolicyNames.External,
             ResolvedExecutable = Path.GetFullPath("Write-Output"),
@@ -51,15 +51,15 @@ public static class ShellCommandPolicyTests
         };
         var snapshot = Snapshot(facts, broad, deny);
 
-        Assert.Equal(!matches, PolicyEvaluator.Evaluate(snapshot, facts).IsAllowed);
-        Assert.Equal(!matches, PolicyEvaluator.Evaluate(snapshot with { Rules = [broad], Enforced = [deny with { Overrides = [] }] }, facts).IsAllowed);
+        Assert.Equal(!matches, TestPolicyEvaluation.Evaluate(snapshot, facts).IsAllowed);
+        Assert.Equal(!matches, TestPolicyEvaluation.Evaluate(snapshot with { Rules = [broad], Enforced = [deny with { Overrides = [] }] }, facts).IsAllowed);
         var closed = snapshot with
         {
             Rules = [broad],
             Enforced = [deny with { Policy = PolicyOutcome.Allow, Overrides = [] }],
             RequireEnforcedMatch = true,
         };
-        Assert.Equal(matches, PolicyEvaluator.Evaluate(closed, facts).IsAllowed);
+        Assert.Equal(matches, TestPolicyEvaluation.Evaluate(closed, facts).IsAllowed);
     }
 
     [Theory]
@@ -81,7 +81,7 @@ public static class ShellCommandPolicyTests
 
         foreach (var arguments in new ImmutableArray<string>[] { facts.Arguments, ["-Message", "hello", "world"] })
         {
-            var decision = PolicyEvaluator.Evaluate(snapshot, facts with { Arguments = arguments });
+            var decision = TestPolicyEvaluation.Evaluate(snapshot, facts with { Arguments = arguments });
             Assert.False(decision.IsAllowed);
             Assert.False(decision.RequiresApproval);
             Assert.Equal(PolicyReasons.ExplicitDenial, decision.ReasonCode);
@@ -93,7 +93,7 @@ public static class ShellCommandPolicyTests
     public static void AbsentFileTargetDoesNotMatchPathsOrEmptyExecutableNames()
     {
         var facts = Facts();
-        var catalog = new PolicyMatcherCatalog();
+        var catalog = new PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout);
         var path = new PolicyMatcher { Type = PolicyMatcherType.Path, Fact = PolicyFact.ResolvedExecutable, Values = [facts.WorkingDirectory] };
         Assert.False(catalog.Matches([path], facts));
         Assert.True(catalog.Matches([path with { Fact = PolicyFact.WorkingDirectory }], facts));
@@ -102,7 +102,7 @@ public static class ShellCommandPolicyTests
         {
             Matchers = [new PolicyMatcher { Type = PolicyMatcherType.AnyOf, Matchers = [path, Rule("name", facts.ExecutableName).Matchers[0]] }],
         };
-        Assert.True(PolicyEvaluator.Evaluate(Snapshot(facts, rule), facts).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(Snapshot(facts, rule), facts).IsAllowed);
     }
 
     [Theory]
@@ -115,18 +115,18 @@ public static class ShellCommandPolicyTests
     public static void InvalidFactShapesDenyEvenWithoutCandidateRules(string kind, string? target, string name)
     {
         var facts = Facts() with { CommandKind = kind, ResolvedExecutable = target!, ExecutableName = name };
-        Assert.Equal(PolicyReasons.AnalysisError, PolicyEvaluator.Evaluate(Snapshot(facts), facts).ReasonCode);
+        Assert.Equal(PolicyReasons.AnalysisError, TestPolicyEvaluation.Evaluate(Snapshot(facts), facts).ReasonCode);
     }
 
     [Fact]
     public static void PowerShellIndexDoesNotChangeUnixExternalPathOrNameCaseSemantics()
     {
         var facts = Facts() with { ExecutableName = "Native", ResolvedExecutable = Path.GetFullPath("Native"), CommandKind = CommandPolicyNames.External };
-        Assert.False(PolicyEvaluator.Evaluate(Snapshot(facts, Rule("name", "NATIVE")), facts).IsAllowed);
-        Assert.False(PolicyEvaluator.Evaluate(Snapshot(facts, Rule("path", facts.ResolvedExecutable.ToUpperInvariant())), facts).IsAllowed);
-        Assert.True(PolicyEvaluator.Evaluate(Snapshot(facts, Rule("path", facts.ResolvedExecutable)), facts).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(Snapshot(facts, Rule("name", "NATIVE")), facts).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(Snapshot(facts, Rule("path", facts.ResolvedExecutable.ToUpperInvariant())), facts).IsAllowed);
+        Assert.True(TestPolicyEvaluation.Evaluate(Snapshot(facts, Rule("path", facts.ResolvedExecutable)), facts).IsAllowed);
         var explicitFacts = facts with { CommandKind = CommandPolicyNames.ExplicitExternal };
-        Assert.False(PolicyEvaluator.Evaluate(Snapshot(explicitFacts, Rule("name", facts.ExecutableName)), explicitFacts).IsAllowed);
+        Assert.False(TestPolicyEvaluation.Evaluate(Snapshot(explicitFacts, Rule("name", facts.ExecutableName)), explicitFacts).IsAllowed);
     }
 
     private static CommandFacts Facts() => new("linux", "pwsh", "Write-Output", string.Empty, CommandPolicyNames.ShellCommand, [], Path.GetFullPath("."));

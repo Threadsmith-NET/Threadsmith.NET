@@ -66,7 +66,7 @@ public static partial class ShellBuiltinPolicyTests
                 PreparationEnvironment = new Dictionary<string, string> { ["PATH"] = root },
             };
             await using var events = new DomainEventStream();
-            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
             var context = ShellCommandPolicyTests.Context(root, policy);
             var cancellationToken = TestContext.Current.CancellationToken;
             const string redirect = "gh run view --job 131155720059 --repo Threadsmith-NET/Threadsmith.NET --log > .threadsmith/.scratchpad/ci-linux.log";

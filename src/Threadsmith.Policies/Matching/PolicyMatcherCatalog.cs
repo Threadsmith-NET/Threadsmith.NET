@@ -13,6 +13,9 @@ public interface IPolicyMatcher
 
     /// <summary>Matches command facts without interpreting program-specific arguments.</summary>
     bool Matches(ImmutableArray<PolicyMatcher> matchers, ActionFacts facts);
+
+    /// <summary>Searches a rule's argument restrictions without interpreting arguments.</summary>
+    bool DeniesArguments(PolicyRule rule, string arguments);
 }
 
 /// <summary>Implements the closed, host-owned matcher catalog.</summary>
@@ -21,6 +24,20 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
     // Weak identity keys keep compiled patterns alive only while their immutable source nodes are retained.
     private static readonly ConditionalWeakTable<PolicyMatcher, Regex> Patterns = [];
     private static readonly ConditionalWeakTable<PolicyRule, Regex[]> ArgumentPatterns = [];
+    private readonly TimeSpan? _matchTimeout;
+    private readonly ConditionalWeakTable<Regex, Regex> _executionPatterns = [];
+
+    /// <summary>Initializes a new instance of the <see cref="PolicyMatcherCatalog"/> class with a host-owned execution bound.</summary>
+    public PolicyMatcherCatalog(TimeSpan? matchTimeout = null)
+    {
+        if (matchTimeout is { } timeout && timeout != Regex.InfiniteMatchTimeout
+            && (timeout <= TimeSpan.Zero || timeout.TotalMilliseconds > int.MaxValue - 1))
+        {
+            throw new ArgumentOutOfRangeException(nameof(matchTimeout));
+        }
+
+        _matchTimeout = matchTimeout;
+    }
 
     /// <inheritdoc />
     public void Validate(PolicyMatcher matcher) => ValidateNode(matcher, 0, null);
@@ -32,11 +49,14 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
         return MatchesValidated(matchers, command);
     }
 
+    /// <summary>Denies on any search match without interpreting argument boundaries or options.</summary>
+    public bool DeniesArguments(PolicyRule rule, string arguments) => GetArgumentPatterns(rule).Any(pattern => IsMatch(pattern, arguments));
+
     /// <summary>Validates inactive profile syntax using its declared platform.</summary>
     internal static void Validate(PolicyMatcher matcher, string? platform) => ValidateNode(matcher, 0, platform);
 
     /// <summary>Matches facts already validated by the owning action evaluator.</summary>
-    internal static bool MatchesValidated(ImmutableArray<PolicyMatcher> matchers, CommandFacts facts)
+    internal bool MatchesValidated(ImmutableArray<PolicyMatcher> matchers, CommandFacts facts)
     {
         var matched = true;
         foreach (var node in matchers)
@@ -59,9 +79,6 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
 
         return [.. value.DenyArgumentsMatching.Select(expression => CreatePattern(expression, false, fullValue: false))];
     });
-
-    /// <summary>Denies on any search match without interpreting argument boundaries or options.</summary>
-    internal static bool DeniesArguments(PolicyRule rule, string arguments) => GetArgumentPatterns(rule).Any(pattern => pattern.IsMatch(arguments));
 
     /// <summary>Validates action facts even when an index selects no candidate rules.</summary>
     internal static CommandFacts ValidateFacts(ActionFacts facts)
@@ -131,7 +148,7 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
         }
     }
 
-    private static bool Match(PolicyMatcher node, CommandFacts facts)
+    private bool Match(PolicyMatcher node, CommandFacts facts)
     {
         if (node.Type is PolicyMatcherType.AllOf or PolicyMatcherType.AnyOf)
         {
@@ -166,10 +183,19 @@ public sealed class PolicyMatcherCatalog : IPolicyMatcher
             PolicyMatcherType.Exact => string.Equals(value, node.Value, comparison),
             PolicyMatcherType.ValueSet => node.Values.Contains(value, node.IgnoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal),
             PolicyMatcherType.Executable => MatchesExecutable(node.Value, facts),
-            PolicyMatcherType.Regex or PolicyMatcherType.Glob => Pattern(node).IsMatch(value),
+            PolicyMatcherType.Regex or PolicyMatcherType.Glob => IsMatch(Pattern(node), value),
             _ => throw new InvalidDataException(PolicyReasons.UnknownMatcher),
         };
         return matched;
+    }
+
+    private bool IsMatch(Regex pattern, string value)
+    {
+        // Execution bounds belong to this host-owned matcher, never to shared policy identities.
+        var execution = _matchTimeout is { } timeout
+            ? _executionPatterns.GetValue(pattern, source => new Regex(source.ToString(), source.Options, timeout))
+            : pattern;
+        return execution.IsMatch(value);
     }
 
     private static bool MatchesExecutable(string? expected, CommandFacts facts)

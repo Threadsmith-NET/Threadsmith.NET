@@ -26,7 +26,7 @@ public static class StandardCommandRulesTests
             Path.GetFullPath("."));
 
         // Act
-        var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
 
         // Assert
         Assert.True(decision.IsAllowed);
@@ -56,7 +56,7 @@ public static class StandardCommandRulesTests
                 _ => [command, remote],
             };
             var facts = new CommandFacts("linux", "bash", "git", Path.GetFullPath("git"), "external", arguments, Path.GetFullPath("."));
-            var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+            var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
             Assert.Equal(allowed ? PolicyOutcome.Allow : PolicyOutcome.AlwaysDeny, decision.Outcome);
         }
     }
@@ -73,7 +73,7 @@ public static class StandardCommandRulesTests
         {
             ImmutableArray<string> arguments = attached ? [command, option + "=ext::fixture"] : [command, option, "ext::fixture"];
             var facts = new CommandFacts("linux", "bash", "git", Path.GetFullPath("git"), "external", arguments, Path.GetFullPath("."));
-            Assert.Equal(PolicyOutcome.AlwaysDeny, PolicyEvaluator.Evaluate(snapshot, facts).Outcome);
+            Assert.Equal(PolicyOutcome.AlwaysDeny, TestPolicyEvaluation.Evaluate(snapshot, facts).Outcome);
         }
     }
 
@@ -125,7 +125,7 @@ public static class StandardCommandRulesTests
             var facts = new CommandFacts("linux", "bash", "git", Path.GetFullPath("git"), "external", arguments, Path.GetFullPath("."));
 
             // Act through the shared evaluator's text searches.
-            var decision = PolicyEvaluator.Evaluate(snapshot, facts);
+            var decision = TestPolicyEvaluation.Evaluate(snapshot, facts);
 
             // Assert: denial comes from the Git rule's text restrictions.
             Assert.Equal(allowed, decision.IsAllowed);

@@ -52,7 +52,7 @@ public sealed class SourceEditAnalysisTestsCandidatePromotionRetainsOriginAndReu
         var completion = new TaskCompletionSource<SemanticCheckCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = events.Subscribe((item, _) =>
         {
-            if (item is SemanticCheckCompleted check && check.RunId == run && check.Analysis?.EffectId == first.EffectId)
+            if (item is SemanticCheckCompleted { CheckName: "advisory edit analysis" } check && check.RunId == run && check.Analysis?.EffectId == first.EffectId)
             {
                 completion.TrySetResult(check);
             }
@@ -98,11 +98,9 @@ public sealed class SourceEditAnalysisTestsCandidatePromotionRetainsOriginAndReu
         Assert.True(repairAnalysis.ResolvedErrors > 0);
         Assert.DoesNotContain(repairAnalysis.Diagnostics, item => item.Code == "CS0246");
         Assert.Equal(1, repairAnalysis.CurrentErrors);
-        Assert.Collection(repairAnalysis.Diagnostics, item =>
-        {
-            Assert.Equal("CS8805", item.Code);
-            Assert.Equal("initial", item.Origin);
-        });
+        var remaining = Assert.Single(repairAnalysis.Diagnostics);
+        Assert.Equal("CS8805", remaining.Code);
+        Assert.Equal("initial", remaining.Origin);
     }
 }
 
@@ -328,7 +326,7 @@ public sealed class SourceEditAnalysisTestsUnregisteredEndpointsSkipDiagnosticsA
         var candidate = Snapshot(relative, original, replacement);
         candidate = candidate with
         {
-            Endpoints = [..candidate.Endpoints, ..Snapshot("report.md", "before", "after").Endpoints],
+            Endpoints = [.. candidate.Endpoints, .. Snapshot("report.md", "before", "after").Endpoints],
         };
         Assert.NotNull(await engine.AnalyzeCandidateAsync(command, root, candidate, TimeSpan.FromSeconds(20), ct));
         var passes = engine.EditAnalysisStatistics.DiagnosticPasses;

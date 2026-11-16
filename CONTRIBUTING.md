@@ -114,6 +114,15 @@ Use `--include` with the changed file paths to focus whitespace and analyzer che
 
 Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
 
+Before submitting new or changed tests, review these sources of local/CI differences:
+
+- **Hidden deadlines:** trace nested regex, SDK, process, and compiler dependencies. An outer fake clock cannot freeze an API's private clock. Functional policy tests use the real matcher with an instance-owned infinite match timeout; separate tests check the production 100 ms configuration and injected timeout denial.
+- **Completion identity:** match the operation, producer, and phase. Compiler and analyzer completion can share an edit ID. Force the competing completion order with barriers and assert the required final result.
+- **Fixture ownership:** use unique temporary roots, join background work before cleanup, and avoid process-wide environment/current-directory mutations. Do not depend on installed tools, developer caches, file enumeration order, path casing, line endings, or culture unless those are explicit test inputs.
+- **Validation coverage:** run the affected project and the full solution with CI's parallelism after the final edit. Record OS, SDK, commands, and outcomes. A focused local pass cannot establish cross-platform success; only the exact submitted revision's three-platform CI can do that.
+
+For each CI failure, retain the failing test name and assertion/exception, identify the hidden assumption, and add deterministic coverage of that assumption where practical. Distinguish a confirmed cause from an inference when the logs lack detail. Do not disable parallelism, skip the case, loosen its expected result, or rerun unchanged code as a substitute for a fix.
+
 Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, inspect the current `.github/workflows/` checks and run the same product build and test commands used by CI:
 
 Run the packaged-documentation preflight before every PR or follow-up push, including documentation-only changes:

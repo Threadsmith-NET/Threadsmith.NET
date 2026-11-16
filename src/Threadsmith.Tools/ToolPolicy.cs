@@ -34,6 +34,14 @@ public interface IPolicyEngine
 /// <summary>Default least-privilege policy for built-in tools.</summary>
 public sealed class DefaultPolicyEngine : IPolicyEngine
 {
+    private readonly Threadsmith.Policies.Matching.IPolicyMatcher? _commandMatcher;
+
+    /// <summary>Initializes a new instance of the <see cref="DefaultPolicyEngine"/> class with an optional host-owned command matcher.</summary>
+    public DefaultPolicyEngine(Threadsmith.Policies.Matching.IPolicyMatcher? commandMatcher = null)
+    {
+        _commandMatcher = commandMatcher;
+    }
+
     /// <inheritdoc />
     public ToolPolicyDecision Evaluate(
         ITool tool,
@@ -228,7 +236,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 for (var index = 0; index < prepared.Actions.Length; index++)
                 {
                     var action = prepared.Actions[index];
-                    var decision = Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action);
+                    var decision = Threadsmith.Policies.Evaluation.PolicyEvaluator.Evaluate(snapshot, action, _commandMatcher);
                     if (!decision.IsAllowed)
                     {
                         return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);

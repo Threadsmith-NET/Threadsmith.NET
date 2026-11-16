@@ -73,7 +73,7 @@ public static class PolicyEvaluationPlanTests
     public static void ValidatedPatternsAreReusedByIdentityAndCopiesDoNotReuseChangedPatterns()
     {
         var matcher = new PolicyMatcher { Type = PolicyMatcherType.Regex, Fact = PolicyFact.ExecutableName, Value = "git" };
-        var catalog = new PolicyMatcherCatalog();
+        var catalog = new PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout);
         catalog.Validate(matcher);
         var patternMethod = typeof(PolicyMatcherCatalog).GetMethod("Pattern", BindingFlags.Static | BindingFlags.NonPublic)!;
         var pattern = patternMethod.Invoke(null, [matcher]);
@@ -107,14 +107,14 @@ public static class PolicyEvaluationPlanTests
 
         // A singleton AnyOf preserves semantics but deliberately forces full-scan fallback.
         var unindexed = snapshot with { Rules = [.. snapshot.Rules.Select(Wrap)], Enforced = [.. snapshot.Enforced.Select(Wrap)] };
-        var indexedDecision = PolicyEvaluator.Evaluate(snapshot, facts);
-        var scannedDecision = PolicyEvaluator.Evaluate(unindexed, facts);
+        var indexedDecision = TestPolicyEvaluation.Evaluate(snapshot, facts);
+        var scannedDecision = TestPolicyEvaluation.Evaluate(unindexed, facts);
         Assert.Equal(scannedDecision.Outcome, indexedDecision.Outcome);
         Assert.Equal(scannedDecision.ReasonCode, indexedDecision.ReasonCode);
         Assert.Equal(scannedDecision.RuleIds, indexedDecision.RuleIds);
         Assert.Equal(scannedDecision.RuleFingerprint, indexedDecision.RuleFingerprint);
         Assert.NotSame(plan, getPlan.Invoke(null, [unindexed]));
-        Assert.Equal(PolicyReasons.AnalysisError, PolicyEvaluator.Evaluate(snapshot, facts with { WorkingDirectory = "relative" }).ReasonCode);
+        Assert.Equal(PolicyReasons.AnalysisError, TestPolicyEvaluation.Evaluate(snapshot, facts with { WorkingDirectory = "relative" }).ReasonCode);
     }
 
     [Theory]
@@ -155,7 +155,7 @@ public static class PolicyEvaluationPlanTests
         var candidates = Candidates(snapshot, facts, "Ordinary").ToArray();
 
         Assert.Equal(["ambiguous"], candidates.Select(rule => rule.Id));
-        AssertEquivalent(PolicyEvaluator.Evaluate(snapshot with { Rules = [.. snapshot.Rules.Select(Wrap)] }, facts), PolicyEvaluator.Evaluate(snapshot, facts));
+        AssertEquivalent(TestPolicyEvaluation.Evaluate(snapshot with { Rules = [.. snapshot.Rules.Select(Wrap)] }, facts), TestPolicyEvaluation.Evaluate(snapshot, facts));
     }
 
     [Theory]
@@ -170,7 +170,7 @@ public static class PolicyEvaluationPlanTests
         };
         var snapshot = enforced ? basis with { Enforced = [invalid] } : basis with { Rules = [invalid] };
 
-        var decision = PolicyEvaluator.Evaluate(snapshot, Facts("git"));
+        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts("git"));
 
         Assert.Equal(PolicyReasons.AnalysisError, decision.ReasonCode);
         Assert.False(decision.IsAllowed);

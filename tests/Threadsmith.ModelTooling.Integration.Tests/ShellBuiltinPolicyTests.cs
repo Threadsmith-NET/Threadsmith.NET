@@ -43,7 +43,7 @@ public static partial class ShellBuiltinPolicyTests
             Assert.Equal(string.Empty, facts.ResolvedExecutable);
             Assert.Equal(name, facts.ExecutableName);
             await using var events = new DomainEventStream();
-            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
             var request = Request(root, command, context);
 
             var result = await pipeline.InvokeAsync(request, cancellationToken);
@@ -110,7 +110,7 @@ public static partial class ShellBuiltinPolicyTests
             PreparationEnvironment = new Dictionary<string, string> { ["PATH"] = string.Empty },
         };
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
         foreach (var value in new[] { "'hello world'", "\"hello world\"" })
         {
             var result = await pipeline.InvokeAsync(Request(root, name + " -Message " + value, ShellCommandPolicyTests.Context(root, policy)), TestContext.Current.CancellationToken);
@@ -137,7 +137,7 @@ public static partial class ShellBuiltinPolicyTests
         var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: ResolveShell(shell));
         var command = string.Join("; ", Enumerable.Range(0, 3).Select(index => name + (index == deniedIndex ? " denied" : " allowed")));
         var context = ShellCommandPolicyTests.Context(root, policy);
-        var decision = new DefaultPolicyEngine().Evaluate(tool, new RunProcessInput { Command = command, WorkingDirectory = root }, context);
+        var decision = new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)).Evaluate(tool, new RunProcessInput { Command = command, WorkingDirectory = root }, context);
         if (deniedIndex == -1)
         {
             var actions = tool.Prepare(new RunProcessInput { Command = command, WorkingDirectory = root }, context).PreparedCommand!.Actions;
@@ -163,7 +163,7 @@ public static partial class ShellBuiltinPolicyTests
             return Task.FromResult(new PolicyApprovalResponse(approval.RequestId, PolicyApprovalChoice.Once));
         });
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
 
         var result = await pipeline.InvokeAsync(Request(root, command, context), TestContext.Current.CancellationToken);
 
@@ -198,7 +198,7 @@ public static partial class ShellBuiltinPolicyTests
         var coordinator = new CommandPolicyCoordinator();
         using var handler = coordinator.Attach((_, _) => throw new InvalidOperationException("A denied compound must not request approval."));
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
 
         var result = await pipeline.InvokeAsync(Request(root, command, context), TestContext.Current.CancellationToken);
 
@@ -228,7 +228,7 @@ public static partial class ShellBuiltinPolicyTests
         };
         await using var events = new DomainEventStream();
         var policy = CreatePolicy(root, "pwsh", "Write-Output", PolicyOutcome.Allow);
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
 
         var result = await pipeline.InvokeAsync(Request(root, "Write-Output " + arguments, ShellCommandPolicyTests.Context(root, policy)), TestContext.Current.CancellationToken);
 
@@ -265,7 +265,7 @@ public static partial class ShellBuiltinPolicyTests
             PreparationEnvironment = new Dictionary<string, string> { ["PATH"] = string.Empty },
         };
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
         var command = "Get-Process -Id " + Environment.ProcessId + " | Select-Object -ExpandProperty Id";
 
         var result = await pipeline.InvokeAsync(Request(root, command, ShellCommandPolicyTests.Context(root, policy)), TestContext.Current.CancellationToken);
@@ -328,7 +328,7 @@ public static partial class ShellBuiltinPolicyTests
         policy = policy with { AllowedExecutables = [.. policy.AllowedExecutables, shell] };
         var context = ShellCommandPolicyTests.Context(root, policy);
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), new CommandPolicyCoordinator(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
 
         var result = await pipeline.InvokeAsync(Request(root, "Write-Output $(dynamic)", context), TestContext.Current.CancellationToken);
 

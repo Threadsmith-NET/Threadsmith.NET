@@ -14,7 +14,7 @@ public abstract partial class SourceEditAnalysisTests
         var completion = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = events.Subscribe((item, _) =>
         {
-            if (item is SemanticCheckCompleted { Analysis: { } analysis } && analysis.EffectId == command.EffectId)
+            if (item is SemanticCheckCompleted { CheckName: "advisory edit analysis", Analysis: { } analysis } && analysis.EffectId == command.EffectId)
             {
                 completion.TrySetResult(analysis);
             }
@@ -23,6 +23,55 @@ public abstract partial class SourceEditAnalysisTests
         });
         Assert.NotNull(await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.Zero, cancellationToken));
         return await completion.Task.WaitAsync(cancellationToken);
+    }
+}
+
+/// <summary>Checks completion identity independently of worker scheduling.</summary>
+public sealed class SourceEditAnalysisTestsCompilerCompletionIdentity : SourceEditAnalysisTests
+{
+    /// <summary>Delivers analyzer completion while compiler work is held behind a barrier.</summary>
+    [Fact]
+    public static async Task AnalyzerCompletionCannotReleaseCompilerWait()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new TestSemanticSolution();
+        await using var events = new DomainEventStream();
+        var compilerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCompiler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider())
+        {
+            EditSyntaxAnalysisObserver = async (_, token) =>
+            {
+                compilerEntered.TrySetResult();
+                await releaseCompiler.Task.WaitAsync(token);
+            },
+        };
+        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
+        await engine.LoadAsync(request, ct);
+        var command = Command(request.SessionId, RunId.New(), request.WorkspaceId);
+        const string relative = "Contracts/Services.cs";
+        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
+        var pending = AnalyzeCompletedAsync(engine, events, command, fixture.Root, Snapshot(relative, original, original + "\npublic class Broken { public MissingType Value; }"), ct);
+        try
+        {
+            await compilerEntered.Task.WaitAsync(ct);
+            // Publish the competing producer's completion at an explicit compiler barrier.
+            var competingCompletion = new SemanticCheckCompleted(command.SessionId, DateTimeOffset.UtcNow, command.RunId, SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Completed)
+            {
+                Analysis = new SourceEditAnalysis { EffectId = command.EffectId, Pending = true },
+            };
+            await events.PublishAsync(competingCompletion, ct);
+            // Enqueue order on the helper subscription guarantees this event precedes compiler completion.
+            // The final assertions below detect selecting it even if callback processing is delayed.
+        }
+        finally
+        {
+            releaseCompiler.TrySetResult();
+        }
+
+        var analysis = await pending;
+        Assert.False(analysis.Pending);
+        Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246");
     }
 }
 

@@ -40,7 +40,7 @@ public static partial class ShellBuiltinPolicyTests
             var context = ShellCommandPolicyTests.Context(root, policy);
             await using var events = new DomainEventStream();
             var coordinator = new CommandPolicyCoordinator();
-            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
             var request = Request(root, command, context);
             var facts = Assert.Single(tool.Prepare(new RunProcessInput { Command = command }, context).PreparedCommand!.Actions);
             Assert.Equal(name, facts.ExecutableName);
@@ -152,7 +152,7 @@ public static partial class ShellBuiltinPolicyTests
         var coordinator = new CommandPolicyCoordinator();
         using var handler = coordinator.Attach((_, _) => throw new InvalidOperationException("Rejected setup must not request approval."));
         await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)), coordinator, events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
 
         // Act
         var result = await pipeline.InvokeAsync(Request(root, command, context), TestContext.Current.CancellationToken);

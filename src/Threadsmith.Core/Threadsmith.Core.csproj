@@ -9,6 +9,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
     <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.ModelTooling.Integration.Tests" />
   </ItemGroup>
 
   <!-- The immutable policy contract leaf is Core's only product dependency. -->

@@ -465,12 +465,15 @@ public static partial class OpenRouterProviderTests
 
     /// <summary>OpenRouter uses shared rate-limit recovery and its configured attempt limit.</summary>
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public static async Task RateLimitStream_UsesSharedRetriesAndOneBusyNotice(int maximumAttempts)
+    [InlineData(1, 429)]
+    [InlineData(2, 429)]
+    [InlineData(4, 429)]
+    [InlineData(1, 503)]
+    [InlineData(3, 503)]
+    [InlineData(3, 529)]
+    public static async Task BusyStream_UsesSharedRetriesAndOneBusyNotice(int maximumAttempts, int status)
     {
-        using var handler = new Handler(Failed(429));
+        using var handler = new Handler(Failed(status));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var model = Model() with { RetryMaxAttempts = maximumAttempts, RetryDelayMilliseconds = 0 };
         var chunks = new List<ModelChunk>();

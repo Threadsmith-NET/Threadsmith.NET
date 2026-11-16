@@ -89,6 +89,8 @@ public static partial class OpenAiCompatibleTimeoutTests
 
             // Act
             clock.Advance(TimeSpan.FromMilliseconds(100));
+            await clock.BackoffEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+            clock.Advance(TimeSpan.FromMilliseconds(250));
             var chunks = await pending.WaitAsync(TestContext.Current.CancellationToken);
 
             // Assert: retry and success do not join the abandoned read or publish its late bytes.

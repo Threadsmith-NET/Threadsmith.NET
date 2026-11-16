@@ -73,7 +73,10 @@ public static class OpenAiCompatibleStreamErrorTests
     [InlineData("{\"code\":\"429\"}", false)]
     [InlineData("{\"type\":\"rate_limit_error\"}", false)]
     [InlineData("{\"code\":\"rate_limit_exceeded\"}", true)]
-    public static async Task RateLimit_RetriesWithOneBusyNotice(string error, bool exhaust)
+    [InlineData("{\"code\":\"server_is_overloaded\",\"type\":\"service_unavailable_error\"}", false)]
+    [InlineData("{\"status\":503}", false)]
+    [InlineData("{\"status_code\":\"529\"}", false)]
+    public static async Task ProviderBusy_RetriesWithOneBusyNotice(string error, bool exhaust)
     {
         var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
         const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";

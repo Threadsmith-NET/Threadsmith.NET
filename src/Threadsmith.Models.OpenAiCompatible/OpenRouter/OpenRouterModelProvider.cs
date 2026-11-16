@@ -139,6 +139,7 @@ internal sealed class OpenRouterModelProvider : IModelProvider
                         throw new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"OpenRouter remained unavailable after {attempt} attempts (HTTP {(int)response.StatusCode})."))
                         {
                             IsRateLimit = response.StatusCode == HttpStatusCode.TooManyRequests,
+                            IsOverloaded = response.StatusCode == HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 529,
                             RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, _timeProvider.GetUtcNow()),
                         };
                     }

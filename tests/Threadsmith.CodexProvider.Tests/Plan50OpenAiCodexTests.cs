@@ -1026,7 +1026,10 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData("{\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}", false)]
     [InlineData("{\"type\":\"response.failed\",\"response\":{\"usage\":null,\"error\":{\"code\":429}}}", false)]
     [InlineData("{}", true)]
-    public async Task Provider_RateLimit_RetriesAndReportsBusyOnce(string frame, bool httpStatus)
+    [InlineData("{\"type\":\"error\",\"code\":\"server_is_overloaded\"}", false)]
+    [InlineData("{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"type\":\"service_unavailable_error\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}}", false)]
+    [InlineData("{\"type\":\"error\",\"error\":{\"type\":\"service_unavailable_error\"}}", false)]
+    public async Task Provider_Busy_RetriesAndReportsBusyOnce(string frame, bool httpStatus)
     {
         var calls = 0;
         var handler = new RecordingHandler(_ => ++calls < 3
@@ -1203,7 +1206,7 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal(2, calls);
         Assert.True(body.Started.Task.IsCompleted);
-        Assert.Equal(status == 429 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Equal(status is 429 or 503 or 529 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 

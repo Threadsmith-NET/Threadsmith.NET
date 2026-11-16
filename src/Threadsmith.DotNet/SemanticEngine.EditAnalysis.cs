@@ -25,6 +25,7 @@ public sealed partial class SemanticEngine
     ];
 
     private readonly Dictionary<ProjectId, EditProjectBasis> _editDiagnosticBases = [];
+    private readonly LinkedList<ProjectId> _compilerOriginOrder = [];
     private readonly HashSet<ProjectId> _editedProjects = [];
     private readonly HashSet<string> _editedDocumentPaths = new(StringComparerForCurrentPlatform());
     private EditCandidate? _editCandidate;
@@ -43,6 +44,9 @@ public sealed partial class SemanticEngine
 
     /// <summary>Observes distinct cached and staged compiler DTO retention at owned publication boundaries.</summary>
     internal Action<(int CachedProjects, int StagedProjects, int EvidenceSets, int Findings)>? EditCompilerRetentionObserver { get; init; }
+
+    /// <summary>Observes bounded initial compiler fingerprint maps independently of optional slots.</summary>
+    internal Action<(int CachedProjects, int StagedProjects, int Fingerprints)>? EditCompilerOriginRetentionObserver { get; init; }
 
     /// <summary>Captures the exact current writer candidate for explicitly requested scoped analyzer measurements.</summary>
     internal Solution CaptureEditCandidateSnapshot(Guid effectId)
@@ -495,11 +499,11 @@ public sealed partial class SemanticEngine
                         compilerBases.Enqueue((projectId, compiler));
                     }
 
-                    // Origin bookkeeping is not an optional reuse optimization. Preserve it under
-                    // the existing configured project policy, independently of slot admission.
-                    if (result.Initial is { } initial)
+                    // Keep complete origin maps independently of optional slots, but under the same
+                    // finite project/fingerprint bounds. Partial maps would falsely label absent keys.
+                    if (result.Initial is { } initial && initial.Count <= MaximumCompilerCachedFindingsPerSlot)
                     {
-                        if (compilerOrigins.Count >= EditProjectCacheLimit)
+                        if (compilerOrigins.Count >= Math.Min(EditProjectCacheLimit, MaximumCompilerCachedProjects))
                         {
                             compilerOrigins.Dequeue();
                         }
@@ -507,6 +511,7 @@ public sealed partial class SemanticEngine
                         compilerOrigins.Enqueue((projectId, initial));
                     }
 
+                    ObserveEditCompilerOriginRetention(compilerOrigins.Select(item => item.Initial));
                     ObserveEditCompilerRetention(compilerBases.Select(item => item.Basis));
                     candidate.ProjectResults[projectId] = result with { Basis = null, Initial = null };
 
@@ -554,6 +559,26 @@ public sealed partial class SemanticEngine
                 {
                     var retainedBasis = GetEditProjectBasis(projectId);
                     _editDiagnosticBases[projectId] = retainedBasis with { CompilerInitial = initial };
+                    _compilerOriginOrder.Remove(projectId);
+                    _compilerOriginOrder.AddLast(projectId);
+                }
+
+                while (_compilerOriginOrder.Count > Math.Min(EditProjectCacheLimit, MaximumCompilerCachedProjects)
+                    && _compilerOriginOrder.First is { Value: var oldest })
+                {
+                    _compilerOriginOrder.RemoveFirst();
+                    if (_editDiagnosticBases.TryGetValue(oldest, out var basis))
+                    {
+                        var retained = basis with { CompilerInitial = null };
+                        if (retained == new EditProjectBasis())
+                        {
+                            _editDiagnosticBases.Remove(oldest);
+                        }
+                        else
+                        {
+                            _editDiagnosticBases[oldest] = retained;
+                        }
+                    }
                 }
 
                 foreach (var (projectId, compiler) in compilerBases)
@@ -588,6 +613,7 @@ public sealed partial class SemanticEngine
                     }
                 }
 
+                ObserveEditCompilerOriginRetention([]);
                 ObserveEditCompilerRetention([]);
                 candidate.Result = candidate.Result with
                 {
@@ -748,8 +774,17 @@ public sealed partial class SemanticEngine
                 Diagnostic = finding.Diagnostic with { Origin = initial is null ? "unknown" : knownInitial ? "initial" : "introduced" },
             };
         }).ToArray();
-        var omissions = after.Truncated || before.Truncated
-            ? new[] { "Reportable diagnostic retention is bounded; before/after comparison is unavailable." } : [];
+        var omissions = new List<string>();
+        if (after.Truncated || before.Truncated)
+        {
+            omissions.Add(_prompts.Get(PromptFileNames.ContextSourceEditCompilerRetentionBounded));
+        }
+
+        if (initial is null && candidate.PreviouslyEdited.Contains(id))
+        {
+            omissions.Add(_prompts.Get(PromptFileNames.ContextSourceEditCompilerOriginsUnavailable));
+        }
+
         return new(
             projected,
             after.Errors,
@@ -930,6 +965,7 @@ public sealed partial class SemanticEngine
     private void ResetEditAnalysisInputs()
     {
         _editDiagnosticBases.Clear();
+        _compilerOriginOrder.Clear();
         _editedProjects.Clear();
         if (_hasAppliedEdits && _solution is not null)
         {
@@ -962,7 +998,9 @@ public sealed partial class SemanticEngine
 
         if (_editDiagnosticBases.Count >= EditProjectCacheLimit)
         {
-            _editDiagnosticBases.Remove(_editDiagnosticBases.Keys.First());
+            var oldest = _editDiagnosticBases.Keys.First();
+            _editDiagnosticBases.Remove(oldest);
+            _compilerOriginOrder.Remove(oldest);
         }
 
         return new();
@@ -981,6 +1019,20 @@ public sealed partial class SemanticEngine
         var evidence = cached.Concat(pending).SelectMany(item => new[] { item.Baseline.Evidence, item.Candidate.Evidence })
             .Distinct(ReferenceEqualityComparer.Instance).Cast<EditDiagnosticEvidence>().ToArray();
         observer((cached.Length, pending.Length, evidence.Length, evidence.Sum(item => item.Findings.Length)));
+    }
+
+    // Caller holds _gate. Observe map identity so reuse does not double-count fingerprint strings.
+    private void ObserveEditCompilerOriginRetention(IEnumerable<Dictionary<string, int>> staged)
+    {
+        if (EditCompilerOriginRetentionObserver is not { } observer)
+        {
+            return;
+        }
+
+        var cached = _editDiagnosticBases.Values.Select(item => item.CompilerInitial).OfType<Dictionary<string, int>>().ToArray();
+        var pending = staged.ToArray();
+        var maps = cached.Concat(pending).Distinct(ReferenceEqualityComparer.Instance).Cast<Dictionary<string, int>>();
+        observer((cached.Length, pending.Length, maps.Sum(item => item.Count)));
     }
 
     private sealed record EditFinding(string Fingerprint, SourceEditDiagnostic Diagnostic, bool Unassigned = false, bool New = false);

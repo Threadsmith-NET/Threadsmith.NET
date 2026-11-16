@@ -16,9 +16,9 @@ Supply exactly one non-null source field: `code` for inline source or `scriptPat
 
 A missing bare filename does not fall back to a repository file. Windows accepts `/` and `\` separators; macOS and Linux use `/`. Use `/` in portable relative paths. Traversal cannot escape the repository. Drive-relative, device, alternate data stream, and URI paths are rejected. Prohibited paths, narrowed child read scope, and link/junction/reparse-point checks still apply. External read-folder grants authorize data reads, not external script source.
 
-File source must use strict UTF-8, with an optional UTF-8 BOM. Invalid encoding and excess byte/character limits fail before worker execution. The host captures the file once. Source detail, the saved execution copy, and the worker use that same captured text. Changes to the original after capture affect only later invocations.
+File source must use strict UTF-8, with an optional UTF-8 BOM. Invalid encoding and excess byte/character limits fail before worker execution. The host captures the file once. For packaged skill scripts, it verifies the captured raw bytes against the host-bound package length and SHA-256, including any BOM, before exposing source evidence or starting execution. Unused scripts are not reread for every workflow step. Source detail, the saved execution copy, and the worker use that same captured text. Changes to the original after capture affect only later invocations.
 
-`ScriptPath` always identifies a new scratchpad execution copy, including failed worker results. It never identifies the original repository source. Run its absolute path or bare filename to repeat the captured source. Run the original repository path to capture its current contents. The source file is not overwritten. Selecting it grants no repository write authority.
+`ScriptPath` always identifies a new scratchpad execution copy, including failed worker results. It never identifies the original repository source. Pass that returned path as `scriptPath`, or use its bare filename, to run the same captured source again during the session while the copy remains available. Scratchpad cleanup or session end removes the copy; it is not a durable script location. Run the original repository path to capture its current contents. The source file is not overwritten. Selecting it grants no repository write authority.
 
 ```json
 {"code":"1 + 1","kind":"expression"}
@@ -31,6 +31,14 @@ File source must use strict UTF-8, with an optional UTF-8 BOM. Invalid encoding 
 ```json
 {"scriptPath":"scripts/check-data.csx","kind":"statement"}
 ```
+
+## Native skill scripts
+
+Native skill packages can declare multiple integrity-checked `kind: "script"` assets at flat `scripts/<filename>.csx` paths. The procedure's host-context JSON supplies a `scripts` array with each script's `name` and repository-relative `scriptPath`; script bodies are not automatically injected into the prompt. Pass the supplied `scriptPath` to this same tool with the appropriate `kind`. Do not pass only the packaged filename: bare names select the scratchpad root, not the package's scripts folder.
+
+Repository-contained package scripts use their repository-relative paths. For external packages, the host stages verified copies under `skill-scripts/<session-id>/<package-digest>/` in the active repository scratchpad when a procedure first runs. Discovery, verification, installation, and staging do not execute scripts. Every selected script's captured bytes must match its package length and SHA-256 before execution. A run returns a separate scratchpad execution copy in `ScriptPath`, with the same session-scoped rerun behavior described above.
+
+Declare `csharp_script` as a required tool when a native skill needs it. Packaging scripts does not enable the tool by itself, grant authority, bypass this reference, or introduce another runner. Existing policy, read scope, source limits, cancellation, and worker restrictions still apply. See [native script authoring](../skill-authoring.md#optional-native-packaged-scripts) for manifest, staging, and integrity details, and [skills operations](skills.md#optional-native-packaged-scripts) for runtime behavior.
 
 ## Execution and results
 

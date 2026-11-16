@@ -46,13 +46,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 34 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 27 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **299** | Complete deployed catalog. |
+| **Total** | **301** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -187,6 +187,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-SourceEdit-AnalyzerInstanceScope.md` | Selected analyzer instance execution and clean-result limits. | `None` |
 | `Context-SourceEdit-NewSourceParseOptions.md` | Default parsing and pending evaluated membership for new source. | `None` |
 | `Context-SourceEdit-OmittedProjectCoverage.md` | Explicit bounded omission of prior edited projects. | [`ProjectCount`](#placeholder-projectcount) |
+| `Context-SourceEdit-CompilerRetentionBounded.md` | Unavailable before/after compiler comparison when diagnostic retention is bounded. | `None` |
+| `Context-SourceEdit-CompilerOriginsUnavailable.md` | Unknown compiler origins after bounded retention or reset, independent of before/after error comparison. | `None` |
 
 ### Correction prompts
 
@@ -453,7 +455,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Exclusive inline/file source selection, path resolution, saved-copy reruns, script kind, and on-demand execution reference for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
+| `Tool-csharp_script-Description.md` | Exclusive inline/file source selection, scratchpad/repository path resolution, returned-path reruns during the session while the saved copy remains available, script kind, and on-demand execution reference including native packaged scripts for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family
 
@@ -719,7 +721,7 @@ For captured PR reviews, the shared handoff references the snapshot's complete i
 |---|---|---|
 | `Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
 | `Skill-Procedure-OutputCorrection.md` | Formatting-only recovery of invalid final skill output without repeating completed tools. | [`FailureSummary`](#placeholder-failuresummary) |
-| `Skill-Procedure-Request.md` | Skill procedure request, including host-owned repository/platform facts as JSON (not instructions). | [`HostContextJson`](#placeholder-hostcontextjson), [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
+| `Skill-Procedure-Request.md` | Skill procedure request, including host-owned repository/platform facts and packaged script filename-to-scriptPath mappings as JSON (not instructions); execution uses the ordinary csharp_script tool. | [`HostContextJson`](#placeholder-hostcontextjson), [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 
 #### `Workflow` family
@@ -815,7 +817,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-hiddencount"></a>`HiddenCount` | Number of bounded result items not shown. |
 | <a id="placeholder-holderid"></a>`HolderId` | Identifier of the agent or operation currently holding a conflicting resource. |
 | <a id="placeholder-hostactionkind"></a>`HostActionKind` | Host-classified action required to continue or recover. |
-| <a id="placeholder-hostcontextjson"></a>`HostContextJson` | Host-owned active repository root (null when unavailable) and current platform encoded as JSON data. Never process cwd, package instructions, or a policy directory restriction. |
+| <a id="placeholder-hostcontextjson"></a>`HostContextJson` | Host-owned active repository root (null when unavailable), current platform, and scripts array encoded as JSON data. Each script entry has its filename (name, including .csx) and executable repository-relative scriptPath; an empty array means no packaged scripts. Never process cwd, package instructions, or a policy directory restriction. |
 | <a id="placeholder-identity"></a>`Identity` | Display identity of the surrounding artifact, result, or capability. |
 | <a id="placeholder-impactitems"></a>`ImpactItems` | Fully rendered set of symbol/project/test impact entries. |
 | <a id="placeholder-implementationpluralsuffix"></a>`ImplementationPluralSuffix` | Grammar suffix selected from the implementation count. |

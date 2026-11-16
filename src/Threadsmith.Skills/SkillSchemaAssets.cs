@@ -1,6 +1,5 @@
 namespace Threadsmith.Skills;
 
-using System.Security.Cryptography;
 using System.Text;
 using Threadsmith.Core;
 
@@ -15,16 +14,7 @@ internal static class SkillSchemaAssets
     {
         var asset = candidate.Metadata.Assets.Single(item =>
             string.Equals(item.Path, schemaAssetPath, StringComparison.OrdinalIgnoreCase));
-        var path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-        if (bytes.LongLength != asset.Bytes
-            || !string.Equals(
-                Convert.ToHexStringLower(SHA256.HashData(bytes)),
-                asset.Sha256,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("Skill schema changed after package verification.");
-        }
+        var bytes = await SkillAssetContent.ReadAsync(candidate.Provenance.PackageRoot, asset, cancellationToken);
 
         return new UTF8Encoding(false, true).GetString(bytes);
     }

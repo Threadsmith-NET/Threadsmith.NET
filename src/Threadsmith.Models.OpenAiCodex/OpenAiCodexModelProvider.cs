@@ -617,10 +617,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                             yield return new ModelChunk { Usage = failedUsage, IsInterruptedUsage = true };
                         }
 
-                        if (ModelStreamRetry.IsRateLimitError(errorRoot))
+                        var rateLimited = ModelStreamRetry.IsRateLimitError(errorRoot);
+                        var overloaded = ModelStreamRetry.IsOverloadError(errorRoot);
+                        if (rateLimited || overloaded)
                         {
-                            throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported a rate limit (code 429)."))
-                            { IsRateLimit = true };
+                            throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported temporary provider unavailability."))
+                            { IsRateLimit = rateLimited, IsOverloaded = overloaded };
                         }
 
                         throw new ModelProviderException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported a provider error."));
@@ -753,11 +755,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
         // Retry eligibility comes from headers; an optional error body may never finish arriving.
         if (statusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests
-            or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)
+            or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout || (int)statusCode == 529)
         {
             return new TransientModelException(ProviderErrorDetails.PreferMessage(details, $"Codex returned transient HTTP {(int)statusCode}."))
             {
                 IsRateLimit = statusCode == HttpStatusCode.TooManyRequests,
+                IsOverloaded = statusCode == HttpStatusCode.ServiceUnavailable || (int)statusCode == 529,
                 RetryAfter = ModelStreamRetry.ReadRetryAfter(response.Headers, DateTimeOffset.UtcNow),
             };
         }

@@ -1,6 +1,6 @@
 # Declarative skill authoring
 
-Threadsmith skills are bounded data packages. They do not contain assemblies, scripts, expressions, arbitrary CLR type names, task/concurrency directives, or direct side effects. If a workflow needs a capability that does not already exist as a host tool/action, implement and govern that capability separately; a skill cannot create it.
+Threadsmith skills are bounded declarative packages, not executable plugins. Native packages may include integrity-checked C# script assets for use through the existing `csharp_script` tool; packaging does not execute them or grant authority. Packages cannot introduce assemblies, workflow expressions, arbitrary CLR type names, task/concurrency directives, or direct side effects. If a workflow needs a capability that does not already exist as a host tool/action, implement and govern that capability separately; a skill cannot create it.
 
 ## Package layout
 
@@ -14,6 +14,9 @@ my-skill/
   schemas/
     input.json
     output.json
+  scripts/             # optional, native packages only
+    analyze.csx
+    summarize.csx
 ```
 
 Every file except `skill.json` must be declared exactly once in `assets` with package-relative path, exact UTF-8 byte count, lowercase SHA-256, required/optional flag, and kind. Undeclared files, rooted/traversing/alternate-stream paths, links/reparse points, hash/length mismatches, and manifest changes between discovery and verification invalidate the package.
@@ -38,6 +41,16 @@ Ids use lowercase ASCII letters, digits, `.`, `_`, or `-`. Versions use bounded 
 Native skills combine declared input and output schemas with host-resolved tool dependencies. Schemas improve structural consistency, not semantic correctness or model determinism. Required dependencies remove manual tool setup for that execution; they grant no authority and do not change the outer conversation's catalog or saved settings. Optional tools are not enabled implicitly. If a tool is both required and optional, required semantics take precedence. Missing, incompatible, denied, or consent-blocked dependencies stop model work rather than silently disappearing.
 
 Portable Agent Skills Specification packages supply instructions and resources. The schema and dependency behaviors described here are Threadsmith host contracts, not portable specification guarantees or claims of exclusivity over other hosts.
+
+### Optional native packaged scripts
+
+Declare each script in the existing `assets` array with `kind: "script"`, exact UTF-8 byte count, lowercase SHA-256, and the usual required flag. Use flat `scripts/<filename>.csx` paths with forward slashes. Multiple scripts are supported; filenames are unique under case-insensitive comparison. Names use ASCII letters, digits, `.`, `_`, and `-`, and must not start with a dot. Nested folders, other script extensions, and scripts disguised as reference assets are rejected. Scripts are optional package resources; a package with no scripts works unchanged. Once declared, every script must pass integrity checks, regardless of its required flag.
+
+The host supplies repository-contained scripts as repository-relative paths. On the first procedure invocation using an external package, it copies the verified script bytes into `skill-scripts/<session-id>/<package-digest>/` beneath the active scratchpad. Later steps in the same workflow reuse verified paths without rereading every script. New invocations and resumed workflows recheck file integrity; copies are never overwritten. Every selected packaged script is checked against its declared length/hash on the ordinary captured execution bytes before source evidence or worker execution, so changes between steps are rejected when used. Current path authority is checked on every step. The aggregate declared script size admitted for preparation is 4 MiB; available effective C# source byte/character limits also apply before copying. Standard scratchpad cleanup removes them. Missing copies are recreated after cleanup or session restoration. External staging requires an active scratchpad inside the repository and fails explicitly when unavailable. Discovery, verification, and installation do not stage or execute scripts.
+
+The procedure's host-context JSON contains a `scripts` array with each filename in `name` (including `.csx`) and its repository-relative `scriptPath`. Instructions can refer to `analyze.csx`; the model uses that entry's exact `scriptPath` with the ordinary `csharp_script` tool and the appropriate `kind`. Script bodies are not automatically injected into the prompt. Bare tool filenames still select the scratchpad root, not the skill's script folder; use the supplied path rather than guessing one.
+
+Declare `csharp_script` in `requirements.requiredTools` if execution is necessary. Scripts do not enable execution by themselves, bypass the scripting reference, or add filesystem, network, process, trust, approval, or tool authority. Existing source limits and worker restrictions apply. Keep scripts self-contained: no imports, `#load`, automatic dependency restore, shared worker state, startup hooks, or automatic execution. Claude-style compatibility packages are unchanged.
 
 ### Narrow authoring example
 

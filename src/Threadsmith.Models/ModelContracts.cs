@@ -350,6 +350,9 @@ public sealed class TransientModelException : Exception
     /// <summary>Identifies throttling so the existing retry loop can back off and report busy status.</summary>
     public bool IsRateLimit { get; init; }
 
+    /// <summary>Identifies provider overload or temporary service unavailability.</summary>
+    public bool IsOverloaded { get; init; }
+
     /// <summary>Optional provider-directed delay before another attempt.</summary>
     public TimeSpan? RetryAfter { get; init; }
 

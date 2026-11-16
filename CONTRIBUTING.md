@@ -144,6 +144,14 @@ dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
 ```
 
+For the fast model/tool contract suite, run:
+
+```powershell
+dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build
+```
+
+The target is under 30 seconds for test execution after building. Real shell, scripting-worker, PDF, and MSBuild/Roslyn workspace checks live in `tests/Threadsmith.ModelTooling.Integration.Tests`. Run that project for changes to those integration paths. Both projects remain in the solution and run in the normal CI test step; the fast command does not replace integration validation. Test timing reports are diagnostic evidence, not per-test timeout assertions.
+
 Also run checks owned by the area you changed:
 
 - Architecture or project-reference changes: `tests/Threadsmith.Architecture.Tests`.

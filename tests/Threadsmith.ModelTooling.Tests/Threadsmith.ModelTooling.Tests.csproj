@@ -15,7 +15,6 @@
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Policies\Threadsmith.Policies.csproj" />
-    <ProjectReference Include="..\Threadsmith.CommandMarker\Threadsmith.CommandMarker.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\src\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models.OpenAiCompatible\Threadsmith.Models.OpenAiCompatible.csproj" />
@@ -25,9 +24,6 @@
     <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
-    <ProjectReference Include="..\..\src\Threadsmith.Scripting.Worker\Threadsmith.Scripting.Worker.csproj" />
-    <ProjectReference Include="..\Threadsmith.SemanticFixtures.Roslyn59\Threadsmith.SemanticFixtures.Roslyn59.csproj"
-                      ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\fixtures\model\*.sse"
@@ -36,37 +32,6 @@
     <None Include="..\fixtures\model\plan46-pi-reasoning-v1.json"
           Link="fixtures\model\%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Update="SemanticFixture.Build.props"
-          Link="fixtures\semantic\SmallDotNetSolution\Directory.Build.props"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\global.json"
-          Link="fixtures\semantic\SmallDotNetSolution\global.json"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\fixtures\semantic\**\*"
-          Link="fixtures\semantic\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest" />
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
-  <Target Name="CopyCommandMarkerFixture" AfterTargets="Build">
-    <ItemGroup>
-      <CommandMarkerFixture Include="..\Threadsmith.CommandMarker\bin\$(Configuration)\net10.0\Threadsmith.CommandMarker*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(CommandMarkerFixture)" DestinationFolder="$(OutDir)fixtures\command-marker" SkipUnchangedFiles="true" />
-  </Target>
-  <Target Name="CopySemanticFixtureAnalyzer" AfterTargets="Build">
-    <ItemGroup>
-      <ThreadingFixtureAnalyzer Include="@(Analyzer)" Condition="'%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers' Or '%(Filename)' == 'Microsoft.VisualStudio.Threading.Analyzers.CSharp'" />
-    </ItemGroup>
-    <Copy SourceFiles="@(ThreadingFixtureAnalyzer)" DestinationFolder="$(OutDir)fixtures\semantic\SmallDotNetSolution\Analyzers" SkipUnchangedFiles="true" />
-    <PropertyGroup>
-      <SemanticFixtureAnalyzerPath>$(MSBuildThisFileDirectory)..\Threadsmith.SemanticFixtures.Roslyn59\bin\$(Configuration)\netstandard2.0\Threadsmith.SemanticFixtures.Roslyn59.dll</SemanticFixtureAnalyzerPath>
-    </PropertyGroup>
-    <Error Condition="!Exists('$(SemanticFixtureAnalyzerPath)')"
-           Text="The Roslyn 5.9 semantic fixture analyzer was not built." />
-    <Copy SourceFiles="$(SemanticFixtureAnalyzerPath)"
-          DestinationFolder="$(OutDir)fixtures\semantic\SmallDotNetSolution\Analyzers"
-          SkipUnchangedFiles="true" />
-    <Copy SourceFiles="$(SemanticFixtureAnalyzerPath)"
-          DestinationFolder="$(OutDir)plan117\analyzer-failure"
-          SkipUnchangedFiles="true" />
-  </Target>
 </Project>

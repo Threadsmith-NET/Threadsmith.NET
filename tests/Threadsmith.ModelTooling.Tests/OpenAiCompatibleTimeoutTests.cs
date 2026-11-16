@@ -460,7 +460,7 @@ public static partial class OpenAiCompatibleTimeoutTests
                     DiagnosticsEntered.TrySetResult();
                 }
 
-                if (dueTime == TimeSpan.FromMinutes(1))
+                if (dueTime == TimeSpan.FromMinutes(1) || dueTime == TimeSpan.FromMilliseconds(250))
                 {
                     BackoffEntered.TrySetResult();
                 }

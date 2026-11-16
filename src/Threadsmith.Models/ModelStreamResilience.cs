@@ -47,11 +47,11 @@ public static class ModelStreamResilience
                     if (failure?.RetryAfter is { } retryAfter)
                     {
                         return ValueTask.FromResult<TimeSpan?>(TimeSpan.FromMilliseconds(
-                            Math.Max(retryAfter.TotalMilliseconds, Math.Max(policy.Delay.TotalMilliseconds, failure.IsRateLimit ? 250 : 0))));
+                            Math.Max(retryAfter.TotalMilliseconds, Math.Max(policy.Delay.TotalMilliseconds, failure.IsRateLimit || failure.IsOverloaded ? 250 : 0))));
                     }
 
                     // Null delegates exponential backoff and its ceiling to the resilience strategy.
-                    return ValueTask.FromResult<TimeSpan?>(failure is { IsRateLimit: true } ? null : policy.Delay);
+                    return ValueTask.FromResult<TimeSpan?>(failure is { IsRateLimit: true } or { IsOverloaded: true } ? null : policy.Delay);
                 },
                 OnRetry = async args =>
                 {
@@ -60,7 +60,7 @@ public static class ModelStreamResilience
                         await DeliverAsync(ModelStreamRetry.ReasoningBoundary());
                     }
 
-                    if (!busyReported && args.Outcome.Exception is TransientModelException { IsRateLimit: true })
+                    if (!busyReported && args.Outcome.Exception is TransientModelException { IsRateLimit: true } or TransientModelException { IsOverloaded: true })
                     {
                         busyReported = true;
                         await DeliverAsync(new ModelChunk { ProviderBusy = true });

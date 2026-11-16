@@ -168,7 +168,7 @@ public sealed record SkillAssetMetadata
     /// <summary>Whether invocation cannot proceed when this asset is omitted.</summary>
     public bool Required { get; init; } = true;
 
-    /// <summary>Asset purpose such as instructions, input-schema, output-schema, or reference.</summary>
+    /// <summary>Asset purpose such as instructions, input-schema, output-schema, reference, or script.</summary>
     public required string Kind { get; init; }
 }
 
@@ -548,6 +548,9 @@ public sealed record SkillInvocationHostContext
     public string? ReasoningLevel { get; init; }
 }
 
+/// <summary>Host-resolved package location and metadata for an inert C# script asset.</summary>
+public sealed record SkillScriptSource(string PackageRoot, SkillAssetMetadata Asset);
+
 /// <summary>Frozen invocation resolution used throughout one workflow.</summary>
 public sealed record SkillInvocationPlan
 {
@@ -580,6 +583,9 @@ public sealed record SkillInvocationPlan
 
     /// <summary>Declared currently available tool ids eligible for procedure turns.</summary>
     public IReadOnlyList<string> AvailableToolIds { get; init; } = [];
+
+    /// <summary>Verified script declarations supplied transiently by the workflow, never restored as authority.</summary>
+    public IReadOnlyList<SkillScriptSource> ScriptAssets { get; init; } = [];
 
     /// <summary>Effective budget capped by host and package limits.</summary>
     public required SkillBudget EffectiveBudget { get; init; }

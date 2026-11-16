@@ -112,7 +112,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var inputSchemaContent = authoring is null ? null : content.Single(segment =>
             string.Equals(segment.AssetPath, step.InputSchemaAsset, StringComparison.OrdinalIgnoreCase));
         var authoringInputSchema = inputSchemaContent is null ? null : schemas.Compile(inputSchemaContent.Content);
-        var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
+        var initialContext = await CreateToolContextAsync(plan, cancellationToken);
+        var scripts = await SkillScriptAssets.PrepareForWorkflowAsync(plan, initialContext, cancellationToken);
+        var scriptIntegrity = SkillScriptAssets.BindIntegrity(plan, scripts, initialContext);
+        initialContext = initialContext with { ScriptSourceIntegrity = scriptIntegrity };
+        var prompt = BuildPrompt(plan, step, iteration, content, inputJson, scripts);
         var messages = new List<ModelMessage>
         {
             new()
@@ -128,7 +132,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         await using var questionRun = plan.Request.CallerToolSnapshotId is null
             ? _questions?.BeginRun(plan.Request.SessionId, plan.Request.RunId) : null;
         using var transientState = new ModelRequestTransientState();
-        var initialContext = await CreateToolContextAsync(plan, cancellationToken);
         var callerTools = plan.Request.CallerToolSnapshotId is { } initialCallerSnapshot
             ? _snapshots.Resolve(initialCallerSnapshot, plan.Request.SessionId, plan.Request.RunId) : null;
         var requiredRegistrations = plan.Compatibility.AvailableRequiredTools.Select(toolId =>
@@ -150,7 +153,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             for (var round = 0; round < maximumRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var roundContext = (await CreateToolContextAsync(plan, cancellationToken)) with { OperationScope = operationScope };
+                var roundContext = (await CreateToolContextAsync(plan, cancellationToken)) with { OperationScope = operationScope, ScriptSourceIntegrity = scriptIntegrity };
                 var modelContext = operationScope.RefreshCommandPolicy(roundContext);
                 var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
                     ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
@@ -401,6 +404,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     {
                         // Adopt only the generation captured before this model response. Keep live
                         // restriction changes, and never refresh queued calls after an Always save.
+                        ScriptSourceIntegrity = scriptIntegrity,
                         SecurityPolicy = latestContext.SecurityPolicy == roundContext.SecurityPolicy
                             ? modelContext.SecurityPolicy : latestContext.SecurityPolicy,
                         OperationScope = operationScope,
@@ -796,7 +800,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         SkillWorkflowStep step,
         int iteration,
         IReadOnlyList<SkillContextSegment> content,
-        string inputJson)
+        string inputJson,
+        IReadOnlyList<SkillScriptPath> scripts)
     {
         var skillAssets = new StringBuilder();
         foreach (var segment in content)
@@ -812,7 +817,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 PromptFileNames.SkillProcedureRequest,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["HostContextJson"] = JsonSerializer.Serialize(new { repositoryRoot = plan.RepositoryPath, platform = CommandPolicyAuthoringPolicy.HostPlatform }),
+                    ["HostContextJson"] = JsonSerializer.Serialize(new
+                    {
+                        repositoryRoot = plan.RepositoryPath,
+                        platform = CommandPolicyAuthoringPolicy.HostPlatform,
+                        scripts = scripts.Select(script => new { name = script.Name, scriptPath = script.ScriptPath }),
+                    }),
                     ["PackageId"] = plan.Package.SkillId.Value,
                     ["PackageVersion"] = plan.Package.Version,
                     ["PackageDigest"] = plan.Package.Digest.Value,

@@ -350,6 +350,10 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public ToolOperationScope? OperationScope { get; init; }
 
+    /// <summary>Expected script integrity by absolute source path; checked on the captured execution bytes.</summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, ScriptSourceIntegrity> ScriptSourceIntegrity { get; init; } = new Dictionary<string, ScriptSourceIntegrity>();
+
     /// <summary>Verified skill dependencies supplied only to this execution, not the session catalog.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> RequiredSkillToolIds { get; init; } = [];

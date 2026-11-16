@@ -59,59 +59,17 @@ public static class ModelStreamRetry
         return delay is { } value ? TimeSpan.FromMilliseconds(Math.Clamp(value.TotalMilliseconds, 0, 30000)) : null;
     }
 
-    /// <summary>Recognizes structured rate-limit errors without inspecting or exposing provider prose.</summary>
-    public static bool IsRateLimitError(JsonElement error)
-    {
-        if (error.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
+    /// <summary>Recognizes structured rate-limit errors without inspecting provider prose.</summary>
+    public static bool IsRateLimitError(JsonElement error) => HasErrorCode(error, overloaded: false);
 
-        if (error.TryGetProperty("error", out var nested) && nested.ValueKind == JsonValueKind.Object)
-        {
-            error = nested;
-        }
+    /// <summary>Recognizes structured rate limits in a mutable JSON tree.</summary>
+    public static bool IsRateLimitError(JsonObject error) => HasErrorCode(error, overloaded: false);
 
-        foreach (var property in error.EnumerateObject())
-        {
-            if (property.Name is not ("code" or "type" or "status" or "status_code"))
-            {
-                continue;
-            }
+    /// <summary>Recognizes structured provider overload and temporary unavailability.</summary>
+    public static bool IsOverloadError(JsonElement error) => HasErrorCode(error, overloaded: true);
 
-            if ((property.Value.ValueKind == JsonValueKind.Number
-                    && property.Value.TryGetInt32(out var status) && status == 429)
-                || (property.Value.ValueKind == JsonValueKind.String
-                    && property.Value.GetString() is "429" or "rate_limit_exceeded" or "rate_limit_error"))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /// <summary>Recognizes structured rate limits in an already parsed mutable JSON tree without re-encoding it.</summary>
-    public static bool IsRateLimitError(JsonObject error)
-    {
-        ArgumentNullException.ThrowIfNull(error);
-        error = error["error"] as JsonObject ?? error;
-        foreach (var property in error)
-        {
-            if (property.Key is not ("code" or "type" or "status" or "status_code") || property.Value is not JsonValue value)
-            {
-                continue;
-            }
-
-            if ((value.TryGetValue<int>(out var status) && status == 429)
-                || (value.TryGetValue<string>(out var text) && text is "429" or "rate_limit_exceeded" or "rate_limit_error"))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
+    /// <summary>Recognizes structured overload and temporary unavailability in a mutable JSON tree.</summary>
+    public static bool IsOverloadError(JsonObject error) => HasErrorCode(error, overloaded: true);
 
     /// <summary>Only reasoning without response data can be followed by another attempt.</summary>
     public static bool IsReasoningOnly(ModelChunk chunk)
@@ -130,6 +88,73 @@ public static class ModelStreamRetry
             IsDisplayOnlyReasoning = true,
             SuppressReasoningDiagnostics = true,
         };
+    }
+
+    /// <summary>Matches structured failure identifiers without inspecting provider prose.</summary>
+    private static bool HasErrorCode(JsonElement error, bool overloaded)
+    {
+        if (error.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (error.TryGetProperty("error", out var nested) && nested.ValueKind == JsonValueKind.Object)
+        {
+            error = nested;
+        }
+
+        foreach (var property in error.EnumerateObject())
+        {
+            if (property.Name is not ("code" or "type" or "status" or "status_code" or "error_type"))
+            {
+                continue;
+            }
+
+            if ((property.Value.ValueKind == JsonValueKind.Number
+                    && property.Value.TryGetInt32(out var status) && MatchesErrorStatus(status, overloaded))
+                || (property.Value.ValueKind == JsonValueKind.String
+                    && MatchesErrorCode(property.Value.GetString(), overloaded)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Matches structured failure identifiers in a mutable JSON tree without re-encoding it.</summary>
+    private static bool HasErrorCode(JsonObject error, bool overloaded)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        error = error["error"] as JsonObject ?? error;
+        foreach (var property in error)
+        {
+            if (property.Key is not ("code" or "type" or "status" or "status_code" or "error_type") || property.Value is not JsonValue value)
+            {
+                continue;
+            }
+
+            if ((value.TryGetValue<int>(out var status) && MatchesErrorStatus(status, overloaded))
+                || (value.TryGetValue<string>(out var text) && MatchesErrorCode(text, overloaded)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool MatchesErrorStatus(int status, bool overloaded)
+    {
+        return overloaded ? status is 503 or 529 : status == 429;
+    }
+
+    private static bool MatchesErrorCode(string? code, bool overloaded)
+    {
+        return overloaded
+            ? code is "503" or "529" or "server_is_overloaded" or "service_unavailable_error"
+                or "overloaded_error" or "provider_overloaded" or "provider_unavailable"
+            : code is "429" or "rate_limit_exceeded" or "rate_limit_error";
     }
 
     private static long? AddReported(long? previous, long? current)

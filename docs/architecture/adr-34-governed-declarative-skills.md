@@ -44,3 +44,11 @@ Resolve dependencies through the shared registry and capture exact registrations
 Native procedures can ask necessary clarification questions through the ordinary `ask_user` pipeline and input owner. They retain normal cancellation and question limits; answers grant no authority. No private question service or alternate skill runner is permitted.
 
 Declared input/output schemas and host-resolved dependencies form an explicit native execution contract. These improve structural consistency, not semantic correctness or model determinism. Portable Agent Skills Specification packages do not imply these Threadsmith-specific host guarantees; other hosts can provide extensions.
+
+## Optional native packaged-script amendment
+
+The original prohibition on packaged scripts is narrowed only for inert native C# script assets. Native manifests may declare multiple `kind: "script"` assets at flat `scripts/<filename>.csx` paths with case-insensitively unique portable filenames. These reuse existing byte lengths, SHA-256 hashes, package verification, confinement, and enablement. They do not introduce executable plugins or workflow expressions.
+
+Repository-contained source is exposed through repository-relative `scriptPath`. External package scripts are copied when a procedure first runs into a session/package-digest-specific folder in the active in-repository scratchpad. Copies are integrity-checked and reused until standard scratchpad cleanup. An unavailable scratchpad blocks external staging; checkpoints do not restore scratchpad authority.
+
+The host supplies filename-to-scriptPath JSON in procedure context, not script bodies. Execution requires an ordinary model-requested `csharp_script` call through the existing tool pipeline. Discovery, verification, installation, staging, and invocation do not execute scripts automatically. No imports, dependency restore, new authority, alternate runner, or separate cleanup lifecycle is introduced. Claude-style compatibility and all other restrictions remain unchanged.

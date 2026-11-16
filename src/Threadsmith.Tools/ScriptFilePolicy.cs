@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Security.Cryptography;
 using System.Text;
 using Threadsmith.Core;
 
@@ -139,6 +140,13 @@ internal static class ScriptFilePolicy
 
         cancellationToken.ThrowIfCancellationRequested();
         var bytes = content.GetBuffer().AsSpan(0, (int)content.Length);
+        if (context.ScriptSourceIntegrity.TryGetValue(normalized, out var expected)
+            && (bytes.Length != expected.Bytes
+                || !string.Equals(Convert.ToHexStringLower(SHA256.HashData(bytes)), expected.Sha256, StringComparison.Ordinal)))
+        {
+            throw new ToolArgumentValidationException("Script source no longer matches its verified package integrity.");
+        }
+
         var offset = bytes.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }) ? 3 : 0;
         if (bytes.Length - offset > scope.MaximumWriteBytes)
         {

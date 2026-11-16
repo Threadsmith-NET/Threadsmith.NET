@@ -241,20 +241,24 @@ public sealed class AnthropicStreamFixtureTests
             + TestAnthropic.Event("error", new { type = "error", error = new { type = "overloaded_error", message = "Capacity detail for test-key" } });
         var handler = new TestAnthropicHandler(fixture);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var error = await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
+        var error = await Assert.ThrowsAsync<TransientModelException>(() => TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request()));
+        Assert.True(error.IsOverloaded);
         Assert.Contains("Capacity detail for [REDACTED]", error.Message, StringComparison.Ordinal);
         Assert.Single(handler.Requests);
         Assert.Null(error.InnerException);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task StreamAsync_RateLimit_RetriesAndReportsBusyOnce(bool httpStatus)
+    [InlineData(false, "rate_limit_error", 429)]
+    [InlineData(true, "rate_limit_error", 429)]
+    [InlineData(false, "overloaded_error", 529)]
+    [InlineData(true, "overloaded_error", 529)]
+    [InlineData(true, "overloaded_error", 503)]
+    public async Task StreamAsync_ProviderBusy_RetriesAndReportsBusyOnce(bool httpStatus, string errorType, int status)
     {
-        var failure = TestAnthropic.Event("error", new { type = "error", error = new { type = "rate_limit_error", message = "SECRET" } });
+        var failure = TestAnthropic.Event("error", new { type = "error", error = new { type = errorType, message = "SECRET" } });
         var handler = new TestAnthropicHandler((attempt, _) => Task.FromResult(
-            new HttpResponseMessage(httpStatus && attempt < 2 ? HttpStatusCode.TooManyRequests : HttpStatusCode.OK)
+            new HttpResponseMessage(httpStatus && attempt < 2 ? (HttpStatusCode)status : HttpStatusCode.OK)
             {
                 Content = new StringContent(attempt < 2 ? failure : TestAnthropic.TextStream(), System.Text.Encoding.UTF8, "text/event-stream"),
             }));

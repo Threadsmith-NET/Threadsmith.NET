@@ -1,0 +1,1 @@
+Initial compiler-origin evidence is unavailable after bounded retention or reset; origin labels are unknown. Before/after error comparison remains independently available.

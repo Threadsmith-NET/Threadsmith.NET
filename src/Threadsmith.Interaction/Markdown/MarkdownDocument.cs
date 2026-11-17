@@ -34,7 +34,11 @@ public sealed record MarkdownListItem(
     ImmutableArray<MarkdownBlock> Blocks);
 
 /// <summary>Literal fenced or indented code.</summary>
-public sealed record MarkdownCodeBlock(string Code, string? Language) : MarkdownBlock;
+public sealed record MarkdownCodeBlock(string Code, string? Language) : MarkdownBlock
+{
+    /// <summary>Gets parser-owned source mapping for a fenced block; null denotes indented or synthetic code.</summary>
+    public MarkdownFencedBody? FencedBody { get; init; }
+}
 
 /// <summary>Bounded table rows and cells.</summary>
 public sealed record MarkdownTable(ImmutableArray<MarkdownTableRow> Rows) : MarkdownBlock;

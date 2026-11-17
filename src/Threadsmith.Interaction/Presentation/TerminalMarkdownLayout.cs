@@ -9,7 +9,10 @@ internal static class TerminalMarkdownLayout<TMetrics>
     where TMetrics : IDisplayTextMetrics<TMetrics>
 {
     /// <summary>Formats a document into themed semantic segments for the active terminal width.</summary>
-    internal static IReadOnlyList<PresentationTextSegment> Format(MarkdownDocument document, int width)
+    internal static IReadOnlyList<PresentationTextSegment> Format(
+        MarkdownDocument document,
+        int width,
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         MarkdownValidator.Validate(document);
@@ -22,7 +25,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 segments.Add(new PresentationTextSegment("\n", PresentationTextRole.Default));
             }
 
-            AppendBlock(segments, document.Blocks[index], safeWidth, string.Empty);
+            AppendBlock(segments, document.Blocks[index], safeWidth, string.Empty, renderFenced);
         }
 
         if (segments.Count > 0 && !segments[^1].Text.EndsWith('\n'))
@@ -37,7 +40,8 @@ internal static class TerminalMarkdownLayout<TMetrics>
         List<PresentationTextSegment> segments,
         MarkdownBlock block,
         int width,
-        string prefix)
+        string prefix,
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
     {
         switch (block)
         {
@@ -64,12 +68,15 @@ internal static class TerminalMarkdownLayout<TMetrics>
             case MarkdownQuote quote:
                 foreach (var child in quote.Blocks)
                 {
-                    AppendBlock(segments, child, width, prefix + "> ");
+                    AppendBlock(segments, child, width, prefix + "> ", renderFenced);
                 }
 
                 break;
             case MarkdownList list:
-                AppendList(segments, list, width, prefix);
+                AppendList(segments, list, width, prefix, renderFenced);
+                break;
+            case MarkdownCodeBlock { FencedBody: not null } code when renderFenced is not null:
+                renderFenced(segments, code, width, prefix);
                 break;
             case MarkdownCodeBlock code:
                 var language = code.Language is null ? string.Empty : code.Language;
@@ -117,7 +124,8 @@ internal static class TerminalMarkdownLayout<TMetrics>
         List<PresentationTextSegment> segments,
         MarkdownList list,
         int width,
-        string prefix)
+        string prefix,
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
     {
         for (var index = 0; index < list.Items.Length; index++)
         {
@@ -139,10 +147,10 @@ internal static class TerminalMarkdownLayout<TMetrics>
             }
 
             var continuation = prefix + new string(' ', GetWidth(marker + task));
-            AppendListFirstBlock(segments, item.Blocks[0], width, itemPrefix, continuation);
+            AppendListFirstBlock(segments, item.Blocks[0], width, itemPrefix, continuation, renderFenced);
             for (var blockIndex = 1; blockIndex < item.Blocks.Length; blockIndex++)
             {
-                AppendBlock(segments, item.Blocks[blockIndex], width, continuation);
+                AppendBlock(segments, item.Blocks[blockIndex], width, continuation, renderFenced);
             }
         }
     }
@@ -152,7 +160,8 @@ internal static class TerminalMarkdownLayout<TMetrics>
         MarkdownBlock block,
         int width,
         string prefix,
-        string continuationPrefix)
+        string continuationPrefix,
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
     {
         if (block is MarkdownParagraph paragraph)
         {
@@ -166,7 +175,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
             return;
         }
 
-        AppendBlock(segments, block, width, prefix);
+        AppendBlock(segments, block, width, renderFenced is not null && block is MarkdownCodeBlock { FencedBody: not null } ? continuationPrefix : prefix, renderFenced);
     }
 
     private static void AppendTable(

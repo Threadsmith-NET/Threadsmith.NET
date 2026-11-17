@@ -16,17 +16,23 @@ internal sealed class AgentViews
     private readonly Func<PresentationTextRole, TUIKit.CellStyle> _resolveStyle;
     private readonly TuiResourceLimits _limits;
     private readonly Action<ToolSourceDetail>? _sourceRequested;
+    private readonly Func<bool>? _canCopy;
+    private readonly Func<string, bool>? _copy;
+    private readonly Func<bool>? _ascii;
     private SessionId _session;
     private long _childOrdinal;
 
     /// <summary>Initializes a new instance of the <see cref="AgentViews"/> class.</summary>
-    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null, Action<ToolSourceDetail>? sourceRequested = null)
+    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null, Action<ToolSourceDetail>? sourceRequested = null, Func<bool>? canCopy = null, Func<string, bool>? copy = null, Func<bool>? ascii = null)
     {
         _limits = limits ?? new();
         _limits.Validate();
         _resolveStyle = resolveStyle;
         _sourceRequested = sourceRequested;
-        Main = new AgentView(null, new TranscriptView(_limits) { ResolveStyle = resolveStyle, SourceRequested = sourceRequested });
+        _canCopy = canCopy;
+        _copy = copy;
+        _ascii = ascii;
+        Main = new AgentView(null, new TranscriptView(_limits) { ResolveStyle = resolveStyle, SourceRequested = sourceRequested, ClipboardAvailable = canCopy, CopyRequested = copy, UseAsciiBorders = ascii });
         Selected = Main;
         _ordered.Add(Main);
     }
@@ -46,6 +52,18 @@ internal sealed class AgentViews
     /// <summary>Switches sessions without letting old output establish new membership.</summary>
     internal void Attach(SessionId session)
     {
+        foreach (var view in _ordered)
+        {
+            if (ReferenceEquals(view, Main))
+            {
+                view.Transcript.RetireBlockActions();
+            }
+            else
+            {
+                view.Transcript.Present(new PresentationBatch([]) { ReplaceOutput = true });
+            }
+        }
+
         _session = session;
         _childOrdinal = 0;
         _children.Clear();
@@ -82,7 +100,7 @@ internal sealed class AgentViews
         }
         else if (!snapshot.IsTerminal)
         {
-            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle, SourceRequested = _sourceRequested }, ++_childOrdinal);
+            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle, SourceRequested = _sourceRequested, ClipboardAvailable = _canCopy, CopyRequested = _copy, UseAsciiBorders = _ascii }, ++_childOrdinal);
             _children.Add(snapshot.Target, view);
             _ordered.Insert(1, view);
             Revision++;
@@ -151,6 +169,7 @@ internal sealed class AgentViews
             return false;
         }
 
+        Selected.Transcript.InvalidateBlockActions();
         Selected = view;
         Revision++;
         return true;
@@ -165,6 +184,7 @@ internal sealed class AgentViews
 
     private void RemoveStoppedView(AgentView view)
     {
+        view.Transcript.Present(new PresentationBatch([]) { ReplaceOutput = true });
         if (view.Snapshot is { } snapshot)
         {
             _children.Remove(snapshot.Target);

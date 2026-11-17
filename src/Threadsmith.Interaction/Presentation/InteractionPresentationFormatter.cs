@@ -856,6 +856,20 @@ internal static partial class InteractionPresentationFormatter
                 return null;
             }
 
+            if (started.ToolName == "memories"
+                && outcome.GetString() == "reconciliationRequired"
+                && root.TryGetProperty("Action", out var memoryAction)
+                && memoryAction.ValueKind == JsonValueKind.String
+                && memoryAction.GetString() == "add")
+            {
+                var proposal = string.IsNullOrWhiteSpace(started.TransientActivityDetail)
+                    ? "Proposed memory text unavailable."
+                    : "Proposed memory:\n" + started.TransientActivityDetail;
+                return PrepareMemoryOutput(
+                    "Not added: host requests reconciliation before adding.\n" + proposal,
+                    maximumInspectionCharacters);
+            }
+
             var output = new StringBuilder();
             output.Append("Outcome: ").AppendLine(outcome.GetString());
             foreach (var field in new[] { "ReasonCode", "Resolution", "IsComplete", "QueryTruncated", "OmittedEntries" })

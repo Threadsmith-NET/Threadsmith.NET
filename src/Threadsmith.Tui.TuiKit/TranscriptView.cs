@@ -3,6 +3,7 @@ namespace Threadsmith.Tui.TuiKit;
 using System.Globalization;
 using System.Text;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using TUIKit;
 using TUIKit.Input;
@@ -54,6 +55,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     private int _height = 12;
     private int _top;
     private long _nextId;
+    private bool _selectingWithMouse;
     private Point? _anchor;
     private Point? _end;
     private long? _clearBeforeId;
@@ -72,6 +74,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <inheritdoc/>
     public void Render(ISurface surface)
     {
+        InvalidateBlockActions();
         if (surface.Size.Width < 2 || surface.Size.Height < 1)
         {
             return;
@@ -171,6 +174,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <inheritdoc/>
     public bool HandleKey(KeyEvent key)
     {
+        InvalidateBlockActions();
         if (key.Modifiers == KeyModifiers.Ctrl && key.Code is KeyCode.Up or KeyCode.Down)
         {
             return FocusDisclosure(key.Code == KeyCode.Down);
@@ -234,24 +238,39 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <inheritdoc/>
     public bool HandleMouse(MouseEvent mouse)
     {
+        if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left)
+        {
+            _selectingWithMouse = false;
+            if (mouse.Modifiers == KeyModifiers.None && _blockClicks.HitTest(mouse.X, mouse.Y) is { } hit)
+            {
+                return ActivateBlock(hit.Action);
+            }
+        }
+
         if (mouse.Kind == MouseEventKind.Wheel)
         {
             Scroll(mouse.Button == MouseButton.WheelUp ? -3 : 3);
             return true;
         }
 
-        if (mouse.Y >= _activityTop && mouse.Y < _activityBottom)
+        var overActivity = mouse.Y >= _activityTop && mouse.Y < _activityBottom;
+        if (mouse.Kind == MouseEventKind.Release)
         {
+            if (mouse.Button == MouseButton.Left)
+            {
+                if (_selectingWithMouse && !overActivity && _anchor is not null && _rows.Count > _top)
+                {
+                    MoveSelectionEnd(mouse);
+                }
+
+                _selectingWithMouse = false;
+            }
+
             return true;
         }
 
-        if (mouse.Kind == MouseEventKind.Release)
+        if (overActivity || (mouse.Kind == MouseEventKind.Move && !_selectingWithMouse))
         {
-            if (_anchor is not null && mouse.Button == MouseButton.Left && _rows.Count > _top)
-            {
-                MoveSelectionEnd(mouse);
-            }
-
             return true;
         }
 
@@ -263,15 +282,20 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         var clickedRow = _top + mouse.Y - (Evicted > 0 ? 1 : 0);
         if (mouse.Kind == MouseEventKind.Press && mouse.Modifiers == KeyModifiers.None
             && clickedRow >= _top && clickedRow < Math.Min(_rows.Count, _top + _height)
-            && _disclosureHeaders.TryGetValue(_rows[clickedRow].Line.Id, out var disclosure))
+            && _disclosureHeaders.TryGetValue(_rows[clickedRow].Line.Id, out var disclosure)
+            && !disclosure.StartsWith("fence:", StringComparison.Ordinal))
         {
             return ActivateControl(disclosure);
         }
 
         MoveSelectionEnd(mouse);
-        if (mouse.Kind == MouseEventKind.Press && !mouse.Modifiers.HasFlag(KeyModifiers.Shift))
+        if (mouse.Kind == MouseEventKind.Press)
         {
-            _anchor = _end;
+            _selectingWithMouse = true;
+            if (!mouse.Modifiers.HasFlag(KeyModifiers.Shift))
+            {
+                _anchor = _end;
+            }
         }
 
         return true;
@@ -286,6 +310,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <summary>Appends semantic output while preserving streaming chunk continuity.</summary>
     internal void Present(PresentationBatch batch)
     {
+        InvalidateBlockActions();
         if (batch.ReplaceOutput)
         {
             _items.Clear();
@@ -300,6 +325,9 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             _disclosureHeaders.Clear();
             _disclosureLines.Clear();
             _focusedDisclosure = null;
+            _fencedRows.Clear();
+            _fencedIds.Clear();
+            _retiredFencedItems.Clear();
             _toolIndicators.Clear();
             ToolActivities = [];
             _itemBytes = RetainedBytes = 0;
@@ -330,6 +358,10 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             }
 
             AppendItem(item);
+            if (!_items.Any(retained => ReferenceEquals(retained, item)))
+            {
+                RemoveFencedSource(item);
+            }
         }
     }
 
@@ -342,7 +374,10 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     }
 
     /// <summary>Projects shared semantic items using the existing Markdown layout rules.</summary>
-    internal static IReadOnlyList<PresentationTextSegment> Project(PresentationItem item, int width)
+    internal static IReadOnlyList<PresentationTextSegment> Project(
+        PresentationItem item,
+        int width,
+        Action<PresentationTextSegment, MarkdownCodeBlock, string, int>? frameRow = null)
     {
         IReadOnlyList<PresentationTextSegment> segments;
         bool startsAnswer;
@@ -359,7 +394,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             case PresentationMarkdownItem markdown:
                 try
                 {
-                    segments = TuiMarkdownLayout.Format(markdown.Document, width, markdown.RawSource);
+                    segments = TuiMarkdownLayout.Format(markdown.Document, width, markdown.RawSource, frameRow);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -403,6 +438,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <summary>Starts a fresh viewport while keeping bounded history available above it.</summary>
     internal void ClearView()
     {
+        InvalidateBlockActions();
         _clearBeforeId = _nextId;
         _clearPending = true;
         _clearFirstItem = null;
@@ -434,15 +470,21 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                 continue;
             }
 
+            _fencedRows.TryGetValue(line.Id, out var frame);
+            if (frame is { Part: not 1 })
+            {
+                continue; // Frame rows are decoration, not selectable answer characters.
+            }
+
             if (!firstLine && !line.Continued)
             {
                 selected.Append('\n');
             }
 
             firstLine = false;
-            selected.Append(line.Text.AsSpan(
-                line.Id == first.Line ? first.Offset : 0,
-                (line.Id == last.Line ? last.Offset : line.Text.Length) - (line.Id == first.Line ? first.Offset : 0)));
+            var start = Math.Max(line.Id == first.Line ? first.Offset : 0, frame?.DecorationCharacters ?? 0);
+            var end = line.Id == last.Line ? last.Offset : line.Text.Length;
+            selected.Append(line.Text.AsSpan(start, Math.Max(0, end - start)));
         }
 
         return selected.ToString();
@@ -477,6 +519,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <summary>Shares the aggregate child retention budget without disturbing surviving selection anchors.</summary>
     internal void SetRetentionBudget(int bytes, int lines)
     {
+        InvalidateBlockActions();
         _byteBudget = Math.Clamp(bytes, 0, _limits.MaximumTranscriptBytes);
         _lineBudget = Math.Clamp(lines, 0, _limits.MaximumTranscriptLines);
         while (_items.Count > _lineBudget || _itemBytes > _byteBudget)
@@ -512,13 +555,17 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                 + (text.Disclosure is { } disclosure ? Encoding.UTF8.GetByteCount(disclosure.Summary) + Encoding.UTF8.GetByteCount(disclosure.Id) : 0)
                 + (text.SourceDetail?.Source is { } script ? Encoding.UTF8.GetByteCount(script) : 0),
             PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
-            PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
+            PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource)
+                + (ReferenceEquals(markdown.RawSource, markdown.SafeSource) ? 0 : Encoding.UTF8.GetByteCount(markdown.RawSource))
+                + FencedMetadataBytes(markdown.Document.Blocks),
             _ => 0,
         };
     }
 
     private void ReprojectForWidth(long? previousTopId)
     {
+        InvalidateBlockActions();
+        _fencedRows.Clear();
         var followedTail = AtBottom;
         var unseen = NewCount;
         var evicted = Evicted;
@@ -574,7 +621,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             }
         }
 
-        var x = 0;
+        var x = _fencedRows.TryGetValue(row.Line.Id, out var fencedRow) && fencedRow.Part == 1 && fencedRow.DecorationCharacters == 0
+            ? UnicodeWidth.GetWidth(fencedRow.Prefix) + 2 : 0;
         foreach (var glyph in GetRowGlyphs(row))
         {
             if (x + glyph.Width > surface.Size.Width)
@@ -615,6 +663,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
             x += glyph.Width;
         }
+
+        DrawFencedFrame(surface, y, row);
     }
 
     private DisplayGlyph[] GetRowGlyphs(Row row)
@@ -652,7 +702,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         var row = _rows[Math.Clamp(_top + mouse.Y - (Evicted > 0 ? 1 : 0), 0, _rows.Count - 1)];
         var offset = row.Start;
-        var column = 0;
+        var column = _fencedRows.TryGetValue(row.Line.Id, out var frame) && frame.Part == 1 && frame.DecorationCharacters == 0
+            ? UnicodeWidth.GetWidth(frame.Prefix) + 2 : 0;
         foreach (var (element, width) in Elements(row.Line.Text, row.Start, row.End))
         {
             if (column + width > mouse.X)
@@ -751,6 +802,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void Scroll(int amount)
     {
+        InvalidateBlockActions();
         _clearBeforeId = null;
         _top = Math.Clamp(_top + amount, 0, Math.Max(0, _rows.Count - _height));
         AtBottom = _top == Math.Max(0, _rows.Count - _height);
@@ -795,14 +847,28 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             NormalizeInputBoundary();
         }
 
+        var frames = new Dictionary<PresentationTextSegment, FencedRow>(ReferenceEqualityComparer.Instance);
+        var blocks = new Dictionary<MarkdownFencedBody, FencedBlock>(ReferenceEqualityComparer.Instance);
         var firstId = _nextId;
         long? disclosureHeaderId = null;
         var headerObserved = false;
         foreach (var segment in item is PresentationTextItem { Disclosure: { } } disclosureItem
-            ? ProjectDisclosure(disclosureItem) : Project(item, Math.Max(40, _width)))
+            ? ProjectDisclosure(disclosureItem) : Project(item, _width > 0 ? _width : 80, (segment, code, prefix, part) =>
+            {
+                if (item is PresentationMarkdownItem markdown && code.FencedBody is { } body)
+                {
+                    if (!blocks.TryGetValue(body, out var owner))
+                    {
+                        owner = new FencedBlock(markdown, body, code.Language ?? "text", GetBlockId(markdown, body.Ordinal));
+                        blocks.Add(body, owner);
+                    }
+
+                    frames.Add(segment, new FencedRow(owner, prefix, part == 3 ? 1 : part, part == 3));
+                }
+            }))
         {
             segment.Validate();
-            AppendContent(segment);
+            AppendContent(segment, frames.GetValueOrDefault(segment));
             if (item is PresentationTextItem { Disclosure: not null } && !headerObserved)
             {
                 headerObserved = true;
@@ -977,6 +1043,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void RemoveDisclosure(PresentationItem item)
     {
+        RemoveFencedSource(item);
         RemoveScriptSource(item);
         if (ReferenceEquals(item, _clearFirstItem))
         {
@@ -1018,7 +1085,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void NormalizeInputBoundary()
     {
-        while (_lines.Count > 0 && string.IsNullOrWhiteSpace(_lines[^1].Text))
+        while (_lines.Count > 0 && string.IsNullOrWhiteSpace(_lines[^1].Text) && !_fencedRows.ContainsKey(_lines[^1].Id))
         {
             var line = _lines[^1];
             _lines.RemoveAt(_lines.Count - 1);
@@ -1037,9 +1104,15 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         AddLine(string.Empty, CellStyle.Default, false);
     }
 
-    private void AppendContent(PresentationTextSegment segment)
+    private void AppendContent(PresentationTextSegment segment, FencedRow? frame = null)
     {
         var safe = Safe(segment.Text);
+        if (safe.Length > 0 && safe[0] != '\n' && _lines.Count > 0
+            && _fencedRows.TryGetValue(_lines[^1].Id, out var previousFrame) && previousFrame.Part == 2)
+        {
+            AddLine(string.Empty, CellStyle.Default, false);
+        }
+
         var partStart = 0;
         var partIndex = 0;
         while (true)
@@ -1103,7 +1176,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                     fragment = "[oversized grapheme omitted]";
                 }
 
-                var appendedBytes = Encoding.UTF8.GetByteCount(fragment);
+                var appendedBytes = Encoding.UTF8.GetByteCount(fragment)
+                    + (frame is not null && !_fencedRows.ContainsKey(_lines[^1].Id) ? 64 : 0);
                 if (fragment.Length > 0)
                 {
                     if (!_styles.TryGetValue(line.Id, out var ranges))
@@ -1129,8 +1203,28 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                     }
                 }
 
-                var replacement = line with { Text = line.Text + fragment, Bytes = line.Bytes + appendedBytes };
+                var replacement = line with
+                {
+                    Text = line.Text + fragment,
+                    Bytes = line.Bytes + appendedBytes,
+                    Continued = line.Continued || (frame?.SoftWrapped == true && offset == 0),
+                };
                 _lines[^1] = replacement;
+                if (frame is not null)
+                {
+                    _fencedRows[line.Id] = frame with
+                    {
+                        DecorationCharacters = frame.Part == 1 ? Math.Clamp(frame.Prefix.Length + 2 - offset, 0, fragment.Length) : fragment.Length,
+                    };
+                    frame.Block.FirstId = Math.Min(frame.Block.FirstId, line.Id);
+                    frame.Block.LastId = line.Id;
+                    if (frame.Part == 0 && !line.Continued)
+                    {
+                        frame.Block.HeaderId = line.Id;
+                        _disclosureHeaders[line.Id] = BlockControlId(frame.Block);
+                    }
+                }
+
                 RetainedBytes += appendedBytes;
                 RemoveRows(line.Id);
                 if (_width > 0)
@@ -1179,6 +1273,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             RetainedBytes -= first.Bytes;
             _lines.RemoveAt(0);
             _styles.Remove(first.Id);
+            _fencedRows.Remove(first.Id);
+            InvalidateBlockActions();
             _disclosureHeaders.Remove(first.Id);
             _disclosureLines.Remove(first.Id);
             var removed = RemoveRows(first.Id);

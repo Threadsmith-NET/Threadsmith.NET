@@ -1,5 +1,9 @@
 # Threadsmith.NET Manual Test Plan
 
+## Memory-add reconciliation display
+
+In a disposable repository, have the model propose a non-sensitive multiline memory that requires reconciliation with an existing note. Confirm the completed `memories` tool block shows only the host reconciliation notice (not added) and the proposed memory text, all inside the normal `│`/`└` tool-output brackets. Existing candidate notes, IDs, reconciliation instructions, and diagnostic fields must not be printed. Check both situational and standing-preference proposals, long notes, blank lines, and terminal-control text. Confirm controls remain escaped and configured display truncation stays visible. The model must still receive the full reconciliation response and be able to update a matching note or confirm a distinct proposal. Record physical-terminal and OS checks separately from automated transcript tests.
+
 ## MT-SCRIPT-SOURCE-01 — Script preview and exact copy
 
 **Prerequisites:** Use a disposable fully trusted repository with the existing scratchpad and `csharp_script` tool explicitly enabled. Use non-secret fixtures. Record OS, terminal/version, clipboard support, and configured retention/copy limits. Do not broaden permissions to test the viewer.
@@ -2388,3 +2392,16 @@ Use controlled fixtures for OpenAI-compatible, Anthropic, and Codex. No live out
 4. Confirm cancellation stops reads and backoff. Confirm visible answer or tool output prevents resubmission.
 
 **Expected:** The existing failure path displays useful safe provider details without a new renderer or retry framework.
+
+## MTP-FENCED-COPY-01 — Bordered fenced content and clipboard action
+
+**Prerequisites:** Use a build with bordered fenced content, a deterministic answer fixture, and harmless sample content. Record OS, terminal, theme, clipboard transport, and terminal clipboard policy. Test Windows, Linux and macOS where available. Mark missing environments unverified.
+
+1. Render prose, JSON, YAML, XML, CSV, logs, Markdown, C#, mixed text, invalid structured data, unknown-type, unlabeled, empty, multiple, nested and unclosed fenced blocks. Confirm the type label, rounded frame, body, and top-right inset Copy control. Repeat with the theme's `ui.fencedCodeAscii: true` setting and NO_COLOR.
+2. Click Copy for each nonempty supported block. Paste into an independent local text editor. Compare tabs, spaces, blank lines, Unicode and line endings with the fixture body. Confirm no fence, language label, frame or soft-wrap text is copied. Check the transport status wording.
+3. Scroll and resize before each click. Use a narrow window, a long label and a long line. Confirm no overlapping controls or stale hit areas. Restore width and repeat. Select body text and activate Copy through keyboard focus.
+4. Use an unsupported backend and a terminal policy that rejects clipboard writes. Exercise configured byte limits with multibyte text. Confirm unavailable controls and explicit failures; no false full-copy success.
+5. Use small transcript retention and chunk limits. Evict a block, close child output, replace the session and restore prior answers. Confirm correct ownership and no stale copy. Verify script-source controls and ordinary output remain usable.
+6. Compare source mode and headless output with the fixture. Confirm the new display does not rewrite stored or raw model output. Record automated results separately from physical-terminal results.
+
+**Expected:** The box and action remain readable and correctly bound. Explicit copy preserves the admitted body within policy. Unsupported or incomplete copy is never reported as successful.

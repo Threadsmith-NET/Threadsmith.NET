@@ -27,6 +27,8 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     /// </summary>
     internal const string DefaultPrompt = "Threadsmith > ";
 
+    private static readonly Encoding _clipboardEncoding = new UTF8Encoding(false, true);
+
     private static readonly string[] _keyHelpEntries =
     [
         "F3 - command palette (empty draft or partial slash command)",
@@ -42,7 +44,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         "F9 — paste image; inspect/remove image attachments",
         "Ctrl+C — copy selected text; exit Threadsmith when none is selected",
         "F6 — copy the current selection without using Ctrl+C",
-        "Output: click semantic/script controls; Ctrl+Up/Down selects, Enter/Space activates",
+        "Output: click semantic/script controls or [Copy]; Ctrl+Up/Down selects, Enter/Space activates",
         "C# script: View full script opens details; F4 copies full source, F6 selection",
         "Ctrl+Shift+C — copy the complete message draft",
         "F12 — let the terminal select text; press again to return mouse control",
@@ -140,15 +142,16 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         limits ??= new();
         limits.Validate();
         _limits = limits;
+        _theme = theme;
+        _backend = backend ?? new TuiKitConsoleBackend();
         _ordinaryWorkspace = new(CreateComposer);
         _secondaryWorkspace = new(CreateComposer);
         _steeringWorkspace = new(CreateComposer);
-        _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits, ShowScriptSource));
+        _agentWorkspace = new(() => new AgentViews(ResolveOutputStyle, _limits, ShowScriptSource, () => _backend.IsInteractive && _backend.Capabilities.ClipboardOsc52, Copy, () => _theme.Ui.FencedCodeAscii));
         _agentTabs = new(() => new AgentTabStrip(Agents, SelectAgent, ResolveStyle, CloseAgent));
         _commandDiscovery = new(() => new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits));
         _commandCompletion = new(() => new ComposerCommandCompletion(Discovery));
         _commandAutocomplete = new(() => new ComposerAutocomplete(Discovery, Completion, CompleteCommand));
-        _backend = backend ?? new TuiKitConsoleBackend();
         _readClipboard = readClipboard ?? (token => ClipboardReader.ReadAsync(_limits, token));
         _imageArtifacts = images;
         _captureClipboard = captureClipboard ?? (readClipboard is null
@@ -161,7 +164,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             throw new UnsupportedTerminalException("--tui=tuikit requires an interactive terminal with cursor support.");
         }
 
-        _theme = theme;
         _interrupt = interrupt;
         _suppressStyles = TuiThemeResolver.ShouldSuppressStyles(false, Environment.GetEnvironmentVariable("NO_COLOR"), Environment.GetEnvironmentVariable("TERM"));
         _styles = new TuiKitStyles(theme, _suppressStyles);
@@ -1274,18 +1276,43 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         if (text.Length == 0)
         {
+            _notice = "Nothing to copy: content is empty";
             return false;
         }
 
-        if (Encoding.UTF8.GetByteCount(text) > _limits.MaximumClipboardCopyBytes)
+        if (!_backend.IsInteractive || !_backend.Capabilities.ClipboardOsc52)
         {
-            _notice = $"Copy exceeds the configured {_limits.MaximumClipboardCopyBytes:N0}-byte limit; select a smaller range";
+            _notice = "Terminal clipboard transport is unavailable";
             return false;
         }
 
-        _backend.Write(ClipboardWriter.BuildSequence(text));
-        _backend.Flush();
-        _notice = "Selection copied; Ctrl+C cancels only when nothing is selected";
+        try
+        {
+            if (_clipboardEncoding.GetByteCount(text) > _limits.MaximumClipboardCopyBytes)
+            {
+                _notice = $"Copy exceeds the configured {_limits.MaximumClipboardCopyBytes:N0}-byte limit; select a smaller range";
+                return false;
+            }
+        }
+        catch (EncoderFallbackException)
+        {
+            _notice = "Copy blocked: content contains invalid Unicode";
+            return false;
+        }
+
+        var sequence = ClipboardWriter.BuildSequence(text);
+        try
+        {
+            _backend.Write(sequence);
+            _backend.Flush();
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or NotSupportedException)
+        {
+            _notice = "Terminal clipboard write failed";
+            return false;
+        }
+
+        _notice = "Sent to terminal clipboard";
         return true;
     }
 

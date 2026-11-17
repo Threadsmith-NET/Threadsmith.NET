@@ -304,9 +304,9 @@ Ordinary configuration. Implementation: `src/Threadsmith.Interaction/Contracts/T
 | `maximumHistoryBytes` | `1048576` | Maximum submitted history UTF-8 bytes per composer. |
 | `maximumHistoryEntries` | `1000` | Maximum submitted entries per composer. |
 | `clipboardTimeoutMilliseconds` | `2000` | Clipboard helper timeout across Windows, Linux, and macOS. |
-| `maximumClipboardCopyBytes` | `65536` | Maximum UTF-8 bytes copied to the terminal clipboard. |
+| `maximumClipboardCopyBytes` | `65536` | Maximum UTF-8 bytes copied to the terminal clipboard, including full fenced-body actions. Admission is all-or-nothing; oversized bodies are not truncated. |
 | `maximumToggleOptions` | `2048` | Maximum selectable entries in an enable/disable modal. |
-| `maximumTranscriptBytes` | `524288` | Maximum retained source or projected text bytes per transcript. |
+| `maximumTranscriptBytes` | `524288` | Maximum retained source or projected text bytes per transcript. Fenced-body source ranges and retained frame metadata count toward the existing budgets; no separate copy store is allocated. Evicted or partly retained blocks cannot offer full copy. |
 | `maximumTranscriptLines` | `1024` | Maximum retained logical transcript chunks. |
 | `maximumTranscriptLineCharacters` | `16384` | Maximum characters per projected line chunk. |
 | `maximumGlyphCacheRows` | `512` | Maximum cached glyph rows per transcript. |

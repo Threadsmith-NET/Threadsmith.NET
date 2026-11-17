@@ -34,7 +34,8 @@ Set `tui:defaultTheme` and an ordered `tui:themes[]` array in normal layered con
         "ui": {
           "spinner": "dots",
           "selectionMarker": ">",
-          "footerSeparator": " | "
+          "footerSeparator": " | ",
+          "fencedCodeAscii": false
         }
       }
     ]
@@ -52,7 +53,7 @@ Transient request, tool, and MCP activity uses the same semantic roles and seria
 
 The fixed footer shows repository and Git status through the theme's `SessionStatus` role. Set `tui:footer:enabled` to `false` to hide it without disabling usage accounting. Model, reasoning, context, and token usage remain in the agent header. `~` marks estimated values, `--` unavailable context or usage, and `+?` a known subtotal followed by missing provider usage. Aggregate session usage retains durable totals; per-agent counters after resume cover only newly observed requests.
 
-Theme data is untrusted and bounded: at most 32 configured themes, ids up to 40 safe characters, names up to 80 characters, and UI values up to 40 characters. Control characters, raw ANSI/OSC data, unknown roles/settings, invalid colors, and unsupported spinners fail validation. The initial UI allow-list is `spinner` (`dots`), `selectionMarker`, and `footerSeparator`; the latter two are reserved for selector/footer consumption.
+Theme data is untrusted and bounded: at most 32 configured themes, ids up to 40 safe characters, names up to 80 characters, and UI values up to 40 characters. Control characters, raw ANSI/OSC data, unknown roles/settings, invalid colors, and unsupported spinners fail validation. The UI allow-list is `spinner` (`dots`), `selectionMarker`, `footerSeparator`, and boolean `fencedCodeAscii` (default `false`). The marker and separator remain reserved for selector/footer consumption. `fencedCodeAscii: true` selects TUIKit's standard ASCII box glyphs for fenced answer blocks when rounded Unicode glyphs are unsuitable. It changes display only, applies to MAIN and child output, and follows live theme selection. Fenced bodies and labels use `MarkdownCode`; `[Copy]` uses `Hyperlink`. NO_COLOR suppresses their colors but preserves text and controls.
 
 ## Retained workspace role reference
 

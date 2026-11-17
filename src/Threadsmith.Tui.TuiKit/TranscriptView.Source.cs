@@ -27,6 +27,12 @@ internal sealed partial class TranscriptView
 
     private bool ActivateControl(string id)
     {
+        if (id.StartsWith("fence:", StringComparison.Ordinal))
+        {
+            var block = _fencedRows.Values.Select(row => row.Block).FirstOrDefault(block => BlockControlId(block) == id);
+            return block is not null && ActivateBlock(new BlockAction(block, _blockGeneration));
+        }
+
         if (!id.StartsWith("view-script:", StringComparison.Ordinal))
         {
             return ToggleDisclosure(id);

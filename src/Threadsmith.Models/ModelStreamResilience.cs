@@ -21,21 +21,39 @@ public static class ModelStreamResilience
         ArgumentNullException.ThrowIfNull(attemptFactory);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        const int waiting = 0;
+        const int committed = 1;
+        const int busyExpired = 2;
+        const int requestExpired = 3;
+        var responseState = waiting;
         using var stopped = new CancellationTokenSource();
-        using var busyCancellation = new CancellationTokenSource();
+        using var deadlineCancellation = new CancellationTokenSource();
+        using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, stopped.Token, deadlineCancellation.Token);
+        await using var requestDeadline = requestCancellationToken.Register(() =>
+        {
+            Interlocked.CompareExchange(ref responseState, requestExpired, waiting);
+            deadlineCancellation.Cancel();
+        });
         await using var busyTimer = timeProvider.CreateTimer(
-            _ => busyCancellation.Cancel(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        using var execution = CancellationTokenSource.CreateLinkedTokenSource(requestCancellationToken, cancellationToken, stopped.Token, busyCancellation.Token);
+            _ =>
+            {
+                if (Interlocked.CompareExchange(ref responseState, busyExpired, waiting) == waiting)
+                {
+                    deadlineCancellation.Cancel();
+                }
+            },
+            null,
+            Timeout.InfiniteTimeSpan,
+            Timeout.InfiniteTimeSpan);
         var channel = Channel.CreateBounded<Delivery>(new BoundedChannelOptions(1)
         {
             SingleReader = true,
             SingleWriter = true,
         });
-        var committed = false;
         var reasoning = false;
         var busyReported = false;
-        var busyTimerArmed = false;
         var attempt = 0;
+        var ordinaryFailures = 0;
         long? busyStarted = null;
         TransientModelException? lastBusyFailure = null;
         var builder = new ResiliencePipelineBuilder { TimeProvider = timeProvider };
@@ -50,7 +68,7 @@ public static class ModelStreamResilience
                 MaxDelay = TimeSpan.FromMilliseconds(Math.Max(5000, policy.Delay.TotalMilliseconds)),
                 ShouldHandle = args =>
                 {
-                    if (committed || args.Outcome.Exception is not TransientModelException failure)
+                    if (Volatile.Read(ref responseState) != waiting || args.Outcome.Exception is not TransientModelException failure)
                     {
                         return ValueTask.FromResult(false);
                     }
@@ -64,14 +82,13 @@ public static class ModelStreamResilience
                             if (policy.BusyTimeout > TimeSpan.Zero)
                             {
                                 busyTimer.Change(policy.BusyTimeout, Timeout.InfiniteTimeSpan);
-                                busyTimerArmed = true;
                             }
                         }
 
                         return ValueTask.FromResult(RemainingBusyTime() > TimeSpan.Zero);
                     }
 
-                    return ValueTask.FromResult(attempt < policy.MaxAttempts && RemainingBusyTime() > TimeSpan.Zero);
+                    return ValueTask.FromResult(++ordinaryFailures < policy.MaxAttempts && RemainingBusyTime() > TimeSpan.Zero);
                 },
                 DelayGenerator = args =>
                 {
@@ -146,27 +163,35 @@ public static class ModelStreamResilience
                             ExceptionDispatchInfo.Capture(busyFailure).Throw();
                         }
 
-                        committed = false;
                         reasoning = false;
                         await foreach (var chunk in attemptFactory(++attempt, token).WithCancellation(token))
                         {
                             // Providers still report billable partial usage after cancellation.
                             if (!chunk.IsInterruptedUsage)
                             {
-                                busyCancellation.Token.ThrowIfCancellationRequested();
-                            }
+                                token.ThrowIfCancellationRequested();
+                                var state = Volatile.Read(ref responseState);
+                                if (state == waiting && !ModelStreamRetry.IsReasoningOnly(chunk))
+                                {
+                                    state = Interlocked.CompareExchange(ref responseState, committed, waiting);
+                                    if (state == waiting && busyStarted is not null)
+                                    {
+                                        // Disarm the timer; the state also rejects a callback already queued.
+                                        busyTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+                                    }
+                                }
 
-                            committed |= !chunk.IsInterruptedUsage && !ModelStreamRetry.IsReasoningOnly(chunk);
-                            if (committed && busyTimerArmed)
-                            {
-                                // A recovered answer follows the normal request deadline, not the busy retry window.
-                                busyTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-                                busyTimerArmed = false;
+                                if (state is busyExpired or requestExpired)
+                                {
+                                    throw new OperationCanceledException(token);
+                                }
                             }
 
                             reasoning |= chunk.Reasoning is not null;
                             await DeliverAsync(chunk);
                         }
+
+                        token.ThrowIfCancellationRequested();
                     },
                     execution.Token);
                 channel.Writer.TryComplete();
@@ -175,8 +200,8 @@ public static class ModelStreamResilience
             {
                 channel.Writer.TryComplete(new OperationCanceledException(cancellationToken));
             }
-            catch (Exception) when (busyCancellation.IsCancellationRequested && !requestCancellationToken.IsCancellationRequested
-                && !stopped.IsCancellationRequested && !committed && lastBusyFailure is not null)
+            catch (Exception) when (Volatile.Read(ref responseState) == busyExpired
+                && !stopped.IsCancellationRequested && lastBusyFailure is not null)
             {
                 // Adapters may translate cancellation into their own timeout exception; retain the busy cause.
                 channel.Writer.TryComplete(lastBusyFailure);

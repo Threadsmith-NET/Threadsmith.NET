@@ -82,9 +82,20 @@ internal sealed partial class TranscriptView
         return ClipboardAvailable?.Invoke() == true && CopyRequested is not null
             && block.Body is { IsClosed: true, CharacterCount: > 0 }
             && block.Item is { } item && !_retiredFencedItems.Contains(item) && block.Body.IsAssociatedWith(item.RawSource)
-            && _items.Any(retained => ReferenceEquals(retained, item))
+            && _fencedIds.ContainsKey(item)
             && _lines.Count > 0 && _lines[0].Id <= block.FirstId
             && _lines[^1].Id >= block.LastId && block.HeaderId >= 0;
+    }
+
+    private string? GetActionableHeader(long lineId)
+    {
+        if (!_disclosureHeaders.TryGetValue(lineId, out var id))
+        {
+            return null;
+        }
+
+        return !id.StartsWith("fence:", StringComparison.Ordinal)
+            || (_fencedRows.TryGetValue(lineId, out var frame) && CanCopyBlock(frame.Block)) ? id : null;
     }
 
     private bool ActivateBlock(BlockAction action)
@@ -142,15 +153,15 @@ internal sealed partial class TranscriptView
         }
     }
 
-    private void RemoveFencedSource(PresentationItem item)
+    private void RemoveFencedSource(PresentationMarkdownItem item)
     {
-        InvalidateBlockActions();
-        if (item is PresentationMarkdownItem markdown)
+        _retiredFencedItems.Remove(item);
+        if (!_fencedIds.Remove(item))
         {
-            _fencedIds.Remove(markdown);
-            _retiredFencedItems.Remove(markdown);
+            return;
         }
 
+        InvalidateBlockActions();
         foreach (var frame in _fencedRows.Values)
         {
             if (ReferenceEquals(frame.Block.Item, item))

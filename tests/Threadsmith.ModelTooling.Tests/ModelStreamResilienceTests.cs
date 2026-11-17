@@ -91,9 +91,10 @@ public static class ModelStreamResilienceTests
 
     /// <summary>Ordinary transport failures retain the configured attempt limit.</summary>
     [Theory]
-    [InlineData(1)]
-    [InlineData(3)]
-    public static async Task NonBusyFailuresRetainAttemptLimit(int maximumAttempts)
+    [InlineData(1, 0)]
+    [InlineData(3, 0)]
+    [InlineData(3, 2)]
+    public static async Task NonBusyFailuresRetainAttemptLimit(int maximumAttempts, int busyFailures)
     {
         var clock = new RecordingClock();
         var attempts = 0;
@@ -102,14 +103,19 @@ public static class ModelStreamResilienceTests
             await ModelStreamResilience.ExecuteAsync(
                 AttemptAsync, policy, clock, TimeSpan.Zero, TestContext.Current.CancellationToken, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
 
-        Assert.Equal(maximumAttempts, attempts);
-        Assert.Equal(Enumerable.Repeat(TimeSpan.FromMilliseconds(10), maximumAttempts - 1), clock.Delays);
+        Assert.Equal(busyFailures + maximumAttempts, attempts);
+        Assert.Equal(Enumerable.Repeat(TimeSpan.FromMilliseconds(10), maximumAttempts - 1), clock.Delays.Skip(busyFailures));
 
         async IAsyncEnumerable<ModelChunk> AttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             attempts = attempt;
             await Task.CompletedTask;
+            if (attempt <= busyFailures)
+            {
+                throw new TransientModelException("HTTP 429") { IsRateLimit = true };
+            }
+
             if (attempt > 0)
             {
                 throw new TransientModelException("transport failure");
@@ -195,20 +201,23 @@ public static class ModelStreamResilienceTests
         }
     }
 
-    /// <summary>Caller cancellation and shorter deadlines win even if busy expiry occurs before the attempt unwinds.</summary>
+    /// <summary>Cancellation keeps its classification when another deadline expires during cleanup.</summary>
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public static async Task PendingBusyRetryPreservesEarlierCancellation(bool cancelCaller, bool expireBusyBeforeCompletion)
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, true)]
+    public static async Task PendingBusyRetryPreservesEarlierCancellation(bool cancelCaller, bool expireSecondDeadline, bool busyExpiresFirst)
     {
         // Arrange: the attempt acknowledges cancellation before a separate barrier allows it to unwind.
         var clock = new RecordingClock();
         using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         using var request = CancellationTokenSource.CreateLinkedTokenSource(caller.Token);
         await using var deadline = clock.CreateTimer(_ => request.Cancel(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
-        var timeout = TimeSpan.FromSeconds(5);
+        var busyWindow = TimeSpan.FromSeconds(15);
+        var timeout = TimeSpan.FromSeconds(busyExpiresFirst ? 20 : 5);
+        var busyFailure = new TransientModelException("HTTP 429") { IsRateLimit = true };
         if (!cancelCaller)
         {
             deadline.Change(timeout, Timeout.InfiniteTimeSpan);
@@ -219,7 +228,7 @@ public static class ModelStreamResilienceTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var attempts = 0;
         var pending = ModelStreamResilience.ExecuteAsync(
-            AttemptAsync, new ModelRetryPolicy(), clock, timeout, request.Token, caller.Token)
+            AttemptAsync, new ModelRetryPolicy { BusyTimeout = busyWindow }, clock, timeout, request.Token, caller.Token)
             .ToListAsync(caller.Token).AsTask();
         try
         {
@@ -232,13 +241,13 @@ public static class ModelStreamResilienceTests
             }
             else
             {
-                clock.Advance(TimeSpan.FromMilliseconds(4750));
+                clock.Advance((busyExpiresFirst ? busyWindow : timeout) - TimeSpan.FromMilliseconds(250));
             }
 
             await cancelled.Task.WaitAsync(TestContext.Current.CancellationToken);
-            if (expireBusyBeforeCompletion)
+            if (expireSecondDeadline)
             {
-                clock.Advance(TimeSpan.FromSeconds(15));
+                clock.Advance(busyWindow);
             }
 
             release.TrySetResult();
@@ -248,6 +257,11 @@ public static class ModelStreamResilienceTests
             {
                 var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
                 Assert.Equal(caller.Token, error.CancellationToken);
+            }
+            else if (busyExpiresFirst)
+            {
+                var error = await Assert.ThrowsAsync<TransientModelException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+                Assert.Same(busyFailure, error);
             }
             else
             {
@@ -270,7 +284,7 @@ public static class ModelStreamResilienceTests
             attempts = attempt;
             if (attempt == 1)
             {
-                throw new TransientModelException("HTTP 429") { IsRateLimit = true };
+                throw busyFailure;
             }
 
             entered.TrySetResult();
@@ -286,6 +300,66 @@ public static class ModelStreamResilienceTests
             }
 
             yield break;
+        }
+    }
+
+    /// <summary>A queued busy callback and the first answer are mutually exclusive.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task BusyExpiryAndFirstAnswerHaveOneWinner(bool expiryFirst)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new RecordingClock { DeferIdleTimerCallbacks = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseAnswer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var busyFailure = new TransientModelException("HTTP 429") { IsRateLimit = true };
+        var policy = new ModelRetryPolicy();
+        await using var stream = ModelStreamResilience.ExecuteAsync(
+            AttemptAsync, policy, clock, TimeSpan.Zero, cancellationToken, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        Assert.True(await stream.MoveNextAsync());
+        Assert.True(stream.Current.ProviderBusy);
+        var answer = stream.MoveNextAsync().AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(cancellationToken);
+            clock.Advance(policy.BusyTimeout - TimeSpan.FromMilliseconds(250));
+            var expire = Assert.IsType<Action>(clock.DeferredTimerCallback);
+            if (expiryFirst)
+            {
+                expire();
+                releaseAnswer.TrySetResult();
+                Assert.Same(busyFailure, await Assert.ThrowsAsync<TransientModelException>(() => answer.WaitAsync(cancellationToken)));
+            }
+            else
+            {
+                releaseAnswer.TrySetResult();
+                Assert.True(await answer);
+                Assert.Equal("first", stream.Current.Text);
+                expire();
+                Assert.True(await stream.MoveNextAsync());
+                Assert.Equal("last", stream.Current.Text);
+                Assert.False(await stream.MoveNextAsync());
+            }
+        }
+        finally
+        {
+            releaseAnswer.TrySetResult();
+            await Record.ExceptionAsync(() => answer.WaitAsync(cancellationToken));
+        }
+
+        async IAsyncEnumerable<ModelChunk> AttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken token)
+        {
+            if (attempt == 1)
+            {
+                throw busyFailure;
+            }
+
+            entered.TrySetResult();
+            await releaseAnswer.Task.WaitAsync(cancellationToken);
+            yield return new ModelChunk { Text = "first" };
+            token.ThrowIfCancellationRequested();
+            yield return new ModelChunk { Text = "last" };
         }
     }
 
@@ -320,6 +394,33 @@ public static class ModelStreamResilienceTests
             clock.Advance(TimeSpan.FromSeconds(20));
             cancellationToken.ThrowIfCancellationRequested();
             yield return new ModelChunk { Text = "last" };
+        }
+    }
+
+    /// <summary>A provider that ignores a deadline after commitment cannot deliver another answer or complete successfully.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public static async Task RequestDeadlineAfterFirstChunkStopsUncooperativeStream(bool emitLateChunk)
+    {
+        var caller = TestContext.Current.CancellationToken;
+        using var request = new CancellationTokenSource();
+        await using var stream = ModelStreamResilience.ExecuteAsync(
+            AttemptAsync, new ModelRetryPolicy(), new RecordingClock(), TimeSpan.FromSeconds(5), request.Token, caller)
+            .GetAsyncEnumerator(caller);
+        Assert.True(await stream.MoveNextAsync());
+        Assert.Equal("first", stream.Current.Text);
+        await request.CancelAsync();
+        await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => stream.MoveNextAsync().AsTask());
+
+        async IAsyncEnumerable<ModelChunk> AttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken token)
+        {
+            await Task.Yield();
+            yield return new ModelChunk { Text = "first" };
+            if (emitLateChunk)
+            {
+                yield return new ModelChunk { Text = "late" };
+            }
         }
     }
 
@@ -363,9 +464,15 @@ public static class ModelStreamResilienceTests
 
         public ConcurrentQueue<TimeSpan> TimerChanges { get; } = new();
 
+        public bool DeferIdleTimerCallbacks { get; init; }
+
+        public Action? DeferredTimerCallback { get; private set; }
+
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
+            var timer = DeferIdleTimerCallbacks && dueTime == Timeout.InfiniteTimeSpan
+                ? base.CreateTimer(_ => DeferredTimerCallback = () => callback(state), null, dueTime, period)
+                : base.CreateTimer(callback, state, dueTime, period);
             if (dueTime > TimeSpan.Zero)
             {
                 Delays.Enqueue(dueTime);

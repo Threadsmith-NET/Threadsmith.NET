@@ -182,7 +182,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
         if (key.Modifiers == KeyModifiers.None && (key.Code == KeyCode.Enter || (key.Code == KeyCode.Character && key.Rune == ' ')))
         {
-            var visibleHeaders = _rows.Skip(_top).Take(_height).Select(row => _disclosureHeaders.GetValueOrDefault(row.Line.Id)).OfType<string>();
+            var visibleHeaders = _rows.Skip(_top).Take(_height)
+                .Select(row => GetActionableHeader(row.Line.Id)).OfType<string>();
             var target = visibleHeaders.FirstOrDefault(id => id == _focusedDisclosure) ?? visibleHeaders.FirstOrDefault();
             return target is not null && ActivateControl(target);
         }
@@ -351,16 +352,16 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                 _clearPending = false;
             }
 
-            Retain(item);
-            if (item is PresentationTextItem { Disclosure: not null } or PresentationTextItem { SourceDetail: not null } && !_items.Contains(item))
+            var retained = Retain(item);
+            if (!retained && item is PresentationTextItem { Disclosure: not null } or PresentationTextItem { SourceDetail: not null })
             {
                 continue;
             }
 
             AppendItem(item);
-            if (!_items.Any(retained => ReferenceEquals(retained, item)))
+            if (!retained && item is PresentationMarkdownItem markdown)
             {
-                RemoveFencedSource(item);
+                RemoveFencedSource(markdown);
             }
         }
     }
@@ -533,7 +534,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         _rowGlyphs.Clear();
     }
 
-    private void Retain(PresentationItem item)
+    private bool Retain(PresentationItem item)
     {
         var bytes = PresentationBytes(item);
         _items.Enqueue(item);
@@ -544,6 +545,9 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             _itemBytes -= PresentationBytes(removed);
             RemoveDisclosure(removed);
         }
+
+        // The new item was enqueued last, so it survives unless eviction empties the queue.
+        return _items.Count > 0;
     }
 
     private static int PresentationBytes(PresentationItem item)
@@ -1003,7 +1007,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private bool FocusDisclosure(bool forward)
     {
-        var headers = _disclosureHeaders.Where(pair => _clearBeforeId is null || pair.Key >= _clearBeforeId)
+        var headers = _disclosureHeaders.Where(pair => (_clearBeforeId is null || pair.Key >= _clearBeforeId)
+                && GetActionableHeader(pair.Key) is not null)
             .OrderBy(pair => pair.Key).DistinctBy(pair => pair.Value, StringComparer.Ordinal).ToArray();
         if (headers.Length == 0)
         {
@@ -1043,7 +1048,11 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void RemoveDisclosure(PresentationItem item)
     {
-        RemoveFencedSource(item);
+        if (item is PresentationMarkdownItem markdown)
+        {
+            RemoveFencedSource(markdown);
+        }
+
         RemoveScriptSource(item);
         if (ReferenceEquals(item, _clearFirstItem))
         {

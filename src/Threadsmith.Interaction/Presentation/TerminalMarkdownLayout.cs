@@ -12,7 +12,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
     internal static IReadOnlyList<PresentationTextSegment> Format(
         MarkdownDocument document,
         int width,
-        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced = null)
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, string, string>? renderFenced = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         MarkdownValidator.Validate(document);
@@ -41,7 +41,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
         MarkdownBlock block,
         int width,
         string prefix,
-        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, string, string>? renderFenced)
     {
         switch (block)
         {
@@ -76,7 +76,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
                 AppendList(segments, list, width, prefix, renderFenced);
                 break;
             case MarkdownCodeBlock { FencedBody: not null } code when renderFenced is not null:
-                renderFenced(segments, code, width, prefix);
+                renderFenced(segments, code, prefix, prefix);
                 break;
             case MarkdownCodeBlock code:
                 var language = code.Language is null ? string.Empty : code.Language;
@@ -125,7 +125,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
         MarkdownList list,
         int width,
         string prefix,
-        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, string, string>? renderFenced)
     {
         for (var index = 0; index < list.Items.Length; index++)
         {
@@ -161,7 +161,7 @@ internal static class TerminalMarkdownLayout<TMetrics>
         int width,
         string prefix,
         string continuationPrefix,
-        Action<List<PresentationTextSegment>, MarkdownCodeBlock, int, string>? renderFenced)
+        Action<List<PresentationTextSegment>, MarkdownCodeBlock, string, string>? renderFenced)
     {
         if (block is MarkdownParagraph paragraph)
         {
@@ -175,7 +175,13 @@ internal static class TerminalMarkdownLayout<TMetrics>
             return;
         }
 
-        AppendBlock(segments, block, width, renderFenced is not null && block is MarkdownCodeBlock { FencedBody: not null } ? continuationPrefix : prefix, renderFenced);
+        if (renderFenced is not null && block is MarkdownCodeBlock { FencedBody: not null } code)
+        {
+            renderFenced(segments, code, prefix, continuationPrefix);
+            return;
+        }
+
+        AppendBlock(segments, block, width, prefix, renderFenced);
     }
 
     private static void AppendTable(

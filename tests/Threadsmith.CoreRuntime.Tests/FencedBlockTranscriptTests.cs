@@ -112,8 +112,58 @@ public static class FencedBlockTranscriptTests
             Assert.Contains(state, Snapshot.ToText(cells), StringComparison.Ordinal);
         }
 
-        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.False(view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl)));
+        Assert.False(view.HandleKey(KeyEvent.Special(KeyCode.Enter)));
         Assert.Empty(copies);
+    }
+
+    /// <summary>Current clipboard eligibility leaves scripted source actions reachable.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void UnavailableFence_DoesNotInterceptScriptDisclosure(bool navigate)
+    {
+        var copies = new List<string>();
+        var view = Create("```\nx\n```", copies);
+        var script = new PresentationTextItem([new("Result\n", PresentationTextRole.Success)])
+        {
+            SourceDetail = new ToolSourceDetail
+            {
+                ToolInvocationId = ToolInvocationId.New(),
+                Language = "csharp",
+                Availability = ToolSourceAvailability.Available,
+                Source = "// preview",
+            },
+        };
+        view.Present(new PresentationBatch([script]));
+        Render(view, 50);
+        view.ClipboardAvailable = () => false;
+
+        if (navigate)
+        {
+            Assert.True(view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl)));
+        }
+
+        Assert.True(view.HandleKey(KeyEvent.Special(KeyCode.Enter)));
+        Assert.Contains("// preview", Snapshot.ToText(Render(view, 50)), StringComparison.Ordinal);
+        Assert.Empty(copies);
+    }
+
+    /// <summary>List markers appear once, before the frame instead of in the body.</summary>
+    [Theory]
+    [InlineData("1.")]
+    [InlineData("-")]
+    public static void FenceStartingListItem_RendersMarkerOnHeader(string marker)
+    {
+        var indent = new string(' ', marker.Length + 1);
+        var view = Create($"{marker} ```text\n{indent}body\n{indent}```", []);
+        var cells = Render(view, 40);
+        var header = CopyRow(cells);
+        Assert.True(header >= 0);
+        var rows = Snapshot.ToText(cells).Split('\n');
+        Assert.StartsWith(marker + " ╭", rows[header], StringComparison.Ordinal);
+        Assert.StartsWith(indent + "│ body", rows[header + 1], StringComparison.Ordinal);
+        Assert.StartsWith(indent + "╰", rows[header + 2], StringComparison.Ordinal);
     }
 
     /// <summary>Narrow mode has no clipped target and a later wider layout restores the block action.</summary>
@@ -178,7 +228,7 @@ public static class FencedBlockTranscriptTests
     [InlineData(40)]
     public static void Selection_AcrossSoftWraps_DoesNotCopyLayoutPadding(int width)
     {
-        var body = new string('x', 50) + "\ny";
+        var body = new string('x', width - 5) + "界e\u0301" + new string('x', 50) + "\ny";
         var view = Create("```\n" + body + "\n```", []);
         Render(view, width);
         view.HandleKey(KeyEvent.Char('a', KeyModifiers.Ctrl));

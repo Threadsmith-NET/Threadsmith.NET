@@ -12,6 +12,70 @@ public static partial class OpenAiCompatibleTimeoutTests
 {
     private const string CompletedResponse = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
 
+    /// <summary>Busy expiry reaches both response-body boundaries and retains the original HTTP failure.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task BusyDeadline_CancelsPendingBodyAndPreservesHttpError(bool blockOpening)
+    {
+        // Arrange: no wall-clock HTTP or profile deadline can mask the busy deadline.
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var clock = new AdvancingTimeProvider();
+        var entered = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var stream = new ControlledStream(string.Empty, async (_, token) =>
+        {
+            entered.TrySetResult(token);
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            return 0;
+        });
+        var attempts = 0;
+        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            if (++attempts == 1)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("{\"error\":{\"code\":429,\"message\":\"Busy test failure\"}}"),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = blockOpening ? new CancellationAwareOpeningContent(entered) : new StreamContent(stream),
+            });
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(0), timeProvider: clock);
+        var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
+        try
+        {
+            var readToken = await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+            // Act: backoff has already consumed 250 ms; the read must stop at exactly 15 seconds.
+            clock.Advance(TimeSpan.FromMilliseconds(14749));
+            Assert.False(readToken.IsCancellationRequested);
+            Assert.False(pending.IsCompleted);
+            clock.Advance(TimeSpan.FromMilliseconds(1));
+
+            // Assert the actual adapter token before awaiting completion, so a token regression fails without hanging.
+            Assert.True(readToken.IsCancellationRequested);
+            Assert.False(caller.IsCancellationRequested);
+            var error = await Assert.ThrowsAsync<TransientModelException>(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+            Assert.True(error.IsRateLimit);
+            Assert.Equal("Busy test failure" + Environment.NewLine + "HTTP 429 · Code: 429", error.Message);
+            Assert.Equal(2, attempts);
+            if (!blockOpening)
+            {
+                Assert.True(stream.IsDisposed);
+            }
+        }
+        finally
+        {
+            await caller.CancelAsync();
+            await Record.ExceptionAsync(() => pending.WaitAsync(TestContext.Current.CancellationToken));
+        }
+    }
+
     /// <summary>A handler timeout retries under the same model deadline and may recover.</summary>
     [Theory]
     [InlineData(0)]
@@ -341,7 +405,7 @@ public static partial class OpenAiCompatibleTimeoutTests
             return Task.FromResult(response);
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
-        var profile = Profile(0) with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero } };
+        var profile = Profile(0) with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.Zero } };
         var provider = new OpenAiCompatibleModelProvider(client, profile, timeProvider: clock);
         var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
         try
@@ -531,6 +595,33 @@ public static partial class OpenAiCompatibleTimeoutTests
                 Dispose();
                 return ValueTask.CompletedTask;
             }
+        }
+    }
+
+    private sealed class CancellationAwareOpeningContent : HttpContent
+    {
+        private readonly TaskCompletionSource<CancellationToken> _entered;
+
+        public CancellationAwareOpeningContent(TaskCompletionSource<CancellationToken> entered)
+        {
+            _entered = entered;
+        }
+
+        protected override Task<Stream> CreateContentReadStreamAsync() => throw new NotSupportedException();
+
+        protected override async Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken)
+        {
+            _entered.TrySetResult(cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return Stream.Null;
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) => throw new NotSupportedException();
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
         }
     }
 

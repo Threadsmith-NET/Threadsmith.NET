@@ -91,11 +91,14 @@ public abstract record ModelConfiguration
     /// <summary>Maximum returned tool calls per response; zero disables this local resource limit.</summary>
     public int MaximumToolCalls { get; init; } = ModelProfile.DefaultMaximumToolCalls;
 
-    /// <summary>Maximum retry attempts, including the initial request.</summary>
+    /// <summary>Maximum attempts for non-busy transient failures, including the initial request.</summary>
     public int RetryMaxAttempts { get; init; } = 3;
 
     /// <summary>Delay between retryable attempts in milliseconds.</summary>
     public int RetryDelayMilliseconds { get; init; } = 250;
+
+    /// <summary>Retry window in seconds from the first busy failure; zero disables busy retries.</summary>
+    public int RetryBusyTimeoutSeconds { get; init; } = 15;
 }
 
 /// <summary>Versioned root for a model-provider catalog.</summary>

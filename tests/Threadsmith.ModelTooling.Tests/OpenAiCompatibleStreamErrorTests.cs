@@ -46,25 +46,25 @@ public static class OpenAiCompatibleStreamErrorTests
         Assert.Equal(afterText ? 2 : 3, usage[^1].MaximumAttemptOutputTokens ?? usage[^1].OutputTokens);
     }
 
-    /// <summary>Every attempt, including the first request, counts against the configured limit.</summary>
+    /// <summary>Busy retries use the configured window rather than the transient attempt limit.</summary>
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public static async Task RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    [InlineData(0, 1)]
+    [InlineData(1, 3)]
+    [InlineData(15, 7)]
+    public static async Task RateLimit_UsesConfiguredBusyWindow(int seconds, int expectedAttempts)
     {
         var handler = new StreamHandler("data: {\"error\":{\"code\":429}}\n\n");
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
-            await foreach (var chunk in CreateProvider(client, maximumAttempts).StreamAsync(Request(), TestContext.Current.CancellationToken))
+            await foreach (var chunk in CreateProvider(client, 1, seconds).StreamAsync(Request(), TestContext.Current.CancellationToken))
             {
                 chunks.Add(chunk);
             }
         });
-        Assert.Equal(maximumAttempts, handler.Calls);
-        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Equal(expectedAttempts, handler.Calls);
+        Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
     }
 
     /// <summary>Rate-limit variants recover or exhaust retries without duplicate busy notices or failed-frame usage.</summary>
@@ -103,7 +103,7 @@ public static class OpenAiCompatibleStreamErrorTests
             Assert.Single(chunks, chunk => chunk.Usage is not null);
         }
 
-        Assert.Equal(3, handler.Calls);
+        Assert.Equal(exhaust ? 7 : 3, handler.Calls);
         Assert.Single(chunks, chunk => chunk.ProviderBusy);
     }
 
@@ -252,7 +252,7 @@ public static class OpenAiCompatibleStreamErrorTests
         };
     }
 
-    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client, int maximumAttempts = 3)
+    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client, int maximumAttempts = 3, int busyTimeoutSeconds = 15)
     {
         return new(
         client,
@@ -267,7 +267,7 @@ public static class OpenAiCompatibleStreamErrorTests
             ContextWindow = 32000,
             MaximumOutputTokens = 4000,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-            RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.FromSeconds(busyTimeoutSeconds) },
         },
         apiKey: "credential-canary",
         timeProvider: new AdvancingTimeProvider());

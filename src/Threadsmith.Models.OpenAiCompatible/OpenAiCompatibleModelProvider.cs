@@ -327,7 +327,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
         Stream stream;
         try
         {
-            stream = await response.Content.ReadAsStreamAsync(requestCancellation.Token);
+            stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
@@ -360,7 +360,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 string? line;
                 try
                 {
-                    line = await reader.ReadLineAsync(requestCancellation.Token);
+                    line = await reader.ReadLineAsync(cancellationToken);
                 }
                 catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
                 {

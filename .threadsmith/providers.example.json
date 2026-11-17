@@ -44,6 +44,7 @@
           },
           "timeoutSeconds": 120,
           "retryMaxAttempts": 3,
+          "retryBusyTimeoutSeconds": 15,
           "retryDelayMilliseconds": 250
         }
       ]
@@ -60,6 +61,7 @@
         "defaultReasoningLevel": "high",
         "timeoutSeconds": 120,
         "retryMaxAttempts": 3,
+        "retryBusyTimeoutSeconds": 15,
         "retryDelayMilliseconds": 250
       }
     },
@@ -125,6 +127,7 @@
           "maximumStreamedBytes": 16777216,
           "maximumToolCalls": 32,
           "retryMaxAttempts": 3,
+          "retryBusyTimeoutSeconds": 15,
           "retryDelayMilliseconds": 250
         }
       ],

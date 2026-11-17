@@ -463,19 +463,19 @@ public static partial class OpenRouterProviderTests
         Assert.Equal("id", blocks[1].GetProperty("call_id").GetString());
     }
 
-    /// <summary>OpenRouter uses shared rate-limit recovery and its configured attempt limit.</summary>
+    /// <summary>OpenRouter uses the shared elapsed busy window and one notice.</summary>
     [Theory]
-    [InlineData(1, 429)]
-    [InlineData(2, 429)]
-    [InlineData(4, 429)]
-    [InlineData(1, 503)]
-    [InlineData(3, 503)]
-    [InlineData(3, 529)]
-    public static async Task BusyStream_UsesSharedRetriesAndOneBusyNotice(int maximumAttempts, int status)
+    [InlineData(0, 429, 1)]
+    [InlineData(1, 429, 3)]
+    [InlineData(15, 429, 7)]
+    [InlineData(0, 503, 1)]
+    [InlineData(15, 503, 7)]
+    [InlineData(15, 529, 7)]
+    public static async Task BusyStream_UsesSharedRetriesAndOneBusyNotice(int seconds, int status, int expectedAttempts)
     {
         using var handler = new Handler(Failed(status));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var model = Model() with { RetryMaxAttempts = maximumAttempts, RetryDelayMilliseconds = 0 };
+        var model = Model() with { RetryMaxAttempts = 1, RetryDelayMilliseconds = 0, RetryBusyTimeoutSeconds = seconds };
         var chunks = new List<ModelChunk>();
         var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
@@ -484,8 +484,8 @@ public static partial class OpenRouterProviderTests
                 chunks.Add(chunk);
             }
         });
-        Assert.Equal(maximumAttempts, handler.Calls);
-        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Equal(expectedAttempts, handler.Calls);
+        Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
         Assert.DoesNotContain("test-key", exception.Message, StringComparison.Ordinal);
     }
 
@@ -507,9 +507,9 @@ public static partial class OpenRouterProviderTests
                 }
             }
         });
-        Assert.Equal(new decimal?[] { 0.2m, 0.4m, 0.6m }, usages.Select(usage => usage.ReportedCost));
-        Assert.Equal(9, usages[^1].Cache?.CacheReadTokens);
-        Assert.Equal(3, usages[^1].Cache?.CacheWriteTokens);
+        Assert.Equal(Enumerable.Range(1, 7).Select(index => (decimal?)(index * 0.2m)), usages.Select(usage => usage.ReportedCost));
+        Assert.Equal(21, usages[^1].Cache?.CacheReadTokens);
+        Assert.Equal(7, usages[^1].Cache?.CacheWriteTokens);
     }
 
     private static string Frame(string value) => "data: " + value + "\n\n";

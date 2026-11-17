@@ -1152,7 +1152,7 @@ public sealed class Plan50OpenAiCodexTests
             Assert.DoesNotContain(chunks, chunk => chunk.Usage is not null);
         }
 
-        Assert.Equal(retryable ? 3 : 1, handler.RequestCount);
+        Assert.Equal(retryable ? (recover ? 3 : 7) : 1, handler.RequestCount);
         Assert.Equal(retryable ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
         Assert.DoesNotContain(chunks, chunk => chunk.IsInterruptedUsage);
     }
@@ -1234,20 +1234,20 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(TimeSpan.FromSeconds(3), error.RetryAfter);
         Assert.Equal(status == 429, error.IsRateLimit);
         Assert.True(body.Started.Task.IsCompleted);
-        Assert.Equal(1, handler.RequestCount);
+        Assert.Equal(5, handler.RequestCount);
     }
 
-    /// <summary>The configured maximum counts all attempts, including the original request.</summary>
+    /// <summary>Busy retries follow the elapsed window even with a one-attempt transient limit.</summary>
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public async Task Provider_RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    [InlineData(0, 1)]
+    [InlineData(1, 3)]
+    [InlineData(15, 7)]
+    public async Task Provider_RateLimit_UsesConfiguredBusyWindow(int seconds, int expectedAttempts)
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
         var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
         {
-            RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.FromSeconds(seconds) },
         });
         var chunks = new List<ModelChunk>();
         await Assert.ThrowsAsync<TransientModelException>(async () =>
@@ -1257,8 +1257,8 @@ public sealed class Plan50OpenAiCodexTests
                 chunks.Add(chunk);
             }
         });
-        Assert.Equal(maximumAttempts, handler.RequestCount);
-        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Equal(expectedAttempts, handler.RequestCount);
+        Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
     }
 
     /// <summary>Transport failures before a response use the configured attempt limit.</summary>

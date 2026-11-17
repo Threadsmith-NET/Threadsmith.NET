@@ -29,6 +29,22 @@ public sealed class AnthropicCatalogTests
             registration.Validate(hydrated with { ResourceLimits = new AnthropicResourceLimits() }));
     }
 
+    /// <summary>Hydration and runtime registration preserve omitted and explicit busy timeouts.</summary>
+    [Theory]
+    [InlineData(null, 15)]
+    [InlineData(0, 0)]
+    [InlineData(30, 30)]
+    public void BusyTimeoutFlowsThroughHydrationAndRegistration(int? configured, int expected)
+    {
+        var defaults = new AnthropicModelDefaults();
+        var descriptor = Provider() with { Defaults = configured is { } seconds ? defaults with { RetryBusyTimeoutSeconds = seconds } : defaults };
+        var hydrated = AnthropicCatalogHydrator.Hydrate(descriptor, [Model()], AnthropicReviewedModels.All);
+        var profile = Assert.Single(new AnthropicProviderRegistration().CreateProfiles(hydrated));
+        Assert.Equal(TimeSpan.FromSeconds(expected), profile.RetryPolicy.BusyTimeout);
+        Assert.Throws<InvalidOperationException>(() => AnthropicCatalogHydrator.Hydrate(
+            descriptor with { Defaults = defaults with { RetryBusyTimeoutSeconds = -1 } }, [Model()], AnthropicReviewedModels.All));
+    }
+
     /// <summary>Checks profile identifier is stable exact and provider scoped.</summary>
     [Fact]
     public void ProfileIdentifierIsStableExactAndProviderScoped()

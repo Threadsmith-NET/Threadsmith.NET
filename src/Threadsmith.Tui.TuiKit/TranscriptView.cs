@@ -17,9 +17,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     private readonly TuiResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="TranscriptView"/> class.</summary>
-    internal TranscriptView(TuiResourceLimits? limits = null, ISourceHighlighter? highlighter = null)
+    internal TranscriptView(TuiResourceLimits? limits = null)
     {
-        _highlighter = highlighter ?? new TuiKitSourceHighlighter();
         _limits = limits ?? new();
         _limits.Validate();
         _byteBudget = _limits.MaximumTranscriptBytes;
@@ -938,7 +937,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private bool FocusDisclosure(bool forward)
     {
-        var headers = _disclosureHeaders.Where(pair => _clearBeforeId is null || pair.Key >= _clearBeforeId).OrderBy(pair => pair.Key).ToArray();
+        var headers = _disclosureHeaders.Where(pair => _clearBeforeId is null || pair.Key >= _clearBeforeId)
+            .OrderBy(pair => pair.Key).DistinctBy(pair => pair.Value, StringComparer.Ordinal).ToArray();
         if (headers.Length == 0)
         {
             return false;

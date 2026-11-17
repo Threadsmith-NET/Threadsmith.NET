@@ -255,7 +255,16 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
             catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                return new ToolPolicyDecision(false, ApprovalLevel.None, ShellCommandPreparation.DenialReasonCode);
+                // Preserve only the code-owned shell denial reason so the feedback boundary can render specific recovery; other failures stay generic.
+                var reason = ShellCommandPreparation.DenialReasonCode;
+                if (exception is UnauthorizedAccessException accessException
+                    && (accessException.Message == reason
+                        || ShellCommandPreparation.TryGetUnquotedMetacharacter(accessException.Message, out _)))
+                {
+                    reason = accessException.Message;
+                }
+
+                return new ToolPolicyDecision(false, ApprovalLevel.None, reason);
             }
         }
 

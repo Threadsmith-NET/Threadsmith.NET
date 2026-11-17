@@ -1250,7 +1250,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             return await CompleteFailureAsync(
                 request,
                 invocationId,
-                ToolErrorClassification.ExecutionFailure,
+                exception is ToolArgumentValidationException ? ToolErrorClassification.InvalidArguments : ToolErrorClassification.ExecutionFailure,
                 sanitizedError,
                 startedAt,
                 source: source,
@@ -1438,10 +1438,13 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ToolSourceDetail? sourceDetail = null)
     {
         request.Completion?.Record(ToolTelemetryStatus.Failed, elapsedMilliseconds);
-        if (error == ShellCommandPreparation.DenialReasonCode
+        var metacharacterDenial = ShellCommandPreparation.TryGetUnquotedMetacharacter(error, out var metacharacter);
+        if ((metacharacterDenial || error == ShellCommandPreparation.DenialReasonCode)
             && ConfiguredTool.Unwrap(_registry.Get(request.ToolId)) is RunProcessTool process)
         {
-            error = process.CommandDenialMessage;
+            error = metacharacterDenial
+                ? process.UnquotedMetacharacterDenialMessage(metacharacter)
+                : process.CommandDenialMessage;
         }
 
         var sanitizedError = _sanitizer.Sanitize(error);

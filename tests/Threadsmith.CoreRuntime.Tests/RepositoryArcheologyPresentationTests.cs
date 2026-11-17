@@ -19,8 +19,12 @@ public static class RepositoryArcheologyPresentationTests
         var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UnixEpoch, ToolInvocationId.New(), "repository_archeology");
         var json = JsonSerializer.Serialize(new
         {
-            Status = status, ReasonCode = status, Message = "Investigation finished", Complete = complete,
-            TerminationReason = "fixture reason", ChildRunId = "child-1",
+            Status = status,
+            ReasonCode = status,
+            Message = "Investigation finished",
+            Complete = complete,
+            TerminationReason = "fixture reason",
+            ChildRunId = "child-1",
             Investigation = new
             {
                 children = new[]
@@ -32,10 +36,12 @@ public static class RepositoryArcheologyPresentationTests
                         omissions = new[] { "One older finding omitted" }, usage = new { modelTokens = 1234, toolCalls = 3 },
                     },
                 },
-                omissions = new[] { "One child detail omitted" }, disagreements = new[] { "Two commits differ" },
+                omissions = new[] { "One child detail omitted" },
+                disagreements = new[] { "Two commits differ" },
             },
             References = new[] { new { Id = "observed-1", Path = "src/parser.cs", Revision = "abc123", Source = "tool:git_show", SourceIdentifier = "HEAD~1" } },
-            Limitations = new[] { "Shallow history", "Verify current source" }, OmittedReferences = 2,
+            Limitations = new[] { "Shallow history", "Verify current source" },
+            OmittedReferences = 2,
         });
         var completed = new ToolInvocationCompleted(started.SessionId, started.OccurredAt, started.ToolInvocationId, true, json);
         var display = InteractionPresentationFormatter.FormatToolCompletion(started, completed, false);

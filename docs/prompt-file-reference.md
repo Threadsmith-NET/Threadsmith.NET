@@ -47,12 +47,12 @@ Common editing rules:
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 27 | Host-authored ordinary tool and malformed-output retry messages. |
+| Correction prompts | 28 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **301** | Complete deployed catalog. |
+| **Total** | **302** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -243,6 +243,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Correction-run_process-Denied.md` | Generic `run_process` denial rendered at the pipeline feedback boundary, including unsupported shells; reason codes and authorization remain code-owned. | `None` |
+| `Correction-run_process-UnquotedMetacharacter.md` | Unquoted-metacharacter `run_process` denial rendered at the pipeline feedback boundary; names the denied shell character and the quoting remedy. | [`Metacharacter`](#placeholder-metacharacter) |
 | `Correction-run_process-UnsupportedShell.md` | Corrective guidance for an unsupported `run_process` shell. | [`ShellExecutable`](#placeholder-shellexecutable) |
 
 #### `search` family
@@ -632,7 +633,7 @@ This tool defaults off and requires deliberate user enablement through Tools plu
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, pipelines, variable/environment syntax and redirection, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance, shell-only executable admission, command-policy groups, pipelines, variable/environment syntax and redirection, argument quoting for shell metacharacters, host-owned execution timeouts, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 
@@ -839,6 +840,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumtextcharacters"></a>`MaximumTextCharacters` | Current repository memory character limit; refreshed when repository settings change. |
 | <a id="placeholder-maximumfreshnessdays"></a>`MaximumFreshnessDays` | Configured maximum web-search freshness window in days. |
 | <a id="placeholder-maximumquerycharacters"></a>`MaximumQueryCharacters` | Configured maximum characters in the advertised file-search or web-search query. |
+| <a id="placeholder-metacharacter"></a>`Metacharacter` | Unquoted shell metacharacter that cannot be statically authorized, named in `run_process` denial feedback for quote-and-retry recovery. |
 | <a id="placeholder-modedescription"></a>`ModeDescription` | User-facing explanation of the selected execution or tool mode. |
 | <a id="placeholder-modeltokens"></a>`ModelTokens` | Measured model-token usage for a child or operation. |
 | <a id="placeholder-name"></a>`Name` | Display name of the surrounding capability, server, package, or item. |

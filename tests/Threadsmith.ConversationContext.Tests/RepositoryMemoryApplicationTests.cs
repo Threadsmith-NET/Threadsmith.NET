@@ -58,24 +58,24 @@ public static class RepositoryMemoryApplicationTests
         var service = MemoryTestData.CreateService(fixture, new TestMemoryEmbeddingGenerator());
         var added = await service.ExecuteAsync(
             MemoryTestData.Operation("add", "Original memory") with
-        {
-            Ownership = ownership,
-            Options = new RepositoryMemoryOptions { Intelligence = new RepositoryIntelligenceOptions { ReconciliationEnabled = false } },
-            MemoryType = type,
-            Kind = ManagedRepositoryMemoryKind.Constraint,
-            Concepts = ["cancellation"],
-            Supports = ownership == RepositoryMemoryOwnership.Intelligence
+            {
+                Ownership = ownership,
+                Options = new RepositoryMemoryOptions { Intelligence = new RepositoryIntelligenceOptions { ReconciliationEnabled = false } },
+                MemoryType = type,
+                Kind = ManagedRepositoryMemoryKind.Constraint,
+                Concepts = ["cancellation"],
+                Supports = ownership == RepositoryMemoryOwnership.Intelligence
                 ? [new RepositoryMemorySupport { Path = "source.cs", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }]
                 : [],
-        },
+            },
             ct);
         var entry = Assert.IsType<RepositoryMemoryEntry>(added.Entry);
         var application = new RepositoryMemoryApplication(service, new TestOptionsProvider());
         var updated = await application.HandleAsync(
             new UpdateRepositoryMemoryCommand(SessionId.New(), entry.RepositoryIdentity, entry.Id, "Edited memory")
-        {
-            ExpectedRevision = entry.Revision,
-        },
+            {
+                ExpectedRevision = entry.Revision,
+            },
             ct);
         Assert.Equal(entry.Id, updated.Id);
         Assert.Equal(entry.Revision + 1, updated.Revision);

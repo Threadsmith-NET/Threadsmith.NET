@@ -370,6 +370,55 @@ public sealed partial class SkillSubsystemTests
         Assert.False(later.Started.Task.IsCompleted);
     }
 
+    /// <summary>Invalid reads cannot repeat through canonical argument variants; corrected and successful reads remain available.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkillToolBatch_InvalidReadIsTrackedAcrossRounds(bool reorderArguments)
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-skill-invalid-read-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "guardrails.md"), "fixture guardrails", cancellationToken);
+            var invalid = new ToolRequestModelOutput("read_file", "{\"path\":\"guardrails.md\",\"startPage\":1}");
+            var repeated = reorderArguments
+                ? invalid with { ArgumentsJson = "{ \"startPage\": 1, \"path\": \"guardrails.md\" }" }
+                : invalid;
+            var corrected = new ToolRequestModelOutput("read_file", "{\"path\":\"guardrails.md\"}");
+            var model = new SkillBatchModelProvider
+            {
+                Calls = [invalid],
+                AdditionalBatches = [[repeated], [corrected], [corrected]],
+            };
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var registry = new ToolRegistry([new ReadFileTool(TestPromptLoader.Instance, sanitizer)]);
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            var runner = new ModelSkillProcedureRunner(model, registry, pipeline, sanitizer, (_, _) => Task.FromResult(PermissionContext() with { RepositoryPath = root }), TestPromptLoader.Instance);
+            var plan = PermissionPlan() with
+            {
+                AvailableToolIds = ["read_file"],
+                EffectiveBudget = new SkillBudget { ModelTurns = 5, ToolCalls = 4 },
+            };
+
+            await runner.RunAsync(plan, PermissionStep(), 1, [], "{}", cancellationToken);
+
+            Assert.Equal(5, model.Requests.Count);
+            Assert.Contains(model.Requests[1].Messages, message => message.IsError == true
+                && message.GetModelVisibleContent().Contains("Page options are only valid for PDF files.", StringComparison.Ordinal));
+            Assert.Contains(model.Requests[2].Messages, message => message.IsError == true
+                && message.GetModelVisibleContent().Contains("already has 1 accepted invocations", StringComparison.Ordinal));
+            Assert.Equal(2, model.Requests[^1].Messages.Count(message => message.Role == ModelMessageRole.Tool
+                && message.IsError == false && message.GetModelVisibleContent().Contains("fixture guardrails", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static SkillInvocationPlan BatchPlan()
     {
         return PermissionPlan() with

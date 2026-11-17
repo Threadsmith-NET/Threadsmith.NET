@@ -44,7 +44,7 @@ public sealed class SourceEditAnalysisTestsCompilerReuseCannotEvictOriginsUnderC
         var snapshot = Snapshot(contractsRelative, contractsOriginal, contractsText);
         snapshot = snapshot with
         {
-            Endpoints = [..snapshot.Endpoints, ..Snapshot(appRelative, appOriginal, appText).Endpoints],
+            Endpoints = [.. snapshot.Endpoints, .. Snapshot(appRelative, appOriginal, appText).Endpoints],
         };
         var command = Command(request.SessionId, RunId.New(), request.WorkspaceId);
         var first = await AnalyzeCompletedAsync(engine, events, command, fixture.Root, snapshot, ct);

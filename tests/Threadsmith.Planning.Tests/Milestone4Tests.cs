@@ -1019,7 +1019,8 @@ public static class Milestone4Tests
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public static async Task DuplicateToolCall_RespectsToolMetadata(bool allowDuplicates, bool duplicateWithinResponse)
+    [InlineData(true, false, true)]
+    public static async Task DuplicateToolCall_RespectsToolMetadata(bool allowDuplicates, bool duplicateWithinResponse, bool invalidArguments = false)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-dup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -1032,7 +1033,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue));
-            var registry = new ToolRegistry([new DuplicatePolicyListTool(allowDuplicates)]);
+            var registry = new ToolRegistry([new DuplicatePolicyListTool(allowDuplicates) { InvalidArguments = invalidArguments }]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -1068,11 +1069,11 @@ public static class Milestone4Tests
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
             var snapshot = evidence.Snapshot(sessionId);
-            Assert.Equal(duplicateWithinResponse ? 0 : allowDuplicates ? 2 : 1, snapshot.Count(item => item.Kind == EvidenceKind.ToolResult));
-            Assert.DoesNotContain(snapshot, item => item.Kind == EvidenceKind.Failure);
+            Assert.Equal(duplicateWithinResponse || invalidArguments ? 0 : allowDuplicates ? 2 : 1, snapshot.Count(item => item.Kind == EvidenceKind.ToolResult));
+            Assert.Equal(invalidArguments ? 1 : 0, snapshot.Count(item => item.Kind == EvidenceKind.Failure));
             Assert.Equal(duplicateWithinResponse ? 2 : 3, model.Requests.Count);
             var finalRequest = model.Requests[^1];
-            Assert.Equal(duplicateWithinResponse || !allowDuplicates, finalRequest.Messages.Any(message => message.Role == ModelMessageRole.Tool
+            Assert.Equal(duplicateWithinResponse || !allowDuplicates || invalidArguments, finalRequest.Messages.Any(message => message.Role == ModelMessageRole.Tool
                     && string.Equals(message.ToolName, "list_files", StringComparison.Ordinal)
                     && message.Content.Any(part => part.Content.Contains(
                         duplicateWithinResponse ? "occurs more than once" : "already has 1 accepted invocations",
@@ -2571,8 +2572,15 @@ public static class Milestone4Tests
 
         public override ToolDefinition Definition { get; }
 
+        public bool InvalidArguments { get; init; }
+
         public override Task<ToolExecution<ListFilesOutput>> ExecuteAsync(ListFilesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
         {
+            if (InvalidArguments)
+            {
+                throw new ToolArgumentValidationException("Invalid fixture arguments.");
+            }
+
             return _inner.ExecuteAsync(input, context, cancellationToken);
         }
 

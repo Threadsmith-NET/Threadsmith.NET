@@ -31,8 +31,13 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var content = new string('x', contentCharacters);
         var image = new ImageArtifact
         {
-            Id = "child-image", ContentHash = new string('a', 64), MediaType = "image/png",
-            ByteLength = 100, Width = 2, Height = 2, Source = "fixture",
+            Id = "child-image",
+            ContentHash = new string('a', 64),
+            MediaType = "image/png",
+            ByteLength = 100,
+            Width = 2,
+            Height = 2,
+            Source = "fixture",
         };
         var tool = new InspectMetadataTool(content, Math.Max(64_000, contentCharacters * 4), paths) { Images = images ? [image] : [] };
         var registry = new ToolRegistry([tool]);

@@ -297,6 +297,14 @@ dotnet_diagnostic.CA2016.severity = error
 dotnet_diagnostic.CA1068.severity = error
 
 # ---------------------------------------------------------------------------
+# Argument-validation analyzers (G-2)
+# ---------------------------------------------------------------------------
+
+# Use ArgumentException.ThrowIfNullOr* and ArgumentNullException.ThrowIfNull for argument validation.
+dotnet_diagnostic.CA1510.severity = error
+dotnet_diagnostic.CA1511.severity = error
+
+# ---------------------------------------------------------------------------
 # .NET performance analyzer compatibility
 # ---------------------------------------------------------------------------
 

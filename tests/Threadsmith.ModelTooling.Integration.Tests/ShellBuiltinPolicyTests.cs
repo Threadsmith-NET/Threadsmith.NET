@@ -338,6 +338,53 @@ public static partial class ShellBuiltinPolicyTests
         Assert.Equal(0, manager.Launches);
     }
 
+    /// <summary>Unquoted-metacharacter denials name the exact rejected character.</summary>
+    [Theory]
+    [InlineData("pwsh", "git ls-files *.md", '*')]
+    [InlineData("pwsh", "Select-String ?.txt", '?')]
+    [InlineData("bash", "echo `command`", '`')]
+    [InlineData("bash", "echo @value", '@')]
+    [InlineData("cmd", "echo {value}", '{')]
+    public static void UnquotedMetacharacterDenialReasonNamesRejectedCharacter(string shell, string command, char metacharacter)
+    {
+        var exception = Assert.Throws<UnauthorizedAccessException>(
+            () => ShellCommandPreparation.Parse(command, shell));
+
+        Assert.Equal($"{ShellCommandPreparation.UnquotedMetacharacterDenialPrefix}{metacharacter}", exception.Message);
+    }
+
+    /// <summary>Unquoted-metacharacter denial feedback names the character through the catalog.</summary>
+    [Fact]
+    public static async Task UnquotedMetacharacterDenialUsesCatalogOverrideWithCharacter()
+    {
+        var root = Path.GetFullPath(".");
+        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+        var manager = new RecordingProcessManager();
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.CorrectionRunProcessUnquotedMetacharacter,
+            "fixture metacharacter override: {{Metacharacter}}");
+        var tool = new RunProcessTool(manager, prompts, requireApproval: false, shellExecutable: ResolveShell(shell));
+        var policy = CreatePolicy(root, shell, "git", PolicyOutcome.Allow);
+        policy = policy with { AllowedExecutables = [.. policy.AllowedExecutables, shell] };
+        var context = ShellCommandPolicyTests.Context(root, policy);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([tool]),
+            new DefaultPolicyEngine(new Threadsmith.Policies.Matching.PolicyMatcherCatalog(System.Text.RegularExpressions.Regex.InfiniteMatchTimeout)),
+            new CommandPolicyCoordinator(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance,
+            timeProvider: new FakeTimeProvider());
+
+        var result = await pipeline.InvokeAsync(Request(root, "git ls-files *.md", context), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        Assert.Equal("fixture metacharacter override: *", result.Error);
+        Assert.Equal(0, manager.Launches);
+    }
+
     internal static string ResolveShell(string shell)
     {
         if (!OperatingSystem.IsWindows() && shell is "cmd" or "powershell")

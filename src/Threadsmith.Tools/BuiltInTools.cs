@@ -1953,6 +1953,14 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
     /// <summary>Gets generic model feedback from the deployed prompt catalog.</summary>
     internal string CommandDenialMessage => _prompts.Get(PromptFileNames.CorrectionRunProcessDenied);
 
+    /// <summary>Gets unquoted-metacharacter denial feedback naming the denied shell character.</summary>
+    internal string UnquotedMetacharacterDenialMessage(char metacharacter) => _prompts.Render(
+        PromptFileNames.CorrectionRunProcessUnquotedMetacharacter,
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Metacharacter"] = metacharacter.ToString(),
+        });
+
     /// <summary>Gets host-owned deterministic preparation environment additions, never tool input.</summary>
     internal IReadOnlyDictionary<string, string> PreparationEnvironment { get; init; } = new Dictionary<string, string>();
 

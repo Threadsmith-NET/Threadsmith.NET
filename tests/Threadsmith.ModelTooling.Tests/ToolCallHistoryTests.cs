@@ -1,7 +1,10 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Reflection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
+using Threadsmith.Execution;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
 
@@ -78,6 +81,83 @@ public static class ToolCallHistoryTests
     {
         var definition = new DateTimeTool(TestPromptLoader.Instance).Definition;
         Assert.Throws<ArgumentOutOfRangeException>(() => definition with { NumberOfExactToolInvocationsPerTurn = -1 });
+    }
+
+    /// <summary>Only invalid arguments override reuse; hints, batch snapshots and new runs retain their existing identity rules.</summary>
+    [Theory]
+    [InlineData(ToolErrorClassification.InvalidArguments, false)]
+    [InlineData(ToolErrorClassification.ExecutionFailure, true)]
+    [InlineData(ToolErrorClassification.Timeout, true)]
+    [InlineData(ToolErrorClassification.None, true)]
+    public static void CompletedCalls_RejectOnlyUnchangedInvalidArguments(ToolErrorClassification classification, bool allowed)
+    {
+        var definition = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()).Definition;
+        var history = new ToolCallHistory();
+        const string arguments = "{\"path\":\"guardrails.md\",\"startPage\":1,\"concepts\":[\"csharp\"]}";
+        Assert.True(history.TryAdd(definition, arguments));
+        var beforeCompletion = new ToolCallHistory(history);
+        history.ObserveResult(definition, arguments, new ToolInvocationResult
+        {
+            ToolInvocationId = ToolInvocationId.New(),
+            ToolId = definition.Id,
+            Succeeded = classification == ToolErrorClassification.None,
+            ErrorClassification = classification,
+        });
+
+        var nextBatch = new ToolCallHistory(history);
+        Assert.Equal(allowed, nextBatch.TryAdd(definition, "{\"path\":\"guardrails.md\",\"startPage\":1,\"concepts\":[\"dotnet\"]}"));
+        Assert.True(nextBatch.TryAdd(definition, "{\"path\":\"guardrails.md\"}"));
+        Assert.True(beforeCompletion.TryAdd(definition, arguments));
+        Assert.True(new ToolCallHistory().TryAdd(definition, arguments));
+    }
+
+    /// <summary>The logged PDF-option failure is bounded while corrected reads observe new file contents.</summary>
+    [Fact]
+    public static async Task ReadFile_InvalidPdfOptionIsBlockedButCorrectedReadsSeeEdits()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-invalid-read-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        try
+        {
+            var path = Path.Combine(root, "guardrails.md");
+            await File.WriteAllTextAsync(path, "original", cancellationToken);
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var tool = new ReadFileTool(TestPromptLoader.Instance, sanitizer);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+            var history = new ToolCallHistory();
+            var request = new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = tool.Definition.Id,
+                ArgumentsJson = "{\"path\":\"guardrails.md\",\"startLine\":15,\"startPage\":1}",
+                Context = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" },
+            };
+            Assert.True(history.TryAdd(tool.Definition, request.ArgumentsJson));
+            var invalid = await pipeline.InvokeAsync(request, cancellationToken);
+            Assert.Equal(ToolErrorClassification.InvalidArguments, invalid.ErrorClassification);
+            Assert.Equal("Page options are only valid for PDF files.", invalid.Error);
+            history.ObserveResult(tool.Definition, request.ArgumentsJson, invalid);
+            Assert.False(new ToolCallHistory(history).TryAdd(tool.Definition, request.ArgumentsJson));
+
+            request = request with { ArgumentsJson = "{\"path\":\"guardrails.md\"}" };
+            foreach (var content in new[] { "original", "edited" })
+            {
+                await File.WriteAllTextAsync(path, content, cancellationToken);
+                Assert.True(new ToolCallHistory(history).TryAdd(tool.Definition, request.ArgumentsJson));
+                Assert.True(history.TryAdd(tool.Definition, request.ArgumentsJson));
+                var result = await pipeline.InvokeAsync(request, cancellationToken);
+                history.ObserveResult(tool.Definition, request.ArgumentsJson, result);
+                Assert.True(result.Succeeded, result.Error);
+                Assert.Contains(content, result.ResultJson, StringComparison.Ordinal);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static Dictionary<(string ToolName, string ArgumentsJson), int> Counts(ToolCallHistory history)

@@ -88,7 +88,8 @@ public sealed class RepositoryIntelligenceTool : Tool<RepositoryIntelligenceInpu
 
             var info = new MemoryInfo(item.Id.Value.ToString("D"), item.Text, item.Origin.ToString().ToLowerInvariant(), item.MemoryType == RepositoryMemoryType.StandingPreference ? "standingPreference" : "situational", item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId, item.Revision, item.Kind.ToString().ToLowerInvariant(), item.Concepts)
             {
-                Ownership = "intelligence", Supports = item.Supports,
+                Ownership = "intelligence",
+                Supports = item.Supports,
                 Trust = "untrusted",
                 Freshness = item.Supports.Count == 0 || item.Supports.Any(support => support.IsUnknown) ? "unknown"
                     : item.Supports.Any(support => support.IsDirty) ? "dirty" : "observed",
@@ -112,7 +113,8 @@ public sealed class RepositoryIntelligenceTool : Tool<RepositoryIntelligenceInpu
             QueryTruncated = result.QueryTruncated,
             SearchDetails = result.SearchDetails is { } details ? details with
             {
-                Candidates = [], CandidateEvidenceOmissions = details.CandidateEvidenceOmissions + details.Candidates.Count,
+                Candidates = [],
+                CandidateEvidenceOmissions = details.CandidateEvidenceOmissions + details.Candidates.Count,
             } : null,
         };
         return BoundOutput(output, context);

@@ -781,6 +781,7 @@ internal sealed class ChildAgentModelLoop
         {
             var result = batchResult with { Result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages) };
             var request = requests[result.Ordinal];
+            toolCalls.ObserveResult(resolvedRegistrations[result.Ordinal].Tool.Definition, request.ArgumentsJson, batchResult.Result);
             if (hasResponseEnvelope)
             {
                 transientState.BindToolCall(round, result.Ordinal, result.CorrelationId);

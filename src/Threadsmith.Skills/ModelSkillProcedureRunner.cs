@@ -473,6 +473,10 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     IReadOnlyList<ToolBatchResult> results = [];
                     ToolBatchCancelledException? interruptedBatch = null;
 
+                    // Batch validation canonicalizes each request once; the duplicate-tracking commit and
+                    // result observation reuse these values by ordinal instead of reparsing request arguments.
+                    var canonicalArguments = new string[toolRequests.Count];
+
                     // Rejected requests still consume the existing budget, just as ordinary failed tool calls do.
                     toolCalls += batch.Count;
                     if (!preflight.Succeeded || preflight.Preparation is null)
@@ -492,10 +496,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     else
                     {
                         var batchCalls = new ToolCallHistory(seenCalls);
-                        foreach (var toolRequest in toolRequests)
+                        for (var ordinal = 0; ordinal < toolRequests.Count; ordinal++)
                         {
-                            var arguments = SkillCanonicalJson.CanonicalizeValue(
-                                ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
+                            var toolRequest = toolRequests[ordinal];
+                            var arguments = SkillCanonicalJson.CanonicalizeValue(ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
+                            canonicalArguments[ordinal] = arguments;
                             var accepted = registrations.TryGetValue(toolRequest.ToolName, out var advertised)
                                 ? batchCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(advertised.Tool, modelContext.SecurityPolicy).Definition, arguments, out var rejection)
                                 : batchCalls.TryAdd(toolRequest.ToolName, arguments, out rejection);
@@ -510,9 +515,10 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         // Only accepted batches enter duplicate tracking; rejected siblings can be resubmitted unchanged.
                         if (failureSummary is null)
                         {
-                            foreach (var toolRequest in toolRequests)
+                            for (var ordinal = 0; ordinal < toolRequests.Count; ordinal++)
                             {
-                                var arguments = SkillCanonicalJson.CanonicalizeValue(ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
+                                var toolRequest = toolRequests[ordinal];
+                                var arguments = canonicalArguments[ordinal];
                                 if (registrations.TryGetValue(toolRequest.ToolName, out var advertised))
                                 {
                                     seenCalls.TryAdd(ToolRuntimePolicy.ApplyCeiling(advertised.Tool, modelContext.SecurityPolicy).Definition, arguments);
@@ -569,6 +575,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         if (suspendedQuestion is not null && result is not null && authoringInputSchema is not null)
                         {
                             authoring?.ObserveAnswer(result, value => schemas.Validate(authoringInputSchema, value));
+                        }
+
+                        if (result is not null && registrations.TryGetValue(toolRequest.ToolName, out var completedRegistration))
+                        {
+                            seenCalls.ObserveResult(completedRegistration.Tool.Definition, canonicalArguments[batchRequest.Ordinal], result);
                         }
 
                         if (result is { Succeeded: true }

@@ -507,6 +507,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for generic command denial feedback.</summary>
     public const string CorrectionRunProcessDenied = "Correction-run_process-Denied.md";
 
+    /// <summary>Gets the stable filename for unquoted-metacharacter command denial feedback.</summary>
+    public const string CorrectionRunProcessUnquotedMetacharacter = "Correction-run_process-UnquotedMetacharacter.md";
+
     /// <summary>Gets the stable filename for the CorrectionProviderInvocationInvalid prompt asset.</summary>
     public const string CorrectionProviderInvocationInvalid = "Correction-ProviderInvocation-Invalid.md";
 
@@ -1191,6 +1194,7 @@ public static class PromptFileNames
         CorrectionSearchBounds,
         CorrectionRunProcessUnsupportedShell,
         CorrectionRunProcessDenied,
+        CorrectionRunProcessUnquotedMetacharacter,
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1717,6 +1721,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ToolJiraDescription] = Set("Providers"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
                     [PromptFileNames.CorrectionRunProcessDenied] = Set(),
+                    [PromptFileNames.CorrectionRunProcessUnquotedMetacharacter] = Set("Metacharacter"),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",
                         "Path",

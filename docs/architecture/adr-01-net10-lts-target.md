@@ -13,7 +13,7 @@ Target **.NET 10 LTS** as the runtime baseline. All product and test projects ta
 
 ## Consequences
 - We depend on .NET 10 APIs (collectible ALC refinements, `Microsoft.Extensions.AI`, the new Microsoft Testing Platform, collection expressions, file-scoped namespaces).
-- The SDK is pinned via `global.json` (`10.0.401`, `rollForward: latestPatch`). Patch-only roll-forward keeps local and CI builds inside the approved 10.0.4xx feature band and prevents accidental .NET 11 selection.
+- The SDK is pinned via `global.json` (`10.0.404`, `rollForward: latestPatch`). Patch-only roll-forward keeps local and CI builds inside the approved 10.0.4xx feature band and prevents accidental .NET 11 selection.
 - LTS gives us a supported baseline for the product's lifetime; upgrades are deliberate.
 
 ## Validation

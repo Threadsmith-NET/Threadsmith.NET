@@ -22,7 +22,7 @@ Threadsmith is a governed coding harness: the host owns trust, approval, mutatio
 ### Prerequisites
 
 - Git.
-- The .NET 10 SDK selected by [`global.json`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/global.json) (currently `10.0.401`, with patch-only roll-forward inside the 10.0.4xx feature band).
+- The .NET 10 SDK selected by [`global.json`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/global.json) (minimum `10.0.404`, with patch-only roll-forward inside the 10.0.4xx feature band).
 - PowerShell for repository-maintained release scripts. Normal restore, build, and test commands are cross-platform.
 - An editor or IDE with current .NET and C# support.
 

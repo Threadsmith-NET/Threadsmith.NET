@@ -16,7 +16,7 @@ public static class SemanticToolchainArchitectureTests
     {
         using var globalJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepositoryRoot, "global.json")));
         var sdk = globalJson.RootElement.GetProperty("sdk");
-        Assert.Equal("10.0.401", sdk.GetProperty("version").GetString());
+        Assert.Equal("10.0.404", sdk.GetProperty("version").GetString());
         Assert.Equal("latestPatch", sdk.GetProperty("rollForward").GetString());
 
         var packages = XDocument.Load(Path.Combine(RepositoryRoot, "Directory.Packages.props"))

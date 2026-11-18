@@ -17,12 +17,12 @@
     "Zlib"
   ],
   "windowsSelfContainedDecision": {
-    "status": "approved",
+    "status": "pending",
     "owner": "Threadsmith.NET designated release owner",
-    "decisionDate": "2026-08-16",
-    "expiresOn": "2027-08-16",
-    "sdkVersion": "10.0.204",
-    "runtimeVersion": "10.0.4",
+    "decisionDate": null,
+    "expiresOn": null,
+    "sdkVersion": "10.0.404",
+    "runtimeVersion": "10.0.15",
     "runtimeIdentifiers": [
       "win-x64",
       "win-arm64"
@@ -816,12 +816,12 @@
     },
     {
       "id": "dotnet-runtime",
-      "version": "10.0.4",
+      "version": "10.0.15",
       "scope": "runtime-pack",
       "provenance": "https://dotnet.microsoft.com/download/dotnet/10.0",
       "licenseExpression": "MIT",
-      "noticeTreatment": "Exact SDK-installed runtime LICENSE.txt and THIRD-PARTY-NOTICES.txt staged per RID",
-      "reviewState": "approved"
+      "noticeTreatment": "Stage the exact restored runtime pack's LICENSE.txt and THIRD-PARTY-NOTICES.txt per RID",
+      "reviewState": "pending"
     },
     {
       "id": "ripgrep",

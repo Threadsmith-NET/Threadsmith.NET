@@ -66,11 +66,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly OutputPane _outputPane;
     private readonly ComposerPane _composerPane;
-    private Size _layoutSize;
-    private IToolStatisticsHealthSource? _toolStatisticsHealth;
-
-    private TranscriptView SelectedTranscript => Agents.Selected.Transcript;
-
     private readonly CachedTextRun _terminalTooSmall = new();
     private readonly ToolStatisticsHealthIndicator _statisticsIndicator = new();
     private readonly Action _interrupt;
@@ -83,10 +78,52 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private readonly Lazy<ComposerCommandCompletion> _commandCompletion;
     private readonly Lazy<ComposerAutocomplete> _commandAutocomplete;
     private readonly Lazy<AgentTabStrip> _agentTabs;
+    private Size _layoutSize;
+    private IToolStatisticsHealthSource? _toolStatisticsHealth;
     private TuiResourceLimits _limits;
     private bool _workspaceInitialized;
     private CommandPaletteModal? _paletteModal;
     private ComposerCompletionTarget? _paletteTarget;
+
+    /// <inheritdoc />
+    public InteractionSurfaceCapabilities Capabilities { get; } = new(
+        SupportsActiveRunInput: true,
+        SupportsRetainedStatus: true,
+        SupportsRetainedActivity: true,
+        SupportsRetainedRunHints: true);
+
+    /// <summary>Reports when the active terminal cannot reproduce configured theme colors.</summary>
+    internal IReadOnlyList<string> ThemeDiagnostics
+    {
+        get
+        {
+            if (_suppressStyles || _backend.Capabilities.ColorDepth == TerminalColorDepth.None)
+            {
+                return ["Theme styling is disabled by NO_COLOR or the terminal's reported color capability."];
+            }
+
+            if (_backend.Capabilities.ColorDepth == TerminalColorDepth.TrueColor)
+            {
+                return [];
+            }
+
+            var rgbRoles = _theme.Theme.Styles
+                .Where(pair => pair.Value.Foreground?.Value.StartsWith('#') == true
+                    || pair.Value.Background?.Value.StartsWith('#') == true)
+                .Select(pair => pair.Key.ToString())
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            if (rgbRoles.Length == 0)
+            {
+                return [];
+            }
+
+            var examples = string.Join(", ", rgbRoles.Take(3));
+            return [$"Theme '{_theme.Name}' configures RGB colors for {rgbRoles.Length} roles ({examples}), but the terminal reports {_backend.Capabilities.ColorDepth}; those colors will be approximated. Use a true-color terminal; if yours supports RGB, set COLORTERM=truecolor before launching Threadsmith."];
+        }
+    }
+
+    private TranscriptView SelectedTranscript => Agents.Selected.Transcript;
 
     private TuiKitComposer OrdinaryComposer => _ordinaryWorkspace.Value;
 
@@ -238,13 +275,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         };
         _app.Interrupted += _interrupt;
     }
-
-    /// <inheritdoc />
-    public InteractionSurfaceCapabilities Capabilities { get; } = new(
-        SupportsActiveRunInput: true,
-        SupportsRetainedStatus: true,
-        SupportsRetainedActivity: true,
-        SupportsRetainedRunHints: true);
 
     private ComposerPurpose CurrentPurpose => ReferenceEquals(Composer, OrdinaryComposer)
         ? ComposerPurpose.Conversation : ReferenceEquals(Composer, SecondaryComposer) ? ComposerPurpose.Secondary : ComposerPurpose.Steering;
@@ -555,37 +585,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         {
             await lifetime.CancelAsync();
             await DisposeAsync();
-        }
-    }
-
-    /// <summary>Reports when the active terminal cannot reproduce configured theme colors.</summary>
-    internal IReadOnlyList<string> ThemeDiagnostics
-    {
-        get
-        {
-            if (_suppressStyles || _backend.Capabilities.ColorDepth == TerminalColorDepth.None)
-            {
-                return ["Theme styling is disabled by NO_COLOR or the terminal's reported color capability."];
-            }
-
-            if (_backend.Capabilities.ColorDepth == TerminalColorDepth.TrueColor)
-            {
-                return [];
-            }
-
-            var rgbRoles = _theme.Theme.Styles
-                .Where(pair => pair.Value.Foreground?.Value.StartsWith('#') == true
-                    || pair.Value.Background?.Value.StartsWith('#') == true)
-                .Select(pair => pair.Key.ToString())
-                .Order(StringComparer.Ordinal)
-                .ToArray();
-            if (rgbRoles.Length == 0)
-            {
-                return [];
-            }
-
-            var examples = string.Join(", ", rgbRoles.Take(3));
-            return [$"Theme '{_theme.Name}' configures RGB colors for {rgbRoles.Length} roles ({examples}), but the terminal reports {_backend.Capabilities.ColorDepth}; those colors will be approximated. Use a true-color terminal; if yours supports RGB, set COLORTERM=truecolor before launching Threadsmith."];
         }
     }
 

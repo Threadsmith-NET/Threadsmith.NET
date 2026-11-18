@@ -215,7 +215,7 @@ public EntityType[] SupportedTypes => [
 | Extension method classes | `public static` (or `internal static` if project-internal) |
 
 ### G-18: XML documentation follows build policy
-Document public product types and members with `/// <summary>` and additional XML tags for non-obvious details. Describe intent and usage, not a restatement of code. Follow configured SA1600/SA1601 requirements for other members. Tests and spikes are exempt from XML-documentation requirements under `Directory.Build.props` and `.editorconfig`.
+Document public product types and members with `/// <summary>` and additional XML tags for non-obvious details. Describe intent and usage, not a restatement of code. Follow configured SA1600/SA1601 requirements for other members. Positional records still require declaration documentation; the build-only compatibility suppressor exempts only SA1600 on positional parameter names, so add `<param>` tags when they explain non-obvious details. Tests and spikes are exempt from XML-documentation requirements under `Directory.Build.props` and `.editorconfig`.
 
 ```csharp
 /// <summary>Acquires source data, caching the parsed result for subsequent calls.</summary>

@@ -173,37 +173,6 @@ internal sealed class RepositoryMemoryModal : Modal
 
         internal RepositoryMemoryListItem? Selected => _entries.Count == 0 ? null : _entries[_selected];
 
-        internal void Update(IReadOnlyList<RepositoryMemoryListItem> entries, IReadOnlyList<string> warnings)
-        {
-            if (_entries.SequenceEqual(entries) && _warnings.SequenceEqual(warnings, StringComparer.Ordinal))
-            {
-                return;
-            }
-
-            var id = Selected?.Id;
-            var retained = -1;
-            var currentIds = entries.Select(entry => entry.Id).ToHashSet();
-            foreach (var removed in _layouts.Keys.Where(key => !currentIds.Contains(key)).ToArray())
-            {
-                _layouts.Remove(removed);
-            }
-
-            for (var index = 0; index < entries.Count; index++)
-            {
-                if (entries[index].Id == id)
-                {
-                    retained = index;
-                    break;
-                }
-            }
-
-            _selected = retained >= 0 ? retained : Math.Clamp(_selected, 0, Math.Max(0, entries.Count - 1));
-            _entries = entries;
-            _warnings = warnings;
-            _width = 0;
-            _reveal = true;
-        }
-
         internal MemoryListView(string name, IReadOnlyList<RepositoryMemoryListItem> entries, IReadOnlyList<string> warnings, Func<PresentationTextRole, CellStyle> style)
         {
             Name = name;
@@ -249,6 +218,37 @@ internal sealed class RepositoryMemoryModal : Modal
                 Draw(surface, _originX, index + 2, row.Origin, PresentationTextRole.Status);
                 Draw(surface, _textX, index + 2, row.Text, row.Role);
             }
+        }
+
+        internal void Update(IReadOnlyList<RepositoryMemoryListItem> entries, IReadOnlyList<string> warnings)
+        {
+            if (_entries.SequenceEqual(entries) && _warnings.SequenceEqual(warnings, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            var id = Selected?.Id;
+            var retained = -1;
+            var currentIds = entries.Select(entry => entry.Id).ToHashSet();
+            foreach (var removed in _layouts.Keys.Where(key => !currentIds.Contains(key)).ToArray())
+            {
+                _layouts.Remove(removed);
+            }
+
+            for (var index = 0; index < entries.Count; index++)
+            {
+                if (entries[index].Id == id)
+                {
+                    retained = index;
+                    break;
+                }
+            }
+
+            _selected = retained >= 0 ? retained : Math.Clamp(_selected, 0, Math.Max(0, entries.Count - 1));
+            _entries = entries;
+            _warnings = warnings;
+            _width = 0;
+            _reveal = true;
         }
 
         internal void HandleKey(KeyEvent key)

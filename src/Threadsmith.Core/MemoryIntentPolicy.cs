@@ -64,8 +64,12 @@ public sealed record MemoryIntentSnapshot(
         return new(Array.AsReadOnly(detached), Array.AsReadOnly(concepts), concepts.ToHashSet(StringComparer.Ordinal), mixed, concepts.Length == 0 ? "fallback" : string.Join(',', concepts));
     }
 
-    private sealed record Evidence(IReadOnlyList<MemoryIntentHint> Hints, IReadOnlyList<string> Concepts,
-        HashSet<string> ConceptSet, bool MixedOrigins, string ConceptKey);
+    private sealed record Evidence(
+        IReadOnlyList<MemoryIntentHint> Hints,
+        IReadOnlyList<string> Concepts,
+        HashSet<string> ConceptSet,
+        bool MixedOrigins,
+        string ConceptKey);
 }
 
 /// <summary>Exact-match eligibility without changing discovery, scoring or reconciliation.</summary>

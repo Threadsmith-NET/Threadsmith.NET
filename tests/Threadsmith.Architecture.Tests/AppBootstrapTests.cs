@@ -395,7 +395,7 @@ public static partial class AppBootstrapTests
 
         Assert.Equal(Environment.NewLine + expected + Environment.NewLine, writer.ToString());
         Assert.Equal(sanitized, diagnostic.Message);
-        Assert.DoesNotContain(writer.ToString(), character => character is '\u001b' or >= '\u007f' and <= '\u009f');
+        Assert.DoesNotContain(writer.ToString(), character => character is '\u001b' or (>= '\u007f' and <= '\u009f'));
     }
 
     /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>

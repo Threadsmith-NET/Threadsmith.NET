@@ -664,22 +664,6 @@ public static class MemoriesToolTests
         Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ToolInvocationContext Invocation(string repository)
-    {
-        return new() { RepositoryPath = repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
-    }
-
-    private sealed class RequestHandler : HttpMessageHandler
-    {
-        public string? Body { get; private set; }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream") };
-        }
-    }
-
     /// <summary>Verifies independent memory routing and intent eligibility.</summary>
     [Theory]
     [InlineData(null, SituationalConceptFilterMode.Off, false)]
@@ -899,6 +883,22 @@ public static class MemoriesToolTests
         foreach (var invalid in new[] { "{}", "{\"query\":\" \"}", "{\"query\":\"x\",\"ownership\":\"intelligence\"}", "{", JsonSerializer.Serialize(new { query = new string('x', 8001) }) })
         {
             Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(invalid));
+        }
+    }
+
+    private static ToolInvocationContext Invocation(string repository)
+    {
+        return new() { RepositoryPath = repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
+    }
+
+    private sealed class RequestHandler : HttpMessageHandler
+    {
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream") };
         }
     }
 

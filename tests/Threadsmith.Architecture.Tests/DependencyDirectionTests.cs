@@ -83,6 +83,16 @@ public static class DependencyDirectionTests
         "Threadsmith.App",
     ];
 
+    /// <summary>Theory data: every product project name.</summary>
+    // ReSharper disable once MemberCanBePrivate.Global
+    public static IEnumerable<TheoryDataRow<string>> ProductProjectNames =>
+        _productProjects.Select(static projectName => new TheoryDataRow<string>(projectName));
+
+    /// <summary>Theory data: only projects with forbidden-package guards.</summary>
+    // ReSharper disable once MemberCanBePrivate.Global
+    public static IEnumerable<TheoryDataRow<string>> GuardedProjectNames =>
+        _forbiddenPackages.Keys.Select(static projectName => new TheoryDataRow<string>(projectName));
+
     /// <summary>The repository root (two levels above the test bin output directory).</summary>
     private static string RepoRoot
     {
@@ -364,16 +374,6 @@ public static class DependencyDirectionTests
             .Select(e => e.Attribute("Include")?.Value ?? string.Empty)
             .Where(n => !string.IsNullOrEmpty(n));
     }
-
-    /// <summary>Theory data: every product project name.</summary>
-    // ReSharper disable once MemberCanBePrivate.Global
-    public static IEnumerable<TheoryDataRow<string>> ProductProjectNames =>
-        _productProjects.Select(static projectName => new TheoryDataRow<string>(projectName));
-
-    /// <summary>Theory data: only projects with forbidden-package guards.</summary>
-    // ReSharper disable once MemberCanBePrivate.Global
-    public static IEnumerable<TheoryDataRow<string>> GuardedProjectNames =>
-        _forbiddenPackages.Keys.Select(static projectName => new TheoryDataRow<string>(projectName));
 
     private static Dictionary<string, HashSet<string>> CreateAllowedGraph()
     {

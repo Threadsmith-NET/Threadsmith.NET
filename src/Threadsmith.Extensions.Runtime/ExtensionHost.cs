@@ -253,6 +253,48 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         return result.Outcome == UnloadOutcome.Unloaded;
     }
 
+    /// <inheritdoc />
+    public ExtensionGeneration? Get(ExtensionGenerationId generationId)
+    {
+        lock (_gate)
+        {
+            return _generations.TryGetValue(generationId, out var generation) ? generation : null;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ExtensionGeneration> LoadAsync(
+        ExtensionLoadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return LoadAsync(request, null, cancellationToken);
+    }
+
+    /// <summary>Loads a generation as the explicitly authorized successor to an active predecessor.</summary>
+    /// <param name="current">The active generation being replaced.</param>
+    /// <param name="request">The successor load request.</param>
+    /// <param name="cancellationToken">A token that cancels the load.</param>
+    /// <returns>The activated and published successor generation.</returns>
+    internal async Task<ExtensionGeneration> LoadReplacementAsync(
+        ExtensionGeneration current,
+        ExtensionLoadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        lock (_gate)
+        {
+            if (!_generations.TryGetValue(current.GenerationId, out var registered)
+                || !ReferenceEquals(registered, current))
+            {
+                throw new ArgumentException(
+                    "The replacement predecessor is not an active generation.",
+                    nameof(current));
+            }
+        }
+
+        return await LoadAsync(request, current.GenerationId, cancellationToken);
+    }
+
     private List<ExtensionSummary> BuildSummaries()
     {
         var summaries = new List<ExtensionSummary>();
@@ -382,48 +424,6 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 return [.. _generations.Values];
             }
         }
-    }
-
-    /// <inheritdoc />
-    public ExtensionGeneration? Get(ExtensionGenerationId generationId)
-    {
-        lock (_gate)
-        {
-            return _generations.TryGetValue(generationId, out var generation) ? generation : null;
-        }
-    }
-
-    /// <inheritdoc />
-    public Task<ExtensionGeneration> LoadAsync(
-        ExtensionLoadRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return LoadAsync(request, null, cancellationToken);
-    }
-
-    /// <summary>Loads a generation as the explicitly authorized successor to an active predecessor.</summary>
-    /// <param name="current">The active generation being replaced.</param>
-    /// <param name="request">The successor load request.</param>
-    /// <param name="cancellationToken">A token that cancels the load.</param>
-    /// <returns>The activated and published successor generation.</returns>
-    internal async Task<ExtensionGeneration> LoadReplacementAsync(
-        ExtensionGeneration current,
-        ExtensionLoadRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(current);
-        lock (_gate)
-        {
-            if (!_generations.TryGetValue(current.GenerationId, out var registered)
-                || !ReferenceEquals(registered, current))
-            {
-                throw new ArgumentException(
-                    "The replacement predecessor is not an active generation.",
-                    nameof(current));
-            }
-        }
-
-        return await LoadAsync(request, current.GenerationId, cancellationToken);
     }
 
     private async Task<ExtensionGeneration> LoadAsync(

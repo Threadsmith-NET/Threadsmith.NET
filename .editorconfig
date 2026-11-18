@@ -357,6 +357,18 @@ dotnet_diagnostic.SA1649.severity = none
 dotnet_diagnostic.SA1518.severity = none
 dotnet_diagnostic.SA1633.severity = none
 
+# StyleCop 1.3 expands layout checks to collection expressions and adds new
+# conditional layout, inherited parameter names, and partial-summary rules.
+# Keep these visible for review without imposing a bulk source/API migration.
+dotnet_diagnostic.SA1137.severity = suggestion
+dotnet_diagnostic.SA1143.severity = suggestion
+dotnet_diagnostic.SA1315.severity = suggestion
+dotnet_diagnostic.SA1413.severity = suggestion
+dotnet_diagnostic.SA1500.severity = suggestion
+dotnet_diagnostic.SA1653.severity = suggestion
+# Mixed accessor bodies are valid when IDE0027 requires an expression-bodied getter.
+dotnet_diagnostic.SA1504.severity = suggestion
+
 # ---------------------------------------------------------------------------
 # Roslynator and threading analyzers
 # ---------------------------------------------------------------------------

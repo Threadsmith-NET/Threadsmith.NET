@@ -4792,7 +4792,9 @@ public static partial class Milestone1Tests
         private readonly TaskCompletionSource _answerEmitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _releaseCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned model emission signal.
         public Task AnswerEmitted => _answerEmitted.Task;
+#pragma warning restore VSTHRD003
 
         public void ReleaseAnswer()
         {
@@ -4833,7 +4835,9 @@ public static partial class Milestone1Tests
         private readonly TaskCompletionSource _initialContentEmitted = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned initial-content signal.
         public Task InitialContentEmitted => _initialContentEmitted.Task;
+#pragma warning restore VSTHRD003
 
         public GatedAnswerModelProvider(int trailingChunkCount = 0, bool leadingWhitespace = true)
         {
@@ -5145,12 +5149,7 @@ public static partial class Milestone1Tests
             }
         }
 
-        private void NotifyChanged()
-        {
-            var changed = _changed;
-            _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            changed.TrySetResult();
-        }
+        public InteractionSurfaceCapabilities Capabilities { get; }
 
         public string? ActiveThemeId { get; private set; }
 
@@ -5253,11 +5252,11 @@ public static partial class Milestone1Tests
             }
         }
 
+#pragma warning disable VSTHRD003 // Fixture-owned presentation phase signals.
         public Task StatusStarted => _statusStarted.Task;
 
         public Task ReasoningPresented => _reasoningPresented.Task;
-
-        public InteractionSurfaceCapabilities Capabilities { get; }
+#pragma warning restore VSTHRD003
 
         public async Task<InteractionSelectionResult> SelectAsync(
             InteractionSelectionRequest request,
@@ -5491,6 +5490,13 @@ public static partial class Milestone1Tests
             }
 
             return Task.CompletedTask;
+        }
+
+        private void NotifyChanged()
+        {
+            var changed = _changed;
+            _changed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            changed.TrySetResult();
         }
 
         private static IReadOnlyList<PresentationTextSegment> PrefixAnswer(

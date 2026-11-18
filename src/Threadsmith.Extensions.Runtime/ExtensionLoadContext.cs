@@ -62,10 +62,10 @@ public sealed class ExtensionLoadContext : AssemblyLoadContext
     }
 
     /// <inheritdoc />
-    protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
+    protected override nint LoadUnmanagedDll(string unmanagedDllName)
     {
         var path = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
-        return path is null ? IntPtr.Zero : LoadUnmanagedDllFromPath(path);
+        return path is null ? nint.Zero : LoadUnmanagedDllFromPath(path);
     }
 
     /// <summary>Determines whether an assembly name is the shared contract that must resolve from default.</summary>

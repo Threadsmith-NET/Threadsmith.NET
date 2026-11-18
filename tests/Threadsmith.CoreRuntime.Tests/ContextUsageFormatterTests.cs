@@ -97,7 +97,7 @@ public static class ContextUsageFormatterTests
         Assert.DoesNotContain("selected", output, StringComparison.Ordinal);
         Assert.Contains("- src/\\u009B2J.cs (changed since collection) (observation gap; current state uncertain)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("\\u000D", output, StringComparison.Ordinal);
-        Assert.DoesNotContain(output, character => character is < ' ' and not '\n' and not '\t' or >= '\u007f' and <= '\u009f');
+        Assert.DoesNotContain(output, character => character is (< ' ' and not '\n' and not '\t') or (>= '\u007f' and <= '\u009f'));
         Assert.Equal("first\r\nsecond λ\u009dtitle\u009c\u001b[2J", item.Text);
 
         IDomainEvent expected = new MemoriesIncluded(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), [item]);

@@ -377,7 +377,9 @@ public static class SessionApplicationSemanticAdmissionTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Gets a signal that freshness admission was entered.</summary>
+#pragma warning disable VSTHRD003 // Fixture-owned refresh-entry signal.
         public Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         /// <summary>Gets the observed refresh reason.</summary>
         public SemanticRefreshReason? Reason { get; private set; }
@@ -550,7 +552,9 @@ public static class SessionApplicationSemanticAdmissionTests
         public int EnsureCount => Volatile.Read(ref _ensureCount);
 
         /// <summary>Gets a signal that the first freshness attempt completed.</summary>
+#pragma warning disable VSTHRD003 // Fixture-owned first refresh-attempt signal.
         public Task FirstEnsure => _firstEnsure.Task;
+#pragma warning restore VSTHRD003
 
         /// <summary>Gets the workspace used by the crossing publication.</summary>
         public WorkspaceId WorkspaceId => _initialWorkspaceId;
@@ -788,7 +792,9 @@ public static class SessionApplicationSemanticAdmissionTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         /// <summary>Gets a signal that the model request was entered.</summary>
+#pragma warning disable VSTHRD003 // Fixture-owned model-entry signal.
         public Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         /// <summary>Allows the blocked model request to complete.</summary>
         public void Release()

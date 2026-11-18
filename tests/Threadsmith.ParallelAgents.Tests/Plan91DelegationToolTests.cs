@@ -979,9 +979,11 @@ public sealed partial class Plan91DelegationToolTests
         private readonly TaskCompletionSource _release = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned publication phase signals.
         public Task Completed => _completed.Task;
 
         public Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         public List<IDomainEvent> Published { get; } = [];
 

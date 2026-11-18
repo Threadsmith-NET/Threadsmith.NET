@@ -1833,9 +1833,11 @@ public sealed class WebFetchTests
         private readonly TaskCompletionSource _started = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned transport phase signals.
         public Task CancellationObserved => _cancellationObserved.Task;
 
         public Task Started => _started.Task;
+#pragma warning restore VSTHRD003
 
         public bool ReturnedResponse { get; private set; }
 

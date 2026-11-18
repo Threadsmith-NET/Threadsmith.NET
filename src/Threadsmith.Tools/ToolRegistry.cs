@@ -9,19 +9,6 @@ public sealed record ToolRegistration(ITool Tool, ToolActivitySource Source)
     public ITool Implementation => ConfiguredTool.Unwrap(Tool);
 }
 
-/// <summary>Compares complete request-fenced tool registration identities.</summary>
-internal static class ToolRegistrationIdentity
-{
-    /// <summary>Returns whether tool instance and host-owned source metadata are unchanged.</summary>
-    public static bool Matches(ToolRegistration current, ToolRegistration expected)
-    {
-        ArgumentNullException.ThrowIfNull(current);
-        ArgumentNullException.ThrowIfNull(expected);
-        return ReferenceEquals(current.Tool, expected.Tool)
-            && current.Source == expected.Source;
-    }
-}
-
 /// <summary>Resolves registered tool contracts by stable identifier.</summary>
 public interface IToolRegistry
 {
@@ -355,5 +342,18 @@ public sealed class ToolRegistry : IToolRegistry
                 $"Tool '{tool.Definition.Id}' has invalid runtime or scheduling bounds.",
                 parameterName);
         }
+    }
+}
+
+/// <summary>Compares complete request-fenced tool registration identities.</summary>
+internal static class ToolRegistrationIdentity
+{
+    /// <summary>Returns whether tool instance and host-owned source metadata are unchanged.</summary>
+    public static bool Matches(ToolRegistration current, ToolRegistration expected)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(expected);
+        return ReferenceEquals(current.Tool, expected.Tool)
+            && current.Source == expected.Source;
     }
 }

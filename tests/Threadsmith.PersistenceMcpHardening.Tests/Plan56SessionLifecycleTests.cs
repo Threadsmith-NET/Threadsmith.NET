@@ -995,7 +995,9 @@ public static partial class Plan56SessionLifecycleTests
         private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned model-stream entry signal.
         internal Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,

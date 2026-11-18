@@ -1064,6 +1064,12 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             _prohibitedPaths = [.. prohibitedPaths];
         }
 
+        public int ProbeCalls { get; private set; }
+
+        public int ArtifactReadCalls { get; private set; }
+
+        public int ExactNameSearchCalls { get; private set; }
+
         private string RepositoryPath { get; }
 
         public bool IsPathAllowed(string path)
@@ -1075,10 +1081,6 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
         {
             return ProbeArtifactPath(path).IsSupported;
         }
-
-        public int ProbeCalls { get; private set; }
-
-        public int ArtifactReadCalls { get; private set; }
 
         public CodeExploreArtifactPathProbe ProbeArtifactPath(string path)
         {
@@ -1140,8 +1142,6 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             var text = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true).GetString(bytes);
             return new CodeExploreArtifactText(normalized, text, ComputeSha256(bytes), probe.MediaKind.Value, bytes.Length);
         }
-
-        public int ExactNameSearchCalls { get; private set; }
 
         public Task<CodeExploreArtifactFileSearchResult> FindArtifactFilesByNameAsync(
             string directoryPath,

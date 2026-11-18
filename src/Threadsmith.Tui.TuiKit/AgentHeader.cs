@@ -75,6 +75,17 @@ internal sealed class AgentHeader
         return width > 0 && y == 0 && x >= MeasureContext(width, state).Left && x < width;
     }
 
+    /// <summary>Preserves complete metadata in F2 details when the one-line header must abbreviate it.</summary>
+    internal static string FormatDetails(AgentHeaderState state)
+    {
+        var context = state.ContextTokens is >= 0 && state.ContextLimit is > 0
+            ? $"~{state.ContextTokens:N0}/{state.ContextLimit:N0} ({100.0 * state.ContextTokens.Value / state.ContextLimit.Value:0}%)"
+            : $"?/{(state.ContextLimit is > 0 ? state.ContextLimit.Value.ToString("N0", CultureInfo.InvariantCulture) : "?")}";
+        return TranscriptView.Safe($"{state.Label} | ({state.ProviderName ?? "Provider unknown"}) {state.Model} ({state.Reasoning.Value}) | {UsageText(state, false)} | Context {context}"
+            + "\n" + RequestUsageText(state.Usage.LatestRequest)
+            + "\nChild views are read-only. Click x on stopped tabs to close them. Ctrl+Left/Right in output selects agents. F7 focuses MAIN's composer.");
+    }
+
     private static ContextLayout MeasureContext(int width, AgentHeaderState state)
     {
         var compact = width < 60;
@@ -92,17 +103,6 @@ internal sealed class AgentHeader
     }
 
     private readonly record struct ContextLayout(int Left, string Label, string Tail, int BarWidth);
-
-    /// <summary>Preserves complete metadata in F2 details when the one-line header must abbreviate it.</summary>
-    internal static string FormatDetails(AgentHeaderState state)
-    {
-        var context = state.ContextTokens is >= 0 && state.ContextLimit is > 0
-            ? $"~{state.ContextTokens:N0}/{state.ContextLimit:N0} ({100.0 * state.ContextTokens.Value / state.ContextLimit.Value:0}%)"
-            : $"?/{(state.ContextLimit is > 0 ? state.ContextLimit.Value.ToString("N0", CultureInfo.InvariantCulture) : "?")}";
-        return TranscriptView.Safe($"{state.Label} | ({state.ProviderName ?? "Provider unknown"}) {state.Model} ({state.Reasoning.Value}) | {UsageText(state, false)} | Context {context}"
-            + "\n" + RequestUsageText(state.Usage.LatestRequest)
-            + "\nChild views are read-only. Click x on stopped tabs to close them. Ctrl+Left/Right in output selects agents. F7 focuses MAIN's composer.");
-    }
 
     private static string IdentityText(AgentHeaderState state, int width)
     {

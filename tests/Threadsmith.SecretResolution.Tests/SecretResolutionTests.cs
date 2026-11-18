@@ -593,7 +593,9 @@ public sealed class SecretResolutionTests
             }
         }
 
+#pragma warning disable VSTHRD003 // Fixture-owned cancellation observation signal.
         internal Task CancellationObserved => _cancellationObserved.Task;
+#pragma warning restore VSTHRD003
     }
 
     private sealed class FakeExternalProvider : ISecretProvider

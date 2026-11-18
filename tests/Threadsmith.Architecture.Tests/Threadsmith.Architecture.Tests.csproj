@@ -28,6 +28,7 @@
     rules by reflecting over each project's assembly references.
   -->
   <ItemGroup>
+    <ProjectReference Include="..\..\eng\Threadsmith.Build.Analyzers\Threadsmith.Build.Analyzers.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />

@@ -119,6 +119,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.ModelTooling.In
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.CommandMarker", "..\tests\Threadsmith.CommandMarker\Threadsmith.CommandMarker.csproj", "{71F1BCCE-575B-4A1C-9C91-F10ACA1FC874}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Build.Analyzers", "..\eng\Threadsmith.Build.Analyzers\Threadsmith.Build.Analyzers.csproj", "{BB949BCD-20A4-4107-903E-7F839FB2E43E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -813,6 +815,18 @@ Global
 		{71F1BCCE-575B-4A1C-9C91-F10ACA1FC874}.Release|x64.Build.0 = Release|Any CPU
 		{71F1BCCE-575B-4A1C-9C91-F10ACA1FC874}.Release|x86.ActiveCfg = Release|Any CPU
 		{71F1BCCE-575B-4A1C-9C91-F10ACA1FC874}.Release|x86.Build.0 = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|x64.Build.0 = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Debug|x86.Build.0 = Debug|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|x64.ActiveCfg = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|x64.Build.0 = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|x86.ActiveCfg = Release|Any CPU
+		{BB949BCD-20A4-4107-903E-7F839FB2E43E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

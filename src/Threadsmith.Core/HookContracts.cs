@@ -532,6 +532,7 @@ public interface IHookCoordinator
 
 /// <summary>Lists configured hook handlers.</summary>
 public sealed record ListHooksCommand : ICommand<IReadOnlyList<HookHandlerDescriptor>>;
+
 /// <summary>Inspects one configured hook handler.</summary>
 public sealed record InspectHookCommand(HookHandlerId HandlerId) : ICommand<HookHandlerDescriptor?>;
 
@@ -540,9 +541,12 @@ public sealed record SetHookEnabledCommand(HookHandlerId HandlerId, bool Enabled
 
 /// <summary>Queries bounded hook audit history.</summary>
 public sealed record QueryHookAuditCommand(string? RepositoryIdentity, HookHandlerId? HandlerId, int MaximumCount = 100) : ICommand<IReadOnlyList<HookAuditRecord>>;
+
 /// <summary>Approves one exact repository hook declaration externally.</summary>
 public sealed record ApproveRepositoryHookCommand(SessionId SessionId, HookRepositoryApproval Approval) : ICommand<bool>;
+
 /// <summary>Revokes one repository hook approval.</summary>
 public sealed record RevokeRepositoryHookCommand(SessionId SessionId, string RepositoryIdentity, HookHandlerId HandlerId) : ICommand<bool>;
+
 /// <summary>Tests one enabled handler without granting authority.</summary>
 public sealed record TestHookCommand(HookHandlerId HandlerId, SessionId SessionId, string? RepositoryIdentity) : ICommand<HookBoundaryDecision>;

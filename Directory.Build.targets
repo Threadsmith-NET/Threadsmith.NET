@@ -17,6 +17,12 @@
     <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- Compiler-only compatibility for StyleCop's expanded positional-record documentation rule. -->
+  <ItemGroup Condition="'$(IsSpike)' != 'true' and '$(IsTestProject)' != 'true' and '$(MSBuildProjectName)' != 'Threadsmith.Build.Analyzers'">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)eng/Threadsmith.Build.Analyzers/Threadsmith.Build.Analyzers.csproj"
+                      OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(IsSpike)' != 'true'">
     <CodeAnalysisRuleSet>$(MSBuildThisFileDirectory)stylecop.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>

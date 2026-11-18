@@ -510,7 +510,7 @@ internal static class TerminalControlEncoder
 
             index += rune.Utf16SequenceLength;
             var scalar = rune.Value;
-            if (scalar is < 0x20 and not '\n' and not '\t' or >= 0x7F and <= 0x9F)
+            if (scalar is (< 0x20 and not '\n' and not '\t') or (>= 0x7F and <= 0x9F))
             {
                 AppendEscape(result, scalar);
             }

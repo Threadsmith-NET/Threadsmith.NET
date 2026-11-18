@@ -1416,14 +1416,9 @@ public sealed class Plan50OpenAiCodexTests
     {
         var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==");
         var image = new ImageArtifact { Id = Guid.NewGuid().ToString("N"), ContentHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), MediaType = "image/png", Width = 2, Height = 2, ByteLength = bytes.Length, Source = "fixture" };
-        string? body = null;
-        var handler = new RecordingHandler(message =>
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
-            body = message.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", Encoding.UTF8, "text/event-stream"),
-            };
+            Content = new StringContent("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", Encoding.UTF8, "text/event-stream"),
         });
         var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with { SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image });
         var message = new ModelMessage
@@ -1444,8 +1439,8 @@ public sealed class Plan50OpenAiCodexTests
             Assert.Null(chunk.Output);
         }
 
-        Assert.Contains(Convert.ToBase64String(bytes), body, StringComparison.Ordinal);
-        using var wire = JsonDocument.Parse(body!);
+        Assert.Contains(Convert.ToBase64String(bytes), handler.RequestBody, StringComparison.Ordinal);
+        using var wire = JsonDocument.Parse(handler.RequestBody!);
         var item = wire.RootElement.GetProperty("input")[tool ? 1 : 0];
         var content = item.GetProperty(tool ? "output" : "content");
         using var metadata = JsonDocument.Parse(content[1].GetProperty("text").GetString()!);

@@ -10,8 +10,13 @@ public sealed record RepositoryArcheologyInput(string Question);
 
 /// <summary>Bounded projection of the existing child execution result.</summary>
 public sealed record RepositoryArcheologyOutput(
-    string Status, string ReasonCode, string Message, bool Complete,
-    string Question, string? ChildRunId, string? TerminationReason,
+    string Status,
+    string ReasonCode,
+    string Message,
+    bool Complete,
+    string Question,
+    string? ChildRunId,
+    string? TerminationReason,
     DelegateAgentsResult? Investigation)
 {
     /// <summary>Host-observed references, separate from unverified child prose.</summary>

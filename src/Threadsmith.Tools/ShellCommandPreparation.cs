@@ -740,8 +740,6 @@ internal static class ShellCommandPreparation
         return new ScriptInvocation(path, arguments, startup, launchArguments);
     }
 
-    private sealed record ScriptInvocation(string Path, ImmutableArray<string> ScriptArguments, ImmutableArray<string> InterpreterArguments, string LaunchArguments);
-
     private static bool IsShellName(string name) => name.Length > 0 && char.IsAsciiLetter(name[0])
         && name.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
@@ -786,4 +784,6 @@ internal static class ShellCommandPreparation
         string AssignmentPrefix,
         bool IsAssignment,
         ImmutableArray<bool> TokenExpansions);
+
+    private sealed record ScriptInvocation(string Path, ImmutableArray<string> ScriptArguments, ImmutableArray<string> InterpreterArguments, string LaunchArguments);
 }

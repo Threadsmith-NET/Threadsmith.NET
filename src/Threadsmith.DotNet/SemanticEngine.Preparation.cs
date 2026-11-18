@@ -699,7 +699,16 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private sealed record ReplacementState(Solution? Solution, SemanticRefreshInventory RefreshInventory, Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace? Workspace,
-        HashSet<ProjectId> Compiled, IReadOnlyList<SemanticProjectInfo> Projects, SemanticConfidenceLevel Confidence, SemanticLoadRequest? Request, SemanticCompilationCoordinator? Preparation,
-        IReadOnlyList<string> ExpectedPaths, bool WorkspaceFailures, bool Published);
+    private sealed record ReplacementState(
+        Solution? Solution,
+        SemanticRefreshInventory RefreshInventory,
+        Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace? Workspace,
+        HashSet<ProjectId> Compiled,
+        IReadOnlyList<SemanticProjectInfo> Projects,
+        SemanticConfidenceLevel Confidence,
+        SemanticLoadRequest? Request,
+        SemanticCompilationCoordinator? Preparation,
+        IReadOnlyList<string> ExpectedPaths,
+        bool WorkspaceFailures,
+        bool Published);
 }

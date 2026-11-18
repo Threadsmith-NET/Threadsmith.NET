@@ -15,8 +15,6 @@ using TUIKit.Widgets;
 /// <summary>Retains a bounded, selectable transcript independently of durable session history.</summary>
 internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 {
-    private readonly TuiResourceLimits _limits;
-
     /// <summary>Initializes a new instance of the <see cref="TranscriptView"/> class.</summary>
     internal TranscriptView(TuiResourceLimits? limits = null)
     {
@@ -33,6 +31,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     internal const int ByteLimit = 512 * 1024;
 
     private const int RowGlyphCacheLimit = 512;
+    private readonly TuiResourceLimits _limits;
     private static readonly string[] _asciiGlyphs = CreateAsciiGlyphs();
     private readonly CachedTextRun _evictionNotice = new();
     private readonly CachedTextRun _activityHeader = new();

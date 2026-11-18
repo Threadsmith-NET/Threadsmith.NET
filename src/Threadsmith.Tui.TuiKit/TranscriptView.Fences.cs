@@ -89,13 +89,13 @@ internal sealed partial class TranscriptView
 
     private string? GetActionableHeader(long lineId)
     {
-        if (!_disclosureHeaders.TryGetValue(lineId, out var id))
+        if (!_disclosureHeaders.TryGetValue(lineId, out var header))
         {
             return null;
         }
 
-        return !id.StartsWith("fence:", StringComparison.Ordinal)
-            || (_fencedRows.TryGetValue(lineId, out var frame) && CanCopyBlock(frame.Block)) ? id : null;
+        return !header.Id.StartsWith("fence:", StringComparison.Ordinal)
+            || (_fencedRows.TryGetValue(lineId, out var frame) && CanCopyBlock(frame.Block)) ? header.Id : null;
     }
 
     private bool ActivateBlock(BlockAction action)

@@ -61,7 +61,7 @@ dotnet --version
 4. Run the test suite:
 
    ```powershell
-   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
+   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 6
    ```
 
 5. Create a focused branch:
@@ -150,7 +150,7 @@ For product changes, validate the final code revision with:
 ```powershell
 dotnet restore src/Threadsmith.sln
 dotnet build src/Threadsmith.sln --configuration Debug --no-restore
-dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
+dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 6
 ```
 
 For the fast model/tool contract suite, run:

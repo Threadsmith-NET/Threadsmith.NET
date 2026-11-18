@@ -14,7 +14,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario SC-SCRIPT-SOURCE-01 — Submitted script source
 
-1. Complete two permitted `csharp_script` calls with distinct source, including a child invocation and compilation/runtime failure results. Each live result has an initially collapsed **C# script** control and an independent **View full script…** action. Output and errors stay outside the preview.
+1. Complete two permitted `csharp_script` calls with distinct source, including a child invocation and compilation/runtime failure results. Each live result has an initially collapsed **C# script** control and an independent **View full script…** action within its `TOOLS: csharp_script` output block. Output and errors stay outside the preview.
 2. Expand source with empty, blank, CRLF/LF/CR, 20/21-line, long-line, and surrogate-boundary fixtures. The preview contains at most 20 logical lines and 8,192 source characters. Removed text has a visible truncation notice. Highlighting never alters the source text.
 3. Activate full source by pointer and keyboard while collapsed. Verify the standard modal shows all retained source, including more than normal scrollback. Resize, scroll, select, close, and confirm unchanged underlying draft/focus.
 4. Copy selections and the full script with tabs, trailing spaces, terminal controls, markup-like text, Unicode, and mixed line endings. Copy equals the original range or complete input. Clipboard byte-policy/platform failure is explicit; no truncated copy is reported as full. Rendering cannot inject terminal commands or source-defined actions.

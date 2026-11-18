@@ -28,6 +28,10 @@ public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment>
     /// <summary>Gets bounded exact source for live interactive inspection only.</summary>
     [JsonIgnore]
     public ToolSourceDetail? SourceDetail { get; init; }
+
+    /// <summary>Gets whether the last detail line is the formatter's empty tool detail placeholder.</summary>
+    [JsonIgnore]
+    internal bool EndsWithToolDetailPlaceholder { get; init; }
 }
 
 /// <summary>Stable identity and concise header for an expandable host output block.</summary>

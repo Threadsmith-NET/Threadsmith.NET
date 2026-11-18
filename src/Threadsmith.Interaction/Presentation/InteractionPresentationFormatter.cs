@@ -9,7 +9,12 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
 internal static partial class InteractionPresentationFormatter
 {
+    /// <summary>Indentation shared by completed tool details and live attachments.</summary>
+    internal const string ToolBlockDetailIndent = BlockOuterIndent + ToolBlockChildIndent;
+
     private const string BlockOuterIndent = " ";
+    private const string ToolBlockChildIndent = "  ";
+    private const string NoToolDetail = "no additional detail";
     private const int MaximumToolDetailLength = 240;
     private const int MaximumToolInspectionCharacters = 96 * 1024;
     private const int DiffContextLines = 2;
@@ -79,7 +84,7 @@ internal static partial class InteractionPresentationFormatter
         ArgumentNullException.ThrowIfNull(timeProvider);
         var label = started.Source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS";
         var identity = GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
-        return CreateOperationActivity(label, identity, GetToolDetail(started, null, started.Source), timeProvider, showOperationDurations);
+        return CreateOperationActivity(label, identity, GetToolDetail(started, null, started.Source) ?? NoToolDetail, timeProvider, showOperationDurations);
     }
 
     /// <summary>Creates the shared live operation block used by tools, MCP, and manual skills.</summary>
@@ -126,15 +131,38 @@ internal static partial class InteractionPresentationFormatter
         IReadOnlyList<PresentationTextSegment>? progress = null,
         int maximumInspectionCharacters = MaximumToolInspectionCharacters,
         TuiResourceLimits? limits = null)
+        => FormatToolCompletion(started, completed, showOperationDurations, out _, inspectCodeExploreOutput, progress, maximumInspectionCharacters, limits);
+
+    /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
+    /// <param name="started">The matching invocation start event.</param>
+    /// <param name="completed">The invocation completion event.</param>
+    /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
+    /// <param name="endsWithPlaceholder">Whether the final line is the generated empty detail.</param>
+    /// <param name="inspectCodeExploreOutput">Whether successful code_explore blocks include final model-visible output.</param>
+    /// <param name="progress">Final host-owned progress entries collected for this invocation.</param>
+    /// <param name="maximumInspectionCharacters">Configured expanded-output character limit.</param>
+    /// <param name="limits">Captured diagnostic presentation limits.</param>
+    /// <returns>A terminal-neutral TUI presentation block.</returns>
+    internal static string FormatToolCompletion(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        bool showOperationDurations,
+        out bool endsWithPlaceholder,
+        bool inspectCodeExploreOutput = false,
+        IReadOnlyList<PresentationTextSegment>? progress = null,
+        int maximumInspectionCharacters = MaximumToolInspectionCharacters,
+        TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
 
         var source = completed.Source ?? started.Source;
         var buildLines = GetBuildDiagnosticLines(started, completed, source, limits ?? new());
+        var toolDetail = buildLines is { Count: > 0 } ? null : GetToolDetail(started, completed, source);
+        var detail = buildLines is { Count: > 0 } ? buildLines[0] : new TuiBlockLine(TuiBlockLineKind.Item, toolDetail ?? NoToolDetail, PresentationTextRole.Muted);
         var lines = new List<TuiBlockLine>
         {
-            buildLines is { Count: > 0 } ? buildLines[0] : new(TuiBlockLineKind.Item, GetToolDetail(started, completed, source), PresentationTextRole.Muted),
+            detail,
         };
         foreach (var entry in progress ?? [])
         {
@@ -179,9 +207,30 @@ internal static partial class InteractionPresentationFormatter
                 PresentationTextRole.ToolSuccess,
                 GetToolOutcomeRole(completed)),
             lines,
-            ChildIndent: "  ");
+            ChildIndent: ToolBlockChildIndent);
 
+        endsWithPlaceholder = buildLines is not { Count: > 0 } && toolDetail is null && lines.Count == 1;
         return FormatBlock(block);
+    }
+
+    /// <summary>Reopens the closing line of a formatted tool block for a live attachment.</summary>
+    /// <param name="text">The final segment of the ordinary tool completion.</param>
+    /// <param name="endsWithPlaceholder">Whether the formatter generated the final line as empty detail.</param>
+    /// <returns>The open block tail, or null when no closing line is present.</returns>
+    internal static string? ContinueToolBlock(string text, bool endsWithPlaceholder)
+    {
+        const string closingPrefix = ToolBlockDetailIndent + "└";
+        var content = text.AsSpan().TrimEnd("\r\n");
+        var lineStart = content.LastIndexOf('\n') + 1;
+        var lastLine = content[lineStart..];
+        if (!lastLine.StartsWith(closingPrefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return endsWithPlaceholder
+            ? text[..lineStart]
+            : $"{content[..(lineStart + ToolBlockDetailIndent.Length)]}│{lastLine[closingPrefix.Length..]}\n";
     }
 
     /// <summary>Formats one completed semantic check as the compact interactive semantic-checks block.</summary>
@@ -1235,7 +1284,7 @@ internal static partial class InteractionPresentationFormatter
         };
     }
 
-    private static string GetToolDetail(
+    private static string? GetToolDetail(
         ToolInvocationStarted started,
         ToolInvocationCompleted? completed,
         ToolActivitySource? source)
@@ -1283,7 +1332,7 @@ internal static partial class InteractionPresentationFormatter
         }
 
         return detail.Length == 0
-            ? "no additional detail"
+            ? null
             : TruncateForDisplay(detail.ToString());
     }
 

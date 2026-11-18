@@ -987,8 +987,12 @@ public static partial class AgentWorkspaceTests
             view.Render(new BufferSurface(buffer));
             var rows = TUIKit.Testing.Snapshot.ToText(buffer).Split('\n');
             var row = Array.FindIndex(rows, line => line.Contains("View full script", StringComparison.Ordinal));
-            Assert.True(row >= 0);
-            Assert.True(view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 1, row, KeyModifiers.None, 1)));
+            Assert.True(row >= 2);
+            Assert.StartsWith(" TOOLS: csharp_script - ", rows[row - 2], StringComparison.Ordinal);
+            Assert.StartsWith("   │ [+] C# script execution", rows[row - 1], StringComparison.Ordinal);
+            Assert.StartsWith("   └ View full script…", rows[row], StringComparison.Ordinal);
+            var linkColumn = rows[row].IndexOf("View full script", StringComparison.Ordinal);
+            Assert.True(view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, linkColumn, row, KeyModifiers.None, 1)));
             Assert.Same(sources[index], opened[^1]);
         }
 

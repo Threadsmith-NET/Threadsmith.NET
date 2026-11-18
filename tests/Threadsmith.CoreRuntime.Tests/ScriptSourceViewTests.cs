@@ -4,6 +4,7 @@ using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Themes;
 using Threadsmith.Tui.TuiKit;
@@ -141,6 +142,83 @@ public sealed class ScriptSourceViewTests
         Assert.Same(item.SourceDetail, opened);
     }
 
+    /// <summary>Live MAIN controls share the tool bracket without changing ordinary transcript text.</summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true, "no additional detail")]
+    public void ScriptControlsContinueTheCompletedToolBlock(bool succeeded, bool sourceFits, string error = "Script failed")
+    {
+        var view = new TranscriptView(new TuiResourceLimits { MaximumTranscriptBytes = 256 });
+        var source = Item(sourceFits ? "1 + 1" : new string('x', 300)).SourceDetail!;
+        var session = SessionId.New();
+        var now = DateTimeOffset.UnixEpoch;
+        var transcript = new ConversationTranscript(string.Empty);
+        var run = RunId.New();
+        transcript.Apply(new ToolInvocationStarted(session, now, source.ToolInvocationId, "csharp_script", run));
+        var completion = new ToolInvocationCompleted(session, now, source.ToolInvocationId, succeeded, Error: succeeded ? null : error)
+        {
+            RunId = run,
+            SourceDetail = source,
+        };
+        Assert.True(transcript.Apply(completion));
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(segments, completion, transcript.Text);
+        var opened = new List<ToolSourceDetail>();
+        view.SourceRequested = opened.Add;
+
+        var item = new PresentationTextItem(segments)
+        {
+            SourceDetail = InteractionEventSegments.GetSourceDetail(completion),
+            EndsWithToolDetailPlaceholder = transcript.EndsWithToolDetailPlaceholder,
+        };
+        view.Present(new([item]));
+        Render(view);
+
+        var header = succeeded ? " TOOLS: csharp_script - completed" : " TOOLS: csharp_script - failed";
+        var detail = succeeded ? "no additional detail" : error;
+        Assert.Equal([header, $"   └ {detail}"], transcript.Text.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+        if (!sourceFits)
+        {
+            Assert.Equal([header, "   └ C# script execution — source unavailable (live retention limit or restored result).", string.Empty], view.Lines);
+            Assert.False(view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl)));
+            return;
+        }
+
+        string[] expectedPrefix = succeeded ? [header] : [header, $"   │ {detail}"];
+        Assert.Equal([.. expectedPrefix, "   │ [+] C# script execution", "   └ View full script…", string.Empty], view.Lines);
+        Click(view, Render(view), "View full script");
+        Assert.Same(source, Assert.Single(opened));
+
+        const string collapsedLabel = "[+] C# script execution";
+        const string expandedLabel = "[-] C# script execution";
+        const string bracket = "   │ ";
+        var headerRow = expectedPrefix.Length;
+        var labelEnd = bracket.Length + expandedLabel.Length;
+        ClickAt(view, bracket.Length - 1, headerRow);
+        ClickAt(view, labelEnd, headerRow);
+        Assert.Equal(bracket + collapsedLabel, view.Lines[headerRow]);
+
+        Click(view, Render(view), collapsedLabel);
+        var cells = new CellBuffer(40, 40);
+        view.Render(new BufferSurface(cells));
+        Assert.Equal([.. expectedPrefix, bracket + expandedLabel, "   │ 1 + 1", "   └ View full script…", string.Empty], view.Lines);
+        for (var column = 0; column < cells.Width; column++)
+        {
+            Assert.Equal(column >= bracket.Length && column < labelEnd, cells.Get(column, headerRow).Style.Attributes.HasFlag(CellAttributes.Underline));
+        }
+
+        ClickAt(view, bracket.Length - 2, headerRow);
+        ClickAt(view, labelEnd, headerRow);
+        Assert.Equal(bracket + expandedLabel, view.Lines[headerRow]);
+        ClickAt(view, bracket.Length - 2, headerRow + 2);
+        Assert.Single(opened);
+
+        ClickAt(view, labelEnd - 1, headerRow);
+        Assert.Equal(bracket + collapsedLabel, view.Lines[headerRow]);
+    }
+
     /// <summary>Bracket-induced continuation chunks stay clickable without adding keyboard focus stops.</summary>
     [Fact]
     public void BracketedScriptLinkRemainsOneActionAcrossChunks()
@@ -152,7 +230,7 @@ public sealed class ScriptSourceViewTests
         view.SourceRequested = opened.Add;
         view.Present(new([first, second]));
 
-        foreach (var width in new[] { 110, 40, 110 })
+        foreach (var width in new[] { 110, 16, 110 })
         {
             Click(view, Render(view, width), "ipt…");
             Assert.Same(first.SourceDetail, opened[^1]);
@@ -172,6 +250,9 @@ public sealed class ScriptSourceViewTests
         view.HandleKey(KeyEvent.Special(KeyCode.Enter));
         Assert.Equal(5, opened.Count);
         Assert.Same(first.SourceDetail, opened[^1]);
+
+        Click(view, Render(view, 16), "ution");
+        Assert.Contains("   │ first", view.Lines);
     }
 
     /// <summary>Selection and full copy use original text.</summary>
@@ -775,7 +856,13 @@ public sealed class ScriptSourceViewTests
         var index = firstMatch ? Array.FindIndex(rows, row => row.Contains(label, StringComparison.Ordinal))
             : Array.FindLastIndex(rows, row => row.Contains(label, StringComparison.Ordinal));
         Assert.True(index >= 0, screen);
-        view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 1, index, KeyModifiers.None, 1));
+        ClickAt(view, rows[index].IndexOf(label, StringComparison.Ordinal), index);
+    }
+
+    private static void ClickAt(TranscriptView view, int x, int y)
+    {
+        view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, x, y, KeyModifiers.None, 1));
+        view.HandleMouse(new(MouseEventKind.Release, MouseButton.Left, x, y, KeyModifiers.None, 1));
     }
 
     private sealed class ThrowingHighlighter : ISourceHighlighter

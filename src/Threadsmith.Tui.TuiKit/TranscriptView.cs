@@ -45,7 +45,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     private readonly List<RowKey> _rowGlyphRemovals = [];
     private readonly Dictionary<long, List<StyledRange>> _styles = [];
     private readonly HashSet<string> _expandedDisclosures = new(StringComparer.Ordinal);
-    private readonly Dictionary<long, string> _disclosureHeaders = [];
+    private readonly Dictionary<long, DisclosureHeader> _disclosureHeaders = [];
     private readonly Dictionary<long, string> _disclosureLines = [];
     private string? _focusedDisclosure;
     private long _activityTick;
@@ -283,8 +283,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         var clickedRow = _top + mouse.Y - (Evicted > 0 ? 1 : 0);
         if (mouse.Kind == MouseEventKind.Press && mouse.Modifiers == KeyModifiers.None
             && clickedRow >= _top && clickedRow < Math.Min(_rows.Count, _top + _height)
-            && _disclosureHeaders.TryGetValue(_rows[clickedRow].Line.Id, out var disclosure)
-            && !disclosure.StartsWith("fence:", StringComparison.Ordinal))
+            && HitDisclosure(_rows[clickedRow], mouse.X) is { } disclosure)
         {
             return ActivateControl(disclosure);
         }
@@ -625,6 +624,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             }
         }
 
+        var focused = _focusedDisclosure is not null && _disclosureHeaders.TryGetValue(row.Line.Id, out var header)
+            && header.Id == _focusedDisclosure ? header : (DisclosureHeader?)null;
         var x = _fencedRows.TryGetValue(row.Line.Id, out var fencedRow) && fencedRow.Part == 1 && fencedRow.DecorationCharacters == 0
             ? UnicodeWidth.GetWidth(fencedRow.Prefix) + 2 : 0;
         foreach (var glyph in GetRowGlyphs(row))
@@ -648,7 +649,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                 style = style.WithBackground(ResolveStyle(PresentationTextRole.OutputStreamPaneRole).Background);
             }
 
-            if (_focusedDisclosure is not null && _disclosureHeaders.GetValueOrDefault(row.Line.Id) == _focusedDisclosure)
+            if (focused is { } control && control.Contains(glyph.Offset))
             {
                 style = style.WithAttribute(CellAttributes.Underline, true);
             }
@@ -669,6 +670,36 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         DrawFencedFrame(surface, y, row);
+    }
+
+    private string? HitDisclosure(Row row, int x)
+    {
+        if (!_disclosureHeaders.TryGetValue(row.Line.Id, out var header) || header.Id.StartsWith("fence:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (header.End is null)
+        {
+            return header.Id;
+        }
+
+        if (x < 0 || x >= _width)
+        {
+            return null;
+        }
+
+        var column = 0;
+        foreach (var glyph in GetRowGlyphs(row))
+        {
+            column += glyph.Width;
+            if (x < column)
+            {
+                return column <= _width && header.Contains(glyph.Offset) ? header.Id : null;
+            }
+        }
+
+        return null;
     }
 
     private DisplayGlyph[] GetRowGlyphs(Row row)
@@ -854,9 +885,10 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         var frames = new Dictionary<PresentationTextSegment, FencedRow>(ReferenceEqualityComparer.Instance);
         var blocks = new Dictionary<MarkdownFencedBody, FencedBlock>(ReferenceEqualityComparer.Instance);
         var firstId = _nextId;
+        var scriptBlockStart = _lines.LastOrDefault() is { Text.Length: 0 } tail ? tail.Id : _nextId;
         long? disclosureHeaderId = null;
         var headerObserved = false;
-        foreach (var segment in item is PresentationTextItem { Disclosure: { } } disclosureItem
+        var segments = item is PresentationTextItem { Disclosure: { } } disclosureItem
             ? ProjectDisclosure(disclosureItem) : Project(item, _width > 0 ? _width : 80, (segment, code, prefix, part) =>
             {
                 if (item is PresentationMarkdownItem markdown && code.FencedBody is { } body)
@@ -869,10 +901,16 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
                     frames.Add(segment, new FencedRow(owner, prefix, part == 3 ? 1 : part, part == 3));
                 }
-            }))
+            });
+        var openToolBlock = item is PresentationTextItem { SourceDetail: not null, Segments.Count: > 0 } script
+            ? InteractionPresentationFormatter.ContinueToolBlock(script.Segments[^1].Text, script.EndsWithToolDetailPlaceholder)
+            : null;
+        foreach (var segment in segments)
         {
-            segment.Validate();
-            AppendContent(segment, frames.GetValueOrDefault(segment));
+            var display = openToolBlock is not null && item is PresentationTextItem text && ReferenceEquals(segment, text.Segments[^1])
+                ? segment with { Text = openToolBlock } : segment;
+            display.Validate();
+            AppendContent(display, frames.GetValueOrDefault(segment));
             if (item is PresentationTextItem { Disclosure: not null } && !headerObserved)
             {
                 headerObserved = true;
@@ -890,11 +928,11 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
             if (disclosureHeaderId is { } headerId && _lines.Any(line => line.Id == headerId))
             {
-                _disclosureHeaders[headerId] = disclosure.Id;
+                _disclosureHeaders[headerId] = new(disclosure.Id);
             }
         }
 
-        AppendScriptSource(item);
+        AppendScriptSource(item, openToolBlock, scriptBlockStart);
     }
 
     private IEnumerable<PresentationTextSegment> ProjectDisclosure(PresentationTextItem item)
@@ -1009,15 +1047,15 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         var headers = _disclosureHeaders.Where(pair => (_clearBeforeId is null || pair.Key >= _clearBeforeId)
                 && GetActionableHeader(pair.Key) is not null)
-            .OrderBy(pair => pair.Key).DistinctBy(pair => pair.Value, StringComparer.Ordinal).ToArray();
+            .OrderBy(pair => pair.Key).DistinctBy(pair => pair.Value.Id, StringComparer.Ordinal).ToArray();
         if (headers.Length == 0)
         {
             return false;
         }
 
-        var current = Array.FindIndex(headers, pair => pair.Value == _focusedDisclosure);
+        var current = Array.FindIndex(headers, pair => pair.Value.Id == _focusedDisclosure);
         var next = current < 0 ? (forward ? 0 : headers.Length - 1) : Math.Clamp(current + (forward ? 1 : -1), 0, headers.Length - 1);
-        _focusedDisclosure = headers[next].Value;
+        _focusedDisclosure = headers[next].Value.Id;
         var row = FindFirstRow(headers[next].Key);
         _top = Math.Clamp(_top, Math.Max(0, row - _height + 1), row);
         AtBottom = false;
@@ -1031,7 +1069,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             return false;
         }
 
-        var header = _disclosureHeaders.FirstOrDefault(pair => pair.Value == id).Key;
+        var header = _disclosureHeaders.FirstOrDefault(pair => pair.Value.Id == id).Key;
         var offset = Math.Max(0, FindFirstRow(header) - _top);
         if (!_expandedDisclosures.Add(id))
         {
@@ -1039,7 +1077,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         }
 
         ReprojectForWidth(TopId);
-        var newHeader = _disclosureHeaders.FirstOrDefault(pair => pair.Value == id).Key;
+        var newHeader = _disclosureHeaders.FirstOrDefault(pair => pair.Value.Id == id).Key;
         _top = Math.Max(0, FindFirstRow(newHeader) - offset);
         AtBottom = false;
         _focusedDisclosure = id;
@@ -1113,7 +1151,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         AddLine(string.Empty, CellStyle.Default, false);
     }
 
-    private void AppendContent(PresentationTextSegment segment, FencedRow? frame = null)
+    private void AppendContent(PresentationTextSegment segment, FencedRow? frame = null, string? controlId = null)
     {
         var safe = Safe(segment.Text);
         if (safe.Length > 0 && safe[0] != '\n' && _lines.Count > 0
@@ -1206,6 +1244,11 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                         ranges.Add(range);
                     }
 
+                    if (controlId is not null)
+                    {
+                        _disclosureHeaders[line.Id] = new(controlId, range.Start, range.End);
+                    }
+
                     if (!AtBottom)
                     {
                         NewCount++;
@@ -1230,7 +1273,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
                     if (frame.Part == 0 && !line.Continued)
                     {
                         frame.Block.HeaderId = line.Id;
-                        _disclosureHeaders[line.Id] = BlockControlId(frame.Block);
+                        _disclosureHeaders[line.Id] = new(BlockControlId(frame.Block));
                     }
                 }
 
@@ -1439,4 +1482,9 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     private readonly record struct Point(long Line, int Offset);
 
     private readonly record struct StyledRange(int Start, int End, PresentationTextRole Role, Uri? Link);
+
+    private readonly record struct DisclosureHeader(string Id, int Start = 0, int? End = null)
+    {
+        public bool Contains(int offset) => offset >= Start && (End is not { } end || offset < end);
+    }
 }

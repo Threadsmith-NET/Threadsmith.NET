@@ -61,6 +61,9 @@ internal sealed class ConversationTranscript
     /// <summary>Gets the complete conversation text.</summary>
     internal string Text => _text.ToString();
 
+    /// <summary>Gets whether the last applied event ended a tool completion with generated empty detail.</summary>
+    internal bool EndsWithToolDetailPlaceholder { get; private set; }
+
     /// <summary>Gets the character count without materializing the conversation text.</summary>
     internal int Length => _text.Length;
 
@@ -78,6 +81,7 @@ internal sealed class ConversationTranscript
     /// <returns>True when the visible transcript changed.</returns>
     internal bool Apply(IDomainEvent domainEvent, IReadOnlyList<PresentationTextSegment>? toolProgress = null)
     {
+        EndsWithToolDetailPlaceholder = false;
         ArgumentNullException.ThrowIfNull(domainEvent);
         switch (domainEvent)
         {
@@ -524,14 +528,17 @@ internal sealed class ConversationTranscript
         ToolInvocationCompleted completed,
         IReadOnlyList<PresentationTextSegment>? progress)
     {
-        AppendLifecycleBlock(InteractionPresentationFormatter.FormatToolCompletion(
+        var text = InteractionPresentationFormatter.FormatToolCompletion(
             started,
             completed,
             _showOperationDurations,
+            out var endsWithPlaceholder,
             _inspectCodeExploreOutput(),
             progress,
             _limits.MaximumToolInspectionCharacters,
-            _limits));
+            _limits);
+        EndsWithToolDetailPlaceholder = endsWithPlaceholder;
+        AppendLifecycleBlock(text);
     }
 
     private void AppendSemanticCheckCompletion(

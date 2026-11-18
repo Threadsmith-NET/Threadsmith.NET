@@ -64,8 +64,8 @@
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
 
     <!-- Persistence (strategy Â§6: SQLite + artifact files; ADR-3). -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
 
     <!-- MCP (strategy Â§6: official C# MCP SDK behind a host adapter; ADR for Â§20). Version-isolated in Threadsmith.Mcp only. -->
     <PackageVersion Include="ModelContextProtocol.Core" Version="2.0.0" />

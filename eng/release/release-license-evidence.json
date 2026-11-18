@@ -1120,60 +1120,60 @@
     },
     {
       "id": "bblanchon.PDFium.Win32",
-      "version": "152.0.7961",
+      "version": "160.0.8165",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/152.0.7961",
-      "packageSha512": "E6m7Y/OZ/eySQBy4drjDCF6pspBdp2PaF6vC04K1BgGbS8UtXOdL0SnReg3zE309hBZ6U/ZDMys9QE5VhBzDDQ==",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/160.0.8165",
+      "packageSha512": "YQzaQpjbP7TEmmjxOd4W7Okub+8/Mj0trnGB4v9VJROXwynxwVBlNGEjMoFrpDGd1FMFeYzKG4oaeTx/UIc6Nw==",
       "licenseExpression": "Apache-2.0",
       "reviewState": "approved",
       "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "additionalNotices": [
-        "legal/PdfReading/PDFium-152.0.7961-win-arm64-NOTICES.txt"
+        "legal/PdfReading/PDFium-160.0.8165-win-x64-NOTICES.txt"
       ],
       "licenseConcluded": "NOASSERTION",
-      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "sourceRevision": "83c18af693945b735503665259b728ba7d409fd0",
       "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
-      "packageArchiveSha512": "pWyGOMwMdyYGtBGqXa77gdXLKZJ0mJL9jLP09tFEpmJd6QVqZoVYPufmVdaKN/3t3RC16O6dZPuttpV97JBAOw==",
-      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+      "packageArchiveSha512": "bf5UskRyHdeDXnRX1h5MStuab1U8c4r2vd7JfY6OYn2cJvV/CMVfSknEO7qqmA5anGxQiAVVGEMhvdgNNjfsqw==",
+      "reviewNotes": "Release owner approved the unmodified PDFium 160.0.8165 packages with complete matching notices on 2026-11-18. Package hashes and six-RID native asset provenance are in legal/PdfReading/160.0.8165-candidate-evidence.json."
     },
     {
       "id": "bblanchon.PDFium.macOS",
-      "version": "152.0.7961",
+      "version": "160.0.8165",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/152.0.7961",
-      "packageSha512": "GaBNtpfoiYbXTi9WLeEWSxWi2zG9kJMfuDMF7AH4kK0zjXz3C/Qg9epKIZKN3nfPaS48Qy3uV2VM14QBI/iAGg==",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/160.0.8165",
+      "packageSha512": "wPOOddgr2pu1kqNGrH1E7DW1Fbhil1IrHWFMkVQK2x4/Ro58BjlAFG+yALCdwaLwQVUKawoKh7ohT9bn9GJVuw==",
       "licenseExpression": "Apache-2.0",
       "reviewState": "approved",
       "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "additionalNotices": [
-        "legal/PdfReading/PDFium-152.0.7961-osx-arm64-NOTICES.txt"
+        "legal/PdfReading/PDFium-160.0.8165-osx-x64-NOTICES.txt"
       ],
       "licenseConcluded": "NOASSERTION",
-      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "sourceRevision": "83c18af693945b735503665259b728ba7d409fd0",
       "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
-      "packageArchiveSha512": "o84By5TiSCLoPb6Mr/veMqkJDWCS0keu3Rrp+OpWBKLNOVy/alHUIdNKZhyd9H4PbbFACtBGagRryWNnYUdD7Q==",
-      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+      "packageArchiveSha512": "zwfBKEC/VaZOe5lj4iW8vNRItxpwwnT2lYaHhQ7CF+ySn+ndM4u5Cj/9cGoUNQ4CAPe5muCDZQavmqgASFAmgQ==",
+      "reviewNotes": "Release owner approved the unmodified PDFium 160.0.8165 packages with complete matching notices on 2026-11-18. Package hashes and six-RID native asset provenance are in legal/PdfReading/160.0.8165-candidate-evidence.json."
     },
     {
       "id": "bblanchon.PDFium.Linux",
-      "version": "152.0.7961",
+      "version": "160.0.8165",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/152.0.7961",
-      "packageSha512": "80m1PwszVp53avI/l+BCov8/6jl7B2FU+hQNTSrApMrkwKcCSRDHkXYYrGYsxpc8NAs/44tyrEQdCfX1yRzPhw==",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/160.0.8165",
+      "packageSha512": "EUvL2Xs6bqsx3v9ygHK4IwQZvKhFGW5gAYhawyinonvwssUQVW264zg5oAd081LkZmHt4q+/83eqPif0u019Cg==",
       "licenseExpression": "Apache-2.0",
       "reviewState": "approved",
       "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "additionalNotices": [
-        "legal/PdfReading/PDFium-152.0.7961-linux-arm64-NOTICES.txt"
+        "legal/PdfReading/PDFium-160.0.8165-linux-x64-NOTICES.txt"
       ],
       "licenseConcluded": "NOASSERTION",
-      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "sourceRevision": "83c18af693945b735503665259b728ba7d409fd0",
       "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
-      "packageArchiveSha512": "mHqxElmixmwmLHJNCghdxOFlrvwn4rc79DblFfD8fQswbw4Ahk6vFVOCb9zuDyNcM+Fj/QCiVMGyuwlPekJk+w==",
-      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+      "packageArchiveSha512": "UeHyeQHanssVVZmIHa4XTCvUCfHTt4043LODXv4+BTJqPDvvftr6vOVji/2x3ENKfFMZeawEbsiYARfdHhV4jQ==",
+      "reviewNotes": "Release owner approved the unmodified PDFium 160.0.8165 packages with complete matching notices on 2026-11-18. Package hashes and six-RID native asset provenance are in legal/PdfReading/160.0.8165-candidate-evidence.json."
     }
   ]
 }

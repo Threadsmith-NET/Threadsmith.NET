@@ -12,13 +12,13 @@ Full exact-source PDFtoImage/Skia licenses and native notices are retained besid
 
 The explicit approval authorizes adding these exact eight dispositions to `eng/release/release-license-evidence.json` and distributing the unmodified native dependencies with the complete accompanying notices. It does not approve modified dependency binaries or change the existing Windows .NET runtime decision. The decision is recorded for all eight components in the canonical release evidence.
 
-## Upgrade candidate (160.0.8165)
+## Approved upgrade (160.0.8165)
 
-The Linux, macOS, and Win32 pins move together. PDFtoImage stays at 5.4.0 and SkiaSharp stays at 4.150.1. [Candidate evidence](160.0.8165-candidate-evidence.json) records the three verified NuGet restore hashes and six attested non-V8 upstream archive hashes. Restore resolves native assets for all six desktop RIDs; runtime validation was performed on Windows x64 only.
+The Linux, macOS, and Win32 pins move together. PDFtoImage stays at 5.4.0 and SkiaSharp stays at 4.150.1. The [verification record](160.0.8165-candidate-evidence.json) retains its original filename for provenance. It records NuGet restore content hashes and separate SHA-256 and SHA-512 digests of the signed archives. All six supported desktop native binaries match the corresponding attested non-V8 upstream archives by SHA-256. Runtime validation was performed on Windows x64 only.
 
-The release owner approved the three unmodified PDFium 160.0.8165 packages with their complete matching notices on 2026-11-18. The approval is recorded in the candidate evidence and does not cover Windows .NET runtime redistribution.
+The [Windows](PDFium-160.0.8165-win-x64-NOTICES.txt), [Linux](PDFium-160.0.8165-linux-x64-NOTICES.txt), and [macOS](PDFium-160.0.8165-osx-x64-NOTICES.txt) notice bundles preserve all 19 license payloads from each platform's archives. The x64 and ARM64 payloads match byte for byte on each platform, so both architectures share the same bundle. The verification record lists all three bundle hashes.
 
-Before updating the canonical evidence, hash the signed NuGet archives, match all six NuGet binaries against the attested archives, and collect and hash the exact license and notice payloads. The candidate does not satisfy the release evidence gate until those checks are complete.
+The release owner approved the three unmodified PDFium 160.0.8165 packages with their complete matching notices on 2026-11-18. The canonical release evidence records that approval. It does not cover Windows .NET runtime redistribution.
 
 ### Security verification
 

@@ -60,12 +60,13 @@ public sealed partial class ScratchpadScriptTests : IDisposable
         Assert.Equal(exampleIndex == 0 ? "5" : string.Join("\n", messages.Select(message => message[..200])), result.Output);
     }
 
-    /// <summary>Ordinary computation and JSON parsing use the real worker's default imports and permissions.</summary>
+    /// <summary>Ordinary computation, JSON parsing, and hashing use the real worker's default imports and permissions.</summary>
     [Theory]
     [InlineData("Math.Sqrt(25)", "5")]
     [InlineData("string.Equals(\"a\", \"A\", StringComparison.OrdinalIgnoreCase)", "True")]
     [InlineData("using (var doc = JsonDocument.Parse(\"{\\\"value\\\":25}\")) { return Math.Sqrt(doc.RootElement.GetProperty(\"value\").GetInt32()); }", "5")]
     [InlineData("using (var doc = System.Text.Json.JsonDocument.Parse(\"[1,2,3]\")) { return doc.RootElement.GetArrayLength(); }", "3")]
+    [InlineData("Convert.ToHexStringLower(SHA256.HashData(source: new byte[] { 97, 98, 99 }))", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")]
     public async Task WorkerSupportsDefaultComputation(string code, string expected)
     {
         var scope = CreateScope();
@@ -78,6 +79,38 @@ public sealed partial class ScratchpadScriptTests : IDisposable
         Assert.Equal(expected, result.Output);
     }
 
+    /// <summary>Trusted configuration can supply more than 32 assembly entries, even with the old setting present.</summary>
+    [Fact]
+    public async Task WorkerAcceptsAssemblyListBeyondFormerCap()
+    {
+        var scope = CreateScope();
+        string[] assemblies =
+        [
+            "System.Buffers", "System.Collections", "System.Collections.Concurrent", "System.Collections.Generic",
+            "System.Collections.Immutable", "System.Collections.ObjectModel", "System.Collections.Specialized",
+            "System.ComponentModel", "System.ComponentModel.DataAnnotations", "System.Diagnostics.Contracts",
+            "System.Diagnostics.Tracing", "System.Globalization", "System.Runtime",
+            "System.IO", "System.IO.Compression", "System.IO.IsolatedStorage", "System.IO.MemoryMappedFiles",
+            "System.IO.Pipes", "System.Linq", "System.Linq.Expressions", "System.Net", "System.Net.Http",
+            "System.Net.Mail", "System.Net.NetworkInformation", "System.Net.Security", "System.Net.Sockets",
+            "System.Runtime.CompilerServices", "System.Runtime.InteropServices", "System.Text.Encodings.Web",
+            "System.Text.RegularExpressions", "System.Threading", "System.Threading.Tasks", "System.Text.Json",
+        ];
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:csharp_script:allowed_assemblies"] = string.Join(',', assemblies),
+            ["tools:config:csharp_script:assembly_config_action"] = "override",
+            ["tools:config:csharp_script:max_assemblies"] = "4",
+        }).Build();
+        var engine = new CSharpScriptEngine(new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), new ToolConfig(config), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope)) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+
+        var result = await engine.ExecuteAsync("JsonSerializer.Serialize(1)", ScriptKind.Expression, context, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("1", result.Output);
+    }
+
     /// <summary>Imports and namespace qualifiers do not grant access to restricted APIs.</summary>
     [Theory]
     [InlineData("Console.WriteLine(25)", null, "Console access is prohibited. Return the result as the script's final expression.")]
@@ -88,6 +121,10 @@ public sealed partial class ScratchpadScriptTests : IDisposable
     [InlineData("System.Text.Json.JsonDocument.Parse(\"{}\")", "System.Text.Json.Serialization", "Namespace 'System.Text.Json' is not permitted")]
     [InlineData("dynamic value = 25; value", null, "The 'dynamic' construct is prohibited")]
     [InlineData("#r \"System.Console\"\n25", null, "Script directives are prohibited")]
+    [InlineData("nameof(CryptoConfig.CreateFromName)", null, "Only SHA256.HashData(byte[]) is permitted for cryptography.")]
+    [InlineData("nameof(SHA256.Create)", null, "Only SHA256.HashData(byte[]) is permitted for cryptography.")]
+    [InlineData("using Digest = System.Security.Cryptography.SHA256; nameof(Digest.Create)", "System.Security.Cryptography", "Only SHA256.HashData(byte[]) is permitted for cryptography.")]
+    [InlineData("nameof(HashAlgorithm.Create)", "System.Security.Cryptography", "Only SHA256.HashData(byte[]) is permitted for cryptography.")]
     public async Task WorkerExplainsRejectedCapabilities(string code, string? allowedAssemblies, string expectedError)
     {
         var scope = CreateScope();
@@ -97,6 +134,7 @@ public sealed partial class ScratchpadScriptTests : IDisposable
             builder.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["tools:config:csharp_script:allowed_assemblies"] = allowedAssemblies,
+                ["tools:config:csharp_script:assembly_config_action"] = "override",
             });
         }
 
@@ -145,7 +183,6 @@ public sealed partial class ScratchpadScriptTests : IDisposable
                 ["tools:config:csharp_script:timeout_ms"] = 5000,
                 ["tools:config:csharp_script:max_output_bytes"] = 65536,
                 ["tools:config:csharp_script:max_code_characters"] = 65536,
-                ["tools:config:csharp_script:max_assemblies"] = 32,
                 ["tools:config:csharp_script:max_assembly_name_characters"] = 128,
                 ["tools:config:csharp_script:max_assembly_setting_characters"] = 4096,
             }.ToImmutableDictionary(),

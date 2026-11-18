@@ -40,13 +40,38 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         };
     }
 
-    /// <summary>JSON is available by default while explicit trusted configuration can remove it.</summary>
+    /// <summary>Trusted settings merge by default and can explicitly replace the defaults.</summary>
     [Fact]
     public void ScriptDefaultsIncludeJsonAndRespectExplicitConfiguration()
     {
         Assert.Contains("System.Text.Json", Load().ScriptAssemblies);
-        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq"}}}}""");
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq,System.Text.RegularExpressions"}}}}""");
+        var merged = Load().ScriptAssemblies;
+        Assert.Contains("System.Text.Json", merged);
+        Assert.Contains("System.Text.RegularExpressions", merged);
+        Assert.Single(merged, name => name == "System.Linq");
+
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq","assembly_config_action":"override"}}}}""");
         Assert.Equal(["System.Linq"], Load().ScriptAssemblies);
+    }
+
+    /// <summary>The removed assembly-count setting does not prevent existing machine policy from loading.</summary>
+    [Fact]
+    public void LegacyScriptAssemblyCapIsIgnored()
+    {
+        const string capKey = "tools:config:csharp_script:max_assemblies";
+        const string nameLimitKey = "tools:config:csharp_script:max_assembly_name_characters";
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"max_assemblies":4}}}}""");
+        File.WriteAllText(_paths.MachineConfiguration, """
+            {"enforced":{"tools":{"config":{"csharp_script":{"max_assemblies":4,"max_assembly_name_characters":64}}}}}
+            """);
+
+        var policy = Load();
+
+        Assert.DoesNotContain(capKey, policy.ResourceLimits.Keys);
+        Assert.Equal(64, policy.ResourceLimits[nameLimitKey]);
+        var defaults = PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAllowedAssemblies.Split(',');
+        Assert.Equal(defaults.Order(StringComparer.Ordinal), policy.ScriptAssemblies.Order(StringComparer.Ordinal));
     }
 
     /// <summary>Ordinary tool preferences cannot broaden the trusted tool allowlist.</summary>

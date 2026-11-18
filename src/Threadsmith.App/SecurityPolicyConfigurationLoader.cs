@@ -214,29 +214,7 @@ internal static class SecurityPolicyConfigurationLoader
         }
 
         limits[exactRuntimeKey] = exactProcessLimit;
-        string[] assemblies = ["System.Linq", "System.Collections", "System.Collections.Generic", "System.Text.Json"];
-        foreach (var source in trusted.Concat(restrictions))
-        {
-            const string key = "tools:config:csharp_script:allowed_assemblies";
-            if (!source.Values.TryGetValue(key, out var node))
-            {
-                continue;
-            }
-
-            if (node.ValueKind != JsonValueKind.String)
-            {
-                throw Invalid(source, key);
-            }
-
-            var requested = (node.GetString() ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-            if (requested.Any(name => name.IndexOfAny(['*', '?', '/', '\\', ':']) >= 0))
-            {
-                throw Invalid(source, key);
-            }
-
-            assemblies = IsRestriction(source)
-                ? [.. assemblies.Intersect(requested, StringComparer.OrdinalIgnoreCase)] : requested;
-        }
+        var assemblies = ResolveScriptAssemblies(trusted, restrictions);
 
         ImmutableArray<string> ResolveList(string key, string[]? defaults, bool pathsAreRoots = false)
         {
@@ -485,6 +463,56 @@ internal static class SecurityPolicyConfigurationLoader
         });
         _ = WebFetchOptions.FromPolicy(policy);
         return policy with { Fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))) };
+    }
+
+    private static string[] ResolveScriptAssemblies(Source[] trusted, List<Source> restrictions)
+    {
+        const string actionKey = "tools:config:csharp_script:assembly_config_action";
+        var action = PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAssemblyConfigAction;
+        string[]? configured = null;
+        foreach (var source in trusted)
+        {
+            if (source.Values.TryGetValue(actionKey, out var node))
+            {
+                var value = node.ValueKind == JsonValueKind.String ? node.GetString() : null;
+                action = value is "merge" or "override" ? value : throw Invalid(source, actionKey);
+            }
+
+            configured = ReadAssemblies(source) ?? configured;
+        }
+
+        var assemblies = PermissionConfiguration.ToolsConfigCsharpScriptSettings.ResolveAllowedAssemblies(configured, action);
+        foreach (var source in restrictions)
+        {
+            if (source.Values.ContainsKey(actionKey))
+            {
+                throw Invalid(source, actionKey);
+            }
+
+            if (ReadAssemblies(source) is { } filter)
+            {
+                assemblies = [.. assemblies.Intersect(filter, StringComparer.OrdinalIgnoreCase)];
+            }
+        }
+
+        return assemblies;
+
+        static string[]? ReadAssemblies(Source source)
+        {
+            const string key = "tools:config:csharp_script:allowed_assemblies";
+            if (!source.Values.TryGetValue(key, out var node))
+            {
+                return null;
+            }
+
+            if (node.ValueKind != JsonValueKind.String || node.GetString() is not { } value
+                || value.IndexOfAny(['*', '?', '/', '\\', ':']) >= 0)
+            {
+                throw Invalid(source, key);
+            }
+
+            return value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        }
     }
 
     private static Threadsmith.Policies.Contracts.PolicyDocument? ReadCommandDocument(Source source)

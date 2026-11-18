@@ -79,8 +79,13 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(expectedWorkload, request.WorkloadClass);
         Assert.False(request.RequiredCapabilities.StructuredOutput);
         var hostPolicy = Assert.Single(request.Messages, message => message.SectionId == "child-host-policy");
+        var prompts = TestPromptLoader.Instance;
+        var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
+            "{{ImplementationValidation}}",
+            prompts.Get(PromptFileNames.SystemImplementationValidationReadOnly),
+            StringComparison.Ordinal);
         Assert.Equal(
-            TestPromptLoader.Instance.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection),
+            prompts.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + inspection,
             hostPolicy.GetModelVisibleContent());
         Assert.Equal(ModelMessageRole.System, hostPolicy.Role);
         Assert.Same(hostPolicy, request.Messages[0]);

@@ -197,8 +197,9 @@ public sealed class ContextAssembler : IContextAssembler
         ArgumentNullException.ThrowIfNull(request);
         var promptProfileId = request.PromptProfileId ?? request.DefaultModelProfileId;
         using var promptScope = _prompts.BeginModelScope(promptProfileId);
+        var implementationValidation = _prompts.Get(PromptFileNames.SystemImplementationValidationWriteable);
         var stableSystemPolicy = _prompts.Get(PromptFileNames.SystemSystemPrompt)
-            + Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryInspection);
+            + Environment.NewLine + PromptAssetRenderer.RenderRepositoryInspection(_prompts, implementationValidation);
         var scratchpadPrompt = GetScratchpadPrompt();
         var systemPolicy = scratchpadPrompt is null
             ? stableSystemPolicy
@@ -647,6 +648,7 @@ public sealed class ContextAssembler : IContextAssembler
         {
             CreateAssetReference("host:stable-policy", PromptFileNames.SystemSystemPrompt, 0, _prompts.Get(PromptFileNames.SystemSystemPrompt)),
             CreateAssetReference("host:repository-inspection", PromptFileNames.SystemRepositoryInspection, 1, _prompts.Get(PromptFileNames.SystemRepositoryInspection)),
+            CreateAssetReference("host:implementation-validation", PromptFileNames.SystemImplementationValidationWriteable, 2, implementationValidation),
         };
         if (scratchpadPrompt is not null)
         {

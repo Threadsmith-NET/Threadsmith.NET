@@ -6,7 +6,14 @@ For execution rules, available file methods, and tested examples, see the [scrip
 
 ## Configuration and lifecycle
 
-Configure `tools:config:csharp_script:allowed_assemblies`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, and JSON; explicit allowlists replace those defaults. See the [configuration example](../user-guide.md) in the user guide.
+Configure `tools:config:csharp_script:allowed_assemblies`, `assembly_config_action`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, JSON, and SHA-256 hashing of byte arrays.
+
+- `merge` (default) adds the configured comma-separated names to the built-in list and removes exact duplicates.
+- `override` uses only the configured names. An empty `allowed_assemblies` string clears the optional list; omitting `allowed_assemblies` keeps the defaults if no trusted layer supplies a list.
+
+Trusted configuration precedence selects one list and one action; lists from different sources are not combined. Machine-enforced `allowed_assemblies` still narrows the result, and worker restrictions still apply. If you relied on the previous replacement behavior, set `assembly_config_action` to `override`. See the [configuration example](../user-guide.md) in the user guide.
+
+There is no assembly-count cap. The former `max_assemblies` setting is ignored and can be removed from existing configuration. Limits on the length of each name and the total setting still apply; see [scripting resource limits](resource-limits.md#toolsconfigcsharp_script).
 
 The host prepares one unused worker in the background at startup by default. Set `tools:config:csharp_script:NumberOfWarmWorkersInPool` to change that count; `0` disables the pool and starts a fresh worker for each invocation. Set `tools:config:csharp_script:WorkerCreationTimeOut` to change the creation/acquisition timeout in milliseconds (default `3000`). These are ordinary startup preferences, not permission grants; restart the application after changing them.
 

@@ -407,9 +407,10 @@ public sealed class SdkHttpTransportTests
             },
         };
 
-        await Assert.ThrowsAnyAsync<Exception>(
-            () => transport.StartAsync(profile, new Dictionary<string, string>()));
+        var failure = await Assert.ThrowsAsync<HttpRequestException>(() => transport.StartAsync(
+            profile, new Dictionary<string, string>(), TestContext.Current.CancellationToken));
 
+        Assert.Equal(HttpStatusCode.InternalServerError, failure.StatusCode);
         Assert.Equal(1, callback.ReleaseCount);
     }
 

@@ -165,10 +165,22 @@ public sealed record PermissionConfiguration
     /// <summary>Configuration shape for tools:config:csharp_script; metadata owns source admission.</summary>
     public sealed record ToolsConfigCsharpScriptSettings
     {
+        /// <summary>Default platform references and imports for C# scripts. Worker API restrictions still apply.</summary>
+        public const string DefaultAllowedAssemblies =
+            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography";
+
+        /// <summary>Default behavior for configured C# script assemblies.</summary>
+        public const string DefaultAssemblyConfigAction = "merge";
+
         /// <summary>Configuration contract for tools:config:csharp_script:allowed_assemblies.</summary>
         [JsonPropertyName("allowed_assemblies")]
         [ConfigurationPermission(Shape = PermissionInputShape.Scalar)]
         public string? AllowedAssemblies { get; init; }
+
+        /// <summary>Combines configured assembly names with the defaults or replaces them.</summary>
+        [JsonPropertyName("assembly_config_action")]
+        [ConfigurationPermission(Shape = PermissionInputShape.Scalar)]
+        public string? AssemblyConfigAction { get; init; }
 
         /// <summary>Configuration contract for tools:config:csharp_script:timeout_ms.</summary>
         [JsonPropertyName("timeout_ms")]
@@ -185,11 +197,6 @@ public sealed record PermissionConfiguration
         [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 65536)]
         public int? MaxCodeCharacters { get; init; }
 
-        /// <summary>Configuration contract for tools:config:csharp_script:max_assemblies.</summary>
-        [JsonPropertyName("max_assemblies")]
-        [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 32)]
-        public int? MaxAssemblies { get; init; }
-
         /// <summary>Configuration contract for tools:config:csharp_script:max_assembly_name_characters.</summary>
         [JsonPropertyName("max_assembly_name_characters")]
         [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 128)]
@@ -199,6 +206,24 @@ public sealed record PermissionConfiguration
         [JsonPropertyName("max_assembly_setting_characters")]
         [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 4096)]
         public int? MaxAssemblySettingCharacters { get; init; }
+
+        /// <summary>Resolves the configured assembly names before any enforced restrictions.</summary>
+        /// <param name="configured">The configured names, or null to use the defaults.</param>
+        /// <param name="action">Whether to merge with or override the defaults.</param>
+        /// <returns>The effective names, without duplicates.</returns>
+        public static string[] ResolveAllowedAssemblies(string[]? configured, string action)
+        {
+            var defaults = DefaultAllowedAssemblies.Split(',');
+            var assemblies = action switch
+            {
+                DefaultAssemblyConfigAction => defaults.Concat(configured ?? []),
+                "override" => configured ?? defaults,
+                _ => throw new InvalidDataException("assembly_config_action must be 'merge' or 'override'."),
+            };
+
+            // The worker also uses these values as case-sensitive namespace names.
+            return [.. assemblies.Distinct(StringComparer.Ordinal)];
+        }
     }
 
     /// <summary>Configuration shape for tools:config; metadata owns source admission.</summary>

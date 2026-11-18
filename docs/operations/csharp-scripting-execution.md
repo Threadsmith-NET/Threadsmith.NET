@@ -43,7 +43,7 @@ Declare `csharp_script` as a required tool when a native skill needs it. Packagi
 ## Execution and results
 
 - Use `kind: "expression"` for a value or `kind: "statement"` for multiple statements. The default is `expression`. Return a final expression without a trailing semicolon, or use `return` inside a statement block.
-- `System` is imported automatically. Defaults also import and permit `System.Linq`, `System.Collections`, `System.Collections.Generic`, and `System.Text.Json`. Explicit `allowed_assemblies` configuration can restrict these APIs; imports do not grant permissions.
+- `System` is imported automatically. Defaults also import `System.Linq`, `System.Collections`, `System.Collections.Generic`, `System.Text.Json`, and `System.Security.Cryptography`. The worker permits only `SHA256.HashData(byte[])` for cryptography, even if trusted configuration explicitly includes the cryptography namespace. Trusted configuration can replace the optional defaults with `assembly_config_action: "override"` and an explicit `allowed_assemblies` list. Worker restrictions still apply.
 - Console access is prohibited. The returned value is converted with `.ToString()`; collections are not automatically serialized. Return readable text with `string.Join`, or explicitly serialize supported data with `JsonSerializer.Serialize`.
 - Use `using (...) { ... }` to dispose resources. The current script compiler rejects top-level `using var` declarations.
 - Each call runs in a fresh, single-use worker, which may already be prewarmed. Variables do not persist between calls. For either input form, the host saves a unique `.csx` execution copy in the session scratchpad and returns its path.

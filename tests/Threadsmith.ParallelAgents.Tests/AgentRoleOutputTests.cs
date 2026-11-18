@@ -42,8 +42,12 @@ public sealed partial class AgentRoleOutputTests
         ];
         Assert.Equal(expectedRoles, messages.Select(message => message.Role));
         Assert.Equal(expectedSections, messages.Select(message => message.SectionId));
+        var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
+            "{{ImplementationValidation}}",
+            prompts.Get(PromptFileNames.SystemImplementationValidationReadOnly),
+            StringComparison.Ordinal);
         Assert.Equal(
-            prompts.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + prompts.Get(PromptFileNames.SystemRepositoryInspection),
+            prompts.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + inspection,
             messages[0].GetModelVisibleContent());
         Assert.Equal(prompts.Get(amendmentFile), messages[1].GetModelVisibleContent());
         Assert.NotEqual(messages[0].GetModelVisibleContent(), messages[1].GetModelVisibleContent());

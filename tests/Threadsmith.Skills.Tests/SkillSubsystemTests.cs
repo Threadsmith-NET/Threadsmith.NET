@@ -1712,8 +1712,8 @@ public sealed partial class SkillSubsystemTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromException<CodeExploreResult>(
                 new InvalidOperationException("The skill projection test should not execute code_explore."));

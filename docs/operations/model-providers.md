@@ -80,6 +80,12 @@ Repository provider/model arrays merge by stable ID. Matching entries recursivel
 
 The OpenAI-compatible adapter sends the request output limit as `max_completion_tokens`. It does not derive a character cutoff from that token limit or discard completed responses through a second estimate-based output check. Configured stream-byte limits remain independent. If the server omits usage, fallback token counts are marked as estimates: they support accounting and configured aggregate budgets, but are not used to reject a child response against the model's output-token maximum.
 
+## Busy-provider retry window
+
+All provider integrations retry rate limits and overloads for 15 seconds from the first busy failure. Configure `"retryBusyTimeoutSeconds": 15` on a model entry; Anthropic also accepts it under provider `defaults`. Values from 0 through 4,294,967 seconds are accepted; zero disables busy retries. Omitted settings use 15 seconds. Legacy `model.profiles` configuration uses `retry.busyTimeoutSeconds`.
+
+The window covers backoff and in-flight retries until response data is committed. Expiry returns the retained provider error, including its HTTP status/code, rather than a generic request-timeout error. Backoff remains exponential, starting at at least 250 ms and capped at five seconds (or a longer configured base delay). `Retry-After` is respected but cannot extend the window. A shorter overall request deadline or caller cancellation still stops work first. `retryMaxAttempts` applies to other transient failures, not busy failures. To disable all retries, set `retryMaxAttempts` to 1 and `retryBusyTimeoutSeconds` to 0.
+
 ## Native OpenAI Codex
 
 The Codex endpoint does not support `max_output_tokens`. Threadsmith uses the requested output budget for input-capacity planning and, for summaries, length guidance in the prompt. It does not discard a completed response merely for exceeding that request budget. Reported output usage is still checked against the configured model profile's separate `maximumOutputTokens`, and configured stream-byte and tool-call limits remain in effect. Usage is recorded even when the profile maximum rejects a response. This distinction applies to main conversations and subagents alike; providers that support a request output limit still receive it.

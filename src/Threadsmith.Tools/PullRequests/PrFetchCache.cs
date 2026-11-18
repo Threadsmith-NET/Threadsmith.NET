@@ -60,7 +60,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
                     existing.Changed.TrySetResult();
                 }
 
-                entry = new Entry(_ownerCancellation, input.Refresh);
+                entry = new Entry(input.Refresh, _ownerCancellation);
                 _entries[key] = entry;
 
                 // Owned by the scope and observed by readers; failures are converted into entry state.
@@ -388,7 +388,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
 
     private sealed class Entry
     {
-        public Entry(CancellationToken ownerCancellation, bool isRefresh)
+        public Entry(bool isRefresh, CancellationToken ownerCancellation = default)
         {
             Cancellation = CancellationTokenSource.CreateLinkedTokenSource(ownerCancellation);
             IsRefresh = isRefresh;

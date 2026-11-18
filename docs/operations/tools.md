@@ -6,6 +6,8 @@ An explicit trusted `tools.allow: []` denies all model tools. Omit the key to in
 
 Intelligence/archeology checkboxes control their individual tool preferences. Their shared service lifecycle remains under `/intelligence enable` and `/intelligence disable`; tool toggles do not start or stop that service. Model-driven history reads also honor common Git-tool preferences, so enable the required history readers explicitly. MCP capability consent/version approval and extension connection/loading remain separate prerequisites.
 
+An exact call that returns `InvalidArguments` cannot be repeated during the same run, even when its tool permits repeated reads. Parent, child and model-driven skill loops return the existing duplicate-call correction; the model must change the arguments. Successful reads and transient execution failures retain the tool's normal repeat allowance.
+
 The built-in tool registry includes:
 
 | Tool | Minimum trust | Approval | Purpose |

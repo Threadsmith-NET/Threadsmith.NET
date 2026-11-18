@@ -19,14 +19,22 @@ public sealed class ToolImageAdmissionTests
     {
         ImageArtifact Image(string id, int bytes) => new()
         {
-            Id = id, ContentHash = new string('a', 64), MediaType = "image/png",
-            Width = 2, Height = 2, ByteLength = bytes, Source = "fixture",
+            Id = id,
+            ContentHash = new string('a', 64),
+            MediaType = "image/png",
+            Width = 2,
+            Height = 2,
+            ByteLength = bytes,
+            Source = "fixture",
         };
         var reserved = Enumerable.Repeat(Image("current", reservedBytes), count).ToList();
         ToolInvocationResult Result(string id) => new()
         {
-            ToolInvocationId = ToolInvocationId.New(), ToolId = "read_file", Succeeded = true,
-            Images = [Image(id, incomingBytes)], ResultJson = "{\"source\":\"fixture\"}",
+            ToolInvocationId = ToolInvocationId.New(),
+            ToolId = "read_file",
+            Succeeded = true,
+            Images = [Image(id, incomingBytes)],
+            ResultJson = "{\"source\":\"fixture\"}",
         };
         var original = Result("first");
         var first = ToolEvidenceAdmission.AdmitImages(original, reserved);

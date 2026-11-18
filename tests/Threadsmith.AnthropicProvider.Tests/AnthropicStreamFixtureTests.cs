@@ -270,14 +270,14 @@ public sealed class AnthropicStreamFixtureTests
     }
 
     [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    [InlineData(4)]
-    public async Task StreamAsync_RateLimit_UsesConfiguredAttemptLimit(int maximumAttempts)
+    [InlineData(0, 1)]
+    [InlineData(1, 3)]
+    [InlineData(15, 7)]
+    public async Task StreamAsync_RateLimit_UsesConfiguredBusyWindow(int seconds, int expectedAttempts)
     {
         var handler = new TestAnthropicHandler(TestAnthropic.Event("error", new { type = "error", error = new { type = "rate_limit_error", message = "SECRET" } }));
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var profile = TestAnthropic.Profile() with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero } };
+        var profile = TestAnthropic.Profile() with { RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.FromSeconds(seconds) } };
         var chunks = new List<ModelChunk>();
         var provider = new AnthropicModelProvider(client, profile, "test-key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
         await Assert.ThrowsAsync<TransientModelException>(async () =>
@@ -287,15 +287,15 @@ public sealed class AnthropicStreamFixtureTests
                 chunks.Add(chunk);
             }
         });
-        Assert.Equal(maximumAttempts, handler.Requests.Count);
-        Assert.Equal(maximumAttempts > 1 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
+        Assert.Equal(expectedAttempts, handler.Requests.Count);
+        Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
     }
 
     /// <summary>The host retries only its reviewed HTTP status set and disposes no shared transport.</summary>
     [Theory]
     [InlineData(408, 3)]
     [InlineData(409, 3)]
-    [InlineData(429, 3)]
+    [InlineData(429, 7)]
     [InlineData(500, 3)]
     [InlineData(400, 1)]
     [InlineData(401, 1)]

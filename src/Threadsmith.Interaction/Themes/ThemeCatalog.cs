@@ -9,6 +9,9 @@ using Threadsmith.Interaction.Presentation;
 /// <param name="FooterSeparator">Separator reserved for footer rendering.</param>
 internal sealed record TuiThemeUi(string Spinner, string SelectionMarker, string FooterSeparator)
 {
+    /// <summary>Gets whether fenced blocks use standard ASCII box glyphs.</summary>
+    internal bool FencedCodeAscii { get; init; }
+
     /// <summary>Gets the compiled UI defaults.</summary>
     internal static TuiThemeUi Default { get; } = new("dots", ">", " | ");
 }

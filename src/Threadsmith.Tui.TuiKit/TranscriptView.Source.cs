@@ -6,8 +6,7 @@ using Threadsmith.Interaction.Presentation;
 /// <summary>Source controls and exact selection mapping for the retained transcript.</summary>
 internal sealed partial class TranscriptView
 {
-    private readonly ISourceHighlighter _highlighter;
-    private readonly Dictionary<string, SourceDocument> _sourcePreviews = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _sourcePreviews = new(StringComparer.Ordinal);
     private SourceDocument? _sourceDocument;
 
     /// <summary>Gets or sets the host-approved full-source action for this view.</summary>
@@ -28,6 +27,12 @@ internal sealed partial class TranscriptView
 
     private bool ActivateControl(string id)
     {
+        if (id.StartsWith("fence:", StringComparison.Ordinal))
+        {
+            var block = _fencedRows.Values.Select(row => row.Block).FirstOrDefault(block => BlockControlId(block) == id);
+            return block is not null && ActivateBlock(new BlockAction(block, _blockGeneration));
+        }
+
         if (!id.StartsWith("view-script:", StringComparison.Ordinal))
         {
             return ToggleDisclosure(id);
@@ -57,36 +62,38 @@ internal sealed partial class TranscriptView
         var firstId = _lines.LastOrDefault()?.Id ?? _nextId;
         if (detail is not { Availability: ToolSourceAvailability.Available, Source: { } source })
         {
-            AppendContent(new("C# script — source unavailable (live retention limit or restored result).\n", PresentationTextRole.Muted));
+            AppendContent(new("C# script execution — source unavailable (live retention limit or restored result).\n", PresentationTextRole.Muted));
         }
         else
         {
             var expanded = _expandedDisclosures.Contains(id);
-            var header = $"[{(expanded ? '-' : '+')}] C# script\n";
-            SourceDocument? visiblePreview = null;
+            var header = $"[{(expanded ? '-' : '+')}] C# script execution\n";
+            const string actionText = "   └ View full script…\n";
+            string? visiblePreview = null;
             var footer = string.Empty;
             if (expanded)
             {
                 var preview = SourceDocument.Preview(source);
-                if (!_sourcePreviews.TryGetValue(id, out var document))
+                if (!_sourcePreviews.TryGetValue(id, out var body))
                 {
-                    document = new SourceDocument(preview.Text, detail.Language, _highlighter);
-                    _sourcePreviews.Add(id, document);
+                    // Match feedback detail lines without tokenizing source or interpreting markup.
+                    body = "   │ " + Safe(preview.Text).Replace("\n", "\n   │ ", StringComparison.Ordinal) + "\n";
+                    _sourcePreviews.Add(id, body);
                 }
 
-                footer = preview.Truncated ? "\n[Preview truncated: first 20 lines / 8,192 characters]\n" : "\n";
+                footer = preview.Truncated ? "   │ [Preview truncated: first 20 lines / 8,192 characters]\n" : string.Empty;
                 var result = string.Concat(textItem.Segments.Select(segment => segment.Text)) + "\n";
-                if (FitsDisclosure(result + header + document.DisplaySource + footer + "View full script…\n"))
+                if (FitsDisclosure(result + header + body + footer + actionText))
                 {
-                    visiblePreview = document;
+                    visiblePreview = body;
                 }
                 else
                 {
-                    header = "[-] C# script — Preview omitted: retention limits.\n";
-                    if (!FitsDisclosure(result + header + "View full script…\n"))
+                    header = "[-] C# script execution — Preview omitted: retention limits.\n";
+                    if (!FitsDisclosure(result + header + actionText))
                     {
                         // Same size as the collapsed header: do not evict output just to explain omission.
-                        header = "[!] C# script\n";
+                        header = "[!] C# script execution\n";
                     }
                 }
             }
@@ -96,13 +103,19 @@ internal sealed partial class TranscriptView
             _disclosureHeaders[headerId] = id;
             if (visiblePreview is not null)
             {
-                AppendSourceDocument(visiblePreview);
-                AppendContent(new(footer, PresentationTextRole.Muted));
+                AppendContent(new(visiblePreview + footer, PresentationTextRole.Muted));
             }
 
             var actionId = _lines.LastOrDefault()?.Id ?? _nextId;
-            AppendContent(new("View full script…\n", PresentationTextRole.Hyperlink));
-            _disclosureHeaders[actionId] = "view-" + id;
+            AppendContent(new("   └ ", PresentationTextRole.Muted));
+            AppendContent(new(actionText[5..], PresentationTextRole.Hyperlink));
+            for (var index = FirstSourceLine(actionId); index < _lines.Count; index++)
+            {
+                if (_lines[index].Text.Length > 0)
+                {
+                    _disclosureHeaders[_lines[index].Id] = "view-" + id;
+                }
+            }
         }
 
         for (var index = FirstSourceLine(firstId); index < _lines.Count; index++)

@@ -384,7 +384,7 @@ public sealed class EditAnalyzerTestsAutomaticGraphReplacementUsesCurrentInputs 
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
         const string after = Violations + "\n// config edit";
         var command = new ApplySourceEditCommand(session, RunId.New(), workspace, Guid.NewGuid(), new() { Rationale = "Check refreshed analyzer inputs.", Mutations = [] });
-        var snapshots = new MutationEffectSnapshot(MutationSetId.New(), [], [..AutomaticSnapshot(fixture.Root, file, Violations, after).Endpoints, ..AutomaticSnapshot(fixture.Root, input, previousInput, inputText).Endpoints]);
+        var snapshots = new MutationEffectSnapshot(MutationSetId.New(), [], [.. AutomaticSnapshot(fixture.Root, file, Violations, after).Endpoints, .. AutomaticSnapshot(fixture.Root, input, previousInput, inputText).Endpoints]);
         Assert.NotNull(await engine.AnalyzeCandidateAsync(command, fixture.Root, snapshots, TimeSpan.Zero, ct));
         await File.WriteAllTextAsync(file, after, ct);
         await File.WriteAllTextAsync(input, inputText, ct);

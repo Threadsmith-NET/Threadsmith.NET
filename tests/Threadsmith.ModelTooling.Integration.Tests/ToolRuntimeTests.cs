@@ -3905,8 +3905,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateRichCodeExploreResult());
@@ -3989,8 +3989,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = CreateRichCodeExploreResult() with
@@ -4015,8 +4015,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateManyImpactCodeExploreResult());
@@ -4029,8 +4029,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateZeroItemImpactCodeExploreResult());
@@ -4043,8 +4043,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(CreateLongArtifactContinuationCodeExploreResult());
@@ -4059,8 +4059,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Request = request;
@@ -4076,8 +4076,8 @@ public static partial class ToolRuntimeTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             WasCalled = true;
             throw new InvalidOperationException("The no-workspace branch should not call the semantic service.");

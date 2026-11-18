@@ -81,7 +81,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         {
             var state = new ParseState(_limits);
             var markdown = Markdown.Parse(source, Pipeline);
-            var blocks = ParseBlocks(markdown, state, 0);
+            var blocks = ParseBlocks(markdown, state, source, 0);
             var document = new MarkdownDocument(blocks) { Limits = _limits };
             MarkdownValidator.Validate(document);
             return new MarkdownParseResult(document, safeSource, null);
@@ -94,7 +94,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         }
     }
 
-    private ImmutableArray<MarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, int depth)
+    private ImmutableArray<MarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, string source, int depth)
     {
         state.CheckDepth(depth);
         var blocks = ImmutableArray.CreateBuilder<MarkdownBlock>();
@@ -112,23 +112,29 @@ internal sealed class MarkdownParser : IMarkdownParser
                         ParseInlines(heading.Inline, state, depth + 1)));
                     break;
                 case QuoteBlock quote:
-                    blocks.Add(new MarkdownQuote(ParseBlocks(quote, state, depth + 1)));
+                    blocks.Add(new MarkdownQuote(ParseBlocks(quote, state, source, depth + 1)));
                     break;
                 case ListBlock list:
-                    blocks.Add(ParseList(list, state, depth + 1));
+                    blocks.Add(ParseList(list, state, source, depth + 1));
                     break;
                 case CodeBlock code:
-                    var codeText = code.Lines.ToString() ?? string.Empty;
-                    if (codeText.Length > _limits.MaximumCodeCharacters)
                     {
-                        throw new InvalidOperationException("Code block exceeded its limit.");
+                        var codeText = code.Lines.ToString() ?? string.Empty;
+                        if (codeText.Length > _limits.MaximumCodeCharacters)
+                        {
+                            throw new InvalidOperationException("Code block exceeded its limit.");
+                        }
+
+                        var language = code is FencedCodeBlock fenced
+                            ? BoundLanguage(fenced.Info)
+                            : null;
+                        blocks.Add(new MarkdownCodeBlock(TerminalControlEncoder.Encode(codeText), language)
+                        {
+                            FencedBody = code is FencedCodeBlock fence ? MapFencedBody(fence, source, state) : null,
+                        });
+                        break;
                     }
 
-                    var language = code is FencedCodeBlock fenced
-                        ? BoundLanguage(fenced.Info)
-                        : null;
-                    blocks.Add(new MarkdownCodeBlock(TerminalControlEncoder.Encode(codeText), language));
-                    break;
                 case Table table:
                     blocks.Add(ParseTable(table, state, depth + 1));
                     break;
@@ -145,7 +151,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         return blocks.ToImmutable();
     }
 
-    private MarkdownList ParseList(ListBlock list, ParseState state, int depth)
+    private MarkdownList ParseList(ListBlock list, ParseState state, string source, int depth)
     {
         state.CheckDepth(depth);
         if (list.Count > _limits.MaximumListItems)
@@ -169,13 +175,74 @@ internal sealed class MarkdownParser : IMarkdownParser
                 isChecked = task.Checked;
             }
 
-            items.Add(new MarkdownListItem(isChecked, ParseBlocks(item, state, depth + 1)));
+            items.Add(new MarkdownListItem(isChecked, ParseBlocks(item, state, source, depth + 1)));
         }
 
         var start = int.TryParse(list.OrderedStart, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 1;
         return new MarkdownList(list.IsOrdered, start, items.ToImmutable());
+    }
+
+    private static MarkdownFencedBody MapFencedBody(FencedCodeBlock block, string source, ParseState state)
+    {
+        var ranges = ImmutableArray.CreateBuilder<(int Start, int Length)>();
+        for (var index = 0; index < block.Lines.Count; index++)
+        {
+            var line = block.Lines.Lines[index];
+            var start = line.Slice.Start;
+            if (!ReferenceEquals(line.Slice.Text, source))
+            {
+                // Markdig expands leading tabs in a generated slice. Its original line position
+                // and consumed display column still identify the admitted characters. A tab
+                // spanning that boundary remains one original character, never synthetic spaces.
+                start = line.Position;
+                var column = 0;
+                while (start < source.Length && source[start] is not '\r' and not '\n' && column < line.Column)
+                {
+                    var next = source[start] == '\t' ? column + 4 - (column % 4) : column + 1;
+                    if (next > line.Column)
+                    {
+                        break;
+                    }
+
+                    column = next;
+                    start++;
+                }
+            }
+
+            var end = start;
+            while (end < source.Length && source[end] is not '\r' and not '\n')
+            {
+                end++;
+            }
+
+            if (end < source.Length && source[end] == '\r')
+            {
+                end++;
+            }
+
+            if (end < source.Length && source[end] == '\n')
+            {
+                end++;
+            }
+
+            if (start < 0 || end > source.Length || (ranges.Count > 0 && start < ranges[^1].Start + ranges[^1].Length))
+            {
+                throw new InvalidOperationException("Invalid fenced source mapping.");
+            }
+
+            if (ranges.Count > 0 && ranges[^1].Start + ranges[^1].Length == start)
+            {
+                ranges[^1] = (ranges[^1].Start, end - ranges[^1].Start);
+            }
+            else
+            {
+                ranges.Add((start, end - start));
+            }
+        }
+
+        return new MarkdownFencedBody(source, state.FencedOrdinal++, block.ClosingFencedCharCount > 0, ranges.ToImmutable());
     }
 
     private MarkdownTable ParseTable(Table table, ParseState state, int depth)
@@ -395,6 +462,8 @@ internal sealed class MarkdownParser : IMarkdownParser
 
     private sealed class ParseState
     {
+        internal int FencedOrdinal { get; set; }
+
         private readonly MarkdownRenderingLimits _limits;
         private int _nodeCount;
 

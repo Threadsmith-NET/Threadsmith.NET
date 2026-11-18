@@ -259,9 +259,10 @@ public static class StandingPreferenceContextTests
         {
             var saved = await service.ExecuteAsync(
                 MemoryTestData.Operation("add", text) with
-            {
-                MemoryType = RepositoryMemoryType.StandingPreference, Concepts = ["unrelated"],
-            },
+                {
+                    MemoryType = RepositoryMemoryType.StandingPreference,
+                    Concepts = ["unrelated"],
+                },
                 ct);
             preferences.Add(saved.Entry!);
         }

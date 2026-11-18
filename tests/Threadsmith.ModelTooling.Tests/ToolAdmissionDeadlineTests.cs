@@ -90,7 +90,10 @@ public static class ToolAdmissionDeadlineTests
 
     private static ToolInvocationRequest Request(AdmissionTool tool) => new()
     {
-        SessionId = SessionId.New(), RunId = tool.RunId, ToolId = tool.Definition.Id, ArgumentsJson = "{}",
+        SessionId = SessionId.New(),
+        RunId = tool.RunId,
+        ToolId = tool.Definition.Id,
+        ArgumentsJson = "{}",
         Context = new ToolInvocationContext { RepositoryPath = Environment.CurrentDirectory, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "test" },
     };
 

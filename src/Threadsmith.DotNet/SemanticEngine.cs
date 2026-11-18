@@ -350,7 +350,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
                     return (Workspace: workspace, Solution: solution);
                 },
-                cancellationToken,
                 abandoned => DisposeCompilerWorkspace(abandoned.Workspace),
                 failedOperationCleanup: () =>
                 {
@@ -358,7 +357,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     {
                         DisposeCompilerWorkspace(failed);
                     }
-                });
+                },
+                cancellationToken: cancellationToken);
             evaluationProgress?.Complete();
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -2354,16 +2354,16 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
     private async Task<T> RunNonCooperativeAsync<T>(
         Func<CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken,
         Action<T>? abandonedResultCleanup = null,
         Solution? sourceSolution = null,
-        CancellationToken queryDeadline = default,
         Action? failedOperationCleanup = null,
+        Action<Task<T>>? retainActualOperation = null,
         CancellationToken? retainedCandidateLifetime = null,
-        Action<Task<T>>? retainActualOperation = null)
+        CancellationToken queryDeadline = default,
+        CancellationToken cancellationToken = default)
     {
         using var hostWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, queryDeadline);
-        var operationCancellation = new CompilerOperationCancellation(retainedCandidateLifetime ?? cancellationToken, queryDeadline, _logger);
+        var operationCancellation = new CompilerOperationCancellation(_logger, retainedCandidateLifetime ?? cancellationToken, queryDeadline);
         var operationToken = operationCancellation.Token;
         try
         {

@@ -118,9 +118,10 @@ csharp_prefer_simple_using_statement = true:error
 csharp_style_prefer_async_using = true:error
 
 # G-15: prefer var for local variables whenever C# can infer the type.
-csharp_style_var_for_built_in_types = true:suggestion
+# Keep explicit types when required, including collection-expression target typing (G-16).
+csharp_style_var_for_built_in_types = true:error
 csharp_style_var_when_type_is_apparent = true:error
-csharp_style_var_elsewhere = true:suggestion
+csharp_style_var_elsewhere = true:error
 
 # Modern, behavior-preserving expression forms.
 csharp_prefer_braces = true:error
@@ -179,7 +180,7 @@ dotnet_diagnostic.SA1124.severity = error
 # severities make violations errors in supporting IDEs, dotnet format, and
 # build hosts that enable code-style analysis.
 dotnet_diagnostic.IDE0003.severity = error
-dotnet_diagnostic.IDE0007.severity = suggestion
+dotnet_diagnostic.IDE0007.severity = error
 dotnet_diagnostic.IDE0008.severity = none
 dotnet_diagnostic.IDE0016.severity = error
 dotnet_diagnostic.IDE0017.severity = error
@@ -288,6 +289,22 @@ dotnet_naming_style.t_pascal_case.required_prefix = T
 dotnet_naming_style.t_pascal_case.capitalization = pascal_case
 
 # ---------------------------------------------------------------------------
+# .NET cancellation analyzers (G-13)
+# ---------------------------------------------------------------------------
+
+# Forward available cancellation tokens and place cancellation parameters last.
+dotnet_diagnostic.CA2016.severity = error
+dotnet_diagnostic.CA1068.severity = error
+
+# ---------------------------------------------------------------------------
+# Argument-validation analyzers (G-2)
+# ---------------------------------------------------------------------------
+
+# Use ArgumentException.ThrowIfNullOr* and ArgumentNullException.ThrowIfNull for argument validation.
+dotnet_diagnostic.CA1510.severity = error
+dotnet_diagnostic.CA1511.severity = error
+
+# ---------------------------------------------------------------------------
 # .NET performance analyzer compatibility
 # ---------------------------------------------------------------------------
 
@@ -322,7 +339,13 @@ dotnet_diagnostic.SA1202.severity = error
 # Preserve private-helper locality after CA1822 marks helpers static.
 dotnet_diagnostic.SA1204.severity = none
 dotnet_diagnostic.SA1206.severity = none
+# G-7 prefers _camelCase for private static fields (including readonly fields)
+# and constants; PascalCase remains permitted. These rules cannot express both alternatives
+# or limit the exception to those fields; field naming still requires review.
+dotnet_diagnostic.SA1303.severity = none
+dotnet_diagnostic.SA1306.severity = none
 dotnet_diagnostic.SA1309.severity = none
+dotnet_diagnostic.SA1311.severity = none
 dotnet_diagnostic.SA1313.severity = none
 # Threadsmith uses idiomatic camelCase tuple element names.
 dotnet_diagnostic.SA1316.severity = none

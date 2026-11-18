@@ -212,7 +212,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
         command.Parameters.AddWithValue("$mode", (int)entry.ConversationMode);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         _ = await reader.ReadAsync(cancellationToken);
-        var preview = await reader.IsDBNullAsync(1) ? entry.Preview : Bound(reader.GetString(1), MaximumPreviewCharacters);
+        var preview = await reader.IsDBNullAsync(1, cancellationToken) ? entry.Preview : Bound(reader.GetString(1), MaximumPreviewCharacters);
         var mode = reader.GetInt32(2);
         return entry with
         {

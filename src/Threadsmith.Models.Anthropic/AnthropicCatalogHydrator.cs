@@ -203,6 +203,7 @@ public static class AnthropicCatalogHydrator
         if (defaults.RequestOutputTokenReserve <= 0 || defaults.TimeoutSeconds < 0
             || defaults.MaximumStreamedBytes < 0 || defaults.MaximumToolCalls < 0
             || defaults.RetryMaxAttempts <= 0 || defaults.RetryDelayMilliseconds < 0
+            || defaults.RetryBusyTimeoutSeconds is < 0 or > ModelRetryPolicy.MaximumBusyTimeoutSeconds
             || defaults.IntendedWorkloadClasses is null || !Enum.IsDefined(defaults.SensitiveDataPolicy))
         {
             throw new InvalidOperationException("Anthropic request defaults contain invalid bounds or policy.");
@@ -313,6 +314,7 @@ public static class AnthropicCatalogHydrator
             MaximumToolCalls = defaults.MaximumToolCalls,
             RetryMaxAttempts = defaults.RetryMaxAttempts,
             RetryDelayMilliseconds = defaults.RetryDelayMilliseconds,
+            RetryBusyTimeoutSeconds = defaults.RetryBusyTimeoutSeconds,
             Compatibility = policy,
         };
     }

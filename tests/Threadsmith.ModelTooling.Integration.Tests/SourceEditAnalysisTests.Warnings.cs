@@ -145,6 +145,20 @@ public sealed class SourceEditAnalysisTestsMixedCompilerFindingsRespectEffective
         var props = Path.Combine(fixture.Root, "Directory.Build.props");
         var properties = await File.ReadAllTextAsync(props, ct);
         await File.WriteAllTextAsync(props, properties.Replace("</PropertyGroup>", $"<Nullable>enable</Nullable><TreatWarningsAsErrors>false</TreatWarningsAsErrors><WarningsAsErrors>{(promote ? "CS8602" : string.Empty)}</WarningsAsErrors></PropertyGroup>", StringComparison.Ordinal), ct);
+        // This test needs one known baseline error. Use a single target and declare
+        // the error in the project under test so SDK and solution loading cannot add
+        // an extra copy of the baseline finding through another project or target.
+        var projectPath = Path.Combine(fixture.Root, "Contracts", "Contracts.csproj");
+        var projectText = await File.ReadAllTextAsync(projectPath, ct);
+        var singleTarget = projectText.Replace(
+            "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>",
+            "<TargetFramework>net10.0</TargetFramework>",
+            StringComparison.Ordinal);
+        await File.WriteAllTextAsync(projectPath, singleTarget, ct);
+        var path = Path.Combine(fixture.Root, "Contracts", "Services.cs");
+        var original = await File.ReadAllTextAsync(path, ct) + "\npublic class BaselineError { public int Value => MissingBaselineValue; }";
+        await File.WriteAllTextAsync(path, original, ct);
+
         await using var events = new DomainEventStream();
         var options = new EditAnalysisOptions
         {
@@ -155,9 +169,8 @@ public sealed class SourceEditAnalysisTestsMixedCompilerFindingsRespectEffective
         };
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = options }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
-        await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
-        var path = Path.Combine(fixture.Root, "Contracts", "Services.cs");
-        var original = await File.ReadAllTextAsync(path, ct);
+        await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, fixture.Root, projectPath, RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
         var changed = original + "\n#nullable enable\n" + (suppress ? "#pragma warning disable CS8602\n" : string.Empty) + "public class WarningEdit { public int M(string? value) => value.Length; public MissingType Value; }";
         var analysis = await AnalyzeCompletedAsync(engine, events, command, fixture.Root, Snapshot("Contracts/Services.cs", original, changed), ct);
         Assert.Equal(visibleWarning, analysis.Diagnostics.Any(item => item.Code == "CS8602"));
@@ -167,14 +180,21 @@ public sealed class SourceEditAnalysisTestsMixedCompilerFindingsRespectEffective
         }
 
         Assert.Equal(exclude, analysis.OutputFiltered);
-        Assert.Equal(retained == 1 && !exclude, analysis.DiagnosticsTruncated);
-        Assert.Equal(retained != 1 || exclude, analysis.ErrorComparisonAvailable);
-        Assert.Equal(0, analysis.ResolvedErrors);
+        Assert.True(
+            analysis.DiagnosticsTruncated == (retained == 1 && !exclude),
+            $"Errors: {analysis.CurrentErrors}. Warnings: {analysis.CurrentWarnings}. Retention: {analysis.FindingRetentionTruncated}. Projection: {analysis.FindingProjectionTruncated}. Findings: {string.Join(", ", analysis.Diagnostics.Select(item => item.Code))}. Omissions: {string.Join(", ", analysis.Omissions)}.");
+        var comparisonAvailable = retained != 1 || exclude;
+        Assert.Equal(comparisonAvailable, analysis.ErrorComparisonAvailable);
+        if (comparisonAvailable)
+        {
+            Assert.Equal(0, analysis.ResolvedErrors);
+        }
+
         if (exclude)
         {
             Assert.DoesNotContain(analysis.Diagnostics, item => item.Code is "CS0246" or "CS8602");
-            Assert.Equal(1, analysis.CurrentErrors); // Unrelated fixture entry-point error remains visible.
-            Assert.Contains(analysis.Diagnostics, item => item.Code == "CS8805");
+            Assert.Equal(1, analysis.CurrentErrors); // The explicit baseline error remains visible.
+            Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0103");
             var compilation = await engine.CaptureMutationSnapshot().Solution.Projects.Single(project => project.Name == "Contracts").GetCompilationAsync(ct);
             Assert.NotNull(compilation);
             // Filtering is not installed as a Roslyn suppression option.
@@ -182,8 +202,12 @@ public sealed class SourceEditAnalysisTestsMixedCompilerFindingsRespectEffective
         }
         else
         {
-            Assert.True(analysis.CurrentErrors >= 2);
-            Assert.Equal(promote && !suppress ? 1 : 0, analysis.NewErrors - 1);
+            var introducedErrors = promote && !suppress ? 2 : 1;
+            Assert.Equal(1 + introducedErrors, analysis.CurrentErrors);
+            if (comparisonAvailable)
+            {
+                Assert.Equal(introducedErrors, analysis.NewErrors);
+            }
         }
 
         var passes = engine.EditAnalysisStatistics.DiagnosticPasses;

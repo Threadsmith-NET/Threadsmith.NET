@@ -133,6 +133,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
                 {
                     MaxAttempts = model.RetryMaxAttempts,
                     Delay = TimeSpan.FromMilliseconds(model.RetryDelayMilliseconds),
+                    BusyTimeout = TimeSpan.FromSeconds(model.RetryBusyTimeoutSeconds),
                 },
             })
             .ToArray();
@@ -178,6 +179,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
             || model.MaximumToolCalls < 0
             || model.RetryMaxAttempts <= 0
             || model.RetryDelayMilliseconds < 0
+            || model.RetryBusyTimeoutSeconds is < 0 or > ModelRetryPolicy.MaximumBusyTimeoutSeconds
             || model.SupportedReasoningLevels.Count == 0
             || model.SupportedReasoningLevels.Distinct().Count() != model.SupportedReasoningLevels.Count
             || !model.SupportedReasoningLevels.Contains(model.DefaultReasoningLevel))

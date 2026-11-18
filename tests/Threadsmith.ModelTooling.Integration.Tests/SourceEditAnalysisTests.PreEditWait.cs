@@ -58,7 +58,7 @@ public sealed class SourceEditAnalysisTestsPreEditAdmissionRequiresAllCandidateI
         {
             snapshot = snapshot with
             {
-                Endpoints = [..snapshot.Endpoints, new(removedPath, Hash(removed), null)],
+                Endpoints = [.. snapshot.Endpoints, new(removedPath, Hash(removed), null)],
             };
         }
         else if (operation == "graph")
@@ -69,7 +69,7 @@ public sealed class SourceEditAnalysisTestsPreEditAdmissionRequiresAllCandidateI
             var graphEdit = Snapshot(projectPath, project, replacement);
             snapshot = snapshot with
             {
-                Endpoints = [..snapshot.Endpoints, ..graphEdit.Endpoints],
+                Endpoints = [.. snapshot.Endpoints, .. graphEdit.Endpoints],
             };
         }
 
@@ -152,7 +152,7 @@ public sealed class SourceEditAnalysisTestsIncompleteCandidatesReturnWhileCompil
             var graph = Snapshot(projectPath, project, project + "\n");
             snapshot = snapshot with
             {
-                Endpoints = [..snapshot.Endpoints, ..graph.Endpoints],
+                Endpoints = [.. snapshot.Endpoints, .. graph.Endpoints],
             };
         }
 

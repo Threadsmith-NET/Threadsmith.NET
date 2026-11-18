@@ -194,11 +194,14 @@ public sealed record AnthropicModelDefaults
     /// <summary>Maximum tool calls per response.</summary>
     public int MaximumToolCalls { get; init; } = ModelProfile.DefaultMaximumToolCalls;
 
-    /// <summary>Maximum total attempts.</summary>
+    /// <summary>Maximum total attempts for non-busy transient failures.</summary>
     public int RetryMaxAttempts { get; init; } = 3;
 
     /// <summary>Retry delay in milliseconds.</summary>
     public int RetryDelayMilliseconds { get; init; } = 250;
+
+    /// <summary>Retry window in seconds from the first busy failure; zero disables busy retries.</summary>
+    public int RetryBusyTimeoutSeconds { get; init; } = 15;
 
     /// <summary>Whether classified sensitive input is permitted.</summary>
     public ModelSensitiveDataPolicy SensitiveDataPolicy { get; init; } = ModelSensitiveDataPolicy.Allowed;

@@ -12,8 +12,8 @@ internal static class Program
 {
     private static async Task Main(string[] args)
     {
-        bool hangOnShutdown = args.Contains("--hang-on-shutdown", StringComparer.Ordinal);
-        int pidFileIndex = Array.IndexOf(args, "--pid-file");
+        var hangOnShutdown = args.Contains("--hang-on-shutdown", StringComparer.Ordinal);
+        var pidFileIndex = Array.IndexOf(args, "--pid-file");
         if (pidFileIndex >= 0 && pidFileIndex + 1 < args.Length)
         {
             await File.WriteAllTextAsync(args[pidFileIndex + 1], Environment.ProcessId.ToString());
@@ -36,7 +36,7 @@ internal static class Program
             return;
         }
 
-        HostApplicationBuilder builder = Host.CreateApplicationBuilder([]);
+        var builder = Host.CreateApplicationBuilder([]);
         builder.Logging.ClearProviders();
         builder.Services
             .AddMcpServer()
@@ -45,7 +45,7 @@ internal static class Program
             .WithResources<TestResources>()
             .WithPrompts<TestPrompts>();
 
-        using IHost host = builder.Build();
+        using var host = builder.Build();
         await host.RunAsync();
         if (hangOnShutdown)
         {

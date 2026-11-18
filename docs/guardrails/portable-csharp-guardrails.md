@@ -100,9 +100,11 @@ public class MyService(ILogger logger, IProcessor processor)
 | Async methods | PascalCase + `Async` suffix | `GetNamedEntitiesAsync` |
 | Properties | PascalCase | `Name`, `AuthToken` |
 | Private instance fields | `_camelCase` | `_logger`, `_pipelineProcessor` |
-| Private static/const | PascalCase or `_camelCase` | `DefaultProviderName` |
+| Private static/const (including static readonly) | Prefer `_camelCase`; PascalCase is also permitted | `_defaultProviderName`, `DefaultProviderName` |
 | Method parameters | `camelCase` | `entityTypes`, `cancellationToken` |
 | Local variables | `camelCase` | `namedEntities`, `result` |
+
+Use `_camelCase` for new or renamed private static fields and constants; existing PascalCase names remain permitted. StyleCop rules SA1303, SA1306, and SA1311 are disabled because they reject permitted private static/const names. Their severity settings cannot express both alternatives or scope the exception to those fields, so field naming still requires review. This does not relax the `_camelCase` requirement for private instance fields.
 
 ### G-8: File-scoped namespaces preferred
 New files use `namespace X.Y;`. Block-scoped namespaces exist in legacy files but are not introduced in new files.

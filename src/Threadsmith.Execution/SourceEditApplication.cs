@@ -2,6 +2,8 @@ namespace Threadsmith.Execution;
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 
 /// <summary>Owns direct edit admission, exact review and durable effects without model-provider or plan dependencies.</summary>
@@ -26,6 +28,7 @@ public sealed class SourceEditApplication :
     private readonly IDomainEventStream _events;
     private readonly IExecutionArtifactPublisher _artifacts;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly ILogger<SourceEditApplication> _logger;
     private readonly ConcurrentDictionary<RunId, (SessionId SessionId, WorkspaceId WorkspaceId)> _runs = new();
     private readonly ConcurrentDictionary<WorkspaceId, (SessionId SessionId, RunId RunId, MutationSetId MutationSetId, Guid EffectId)> _rollbackEdits = new();
     private readonly ISourceEditAnalyzer? _analyzer;
@@ -56,7 +59,8 @@ public sealed class SourceEditApplication :
         ICommandHandler<GetMutationReviewCommand, StagedMutationSet>? reviews = null,
         ICommandHandler<SetMutationPreviewCommand, MutationPreview>? previews = null,
         EditAnalysisOptions? editAnalysisOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<SourceEditApplication>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
         ArgumentNullException.ThrowIfNull(rollbacks);
@@ -76,6 +80,7 @@ public sealed class SourceEditApplication :
         _events = events;
         _artifacts = artifacts;
         _sanitizer = sanitizer;
+        _logger = logger ?? NullLogger<SourceEditApplication>.Instance;
         _analyzer = analyzer;
         _semanticRefresh = semanticRefresh;
         var editOptions = editAnalysisOptions ?? new EditAnalysisOptions();
@@ -260,18 +265,16 @@ public sealed class SourceEditApplication :
             return null;
         }
 
-        SourceEditAnalysis? latest;
-        try
+        var latest = GetLatestFeedback(delivered, out var replacementPending);
+
+        // A failed lookup may have recorded its first failure on this delivery.
+        if (!_feedback.TryGetValue(sessionId, out var current) || current.EffectId != delivered.EffectId)
         {
-            latest = _analyzer?.GetLatestAnalysis(sessionId, delivered.RunId, delivered.WorkspaceId, delivered.EffectId);
-        }
-        catch (Exception)
-        {
-            // Unavailable validation does not undo the applied edit or discard its completion obligation.
-            return TakeUnavailableFeedback(delivered);
+            return null;
         }
 
-        if (HasPendingReplacement(delivered, latest))
+        delivered = current;
+        if (replacementPending)
         {
             // Refresh may still be publishing a completed candidate or installing
             // replacement analysis for a retired snapshot of the same applied effect.
@@ -280,7 +283,7 @@ public sealed class SourceEditApplication :
 
         if (latest?.Obsolete != false || (latest.CommittedGeneration is null && !latest.Pending && latest.Analyzers.Status != "pending"))
         {
-            return TakeUnavailableFeedback(delivered);
+            return TakeUnavailableFeedback(delivered, latest);
         }
 
         if (latest.Revision <= delivered.Revision || latest.CommittedGeneration is null)
@@ -330,7 +333,8 @@ public sealed class SourceEditApplication :
         {
             while (HasPendingFeedback(delivery, runId))
             {
-                if (HasPendingReplacement(delivery, GetLatestFeedback(delivery)) && _semanticRefresh is not null)
+                _ = GetLatestFeedback(delivery, out var replacementPending);
+                if (replacementPending && _semanticRefresh is not null)
                 {
                     await _semanticRefresh.EnsureCurrentAsync(sessionId, SemanticRefreshReason.HostMutation, waiting.Token);
                     continue;
@@ -355,11 +359,12 @@ public sealed class SourceEditApplication :
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            var failure = ReportFeedbackFailure(delivery, "Replacement semantic refresh", exception);
             await _events.PublishAsync(
-                new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Validation incomplete: replacement semantic analysis is unavailable; the edit's recorded disk outcome is unchanged."),
+                new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", failure.Omissions[0]),
                 cancellationToken);
             var current = _feedback.GetValueOrDefault(sessionId) ?? delivery;
-            return RequireFinalFeedbackReview(sessionId, TakeUnavailableFeedback(current) ?? feedback);
+            return RequireFinalFeedbackReview(sessionId, TakeUnavailableFeedback(current, failure) ?? feedback);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -793,44 +798,95 @@ public sealed class SourceEditApplication :
         return analysis;
     }
 
-    private SourceEditAnalysis? TakeUnavailableFeedback(FeedbackDelivery delivery)
+    private SourceEditAnalysis? TakeUnavailableFeedback(FeedbackDelivery delivery, SourceEditAnalysis? latest)
     {
+        var reason = latest switch
+        {
+            null => "No analysis was found for the applied edit; current validation is incomplete.",
+            { Obsolete: true } => "The applied edit's analysis was superseded without a pending replacement; current validation is incomplete.",
+            _ => "No committed generation is available for the applied edit; current validation is incomplete.",
+        };
+
         // Retain the validation obligation even after its one-time unavailable notice is consumed.
+        // Preserve omissions, but never present retired coverage as current coverage.
         return !delivery.UnavailableDelivered
             && _feedback.TryUpdate(delivery.SessionId, delivery with { UnavailableDelivered = true }, delivery)
             ? new SourceEditAnalysis
             {
                 EffectId = delivery.EffectId,
                 Revision = delivery.Revision + 1,
-                Omissions = ["The applied edit's semantic owner is unavailable or superseded; current validation is incomplete."],
+                Omissions = [reason, .. latest?.Omissions ?? []],
             }
             : null;
     }
 
-    private SourceEditAnalysis? GetLatestFeedback(FeedbackDelivery delivery)
+    private SourceEditAnalysis? GetLatestFeedback(FeedbackDelivery delivery) => GetLatestFeedback(delivery, out _);
+
+    private SourceEditAnalysis? GetLatestFeedback(FeedbackDelivery delivery, out bool replacementPending)
     {
+        replacementPending = false;
         try
         {
-            return _analyzer?.GetLatestAnalysis(delivery.SessionId, delivery.RunId, delivery.WorkspaceId, delivery.EffectId);
+            // Replacement installation precedes the coordinator becoming current. Read that
+            // state FIRST: reading an old analysis before a now-current refresh can otherwise
+            // misclassify a replacement that was installed between the two observations.
+            var refreshPending = _semanticRefresh is not null
+                && _semanticRefresh.TryGetWorkspaceId(delivery.SessionId, out var workspaceId)
+                && workspaceId == delivery.WorkspaceId && !_semanticRefresh.IsCurrent(delivery.SessionId);
+            var latest = _analyzer?.GetLatestAnalysis(delivery.SessionId, delivery.RunId, delivery.WorkspaceId, delivery.EffectId);
+            replacementPending = refreshPending && latest is null or { Obsolete: true } or { CommittedGeneration: null };
+            return latest;
         }
-        catch (Exception)
+        catch (Exception exception)
         {
-            // The validation gate and ordinary feedback path report unavailable coverage.
-            return null;
+            return ReportFeedbackFailure(delivery, "Semantic feedback lookup", exception);
         }
+    }
+
+    private SourceEditAnalysis ReportFeedbackFailure(FeedbackDelivery delivery, string operation, Exception exception)
+    {
+        // Multiple completion/gating reads may encounter the same failure. Log it once per
+        // effect, including its stack and host identities, while returning the reason each time.
+        while (_feedback.TryGetValue(delivery.SessionId, out var current)
+            && current.EffectId == delivery.EffectId && !current.FailureLogged)
+        {
+            if (_feedback.TryUpdate(delivery.SessionId, current with { FailureLogged = true }, current))
+            {
+                _logger.LogWarning(
+                    exception,
+                    "{Operation} failed for edit {EffectId}, workspace {WorkspaceId}, session {SessionId}, run {RunId}.",
+                    operation,
+                    delivery.EffectId,
+                    delivery.WorkspaceId.Value,
+                    delivery.SessionId.Value,
+                    delivery.RunId.Value);
+                break;
+            }
+        }
+
+        var detail = _sanitizer.Sanitize($"{exception.GetType().Name}: {exception.Message}");
+        if (detail.Length > 1024)
+        {
+            detail = detail[..1024] + "…";
+        }
+
+        return new SourceEditAnalysis
+        {
+            EffectId = delivery.EffectId,
+            Revision = delivery.Revision + 1,
+            Omissions = [$"{operation} failed ({detail}); current validation is incomplete. The edit's recorded disk outcome is unchanged."],
+        };
     }
 
     private bool HasPendingFeedback(FeedbackDelivery delivery, RunId runId)
     {
-        return delivery.RunId == runId && GetLatestFeedback(delivery) is { } latest
-            && (HasPendingReplacement(delivery, latest) || (!latest.Obsolete && (latest.Pending || latest.Analyzers.Status == "pending")));
-    }
+        if (delivery.RunId != runId)
+        {
+            return false;
+        }
 
-    private bool HasPendingReplacement(FeedbackDelivery delivery, SourceEditAnalysis? latest)
-    {
-        return latest is { Obsolete: true } or { CommittedGeneration: null } && _semanticRefresh is not null
-            && _semanticRefresh.TryGetWorkspaceId(delivery.SessionId, out var workspaceId)
-            && workspaceId == delivery.WorkspaceId && !_semanticRefresh.IsCurrent(delivery.SessionId);
+        var latest = GetLatestFeedback(delivery, out var replacementPending);
+        return replacementPending || (latest is { Obsolete: false } && (latest.Pending || latest.Analyzers.Status == "pending"));
     }
 
     private async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, CancellationToken cancellationToken)
@@ -912,6 +968,8 @@ public sealed class SourceEditApplication :
         public long? FinalFeedbackRevision { get; init; }
 
         public bool UnavailableDelivered { get; init; }
+
+        public bool FailureLogged { get; init; }
 
         public bool CarryForward { get; init; }
     }

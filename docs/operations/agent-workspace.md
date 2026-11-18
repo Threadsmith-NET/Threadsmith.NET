@@ -22,6 +22,14 @@ Tool calls appear inside the selected agent's output pane while they run, using 
 
 Delegated agents report their current named role and queued, running, or final status inside the live `delegate_agents` tool block. Each agent has one row that updates as lifecycle events arrive; repeated final checkpoints do not duplicate it. The completed tool block retains the final rows beneath its timer. Delegation-to-tool correlation uses the originating invocation ID, including when calls overlap. The automatic delegation GUID and `/agents` navigation notices are omitted; the explicit command remains available. On short panes, an omission count replaces progress rows that cannot fit.
 
+## Fenced answer blocks
+
+Fenced blocks in MAIN and child answers use rounded boxes. The content-type token appears at the top left; an unlabeled fence uses `text`. All content types receive the same treatment, including invalid data and unknown labels. The optional `ui.fencedCodeAscii` theme setting uses standard ASCII box glyphs instead.
+
+`[Copy]` appears near the top-right corner only when the active interactive backend advertises OSC 52 clipboard transport and the complete admitted body remains available. Click it, or focus output with F7, select the control with Ctrl+Up/Down, and activate it with Enter or Space. Copy preserves admitted tabs, spaces, blank lines, controls, and original line endings; it excludes Markdown container prefixes and display decoration. Controls stay escaped on screen. Copy uses the existing byte limit and surface transport; it never copies a truncated prefix. A successful dispatch says `Sent to terminal clipboard`; terminal policy may still refuse the write.
+
+Empty and unfinished blocks show their state without a copy action. Below 17 available display cells, a compact plain-text fallback replaces the box and has no action target. Copy controls are rebuilt after scrolling or reflow and released with retained content or closed child views. Source mode (`tui:renderMarkdown=false`), headless output, and stored answers remain unchanged.
+
 ## Child instructions
 
 Each child transcript starts with an **Instructions** block. It contains the host, role, repository, and assignment sections from the effective initial model request, plus provider instructions when present. Expanded shared context precedes child-specific context. The display uses a sanitized copy, not a task summary. It does not fetch evidence references or change model input, token usage, tools, or permissions.

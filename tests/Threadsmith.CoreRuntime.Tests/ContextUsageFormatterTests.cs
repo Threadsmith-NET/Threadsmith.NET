@@ -14,9 +14,12 @@ public static class ContextUsageFormatterTests
     {
         var first = new RepositoryMemoryContextItemProjection
         {
-            Id = RepositoryMemoryId.New(), Included = true, EstimatedTokens = 1,
+            Id = RepositoryMemoryId.New(),
+            Included = true,
+            EstimatedTokens = 1,
             Ownership = RepositoryMemoryOwnership.Intelligence,
-            Text = "Follow the existing service.", Rationale = "Included by qualified hybrid retrieval and context budget.",
+            Text = "Follow the existing service.",
+            Rationale = "Included by qualified hybrid retrieval and context budget.",
             Supports = [new RepositoryMemorySupport { Path = "src/Service.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
         RepositoryMemoryContextItemProjection[] items =

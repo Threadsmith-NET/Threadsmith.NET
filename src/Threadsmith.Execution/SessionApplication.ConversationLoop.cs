@@ -1477,10 +1477,14 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
-        foreach (var call in streamState.PendingToolCalls)
+        var registrationByOrdinal = streamState.PendingToolCalls
+            .Select(call => round.ToolRegistrations
+                .Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        for (var ordinal = 0; ordinal < streamState.PendingToolCalls.Count; ordinal++)
         {
-            var registration = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase));
-            var definition = ToolRuntimePolicy.ApplyCeiling(registration.Tool, round.InvocationContext?.SecurityPolicy).Definition;
+            var call = streamState.PendingToolCalls[ordinal];
+            var definition = ToolRuntimePolicy.ApplyCeiling(registrationByOrdinal[ordinal].Tool, round.InvocationContext?.SecurityPolicy).Definition;
             loopState.InvokedToolCalls.TryAdd(definition, call.ArgumentsJson);
             if (SemanticFirstSearchPolicy.IsSemanticInspectionTool(call.ToolName))
             {
@@ -1507,6 +1511,9 @@ public sealed partial class SessionApplication
             .Select(part => part.Image).OfType<ImageArtifact>().ToList();
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
+            var completedCall = streamState.PendingToolCalls[batchResult.Ordinal];
+            var completedDefinition = registrationByOrdinal[batchResult.Ordinal].Tool.Definition;
+            loopState.InvokedToolCalls.ObserveResult(completedDefinition, completedCall.ArgumentsJson, batchResult.Result);
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
             if (result.Suspension is not null)
             {

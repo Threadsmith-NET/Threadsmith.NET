@@ -21,7 +21,7 @@ public sealed class ConflictingDepBExtension : IThreadsmithExtension
     public ValueTask ActivateAsync(IExtensionActivationContext context, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
-        string version = VersionSource.GetVersion();
+        var version = VersionSource.GetVersion();
         context.Capabilities.RegisterTool(new ProbeToolCapability(version));
         return default;
     }

@@ -12,14 +12,16 @@ using Xunit;
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>Opted-in repeated child calls retain inherited ownership and ordinary evidence accounting.</summary>
-    [Fact]
-    public async Task RunAsync_AllowedDuplicatesReuseInheritedOperationScope()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_AllowedDuplicatesReuseInheritedOperationScope(bool invalidArguments)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
         var profile = CreateProfile();
-        var tool = new InspectMetadataTool(allowDuplicates: true);
+        var tool = new InspectMetadataTool(allowDuplicates: true) { Failure = invalidArguments ? new ToolArgumentValidationException("Invalid fixture arguments.") : null };
         var registry = new ToolRegistry([tool]);
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         var plan = CreatePlan(assignment);
@@ -37,10 +39,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             parent,
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
 
-        var outcome = await runner.RunAsync(plan, assignment);
+        var outcome = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Equal(0, outcome.Usage.Corrections);
-        Assert.Equal(2, evidence.Snapshot(plan.Provenance.SessionId).Count);
+        Assert.Equal(invalidArguments ? 1 : 0, outcome.Usage.Corrections);
+        Assert.Equal(invalidArguments ? 1 : 2, evidence.Snapshot(plan.Provenance.SessionId).Count);
         Assert.Same(scope, tool.LastInvocationContext?.OperationScope);
     }
 

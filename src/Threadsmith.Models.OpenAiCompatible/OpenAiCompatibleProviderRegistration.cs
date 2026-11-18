@@ -259,6 +259,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 MaximumToolCalls = profile.MaximumToolCalls,
                 RetryMaxAttempts = profile.RetryPolicy.MaxAttempts,
                 RetryDelayMilliseconds = checked((int)profile.RetryPolicy.Delay.TotalMilliseconds),
+                RetryBusyTimeoutSeconds = checked((int)profile.RetryPolicy.BusyTimeout.TotalSeconds),
                 LegacyEndpointOverride = profile.Endpoint,
                 LegacyReasoningCapability = profile.ReasoningCapability,
             };
@@ -298,6 +299,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             || model.MaximumToolCalls < 0
             || model.RetryMaxAttempts <= 0
             || model.RetryDelayMilliseconds < 0
+            || model.RetryBusyTimeoutSeconds is < 0 or > ModelRetryPolicy.MaximumBusyTimeoutSeconds
             || model.SupportedReasoningLevels.Count == 0
             || model.SupportedReasoningLevels.Distinct().Count()
                 != model.SupportedReasoningLevels.Count
@@ -344,6 +346,7 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             {
                 MaxAttempts = model.RetryMaxAttempts,
                 Delay = TimeSpan.FromMilliseconds(model.RetryDelayMilliseconds),
+                BusyTimeout = TimeSpan.FromSeconds(model.RetryBusyTimeoutSeconds),
             },
         };
     }

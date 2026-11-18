@@ -7,6 +7,7 @@ Read [planning governance](planning-governance.md) before changing this package.
 ## Working with an implementation document
 
 - [Ask-user clarification](maintenance-ask-user.md)
+- [Bordered fenced content and clipboard copy](maintenance-fenced-code-copy.md)
 
 1. Read `planning-governance.md`, `00-shared-context.md`, and the applicable DOX chain.
 2. Read the active implementation document's status, delivery track, prerequisites, architectural context, tasks, tests, and acceptance criteria.

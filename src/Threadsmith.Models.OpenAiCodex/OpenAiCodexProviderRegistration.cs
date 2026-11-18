@@ -82,7 +82,8 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                 || codex.TimeoutSeconds < 0
                 || codex.MaximumStreamedBytes < 0
                 || codex.MaximumToolCalls < 0
-                || codex.RetryMaxAttempts <= 0))
+                || codex.RetryMaxAttempts <= 0
+                || codex.RetryBusyTimeoutSeconds is < 0 or > ModelRetryPolicy.MaximumBusyTimeoutSeconds))
         {
             throw new InvalidOperationException("The authenticated Codex model catalog is invalid or empty.");
         }
@@ -132,6 +133,7 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                 {
                     MaxAttempts = model.RetryMaxAttempts,
                     Delay = TimeSpan.FromMilliseconds(model.RetryDelayMilliseconds),
+                    BusyTimeout = TimeSpan.FromSeconds(model.RetryBusyTimeoutSeconds),
                 },
             }).ToArray();
     }

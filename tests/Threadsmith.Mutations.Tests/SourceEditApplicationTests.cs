@@ -627,7 +627,7 @@ public sealed partial class SourceEditApplicationTests
             return new(root, workspaceId, events, workspaces, store, artifacts, limits);
         }
 
-        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null, EditAnalysisOptions? editOptions = null, TimeProvider? timeProvider = null)
+        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null, EditAnalysisOptions? editOptions = null, TimeProvider? timeProvider = null, Microsoft.Extensions.Logging.ILogger<SourceEditApplication>? logger = null)
         {
             return new(
             _workspaces,
@@ -645,7 +645,8 @@ public sealed partial class SourceEditApplicationTests
             reviews: _workspaces,
             previews: _workspaces,
             editAnalysisOptions: editOptions,
-            timeProvider: timeProvider ?? new FakeTimeProvider(DateTimeOffset.UtcNow));
+            timeProvider: timeProvider ?? new FakeTimeProvider(DateTimeOffset.UtcNow),
+            logger: logger);
         }
 
         public ApplySourceEditCommand Replace(string expected, string replacement, bool requireReview)

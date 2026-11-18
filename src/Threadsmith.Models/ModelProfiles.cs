@@ -154,11 +154,17 @@ public sealed record ModelCachePricing
 /// <summary>Bounded retry settings for a model endpoint.</summary>
 public sealed record ModelRetryPolicy
 {
-    /// <summary>Total attempts, including the initial request.</summary>
+    /// <summary>Largest whole-second busy window supported by the platform timer.</summary>
+    public const int MaximumBusyTimeoutSeconds = 4_294_967;
+
+    /// <summary>Total attempts for non-busy transient failures, including the initial request.</summary>
     public int MaxAttempts { get; init; } = 3;
 
     /// <summary>Delay between retryable attempts.</summary>
     public TimeSpan Delay { get; init; } = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>Retry window from the first busy failure; zero disables busy retries.</summary>
+    public TimeSpan BusyTimeout { get; init; } = TimeSpan.FromSeconds(15);
 }
 
 /// <summary>A host-configured model endpoint and its policy metadata.</summary>
@@ -382,6 +388,8 @@ public sealed class ConfiguredModelCatalog
                 || profile.MaximumToolCalls < 0
                 || profile.RetryPolicy.MaxAttempts <= 0
                 || profile.RetryPolicy.Delay < TimeSpan.Zero
+                || profile.RetryPolicy.BusyTimeout < TimeSpan.Zero
+                || profile.RetryPolicy.BusyTimeout > TimeSpan.FromSeconds(ModelRetryPolicy.MaximumBusyTimeoutSeconds)
                 || profile.SupportedReasoningLevels.Count == 0
                 || profile.SupportedReasoningLevels.Distinct().Count()
                     != profile.SupportedReasoningLevels.Count
@@ -724,6 +732,7 @@ public static class ModelProfileConfigurationLoader
                 {
                     MaxAttempts = section.GetValue("retry:maxAttempts", 3),
                     Delay = TimeSpan.FromMilliseconds(section.GetValue("retry:delayMilliseconds", 250)),
+                    BusyTimeout = TimeSpan.FromSeconds(section.GetValue("retry:busyTimeoutSeconds", 15)),
                 },
             });
         }

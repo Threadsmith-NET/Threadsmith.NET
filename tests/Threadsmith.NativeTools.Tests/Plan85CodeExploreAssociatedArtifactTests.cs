@@ -29,7 +29,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var source = Assert.Single(result.FileSections);
         Assert.Equal("src/App/ResponseBuilder.cs", source.FilePath);
@@ -123,7 +123,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var artifacts = RequireArtifacts(result);
         Assert.Contains(artifacts, artifact => artifact.FilePath == "src/App/Prompts/Welcome.prompt"
@@ -173,7 +173,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                     Limits = CreateWideArtifactLimits(),
                 },
                 fixture.CreateArtifactReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.DoesNotContain(result.AssociatedArtifacts ?? [], artifact => artifact.Relationship is
                 CodeExploreArtifactRelationshipKind.AdditionalDocument
@@ -214,7 +214,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                     Limits = CreateWideArtifactLimits(),
                 },
                 fixture.CreateArtifactReader(),
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Contains(RequireArtifacts(result), artifact => artifact.FilePath == testCase.ExpectedPath
                 && artifact.Relationship == testCase.ExpectedRelationship);
@@ -241,7 +241,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, result.FileSections.Count);
         var sharedAnalyzerConfigurations = RequireArtifacts(result)
@@ -268,7 +268,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 UseAdaptiveDefaults = true,
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var artifacts = RequireArtifacts(result);
         Assert.Equal(4, artifacts.Count);
@@ -304,7 +304,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var sourceSection = Assert.Single(result.FileSections);
         Assert.Equal(CodeExploreSourceCompleteness.Drifted, sourceSection.Source.Completeness);
@@ -334,7 +334,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 },
             },
             reader,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var coverage = RequireArtifactCoverage(result);
         Assert.Equal(2, coverage.CandidateCount);
@@ -360,7 +360,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Single(result.FileSections);
         Assert.Null(result.AssociatedArtifacts);
@@ -392,7 +392,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(maximumAssociatedArtifacts: 1),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var exactArtifact = Assert.Single(RequireArtifacts(full));
         Assert.Equal(CodeExploreArtifactRelationshipKind.ExplicitPath, exactArtifact.Relationship);
@@ -423,7 +423,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                     maximumPerAssociatedArtifactCharacters: 1),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var coverage = RequireArtifactCoverage(bounded);
         Assert.True(coverage.CharacterLimitReached);
@@ -501,7 +501,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             reader,
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(reader.ExactNameSearchCalls < 40, $"Expected bounded exact-name lookup calls, got {reader.ExactNameSearchCalls}.");
         Assert.Contains(
@@ -525,7 +525,7 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 Limits = CreateWideArtifactLimits(),
             },
             fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var coverage = RequireArtifactCoverage(result);
         Assert.False(coverage.Complete);
@@ -1339,8 +1339,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             var effectiveRequest = request.AssociatedArtifactPathAnchors.Count == 0
                 ? request with
@@ -1355,8 +1355,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
                 workspaceId,
                 effectiveRequest,
                 _reader,
-                cancellationToken,
-                visibleSourceFrontier);
+                visibleSourceFrontier,
+                cancellationToken);
         }
     }
 
@@ -1389,8 +1389,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var artifactReader = Assert.IsAssignableFrom<ICodeExploreArtifactReader>(sourceReader);
@@ -1450,8 +1450,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(new CodeExploreResult(
@@ -1480,8 +1480,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var artifactReader = Assert.IsAssignableFrom<ICodeExploreArtifactReader>(sourceReader);
@@ -1507,8 +1507,8 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var numberedLines = Enumerable.Range(1, 200)

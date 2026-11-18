@@ -82,8 +82,8 @@ public sealed class ScriptSourceViewMeasurementTests
         elapsed = Stopwatch.GetElapsedTime(start);
         bytes = GC.GetAllocatedBytesForCurrentThread() - before;
         TestContext.Current.TestOutputHelper?.WriteLine($"Disclosure (200 retained invocations): {bytes} allocated bytes; {elapsed.TotalMilliseconds:F3} ms.");
-        Assert.Contains("// source 0", view.Lines);
-        Assert.Equal(200, view.Lines.Count(line => line == "View full script…"));
+        Assert.Contains("   │ // source 0", view.Lines);
+        Assert.Equal(200, view.Lines.Count(line => line == "   └ View full script…"));
     }
 
     private static ToolSourceDetail Detail(string source) => new()

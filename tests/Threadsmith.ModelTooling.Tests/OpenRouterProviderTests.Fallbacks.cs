@@ -101,7 +101,7 @@ public static partial class OpenRouterProviderTests
             exception.Message);
         var transient = errorType != "invalid_request";
         Assert.Equal(transient, exception is TransientModelException);
-        Assert.Equal(transient && !afterText ? 2 : 1, handler.Calls);
+        Assert.Equal(transient && !afterText ? 7 : 1, handler.Calls);
         Assert.All(chunks.Where(chunk => chunk.Usage is not null), chunk => Assert.Equal(transient, chunk.IsInterruptedUsage));
     }
 

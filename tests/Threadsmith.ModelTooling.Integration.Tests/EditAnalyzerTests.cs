@@ -269,7 +269,7 @@ public sealed class EditAnalyzerTestsMeasureSelectedAnalyzersThroughProductionQu
             {
                 result = await engine.AnalyzeAnalyzerCandidateAsync(source, candidate, documents, experiment.Options, false, experiment.ReuseBaseline, TestContext.Current.CancellationToken);
             }
-            catch (OperationCanceledException)when (!TestContext.Current.CancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
             {
                 outcome = "budget-cancelled";
             }
@@ -304,7 +304,7 @@ public sealed class EditAnalyzerTestsMeasureSelectedAnalyzersThroughProductionQu
                 await pending;
 #pragma warning restore VSTHRD003
             }
-            catch (OperationCanceledException)when (!TestContext.Current.CancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
             {
                 outcome = "cancelled";
             }

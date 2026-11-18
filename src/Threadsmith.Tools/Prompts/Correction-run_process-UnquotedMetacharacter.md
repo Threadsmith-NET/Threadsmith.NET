@@ -1,0 +1,1 @@
+Command execution denied: the unquoted shell metacharacter {{Metacharacter}} cannot be statically authorized. Quote the argument containing it (for example '*.md'), then retry the command.

@@ -114,46 +114,46 @@ public sealed class PolicyConfigurationService
         {
             case PolicyUpdateOperation.Add:
             case PolicyUpdateOperation.Replace:
-            {
-                if (request.Rule is not { } rule || rule.Id != request.Id || exists != (request.Operation == PolicyUpdateOperation.Replace))
                 {
-                    throw new InvalidDataException("PolicyRuleUpdateConflict");
-                }
+                    if (request.Rule is not { } rule || rule.Id != request.Id || exists != (request.Operation == PolicyUpdateOperation.Replace))
+                    {
+                        throw new InvalidDataException("PolicyRuleUpdateConflict");
+                    }
 
-                profile = profile with { Rules = [.. profile.Rules.Where(item => item.Id != request.Id), rule] };
-                break;
-            }
+                    profile = profile with { Rules = [.. profile.Rules.Where(item => item.Id != request.Id), rule] };
+                    break;
+                }
 
             case PolicyUpdateOperation.Remove:
-            {
-                profile = profile with { Rules = [.. profile.Rules.Where(item => item.Id != request.Id)] };
-                break;
-            }
-
-            case PolicyUpdateOperation.Disable:
-            {
-                profile = profile with { DisabledRuleIds = [.. profile.DisabledRuleIds.Append(request.Id).Distinct(StringComparer.Ordinal)] };
-                break;
-            }
-
-            case PolicyUpdateOperation.Grant:
-            {
-                if (request.Destination != PolicyDestination.User || request.Grant is not { } grant || grant.Id != request.Id)
                 {
-                    throw new InvalidDataException("PolicyInvalidGrantUpdate");
+                    profile = profile with { Rules = [.. profile.Rules.Where(item => item.Id != request.Id)] };
+                    break;
                 }
 
-                profile = profile with { AlwaysAllow = [.. profile.AlwaysAllow.Where(item => item.Id != request.Id), grant] };
-                break;
-            }
+            case PolicyUpdateOperation.Disable:
+                {
+                    profile = profile with { DisabledRuleIds = [.. profile.DisabledRuleIds.Append(request.Id).Distinct(StringComparer.Ordinal)] };
+                    break;
+                }
+
+            case PolicyUpdateOperation.Grant:
+                {
+                    if (request.Destination != PolicyDestination.User || request.Grant is not { } grant || grant.Id != request.Id)
+                    {
+                        throw new InvalidDataException("PolicyInvalidGrantUpdate");
+                    }
+
+                    profile = profile with { AlwaysAllow = [.. profile.AlwaysAllow.Where(item => item.Id != request.Id), grant] };
+                    break;
+                }
 
             case PolicyUpdateOperation.Revoke:
-            {
-                document = document with { Common = document.Common with { AlwaysAllow = [.. document.Common.AlwaysAllow.Where(item => item.Id != request.Id)] } };
-                platform = platform with { AlwaysAllow = [.. platform.AlwaysAllow.Where(item => item.Id != request.Id)] };
-                profile = profile with { AlwaysAllow = [.. profile.AlwaysAllow.Where(item => item.Id != request.Id)] };
-                break;
-            }
+                {
+                    document = document with { Common = document.Common with { AlwaysAllow = [.. document.Common.AlwaysAllow.Where(item => item.Id != request.Id)] } };
+                    platform = platform with { AlwaysAllow = [.. platform.AlwaysAllow.Where(item => item.Id != request.Id)] };
+                    profile = profile with { AlwaysAllow = [.. profile.AlwaysAllow.Where(item => item.Id != request.Id)] };
+                    break;
+                }
 
             default:
                 throw new InvalidDataException("PolicyUnknownUpdate");

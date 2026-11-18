@@ -22,6 +22,9 @@ internal static class ShellCommandPreparation
     /// <summary>Gets the code-owned denial reason, rendered only at the feedback boundary.</summary>
     internal const string DenialReasonCode = "CommandExecutionDenied";
 
+    /// <summary>Gets the code-owned unquoted-metacharacter denial reason prefix, rendered only at the feedback boundary.</summary>
+    internal const string UnquotedMetacharacterDenialPrefix = "CommandExecutionDeniedUnquotedMetacharacter:";
+
     /// <summary>Analyzes and binds every command before any part can execute.</summary>
     internal static PreparedShellCommand Prepare(string command, string shellName, string workingDirectory, IReadOnlyDictionary<string, string> additions)
     {
@@ -304,7 +307,8 @@ internal static class ShellCommandPreparation
 
             if (character is '(' or ')' or '{' or '}' || (!cmd && character is '`' or '@' or '*' or '?'))
             {
-                throw Denied();
+                // Quoting passes the metacharacter literally; admission stays statically bound.
+                throw UnquotedMetacharacterDenied(character);
             }
 
             if (!cmd && character is '[' or ']' && !(powershell && tokens.Count > 0 && started && !tokenHasExpansion))
@@ -505,6 +509,20 @@ internal static class ShellCommandPreparation
             started = false;
             tokenHasExpansion = false;
         }
+    }
+
+    /// <summary>Gets the denied character from an unquoted-metacharacter denial reason.</summary>
+    internal static bool TryGetUnquotedMetacharacter(string error, out char metacharacter)
+    {
+        metacharacter = default;
+        if (!error.StartsWith(UnquotedMetacharacterDenialPrefix, StringComparison.Ordinal)
+            || error.Length != UnquotedMetacharacterDenialPrefix.Length + 1)
+        {
+            return false;
+        }
+
+        metacharacter = error[^1];
+        return true;
     }
 
     private static void ValidateSetupVariable(string name)
@@ -752,6 +770,9 @@ internal static class ShellCommandPreparation
 
         return "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
     }
+
+    private static UnauthorizedAccessException UnquotedMetacharacterDenied(char character) =>
+        new($"{UnquotedMetacharacterDenialPrefix}{character}");
 
     private static UnauthorizedAccessException Denied() => new(DenialReasonCode);
 

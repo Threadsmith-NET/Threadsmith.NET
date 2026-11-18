@@ -215,12 +215,12 @@ public sealed class AnthropicFailureAccountingTests
         Assert.Equal(reports.Count > 1 ? 500L : null, final.MaximumAttemptOutputTokens);
         Assert.Null(final.ReasoningTokens);
         Assert.Equal(succeeded ? 2 : failedAttempts, reports.Count);
-        Assert.Equal(outcome == "cancel" ? 1 : succeeded ? 2 : 3, attempts);
+        Assert.Equal(outcome == "cancel" ? 1 : succeeded ? 2 : outcome == "headers" ? 7 : 3, attempts);
     }
 
     private static AnthropicModelProvider Provider(HttpClient client)
     {
-        return new(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility());
+        return new(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
     }
 }
 

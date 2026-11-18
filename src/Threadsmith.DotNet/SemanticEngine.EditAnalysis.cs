@@ -690,11 +690,16 @@ public sealed partial class SemanticEngine
                 {
                     try
                     {
-                        return await RunNonCooperativeAsync(operation, token, sourceSolution: source, retainedCandidateLifetime: lifetime.Token, retainActualOperation: task =>
-                        {
-                            retained = task;
-                            actualCompletion?.Invoke(task);
-                        });
+                        return await RunNonCooperativeAsync(
+                            operation,
+                            sourceSolution: source,
+                            retainActualOperation: task =>
+                            {
+                                retained = task;
+                                actualCompletion?.Invoke(task);
+                            },
+                            retainedCandidateLifetime: lifetime.Token,
+                            cancellationToken: token);
                     }
                     catch (SemanticOperationAbandonedException exception)
                     {

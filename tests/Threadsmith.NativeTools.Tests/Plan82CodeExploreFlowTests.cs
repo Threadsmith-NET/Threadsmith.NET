@@ -28,7 +28,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.All(result.ResolvedAnchors, resolution => Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome));
         var flow = RequireFlow(result);
@@ -60,7 +60,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var flow = RequireFlow(result);
         var path = Assert.Single(flow.Paths);
@@ -96,7 +96,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var flow = RequireFlow(result);
         var path = Assert.Single(flow.Paths);
@@ -125,7 +125,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var blastRadius = result.BlastRadius ?? throw new InvalidOperationException("Expected compact blast-radius evidence.");
         Assert.Contains(blastRadius.Items, item => item.Kind == ImpactKind.Project
@@ -156,7 +156,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Flow);
         Assert.NotNull(result.BlastRadius);
@@ -178,7 +178,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateLimits(maximumFlowEdges: 1),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var flow = RequireFlow(result);
         Assert.True(Assert.Single(flow.Paths).IsComplete);
@@ -205,7 +205,7 @@ public sealed class Plan82CodeExploreFlowTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader("src/CoreFlow/Hidden/**"),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var flow = RequireFlow(result);
         var path = Assert.Single(flow.Paths);
@@ -457,8 +457,8 @@ public sealed class Plan82CodeExploreFlowTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_result);

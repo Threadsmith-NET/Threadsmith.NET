@@ -759,6 +759,197 @@ public sealed class WebFetchTests
         Assert.Equal(1, fetcher.CallCount);
     }
 
+    /// <summary>Literal URLs and opaque references share exact policy claims and one-shot consumption.</summary>
+    [Theory]
+    [InlineData(false, "https://supplied.example/docs?q=protected")]
+    [InlineData(true, "https://supplied.example/docs?q=protected")]
+    [InlineData(true, "https://SUPPLIED.example:443/docs?q=protected#section")]
+    public async Task CurrentUserLiteralUrl_ReusesReferenceWithoutApprovalAsync(bool literalFirst, string literalUrl)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var context = CreateContext(fixture.Path);
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), new FakeTimeProvider());
+        var fetcher = new StubFetcher();
+        var prompt = new CapturingApprovalPrompt();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+        var references = authority.IssueCurrentUserMessageUrls(
+            fixture.Path,
+            context.SessionId,
+            context.RunId,
+            ConversationMessageId.New(),
+            "Read [guide](https://supplied.example/docs?q=protected).",
+            context.Invocation);
+        var literal = new WebFetchRequest { Reference = literalUrl };
+        var opaque = new WebFetchRequest { Reference = Assert.Single(references).Id };
+
+        // Act
+        var claims = ((ITool)tool).GetNetworkHosts(literal);
+        var policy = new DefaultPolicyEngine().Evaluate(tool, literal, context.Invocation);
+        var response = await tool.ExecuteAsync(literalFirst ? literal : opaque, context, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.Equal(["supplied.example"], claims);
+        Assert.True(policy.IsAllowed);
+        Assert.Equal(WebFetchSourceKind.CurrentUserMessage, response.Value.Provenance.SourceKind);
+        Assert.Equal("https://supplied.example/docs", response.Value.Provenance.RequestedUrl);
+        Assert.Equal(
+            [WebFetchUrlPolicy.Digest(new Uri("https://supplied.example/docs?q=protected"))],
+            fetcher.LastAuthorizedDirectUrlDigests);
+        Assert.Equal(0, prompt.CallCount);
+        Assert.False(authority.HasDirectGrant(context, literalUrl));
+        Assert.False(authority.HasHostGrant(context, literalUrl));
+        Assert.Empty(((ITool)tool).GetNetworkHosts(literal));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(context, literalFirst ? opaque : literal));
+        Assert.Equal(1, fetcher.CallCount);
+    }
+
+    /// <summary>Explicit redirect-chain authority takes precedence over a matching current-message URL.</summary>
+    [Fact]
+    public async Task CurrentUserLiteralUrl_ExplicitRedirectChain_RetainsPrecedenceAsync()
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var context = CreateContext(fixture.Path);
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), new FakeTimeProvider());
+        const string initial = "https://supplied.example/start";
+        const string redirect = "https://redirect.example/final";
+        _ = authority.IssueCurrentUserMessageUrls(
+            fixture.Path, context.SessionId, context.RunId, ConversationMessageId.New(), initial, context.Invocation);
+        authority.GrantDirectUrlChain(fixture.Path, context.SessionId, [initial, redirect]);
+        var fetcher = new StubFetcher();
+        var prompt = new CapturingApprovalPrompt();
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+        var request = new WebFetchRequest { Reference = initial };
+
+        // Act
+        var policy = new DefaultPolicyEngine().Evaluate(tool, request, context.Invocation);
+        var response = await tool.ExecuteAsync(request, context, TestContext.Current.CancellationToken);
+
+        // Assert
+        Assert.True(policy.IsAllowed);
+        Assert.Equal(WebFetchSourceKind.ExplicitDirectGroup, response.Value.Provenance.SourceKind);
+        Assert.Contains(WebFetchUrlPolicy.Digest(new Uri(initial)), fetcher.LastAuthorizedDirectUrlDigests);
+        Assert.Contains(WebFetchUrlPolicy.Digest(new Uri(redirect)), fetcher.LastAuthorizedDirectUrlDigests);
+        Assert.Equal(0, prompt.CallCount);
+        Assert.Equal(1, fetcher.CallCount);
+    }
+
+    /// <summary>Current-message authority never grants neighboring URLs or redirect hosts.</summary>
+    [Theory]
+    [InlineData("https://supplied.example/other?q=protected")]
+    [InlineData("https://supplied.example/docs?q=changed")]
+    [InlineData("https://supplied.example/docs")]
+    [InlineData("https://sub.supplied.example/docs?q=protected")]
+    public async Task CurrentUserLiteralUrl_DifferentDestination_StillRequiresApprovalAsync(string destination)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var context = CreateContext(fixture.Path);
+        var options = new WebFetchOptions();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), new FakeTimeProvider());
+        var references = authority.IssueCurrentUserMessageUrls(
+            fixture.Path,
+            context.SessionId,
+            context.RunId,
+            ConversationMessageId.New(),
+            "Read https://supplied.example/docs?q=protected",
+            context.Invocation);
+        var fetcher = new StubFetcher();
+        var prompt = new CapturingApprovalPrompt(DirectFetchApprovalOutcome.Denied);
+        var tool = new WebFetchTool(fetcher, authority, options, TestPromptLoader.Instance, prompt);
+        var request = new WebFetchRequest { Reference = destination };
+
+        // Act
+        var exception = await Assert.ThrowsAsync<ToolExecutionException>(() =>
+            tool.ExecuteAsync(request, context, TestContext.Current.CancellationToken));
+
+        // Assert
+        Assert.Equal(ToolErrorClassification.ApprovalDenied, exception.ErrorClassification);
+        Assert.Equal(1, prompt.CallCount);
+        Assert.Equal(0, fetcher.CallCount);
+        Assert.Empty(((ITool)tool).GetNetworkHosts(request));
+        Assert.False(tool.IsNetworkHostAuthorized(request, context.Invocation, new Uri(destination).IdnHost));
+        Assert.Equal("supplied.example", authority.GetUserUrlHost(Assert.Single(references).Id));
+    }
+
+    /// <summary>Literal matching preserves all current-message scope, expiry, consent, and policy boundaries.</summary>
+    [Theory]
+    [InlineData("repository")]
+    [InlineData("session")]
+    [InlineData("run")]
+    [InlineData("policy")]
+    [InlineData("consent")]
+    [InlineData("expiry")]
+    [InlineData("next-message")]
+    [InlineData("run-ended")]
+    [InlineData("revoked")]
+    public void CurrentUserLiteralUrl_InvalidatedAuthority_IsRejected(string boundary)
+    {
+        // Arrange
+        using var fixture = new TemporaryDirectory();
+        var context = CreateContext(fixture.Path);
+        var options = new WebFetchOptions();
+        var clock = new FakeTimeProvider();
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptionsState(options), clock);
+        const string url = "https://supplied.example/docs?q=protected";
+        var references = authority.IssueCurrentUserMessageUrls(
+            fixture.Path,
+            context.SessionId,
+            context.RunId,
+            ConversationMessageId.New(),
+            url,
+            context.Invocation);
+        var changedContext = boundary switch
+        {
+            "repository" => context with { Invocation = context.Invocation with { RepositoryPath = Path.Combine(fixture.Path, "other") } },
+            "session" => context with { SessionId = SessionId.New() },
+            "run" => context with { RunId = RunId.New() },
+            "policy" => context with { Invocation = context.Invocation with { DeniedToolIds = ["web_fetch"] } },
+            _ => context,
+        };
+        switch (boundary)
+        {
+            case "consent":
+                {
+                    authority.SetCurrentMessageConsentEvaluator(static _ => false);
+                    break;
+                }
+
+            case "expiry":
+                {
+                    clock.Advance(options.ReferenceLifetime);
+                    break;
+                }
+
+            case "next-message":
+                {
+                    _ = authority.IssueCurrentUserMessageUrls(
+                        fixture.Path, context.SessionId, context.RunId, ConversationMessageId.New(), "No URL here", context.Invocation);
+                    break;
+                }
+
+            case "run-ended":
+                {
+                    authority.RevokeRun(context.SessionId, context.RunId);
+                    break;
+                }
+
+            case "revoked":
+                {
+                    authority.RevokeAll();
+                    break;
+                }
+        }
+
+        // Act / Assert
+        Assert.False(authority.HasDirectGrant(changedContext, url));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(changedContext, new WebFetchRequest { Reference = url }));
+        Assert.Throws<WebFetchException>(() => authority.Resolve(changedContext, new WebFetchRequest { Reference = Assert.Single(references).Id }));
+    }
+
     /// <summary>A new top-level intake revokes prior current-message authority without revoking an explicit direct group.</summary>
     [Fact]
     public void CurrentUserReference_NextIntakeRevokesPriorMessageOnly()

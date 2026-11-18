@@ -93,9 +93,9 @@ public sealed class DomainEventStream : IDomainEventStream
                 deliveries.Add(await subscription.PrepareAsync(
                     domainEvents,
                     decision.Task,
+                    _committedDeliveryTimeout,
                     CancellationToken.None,
-                    cancellationToken,
-                    _committedDeliveryTimeout));
+                    cancellationToken));
             }
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -157,10 +157,10 @@ public sealed class DomainEventStream : IDomainEventStream
 
     private sealed record Delivery(
         IReadOnlyList<IDomainEvent> DomainEvents,
-        CancellationToken CancellationToken,
         Task<bool> CommitDecision,
         TaskCompletionSource Completion,
-        TimeSpan? Timeout);
+        TimeSpan? Timeout,
+        CancellationToken CancellationToken = default);
 
     private sealed class Subscription : IDomainEventSubscription
     {
@@ -197,18 +197,18 @@ public sealed class DomainEventStream : IDomainEventStream
             var completion = await PrepareAsync(
                 [domainEvent],
                 Task.FromResult(true),
+                timeout: null,
                 cancellationToken,
-                cancellationToken,
-                timeout: null);
+                cancellationToken);
             await completion;
         }
 
         public async Task<Task> PrepareAsync(
             IReadOnlyList<IDomainEvent> domainEvents,
             Task<bool> commitDecision,
-            CancellationToken deliveryCancellationToken,
-            CancellationToken enqueueCancellationToken,
-            TimeSpan? timeout)
+            TimeSpan? timeout,
+            CancellationToken deliveryCancellationToken = default,
+            CancellationToken enqueueCancellationToken = default)
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             if (Volatile.Read(ref _terminalFailure) is { } terminalFailure)
@@ -222,10 +222,10 @@ public sealed class DomainEventStream : IDomainEventStream
             await _channel.Writer.WriteAsync(
                 new Delivery(
                     domainEvents,
-                    deliveryCancellationToken,
                     commitDecision,
                     completion,
-                    timeout),
+                    timeout,
+                    deliveryCancellationToken),
                 enqueueCancellationToken);
             return completion.Task;
         }

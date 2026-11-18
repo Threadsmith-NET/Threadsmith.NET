@@ -156,7 +156,7 @@ public sealed class AnthropicTransportTests
         Assert.Null(error.InnerException);
     }
 
-    /// <summary>Native metadata does not commit output, and a mixed failure sequence has one attempt limit.</summary>
+    /// <summary>Native metadata does not commit output, and busy failures do not use the ordinary attempt limit.</summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
@@ -199,7 +199,8 @@ public sealed class AnthropicTransportTests
             return Task.FromResult(Response(new MemoryStream(Encoding.UTF8.GetBytes(TestAnthropic.TextStream()))));
         });
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
+        var profile = TestAnthropic.Profile();
+        var provider = new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
         var request = TestAnthropic.Request() with { SubmissionObserver = () => submissions++, IncludeReasoningText = true };
         var chunks = new List<ModelChunk>();
         async Task CollectAsync()
@@ -224,8 +225,10 @@ public sealed class AnthropicTransportTests
             Assert.Single(chunks, chunk => chunk.FinishReason is not null);
         }
 
-        Assert.Equal(reasoningOnly && !partialOutput ? 1 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
-        Assert.Equal(partialOutput ? 2 : 3, attempts);
+        var expectedAttempts = partialOutput ? 2 : exhaustRetries ? 1 + profile.RetryPolicy.MaxAttempts : 3;
+        // The initial busy request has no reasoning, and the last request is not retried.
+        Assert.Equal(reasoningOnly && !partialOutput ? expectedAttempts - 2 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
+        Assert.Equal(expectedAttempts, attempts);
         Assert.Equal(attempts, submissions);
     }
 

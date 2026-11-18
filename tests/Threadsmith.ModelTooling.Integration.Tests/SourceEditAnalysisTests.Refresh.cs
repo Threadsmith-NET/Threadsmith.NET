@@ -52,11 +52,11 @@ public sealed class SourceEditAnalysisTestsFullRefreshContinuesOnlyExactAppliedB
         var solutionText = await File.ReadAllTextAsync(request.SolutionPath, ct) + "\n";
         const string sourceText = "public class AddedByEdit { MissingType Value; }";
         var preamble = encodingName == "utf8" ? [] : encoding.GetPreamble();
-        byte[] solutionBytes = [..preamble, ..encoding.GetBytes(solutionText)];
-        byte[] sourceBytes = [..preamble, ..encoding.GetBytes(sourceText)];
+        byte[] solutionBytes = [.. preamble, .. encoding.GetBytes(solutionText)];
+        byte[] sourceBytes = [.. preamble, .. encoding.GetBytes(sourceText)];
         const string sourceRelativePath = "Contracts/AddedByEdit.cs";
         var sourcePath = Path.Combine(fixture.Root, sourceRelativePath);
-        var snapshot = new MutationEffectSnapshot(MutationSetId.New(), [], [new("SmallDotNetSolution.sln", Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(request.SolutionPath, ct))), Convert.ToHexString(SHA256.HashData(solutionBytes))) { FinalBytes = solutionBytes }, new(sourceRelativePath, null, Convert.ToHexString(SHA256.HashData(sourceBytes))) { FinalBytes = sourceBytes }, ]);
+        var snapshot = new MutationEffectSnapshot(MutationSetId.New(), [], [new("SmallDotNetSolution.sln", Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(request.SolutionPath, ct))), Convert.ToHexString(SHA256.HashData(solutionBytes))) { FinalBytes = solutionBytes }, new(sourceRelativePath, null, Convert.ToHexString(SHA256.HashData(sourceBytes))) { FinalBytes = sourceBytes },]);
         Assert.NotNull(await engine.AnalyzeCandidateAsync(command, fixture.Root, snapshot, TimeSpan.Zero, ct));
         await File.WriteAllBytesAsync(request.SolutionPath, solutionBytes, ct);
         await File.WriteAllBytesAsync(sourcePath, sourceBytes, ct);

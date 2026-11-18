@@ -197,7 +197,7 @@ public sealed class EditAnalyzerTestsMeasureCompilerAnalyzerOverlapThroughProduc
             {
                 result = await engine.AnalyzeAnalyzerCandidateAsync(source, candidate, documents, experiment.Options, false, true, ct);
             }
-            catch (OperationCanceledException)when (!ct.IsCancellationRequested)
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 analyzerOutcome = "budget-cancelled";
             }

@@ -71,12 +71,11 @@ public sealed class ScriptSourceViewTests
         Assert.Equal(8191, SourceDocument.Preview(new string('x', 8191) + "😀").Text.Length);
     }
 
-    /// <summary>Actions keep their identity and reflow reuses highlighting.</summary>
+    /// <summary>Actions keep their identity across plain preview expansion and reflow.</summary>
     [Fact]
-    public void CollapsedActionBindsEachInvocationAndHighlightingIsCached()
+    public void CollapsedActionBindsEachInvocationAcrossPreviewReflow()
     {
-        var highlighter = new CountingHighlighter();
-        var view = new TranscriptView(highlighter: highlighter);
+        var view = new TranscriptView();
         var first = Item("first source");
         var second = Item("second source");
         var opened = new List<ToolSourceDetail>();
@@ -84,7 +83,6 @@ public sealed class ScriptSourceViewTests
         view.Present(new PresentationBatch([first, second]));
         var screen = Render(view);
         Assert.DoesNotContain("first source", screen, StringComparison.Ordinal);
-        Assert.Equal(0, highlighter.Count);
         view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
         view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
         view.HandleKey(KeyEvent.Special(KeyCode.Enter));
@@ -93,10 +91,87 @@ public sealed class ScriptSourceViewTests
         Assert.Contains("second source", Render(view), StringComparison.Ordinal);
         Render(view, 70);
         Render(view, 100);
-        Assert.Equal(1, highlighter.Count);
+        Assert.Contains("   │ second source", view.Lines);
         Click(view, Render(view), "View full", firstMatch: false);
         Assert.Same(second.SourceDetail, opened[1]);
         Assert.DoesNotContain("first source", JsonSerializer.Serialize(first), StringComparison.Ordinal);
+    }
+
+    /// <summary>Preview details use plain feedback styling while the independent modal action stays available.</summary>
+    [Fact]
+    public void ScriptPreviewUsesBracketedPlainTextAndSeparateModalLink()
+    {
+        var styles = new TuiKitStyles(BuiltInThemes.Create()[0], false);
+        var view = new TranscriptView { ResolveStyle = styles.Resolve };
+        var item = Item("var value = 42;\r\n\t// [red]\r\n\r\nreturn \"text\";\u001b");
+        ToolSourceDetail? opened = null;
+        view.SourceRequested = detail => opened = detail;
+        view.Present(new([item]));
+        Render(view);
+        Assert.Equal(["Result", string.Empty, "[+] C# script execution", "   └ View full script…", string.Empty], view.Lines);
+
+        view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
+        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        foreach (var width in new[] { 110, 40, 70, 110 })
+        {
+            var cells = new CellBuffer(width, 40);
+            view.Render(new BufferSurface(cells));
+            Assert.Equal(
+                ["Result", string.Empty, "[-] C# script execution", "   │ var value = 42;", "   │     // [red]", "   │ ", "   │ return \"text\";?", "   └ View full script…", string.Empty],
+                view.Lines);
+            for (var row = 3; row <= 6; row++)
+            {
+                for (var column = 0; column < view.Lines[row].Length; column++)
+                {
+                    Assert.Equal(styles.Resolve(PresentationTextRole.Muted).Foreground, cells.Get(column, row).Style.Foreground);
+                }
+            }
+
+            Assert.Equal(styles.Resolve(PresentationTextRole.Muted).Foreground, cells.Get(3, 7).Style.Foreground);
+            Assert.Equal(styles.Resolve(PresentationTextRole.Hyperlink).Foreground, cells.Get(5, 7).Style.Foreground);
+        }
+
+        Click(view, Render(view), "View full");
+        Assert.Same(item.SourceDetail, opened);
+        opened = null;
+        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.Contains("[+] C# script", Render(view), StringComparison.Ordinal);
+        Assert.DoesNotContain(view.Lines, line => line.Contains("var value", StringComparison.Ordinal));
+        Click(view, Render(view), "View full");
+        Assert.Same(item.SourceDetail, opened);
+    }
+
+    /// <summary>Bracket-induced continuation chunks stay clickable without adding keyboard focus stops.</summary>
+    [Fact]
+    public void BracketedScriptLinkRemainsOneActionAcrossChunks()
+    {
+        var view = new TranscriptView(new TuiResourceLimits { MaximumTranscriptLineCharacters = 18 });
+        var first = Item("first");
+        var second = Item("second");
+        var opened = new List<ToolSourceDetail>();
+        view.SourceRequested = opened.Add;
+        view.Present(new([first, second]));
+
+        foreach (var width in new[] { 110, 40, 110 })
+        {
+            Click(view, Render(view, width), "ipt…");
+            Assert.Same(first.SourceDetail, opened[^1]);
+        }
+
+        view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
+        view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
+        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.Equal(4, opened.Count);
+        Assert.Same(first.SourceDetail, opened[^1]);
+        view.HandleKey(KeyEvent.Special(KeyCode.Down, KeyModifiers.Ctrl));
+        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Render(view);
+        Assert.Contains("   │ second", view.Lines);
+        Assert.Equal(4, opened.Count);
+        view.HandleKey(KeyEvent.Special(KeyCode.Up, KeyModifiers.Ctrl));
+        view.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.Equal(5, opened.Count);
+        Assert.Same(first.SourceDetail, opened[^1]);
     }
 
     /// <summary>Selection and full copy use original text.</summary>
@@ -228,8 +303,9 @@ public sealed class ScriptSourceViewTests
             var screen = Render(view, width);
             Assert.Contains("Result", screen, StringComparison.Ordinal);
             Assert.Contains("[-] C# script", screen, StringComparison.Ordinal);
-            Assert.Contains("Preview omitted", screen, StringComparison.Ordinal);
-            Assert.Contains(view.Lines, line => line.StartsWith("View full", StringComparison.Ordinal));
+            // The omission marker can span retained continuation chunks.
+            Assert.Contains("Preview omitted", string.Concat(view.Lines), StringComparison.Ordinal);
+            Assert.Contains(view.Lines, line => line.StartsWith("   └ View full", StringComparison.Ordinal));
             Assert.Equal(0, view.Evicted);
         }
 
@@ -246,7 +322,7 @@ public sealed class ScriptSourceViewTests
         var view = new TranscriptView(new TuiResourceLimits { MaximumTranscriptBytes = 256 });
         var item = Item(string.Join('\n', Enumerable.Repeat("x", 20))) with
         {
-            Segments = [new("Result" + new string('r', 204) + "\n", PresentationTextRole.Success)],
+            Segments = [new("Result" + new string('r', 187) + "\n", PresentationTextRole.Success)],
         };
         ToolSourceDetail? opened = null;
         view.SourceRequested = detail => opened = detail;
@@ -269,10 +345,9 @@ public sealed class ScriptSourceViewTests
 
     /// <summary>Many source controls retain their own rows across disclosure and width changes.</summary>
     [Fact]
-    public void ManySourceInvocationsSurviveReprojectionAndReuseCachedHighlighting()
+    public void ManySourceInvocationsSurviveReprojectionWithBracketedPreviews()
     {
-        var highlighter = new CountingHighlighter();
-        var view = new TranscriptView(highlighter: highlighter);
+        var view = new TranscriptView();
         var items = Enumerable.Range(0, 80).Select(index => Item($"// source {index}")).ToArray();
         view.Present(new(items));
         Render(view);
@@ -282,13 +357,11 @@ public sealed class ScriptSourceViewTests
         foreach (var width in new[] { 70, 110, 80 })
         {
             Render(view, width);
-            Assert.Equal(items.Length, view.Lines.Count(line => line == "View full script…"));
+            Assert.Equal(items.Length, view.Lines.Count(line => line == "   └ View full script…"));
             Assert.Equal(items.Length, view.Lines.Count(line => line.Contains("C# script", StringComparison.Ordinal)));
-            Assert.Contains("// source 0", view.Lines);
+            Assert.Contains("   │ // source 0", view.Lines);
             Assert.Equal(0, view.Evicted);
         }
-
-        Assert.Equal(1, highlighter.Count);
     }
 
     /// <summary>Batched styles track normalized offsets across continued chunks and logical newlines.</summary>
@@ -703,17 +776,6 @@ public sealed class ScriptSourceViewTests
             : Array.FindLastIndex(rows, row => row.Contains(label, StringComparison.Ordinal));
         Assert.True(index >= 0, screen);
         view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 1, index, KeyModifiers.None, 1));
-    }
-
-    private sealed class CountingHighlighter : ISourceHighlighter
-    {
-        public int Count { get; private set; }
-
-        public IReadOnlyList<SourceHighlightSpan> Highlight(string source, string language)
-        {
-            Count++;
-            return [];
-        }
     }
 
     private sealed class ThrowingHighlighter : ISourceHighlighter

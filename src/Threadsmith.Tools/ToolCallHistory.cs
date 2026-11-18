@@ -7,12 +7,14 @@ using System.Text.Json.Nodes;
 public sealed class ToolCallHistory
 {
     private readonly HashSet<(string ToolName, string ArgumentsJson)>? _currentBatchCalls;
+    private readonly HashSet<(string ToolName, string ArgumentsJson)> _invalidCalls;
     private readonly HashSet<(string ToolName, string ArgumentsJson)> _calls;
     private readonly Dictionary<(string ToolName, string ArgumentsJson), int> _counts;
 
     /// <summary>Initializes a new instance of the <see cref="ToolCallHistory"/> class with an empty execution history.</summary>
     public ToolCallHistory()
     {
+        _invalidCalls = [];
         _calls = [];
         _counts = [];
     }
@@ -21,6 +23,7 @@ public sealed class ToolCallHistory
     public ToolCallHistory(ToolCallHistory accepted)
     {
         ArgumentNullException.ThrowIfNull(accepted);
+        _invalidCalls = [.. accepted._invalidCalls];
         _calls = [.. accepted._calls];
         _counts = new(accepted._counts);
         _currentBatchCalls = [];
@@ -48,6 +51,29 @@ public sealed class ToolCallHistory
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(argumentsJson);
+        return TryRecord(definition.Id, NormalizeArguments(definition, argumentsJson), definition.NumberOfExactToolInvocationsPerTurn, out rejection);
+    }
+
+    /// <summary>Prevents unchanged invalid arguments from using a tool's repeat allowance.</summary>
+    public void ObserveResult(ToolDefinition definition, string argumentsJson, ToolInvocationResult result)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(argumentsJson);
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded && result.ErrorClassification == ToolErrorClassification.InvalidArguments)
+        {
+            _invalidCalls.Add((definition.Id.ToUpperInvariant(), NormalizeArguments(definition, argumentsJson)));
+        }
+    }
+
+    /// <summary>Reports whether a tool has an accepted call in this execution's history.</summary>
+    public bool ContainsTool(string toolName)
+    {
+        return _calls.Any(call => string.Equals(call.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeArguments(ToolDefinition definition, string argumentsJson)
+    {
         if (definition.ConceptsAreHints)
         {
             try
@@ -69,13 +95,7 @@ public sealed class ToolCallHistory
             }
         }
 
-        return TryRecord(definition.Id, argumentsJson, definition.NumberOfExactToolInvocationsPerTurn, out rejection);
-    }
-
-    /// <summary>Reports whether a tool has an accepted call in this execution's history.</summary>
-    public bool ContainsTool(string toolName)
-    {
-        return _calls.Any(call => string.Equals(call.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+        return argumentsJson;
     }
 
     private bool TryRecord(string toolName, string argumentsJson, int limit, [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out ToolCallRejection? rejection)
@@ -89,7 +109,7 @@ public sealed class ToolCallHistory
         }
 
         var count = _counts.GetValueOrDefault(call, _calls.Contains(call) ? 1 : 0);
-        if (count >= Math.Max(1, limit))
+        if (_invalidCalls.Contains(call) || count >= Math.Max(1, limit))
         {
             rejection = new ToolCallRejection(false, count);
             return false;

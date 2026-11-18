@@ -26,6 +26,74 @@ public static class MemoryToolActivityPresentationTests
         Assert.DoesNotContain(note[..240] + "...", transcript.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Reconciliation shows only the proposed note and host notice inside the shared tool block.</summary>
+    [Theory]
+    [InlineData("situational")]
+    [InlineData("standingPreference")]
+    public static void Transcript_ReconciliationShowsProposalInsteadOfCandidates(string memoryType)
+    {
+        const string firstLine = "Record the exact validation command and outcome. ";
+        var note = string.Concat(Enumerable.Repeat(firstLine, 8)) + "\r\nsecond line\u001b[31m\n\nlast line";
+        var result = JsonSerializer.Serialize(new
+        {
+            Action = "add",
+            Outcome = "reconciliationRequired",
+            Entries = new[] { new { Id = "candidate-id", Text = "candidate body", MemoryType = memoryType } },
+            Resolution = "model-facing reconciliation instructions",
+            QueryTruncated = false,
+            OmittedEntries = 0,
+            StandingPreferenceWarning = "preference warning",
+        });
+
+        var transcript = Render(true, result, activityDetail: "add", transientDetail: note);
+
+        Assert.Contains("TOOLS: memories - completed", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("   │ Not added: host requests reconciliation before adding.", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("   │ Proposed memory:", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains(string.Concat(Enumerable.Repeat(firstLine, 8)), transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("   │ second line\\u001B[31m", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("   └ last line", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', transcript.Text);
+        Assert.All(
+            transcript.Text.Split('\n').Where(line => !string.IsNullOrWhiteSpace(line) && !line.Contains("TOOLS:", StringComparison.Ordinal)),
+            line => Assert.True(line.StartsWith("   │", StringComparison.Ordinal) || line.StartsWith("   └", StringComparison.Ordinal), line));
+        foreach (var hidden in new[] { "candidate-id", "candidate body", "Resolution", "model-facing", "QueryTruncated", "OmittedEntries", "preference warning", "Outcome:", "No memories returned" })
+        {
+            Assert.DoesNotContain(hidden, transcript.Text, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Unavailable historical proposal text never falls back to an existing candidate's body.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public static void Transcript_ReconciliationWithoutProposalDoesNotShowCandidates(string? proposal)
+    {
+        var result = CreateResult("add", "reconciliationRequired", [new { Id = "candidate", Text = "existing candidate body" }], 0);
+
+        var transcript = Render(true, result, activityDetail: "add", transientDetail: proposal);
+
+        Assert.Contains("Not added: host requests reconciliation before adding.", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Proposed memory text unavailable.", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("existing candidate body", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>The concise reconciliation output still observes the configured display bound.</summary>
+    [Fact]
+    public static void Transcript_ReconciliationBoundsProposalText()
+    {
+        var note = new string('x', 1000);
+        var result = CreateResult<object>("add", "reconciliationRequired", [], 0);
+
+        var transcript = Render(true, result, activityDetail: "add", transientDetail: note, maximumInspectionCharacters: 256);
+
+        Assert.Contains("Not added: host requests reconciliation before adding.", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Proposed memory:", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("[memory output truncated by console display bound]", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(note, transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Legacy entries remain visible while standing preference bodies are suppressed and outcomes remain visible.</summary>
     [Fact]
     public static void Transcript_ShowsLegacyTypeAndStandingPreferenceWarning()

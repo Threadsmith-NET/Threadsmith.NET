@@ -39,7 +39,7 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             new CodeExploreRequest { Query = anchor, ExactSymbolAnchors = [anchor], Limits = CreateWideLimits() },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var resolution = Assert.Single(result.ResolvedAnchors);
         Assert.Equal(expected, resolution.Outcome);
@@ -70,7 +70,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var resolution = Assert.Single(result.ResolvedAnchors, anchor => anchor.Input == "Duplicate.Run");
         Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome);
@@ -92,7 +92,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var resolution = Assert.Single(result.ResolvedAnchors);
         Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome);
@@ -114,7 +114,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var replayedResolution = Assert.Single(replayedById.ResolvedAnchors);
         Assert.Equal(CodeExploreResolutionOutcome.Resolved, replayedResolution.Outcome);
@@ -137,7 +137,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var guarantee = Assert.Single(result.Presentation?.SourceGuarantees ?? []);
         Assert.Equal(CodeExploreSourceGuaranteeKind.ReadEquivalent, guarantee.Kind);
@@ -164,7 +164,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var byRef = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             new CodeExploreRequest
@@ -174,7 +174,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var byReadonlyRef = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             new CodeExploreRequest
@@ -184,7 +184,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(CodeExploreResolutionOutcome.Resolved, Assert.Single(ordinary.ResolvedAnchors).Outcome);
         Assert.Contains(
@@ -221,7 +221,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateLimits(maximumSourceCharacters: 1, maximumPerFileSourceCharacters: 1),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var truncatedSection = Assert.Single(truncated.FileSections);
         Assert.Equal(CodeExploreSourceCompleteness.Omitted, truncatedSection.Source.Completeness);
@@ -254,7 +254,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var replayedSection = Assert.Single(replayed.FileSections);
         Assert.Equal(CodeExploreSourceCompleteness.Complete, replayedSection.Source.Completeness);
@@ -284,7 +284,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateLimits(maximumSourceCharacters: 35, maximumPerFileSourceCharacters: 35),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var continuation = Assert.Single(truncated.ContinuationTargets);
         Assert.Equal(CodeExplorePathSelectionMode.ExactLineRange, continuation.SelectionMode);
@@ -311,7 +311,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var replayedSection = Assert.Single(replayed.FileSections);
         Assert.All(
@@ -342,7 +342,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var generationMismatch = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -362,7 +362,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var digestMismatch = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             new CodeExploreRequest
@@ -381,7 +381,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(CodeExploreResolutionOutcome.Omitted, Assert.Single(generationMismatch.ResolvedAnchors).Outcome);
         Assert.Empty(generationMismatch.FileSections);
@@ -407,7 +407,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader("secret/**"),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var resolution = Assert.Single(result.ResolvedAnchors);
         Assert.Equal(CodeExploreResolutionOutcome.Omitted, resolution.Outcome);
@@ -439,7 +439,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateLimits(maximumAlternatives: 1, maximumFiles: 16),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var resolution = Assert.Single(result.ResolvedAnchors);
         Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome);
@@ -464,7 +464,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         var discovery = result.Discovery ?? throw new InvalidOperationException("Expected natural-language discovery metadata.");
         Assert.Empty(result.QueryInterpretation?.ExactIdentifiers ?? []);
@@ -499,12 +499,12 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var restricted = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader("secret/**"),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(restricted.Discovery?.CatalogEntryCount < unrestricted.Discovery?.CatalogEntryCount);
         Assert.DoesNotContain(restricted.CandidateSummaries ?? [], summary =>
@@ -529,7 +529,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
             summary.Symbol?.DisplayName.Contains("HiddenLocalTemporalHelper", StringComparison.Ordinal) == true);
@@ -667,15 +667,15 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
 
         var repeated = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         Assert.Empty(repeated.FileSections);
         var backReference = Assert.Single(repeated.BackReferences ?? []);
@@ -700,7 +700,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
         var lines = await File.ReadAllLinesAsync(fixture.ResolvePath("src/Library/Code.cs"), TestContext.Current.CancellationToken);
         const int startLine = 1;
@@ -725,8 +725,8 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         Assert.Empty(repeated.FileSections);
         var backReference = Assert.Single(repeated.BackReferences ?? []);
@@ -751,7 +751,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
         const string laterPath = "src/Library/Deeply/Nested/Verbose/Context/DeduplicationFragmentationCandidateWithExtraLongRepositoryRelativePath.cs";
 
@@ -768,8 +768,8 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateLimits(maximumSourceCharacters: 900, maximumPerFileSourceCharacters: 900),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(repeated.FileSections, section => section.FilePath == "src/Library/Code.cs");
         Assert.Contains(repeated.FileSections, section => section.FilePath == laterPath);
@@ -795,7 +795,7 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
         await File.AppendAllTextAsync(
             fixture.ResolvePath("src/Library/Code.cs"),
@@ -806,8 +806,8 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         var section = Assert.Single(repeated.FileSections);
         Assert.Empty(repeated.BackReferences ?? []);
@@ -837,7 +837,7 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
         var lines = await File.ReadAllLinesAsync(fixture.ResolvePath(path), TestContext.Current.CancellationToken);
         var startLine = Array.FindIndex(lines, line => line.Contains("fragmentation-one", StringComparison.Ordinal)) + 1;
@@ -861,8 +861,8 @@ public sealed class Plan81CodeExploreToolTests
                 Limits = CreateWideLimits(),
             },
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(repeated.FileSections);
         Assert.Empty(repeated.BackReferences ?? []);
@@ -897,15 +897,15 @@ public sealed class Plan81CodeExploreToolTests
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+            cancellationToken: TestContext.Current.CancellationToken);
         var frontier = CreateVisibleFrontier(fixture, first);
 
         var repeated = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             request,
             fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken,
-            frontier);
+            frontier,
+            TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(repeated.FileSections);
         Assert.Empty(repeated.BackReferences ?? []);
@@ -939,7 +939,7 @@ public sealed class Plan81CodeExploreToolTests
                 workspaceId,
                 new CodeExploreRequest { Query = "Example.Worker", Limits = CreateWideLimits() },
                 reader,
-                TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken);
 
             Assert.Equal(CodeExploreAvailabilityStatus.SemanticWorkspaceUnavailable, result.Availability?.Status);
             Assert.Equal(SemanticConfidenceLevel.None, result.Confidence);
@@ -969,7 +969,7 @@ public sealed class Plan81CodeExploreToolTests
                 fixture.WorkspaceId,
                 new CodeExploreRequest { Query = "Example.Worker", Limits = CreateWideLimits() },
                 reader,
-                cancellation.Token));
+                cancellationToken: cancellation.Token));
 
         Assert.Equal(0, reader.IsPathAllowedCallCount);
     }
@@ -1159,8 +1159,8 @@ public sealed class Plan81CodeExploreToolTests
             WorkspaceId workspaceId,
             CodeExploreRequest request,
             ICodeExploreSourceReader sourceReader,
-            CancellationToken cancellationToken = default,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
+            CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_result);

@@ -221,13 +221,16 @@ public static class MemoryConceptRecallTests
         using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
         var turn = RunId.New();
         var request = new RepositoryMemorySearchRequest
-            {
-                RepositoryIdentity = MemoryTestData.Repository, Ownership = RepositoryMemoryOwnership.Ordinary,
-                Query = "unrelated", Concepts = ["cancelation"], UserTurnId = turn,
-                IntentConcepts = new(MemoryTestData.Repository, turn, 0, [new(1, ToolInvocationId.New(), true, ["cancelation"])]),
-                SituationalConceptFilterMode = SituationalConceptFilterMode.Enforce,
-                Options = Options with { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 20 },
-            };
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            Ownership = RepositoryMemoryOwnership.Ordinary,
+            Query = "unrelated",
+            Concepts = ["cancelation"],
+            UserTurnId = turn,
+            IntentConcepts = new(MemoryTestData.Repository, turn, 0, [new(1, ToolInvocationId.New(), true, ["cancelation"])]),
+            SituationalConceptFilterMode = SituationalConceptFilterMode.Enforce,
+            Options = Options with { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 20 },
+        };
         await retriever.SearchAsync(request, ct); // First native lookup is deliberately unavailable in this fixture.
         var result = await retriever.SearchAsync(request, ct);
         Assert.Empty(result.Selected);

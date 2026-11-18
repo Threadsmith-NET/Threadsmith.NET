@@ -46,9 +46,9 @@ public static class MemoryIntentPolicyTests
         Assert.Equal(3, rolledBack.Selected.Count);
         var retained = await search.SearchAsync(
             request with
-        {
-            RetainedMemories = [new(mismatch.Id!.Value, mismatch.Entry!.Revision)],
-        },
+            {
+                RetainedMemories = [new(mismatch.Id!.Value, mismatch.Entry!.Revision)],
+            },
             ct);
         Assert.Equal(expected, retained.Selected.Count);
     }
@@ -103,9 +103,10 @@ public static class MemoryIntentPolicyTests
         Assert.Empty((await search.SearchAsync(request, ct)).Selected);
         Assert.Empty((await search.SearchAsync(
             request with
-        {
-            Concepts = ["compiler"], Options = request.Options with { ConceptRecallEnabled = true },
-        },
+            {
+                Concepts = ["compiler"],
+                Options = request.Options with { ConceptRecallEnabled = true },
+            },
             ct)).Selected);
     }
 
@@ -157,8 +158,11 @@ public static class MemoryIntentPolicyTests
         var result = await search.SearchAsync(
             new RepositoryMemorySearchRequest
             {
-                RepositoryIdentity = MemoryTestData.Repository, Ownership = RepositoryMemoryOwnership.Intelligence,
-                Query = "compiler errors", AllowEmbeddingRebuild = false, Options = new(),
+                RepositoryIdentity = MemoryTestData.Repository,
+                Ownership = RepositoryMemoryOwnership.Intelligence,
+                Query = "compiler errors",
+                AllowEmbeddingRebuild = false,
+                Options = new(),
             },
             ct);
         var after = await store.GetSnapshotAsync(MemoryTestData.Repository, [], ct);

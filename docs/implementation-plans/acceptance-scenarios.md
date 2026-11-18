@@ -1072,3 +1072,13 @@ ASK-USER opt-in addendum: a fresh/default host omits ask_user from model adverti
 3. Inspect the existing parent, child, headless, and raw failure paths. Verify safe details remain visible. Check unreadable and oversized error bodies for a clear fallback and omission marker.
 
 **Verifies:** useful provider errors through existing diagnostics, bounded reads, credential redaction, and unchanged retry and cancellation ownership.
+
+## Scenario SC-FENCED-COPY-01 — Bordered fenced content
+
+1. Show model answers with prose, JSON, YAML, XML, CSV, logs, Markdown, code, mixed text, unknown-type, and unlabeled fenced blocks in MAIN and child output. Confirm a standard bordered box for each block, with the type at the top left. An unlabeled block shows `text`. Invalid data and unrecognized labels receive the same treatment; no content validation is required.
+2. Use a clipboard-capable terminal. Confirm Copy is in the top border near the right, separated from the corner by at least one border cell. Click it and compare the clipboard body with admitted source. Exclude fences, labels, borders, and display wrapping. Preserve body whitespace and line endings.
+3. Repeat with multiple blocks, lists/quotes, long lines, Unicode, resize, scroll, and keyboard activation. Confirm the correct block is copied once and body selection still works.
+4. Disable clipboard support. Confirm no active Copy control. Exercise empty content, policy limits, missing retained body, and backend failure. Confirm no truncated copy or false success. OSC 52 reports terminal dispatch rather than confirmed local clipboard acceptance.
+5. Evict retained blocks, close a child view, and change sessions. Confirm stale controls cannot copy another block. Test small storage chunks and source-view controls. Headless output and source mode retain their existing raw-content behavior.
+
+**Verifies:** Exact admitted body copy, capability-gated explicit user action, bounded retention, safe display, and one existing transcript/clipboard path.

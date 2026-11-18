@@ -334,7 +334,7 @@ public sealed partial class SemanticEngine
         async Task<T> ExecuteAsync(CancellationToken token)
         {
             EnsurePreparedSolutionCurrent(preparedSolution);
-            var value = await RunNonCooperativeAsync(operation, token, sourceSolution: preparedSolution?.Solution, queryDeadline: queryDeadline);
+            var value = await RunNonCooperativeAsync(operation, sourceSolution: preparedSolution?.Solution, queryDeadline: queryDeadline, cancellationToken: token);
             EnsurePreparedSolutionCurrent(preparedSolution);
             return value;
         }
@@ -404,8 +404,8 @@ public sealed partial class SemanticEngine
                                             project.WithAnalyzerReferences([reference]),
                                             [],
                                             operationToken).Count == 0),
-                                        token,
-                                        sourceSolution: solution);
+                                        sourceSolution: solution,
+                                        cancellationToken: token);
                                     ownedValidation.TrySetResult(valid);
                                 }
                                 catch (SemanticOperationAbandonedException exception)
@@ -443,7 +443,7 @@ public sealed partial class SemanticEngine
                         }
                     }
 
-                    var compilation = await RunNonCooperativeAsync<Compilation?>(project.GetCompilationAsync, token, sourceSolution: solution);
+                    var compilation = await RunNonCooperativeAsync<Compilation?>(project.GetCompilationAsync, sourceSolution: solution, cancellationToken: token);
                     return new SemanticPreparationOutcome(
                         id,
                         compilation is not null && !analyzerFailed,

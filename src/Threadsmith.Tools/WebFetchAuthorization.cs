@@ -739,27 +739,10 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                     new HashSet<string>(StringComparer.Ordinal));
             }
 
-            if (_userReferences.TryGetValue(request.Reference, out var userReference))
+            if (IsOpaqueReference(request.Reference)
+                && GetCurrentUserReferenceIdCore(context, request.Reference) is string userReferenceId)
             {
-                if (!string.Equals(userReference.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
-                    || userReference.SessionId != context.SessionId
-                    || userReference.RunId != context.RunId
-                    || userReference.ScopeGeneration != _scopeGeneration
-                    || !HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath)
-                    || !string.Equals(
-                        userReference.PolicyFingerprint,
-                        CreatePolicyFingerprint(context.Invocation),
-                        StringComparison.Ordinal))
-                {
-                    throw StaleReference("current-user URL");
-                }
-
-                _userReferences.Remove(request.Reference);
-                IncrementGenerationCore();
-                return new WebFetchAuthorization(
-                    userReference.Url,
-                    WebFetchSourceKind.CurrentUserMessage,
-                    new HashSet<string>([userReference.UrlDigest], StringComparer.Ordinal));
+                return ConsumeCurrentUserReferenceCore(userReferenceId);
             }
 
             if (IsOpaqueReference(request.Reference))
@@ -790,6 +773,11 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 || !grant.IsInitialUrl
                 || grant.ScopeGeneration != _scopeGeneration)
             {
+                if (GetCurrentUserReferenceIdCore(context, request.Reference) is string literalUserReferenceId)
+                {
+                    return ConsumeCurrentUserReferenceCore(literalUserReferenceId);
+                }
+
                 if (GetHostGrantSourceCore(context, uri) is WebFetchSourceKind hostSource)
                 {
                     return new WebFetchAuthorization(
@@ -912,7 +900,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         await _userAllowedHosts.AddAsync(normalized.IdnHost, cancellationToken);
     }
 
-    /// <summary>Returns whether an exact URL already has an executable direct grant.</summary>
+    /// <summary>Returns whether an exact URL has an executable direct or current-message grant.</summary>
     public bool HasDirectGrant(ToolExecutionContext context, string url)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -922,7 +910,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         lock (_gate)
         {
             PruneCore();
-            return (_directGrants.TryGetValue(digest, out var direct)
+            return GetCurrentUserReferenceIdCore(context, url) is not null
+                || (_directGrants.TryGetValue(digest, out var direct)
                     && direct.IsInitialUrl
                     && direct.SessionId == context.SessionId
                     && string.Equals(direct.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal))
@@ -1083,7 +1072,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             PruneCore();
             if (!_directGrants.TryGetValue(digest, out var initialGrant) || !initialGrant.IsInitialUrl)
             {
-                return _searchHostGrants.Keys.Any(scope => string.Equals(scope.Host, normalized.IdnHost, StringComparison.OrdinalIgnoreCase))
+                return _userReferences.Values.Any(reference => reference.UrlDigest == digest)
+                    || _searchHostGrants.Keys.Any(scope => string.Equals(scope.Host, normalized.IdnHost, StringComparison.OrdinalIgnoreCase))
                     || _sessionHostGrants.Keys.Any(scope => string.Equals(scope.Host, normalized.IdnHost, StringComparison.OrdinalIgnoreCase))
                     || _userAllowedHosts?.ReadHosts().Contains(normalized.IdnHost) == true
                     ? [normalized.IdnHost]
@@ -1149,6 +1139,15 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             }
 
             var digest = WebFetchUrlPolicy.Digest(normalized);
+            if (string.Equals(normalized.IdnHost, networkHost, StringComparison.OrdinalIgnoreCase)
+                && _userReferences.Values.Any(reference => reference.RepositoryIdentity == repositoryIdentity
+                    && reference.UrlDigest == digest
+                    && reference.ScopeGeneration == _scopeGeneration))
+            {
+                // Resolve revalidates the exact session, run, consent, and policy before transport.
+                return true;
+            }
+
             return _directGrants.TryGetValue(digest, out var initialGrant)
                 && initialGrant.IsInitialUrl
                 && string.Equals(initialGrant.RepositoryIdentity, repositoryIdentity, StringComparison.Ordinal)
@@ -1200,15 +1199,10 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
                 return search.Url.AbsoluteUri;
             }
 
-            if (_userReferences.TryGetValue(request.Reference, out var user)
-                && user.RepositoryIdentity == repositoryIdentity
-                && user.SessionId == context.SessionId
-                && user.RunId == context.RunId
-                && user.ScopeGeneration == _scopeGeneration
-                && HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath)
-                && user.PolicyFingerprint == CreatePolicyFingerprint(context.Invocation))
+            var userReferenceId = GetCurrentUserReferenceIdCore(context, request.Reference);
+            if (userReferenceId is not null)
             {
-                return user.Url.AbsoluteUri;
+                return _userReferences[userReferenceId].Url.AbsoluteUri;
             }
         }
 
@@ -1222,6 +1216,46 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     {
         ArgumentNullException.ThrowIfNull(evaluator);
         Volatile.Write(ref _currentMessageConsentEvaluator, evaluator);
+    }
+
+    private WebFetchAuthorization ConsumeCurrentUserReferenceCore(string id)
+    {
+        var reference = _userReferences[id];
+        _userReferences.Remove(id);
+        IncrementGenerationCore();
+        return new WebFetchAuthorization(
+            reference.Url,
+            WebFetchSourceKind.CurrentUserMessage,
+            new HashSet<string>([reference.UrlDigest], StringComparer.Ordinal));
+    }
+
+    private string? GetCurrentUserReferenceIdCore(ToolExecutionContext context, string reference)
+    {
+        var opaque = IsOpaqueReference(reference);
+        var digest = opaque
+            ? null
+            : WebFetchUrlPolicy.Digest(WebFetchUrlPolicy.Normalize(reference, _options.Current.MaximumUrlCharacters));
+        var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath);
+        var policyFingerprint = CreatePolicyFingerprint(context.Invocation);
+        if (!HasCurrentMessageRouteConsent(context.Invocation.RepositoryPath))
+        {
+            return null;
+        }
+
+        foreach (var (id, candidate) in _userReferences)
+        {
+            if ((opaque ? id == reference : candidate.UrlDigest == digest)
+                && candidate.RepositoryIdentity == repositoryIdentity
+                && candidate.SessionId == context.SessionId
+                && candidate.RunId == context.RunId
+                && candidate.ScopeGeneration == _scopeGeneration
+                && candidate.PolicyFingerprint == policyFingerprint)
+            {
+                return id;
+            }
+        }
+
+        return null;
     }
 
     private WebFetchSourceKind? GetHostGrantSourceCore(ToolExecutionContext context, Uri normalized)

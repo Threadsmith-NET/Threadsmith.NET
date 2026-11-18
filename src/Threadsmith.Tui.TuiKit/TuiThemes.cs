@@ -535,7 +535,7 @@ internal static class TuiThemeConfigurationLoader
         }
 
         var uiSection = section.GetSection("ui");
-        string[] supportedUi = ["spinner", "selectionMarker", "footerSeparator"];
+        string[] supportedUi = ["spinner", "selectionMarker", "footerSeparator", "fencedCodeAscii"];
         var unknownUi = uiSection.GetChildren().Select(child => child.Key)
             .FirstOrDefault(key => !supportedUi.Contains(key, StringComparer.OrdinalIgnoreCase));
         if (unknownUi is not null)
@@ -554,7 +554,7 @@ internal static class TuiThemeConfigurationLoader
             throw new InvalidOperationException("The supported theme spinner is 'dots'.");
         }
 
-        return new ConfiguredTheme(name, new TuiTheme(id, styles), new TuiThemeUi(spinner, marker, separator), false);
+        return new ConfiguredTheme(name, new TuiTheme(id, styles), new TuiThemeUi(spinner, marker, separator) { FencedCodeAscii = uiSection.GetValue<bool>("fencedCodeAscii") }, false);
     }
 
     private static readonly KeyValuePair<string, TuiTextDecoration>[] Decorations =

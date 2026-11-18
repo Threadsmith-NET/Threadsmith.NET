@@ -8,9 +8,9 @@ This guide explains how Threadsmith uses the editable Markdown files in the depl
 
 For source-owner paths, deployed paths, byte limits, logging behavior, and the authoritative catalog metadata, see [Deployed prompt assets](operations/prompts.md).
 
-Shared implementation-validation instructions live in `System-RepositoryInspection.md`, supplied to both main and child agents; edit descriptions and feedback reference them. Repository-intelligence investigation and publication rules live in `Context-RepositoryIntelligenceCollection.md`; history and coverage prompts provide boundary-specific instructions, and `Tool-memories-Description.md` owns action and reconciliation semantics. Skill discovery, input preparation, and execution-state handling are separated across their respective descriptions and result guidance. Seven unused legacy child-output and exploration-limit assets have been removed from the catalog.
+`System-RepositoryInspection.md` inserts a validation section in the host-policy message. The main agent gets `System-ImplementationValidation-Writeable.md`; all delegated children get `System-ImplementationValidation-ReadOnly.md`. If you override the shared inspection file, replace its old validation section with `{{ImplementationValidation}}`. Repository-intelligence investigation and publication rules live in `Context-RepositoryIntelligenceCollection.md`; history and coverage prompts provide boundary-specific instructions, and `Tool-memories-Description.md` owns action and reconciliation semantics. Skill discovery, input preparation, and execution-state handling are separated across their respective descriptions and result guidance. Seven unused legacy child-output and exploration-limit assets have been removed from the catalog.
 
-`System-RepositoryInspection.md` directs agents to reuse current, completed background compiler and analyzer evidence for covered documents, rules, and severities. Additional analyzer commands address concrete coverage gaps or explicit requirements; filtering, truncation, and omissions limit reuse. Builds and tests retain their concrete purposes and required gates, and whitespace verification remains separate.
+`System-ImplementationValidation-Writeable.md` directs the main agent to reuse current, completed background compiler and analyzer evidence for covered documents, rules, and severities. Additional analyzer commands address concrete coverage gaps or explicit requirements; filtering, truncation, and omissions limit reuse. Builds and tests retain their concrete purposes and required gates, and whitespace verification remains separate.
 
 ## How prompt files are used
 
@@ -45,14 +45,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
+| System prompts | 24 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 28 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **302** | Complete deployed catalog. |
+| **Total** | **304** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -114,7 +114,9 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, artifact guidance, and native-tool concept hints. | `None` |
 | `System-SkillGuidance.md` | Main-agent docs skill routing, appended only when `invoke_skill` is in the enabled model tool inventory and the maintained `threadsmith-docs-help` skill is enabled and verified. Enablement is checked through the shared skill-listing service on each assembly; missing availability omits the guidance. | `None` |
-| `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance; reuse of current background validation coverage, additional checks for concrete gaps or requirements, separate whitespace verification, and default durable-artifact output to repository-root `.inbox/` unless another location is specified (scratchpad remains temporary). | `None` |
+| `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, change review, and artifact routing; inserts host-selected validation guidance before artifact routing. | [`ImplementationValidation`](#placeholder-implementationvalidation) |
+| `System-ImplementationValidation-Writeable.md` | Main-agent guidance for source-edit feedback, validation coverage, build/test selection, and completion reporting. | `None` |
+| `System-ImplementationValidation-ReadOnly.md` | Delegated-child guidance for assigned checks, available evidence, and reporting what remains unverified. | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad through built-in listing, search, read, and write tools. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family
@@ -910,6 +912,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-symbolname"></a>`SymbolName` | Display name of a compiler-known symbol. |
 | <a id="placeholder-symbolplural"></a>`SymbolPlural` | Grammar word or suffix selected from the symbol count. |
 | <a id="placeholder-symbolpluralsuffix"></a>`SymbolPluralSuffix` | Grammar suffix selected from the symbol count. |
+| <a id="placeholder-implementationvalidation"></a>`ImplementationValidation` | Exact validation guidance selected by the host: the writeable file for the main agent or the read-only file for a delegated child. |
 | <a id="placeholder-systempolicy"></a>`SystemPolicy` | Highest-precedence Threadsmith system policy included in the request. |
 | <a id="placeholder-task"></a>`Task` | Current user task or one delegated-child task statement. |
 | <a id="placeholder-tasks"></a>`Tasks` | Fully rendered list of delegated-child questions or task statements. |

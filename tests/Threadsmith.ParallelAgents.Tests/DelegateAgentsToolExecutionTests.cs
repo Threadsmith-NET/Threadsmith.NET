@@ -1310,9 +1310,11 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private readonly ManualResetEventSlim _releaseCancellation = new(initialState: false);
         private CancellationTokenRegistration? _registration;
 
+#pragma warning disable VSTHRD003 // Fixture-owned scheduler phase signals.
         public Task CancellationEntered => _cancellationEntered.Task;
 
         public Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         public void Complete()
         {
@@ -1373,7 +1375,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         private int _joinCalls;
 
+#pragma warning disable VSTHRD003 // Fixture-owned blocking child-entry signal.
         public Task BlockingChildEntered => _blockingChildEntered.Task;
+#pragma warning restore VSTHRD003
 
         public int JoinCalls => Volatile.Read(ref _joinCalls);
 
@@ -1411,7 +1415,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private readonly TaskCompletionSource _releaseJoin = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned join-entry signal.
         public Task JoinEntered => _joinEntered.Task;
+#pragma warning restore VSTHRD003
 
         public CancellationToken JoinCancellationToken { get; private set; }
 
@@ -1452,7 +1458,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private readonly TaskCompletionSource _releaseJoin = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned join-entry signal.
         public Task JoinEntered => _joinEntered.Task;
+#pragma warning restore VSTHRD003
 
         public async Task<bool> JoinAsync(
             DelegationPlan plan,
@@ -1820,7 +1828,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private readonly TaskCompletionSource _release = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
+#pragma warning disable VSTHRD003 // Fixture-owned runner-entry signal.
         public Task Entered => _entered.Task;
+#pragma warning restore VSTHRD003
 
         public void Release()
         {
@@ -1847,7 +1857,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
 
         public int Active => Volatile.Read(ref _active);
 
+#pragma warning disable VSTHRD003 // Fixture-owned child-entry signal.
         public Task AllEntered => _allEntered.Task;
+#pragma warning restore VSTHRD003
 
         public async Task<AgentRunOutcome> RunAsync(
             DelegationPlan plan,
@@ -1880,7 +1892,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private readonly List<DelegationCheckpoint> _history = [];
         private readonly Dictionary<DelegationId, DelegationCheckpoint> _latest = [];
 
+#pragma warning disable VSTHRD003 // Fixture-owned checkpoint acceptance signal.
         public Task<DelegationCheckpoint> ChildrenRunning => _childrenRunning.Task;
+#pragma warning restore VSTHRD003
 
         public IReadOnlyList<DelegationCheckpoint> History
         {
@@ -1942,7 +1956,9 @@ public sealed partial class DelegateAgentsToolExecutionTests
         private DelegationCheckpoint? _latest;
         private int _lateSaveCount;
 
+#pragma warning disable VSTHRD003 // Fixture-owned checkpoint completion signal.
         public Task LateSaveCompleted => _lateSaveCompleted.Task;
+#pragma warning restore VSTHRD003
 
         public DelegationCheckpoint? Latest
         {

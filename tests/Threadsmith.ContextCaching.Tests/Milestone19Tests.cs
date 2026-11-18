@@ -294,8 +294,19 @@ public sealed partial class Milestone19Tests
 
             var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
             Assert.Equal(ModelMessageRole.System, messages[0].Role);
-            Assert.Contains(TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection), messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            var prompts = TestPromptLoader.Instance;
+            var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
+                "{{ImplementationValidation}}",
+                prompts.Get(PromptFileNames.SystemImplementationValidationWriteable),
+                StringComparison.Ordinal);
+            var hostPolicy = messages[0].GetModelVisibleContent();
+            Assert.Equal(prompts.Get(PromptFileNames.SystemSystemPrompt) + Environment.NewLine + inspection, hostPolicy);
             Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemRepositoryInspection);
+            Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemImplementationValidationWriteable);
+            var estimate = Assert.IsType<ModelWireEstimate>(result.WireEstimate);
+            var systemPrompt = Assert.Single(estimate.Components, component => component.Category == "System prompt");
+            Assert.Equal((hostPolicy.Length + 3L) / 4, systemPrompt.Tokens);
+            Assert.Equal(estimate.WireInputTokens, estimate.Components.Sum(component => component.Tokens));
             Assert.Equal("current-user", messages[^1].SectionId);
             Assert.Contains("current question", messages[^1].Content[0].Content, StringComparison.Ordinal);
             Assert.DoesNotContain(

@@ -388,44 +388,6 @@ public sealed record ActiveTurnCompactionSummary
     public required string ContentHash { get; init; }
 }
 
-/// <summary>Cumulative host-observed file lists carried across updated summaries.</summary>
-internal sealed record ActiveTurnFileLists(
-    IReadOnlyList<string> FilesRead,
-    IReadOnlyList<string> FilesChanged);
-
-/// <summary>Combines prior and newly observed file lists in first-seen order.</summary>
-internal static class ActiveTurnFileListBuilder
-{
-    /// <summary>Builds cumulative deduplicated file lists for one selected group prefix.</summary>
-    public static ActiveTurnFileLists Build(
-        ActiveTurnCompactionSummary? priorSummary,
-        IReadOnlyList<ActiveTurnContinuationGroup> groups)
-    {
-        ArgumentNullException.ThrowIfNull(groups);
-        var filesRead = new List<string>();
-        var filesChanged = new List<string>();
-        AddDistinct(priorSummary?.FilesRead ?? [], filesRead);
-        AddDistinct(priorSummary?.FilesChanged ?? [], filesChanged);
-        AddDistinct(groups.SelectMany(group => group.FilesRead), filesRead);
-        AddDistinct(groups.SelectMany(group => group.FilesChanged), filesChanged);
-        return new ActiveTurnFileLists(filesRead, filesChanged);
-    }
-
-    private static void AddDistinct(
-        IEnumerable<string> source,
-        ICollection<string> destination)
-    {
-        var seen = destination.ToHashSet(StringComparer.Ordinal);
-        foreach (var value in source)
-        {
-            if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
-            {
-                destination.Add(value);
-            }
-        }
-    }
-}
-
 /// <summary>Bounded in-memory checkpoint for one activated active-turn history rewrite.</summary>
 public sealed record ActiveTurnCompactionCheckpoint
 {
@@ -714,27 +676,6 @@ public enum ActiveTurnCompactionOutcome
 
     /// <summary>The candidate input cannot fit the selected model before provider I/O.</summary>
     CapacityExceeded,
-}
-
-/// <summary>Reports a host-measured candidate capacity failure without exposing repository content.</summary>
-internal sealed class ActiveTurnCompactionCapacityException : Exception
-{
-    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
-    public ActiveTurnCompactionCapacityException()
-    {
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
-    public ActiveTurnCompactionCapacityException(string message)
-        : base(message)
-    {
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
-    public ActiveTurnCompactionCapacityException(string message, Exception innerException)
-        : base(message, innerException)
-    {
-    }
 }
 
 /// <summary>Closed outcome of one candidate-provider attempt at the host model-request boundary.</summary>
@@ -1906,5 +1847,64 @@ public static class ActiveTurnSummaryFormatter
         }
 
         return string.Join(Environment.NewLine, paths.Select(path => "- " + JsonSerializer.Serialize(path)));
+    }
+}
+
+/// <summary>Cumulative host-observed file lists carried across updated summaries.</summary>
+internal sealed record ActiveTurnFileLists(
+    IReadOnlyList<string> FilesRead,
+    IReadOnlyList<string> FilesChanged);
+
+/// <summary>Combines prior and newly observed file lists in first-seen order.</summary>
+internal static class ActiveTurnFileListBuilder
+{
+    /// <summary>Builds cumulative deduplicated file lists for one selected group prefix.</summary>
+    public static ActiveTurnFileLists Build(
+        ActiveTurnCompactionSummary? priorSummary,
+        IReadOnlyList<ActiveTurnContinuationGroup> groups)
+    {
+        ArgumentNullException.ThrowIfNull(groups);
+        var filesRead = new List<string>();
+        var filesChanged = new List<string>();
+        AddDistinct(priorSummary?.FilesRead ?? [], filesRead);
+        AddDistinct(priorSummary?.FilesChanged ?? [], filesChanged);
+        AddDistinct(groups.SelectMany(group => group.FilesRead), filesRead);
+        AddDistinct(groups.SelectMany(group => group.FilesChanged), filesChanged);
+        return new ActiveTurnFileLists(filesRead, filesChanged);
+    }
+
+    private static void AddDistinct(
+        IEnumerable<string> source,
+        ICollection<string> destination)
+    {
+        var seen = destination.ToHashSet(StringComparer.Ordinal);
+        foreach (var value in source)
+        {
+            if (!string.IsNullOrWhiteSpace(value) && seen.Add(value))
+            {
+                destination.Add(value);
+            }
+        }
+    }
+}
+
+/// <summary>Reports a host-measured candidate capacity failure without exposing repository content.</summary>
+internal sealed class ActiveTurnCompactionCapacityException : Exception
+{
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException()
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException(string message, Exception innerException)
+        : base(message, innerException)
+    {
     }
 }

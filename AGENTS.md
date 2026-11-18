@@ -40,6 +40,24 @@ This file defines repository-wide rules for AI coding agents.
 - **Keep terminal-library types out of core and extension contracts.** The interactive terminal is a projection of engine state; headless and interactive runs produce identical results.
 - **Do not stage, commit, push, or do destructive Git operations unless explicitly requested.**
 
+## Testing Guidelines
+
+### Speed & Isolation First
+- **Default to pure unit tests:** Test business logic, mapping, validation, and state transitions using plain C# classes with zero I/O, zero DI container startup, and zero network/disk access. Each unit test must execute in under 50ms.
+- **Ban heavy hosts by default:** Do NOT use `WebApplicationFactory`, `TestServer`, `Testcontainers`, or real database connections unless the task explicitly asks for an integration test.
+- **Keep dependencies lightweight:** Mock or fake only external boundaries (HTTP clients, clocks via `TimeProvider`, file system, repositories). Do not mock internal domain classes or DTOs.
+- Under NO circumstance can a test take more than 60 seconds to complete.
+
+### Volume & Signal
+- **Write minimal, high-signal tests:** Add only the tests needed to prove the new behavior and critical boundary conditions. Do not generate exhaustive input permutations.
+- **Use `[Theory]` sparingly:** Only use `[Theory]` / `[TestCase]` for genuinely distinct business branches—never to test 10 variations of the same valid input.
+- **Never test the framework or compiler:** Do not write tests for nullability enforcement, auto-properties, simple constructors, DI registration wiring, or standard EF Core/ASP.NET Core behavior.
+
+### Workflow & Verification
+- **Propose test cases first:** Before creating or editing test files, list the exact test names and one-line descriptions of what each verifies. Wait for approval if more than 4 tests are proposed.
+- **Run targeted tests only:** When verifying changes, run `dotnet test --filter "FullyQualifiedName~<ClassName>"` rather than the entire solution.
+- **Refactor for testability over heavy setup:** If a method requires a full `DbContext` or `HttpContext` just to test a calculation or rule, extract the pure logic into a static or isolated method instead of building a heavy test fixture.
+
 ## PR validation gate
 
 - **Open PRs through `eng/Submit-PullRequest.ps1 -Title <title> -BodyFile <file>`, not a direct `gh pr create`.** It runs the documentation preflight, pushes the clean branch, opens or reuses the PR, and follows its normal PR-triggered three-platform CI run. It reports validation success only when the exact local, remote, and PR revision passed all platforms. Use `-ValidateOnly` to push and validate an existing PR through the same path. Do not dispatch a separate pre-PR or follow-up workflow: one PR-triggered run validates each submitted revision. Failed validation leaves the PR open and must be reported honestly. This is the executable submission gate; prose instructions and local Windows tests are not substitutes.

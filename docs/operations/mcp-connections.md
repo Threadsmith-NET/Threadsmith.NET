@@ -67,6 +67,8 @@ Static bearer tokens and API keys are supported through `headers` plus `secretSc
 
 Threadsmith supports authorization-code + PKCE for SSE and streamable-HTTP profiles. The official MCP SDK performs protected-resource and authorization-server discovery, state and RFC 9207 issuer validation, token exchange, bearer attachment, and transparent refresh. Threadsmith owns browser/callback UX and durable secret caching.
 
+OAuth requires discoverable authorization-server metadata that advertises `S256` PKCE support. If the SDK cannot find that metadata, Threadsmith does not guess `/authorize` or `/token` endpoints. Configure the provider to publish compatible metadata.
+
 ```json
   "mcp": {
     "profiles": [

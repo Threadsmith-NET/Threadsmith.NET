@@ -1001,12 +1001,15 @@ Configure it with scalar values:
         "WorkerCreationTimeOut": "3000",
         "timeout_ms": "5000",
         "max_output_bytes": "65536",
-        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json"
+        "assembly_config_action": "merge",
+        "allowed_assemblies": "System.Text.RegularExpressions"
       }
     }
   }
 }
 ```
+
+In trusted configuration, `assembly_config_action` defaults to `merge`: list only the extra comma-separated `allowed_assemblies` names you want. Duplicate names are ignored. Use `override` to keep only the configured names (an empty string removes all optional names). If you previously relied on `allowed_assemblies` replacing the defaults, set `assembly_config_action` to `override`.
 
 ### Hosted pull-request retrieval
 

@@ -18,9 +18,9 @@
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.150.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.macOS" Version="4.150.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Win32" Version="4.150.1" />
-    <PackageVersion Include="bblanchon.PDFium.Linux" Version="152.0.7961" />
-    <PackageVersion Include="bblanchon.PDFium.macOS" Version="152.0.7961" />
-    <PackageVersion Include="bblanchon.PDFium.Win32" Version="152.0.7961" />
+    <PackageVersion Include="bblanchon.PDFium.Linux" Version="160.0.8165" />
+    <PackageVersion Include="bblanchon.PDFium.macOS" Version="160.0.8165" />
+    <PackageVersion Include="bblanchon.PDFium.Win32" Version="160.0.8165" />
     <PackageVersion Include="StbImageSharp" Version="2.30.15" />
     <!-- Markdown and retained interactive terminal. -->
     <PackageVersion Include="LibGit2Sharp" Version="0.32.0" />
@@ -39,7 +39,7 @@
 
     <!-- Model abstraction (strategy Â§6: host-owned facade, optionally backed by Microsoft.Extensions.AI). -->
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
 
     <!-- Native Anthropic Messages SDK; isolated in Threadsmith.Models.Anthropic. -->
     <PackageVersion Include="Anthropic" Version="12.46.0" />
@@ -50,11 +50,11 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Resilience" Version="10.8.0" />
@@ -64,12 +64,12 @@
     <PackageVersion Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
 
     <!-- Persistence (strategy Â§6: SQLite + artifact files; ADR-3). -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
-    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.15" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
 
     <!-- MCP (strategy Â§6: official C# MCP SDK behind a host adapter; ADR for Â§20). Version-isolated in Threadsmith.Mcp only. -->
-    <PackageVersion Include="ModelContextProtocol.Core" Version="2.0.0" />
-    <PackageVersion Include="ModelContextProtocol" Version="2.0.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.4.0" />
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
 
     <!-- Testing (strategy Â§6: xUnit + Microsoft.Testing.Platform). xUnit v3 with the MTP v2 variant matches the pinned Microsoft.Testing.Platform 2.3.3. -->
     <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
@@ -78,9 +78,9 @@
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.10.0" />
 
     <!-- Static analysis (plan-01 task 4; portable-csharp-guardrails G-1..G-29). -->
-    <PackageVersion Include="StyleCop.Analyzers" Version="1.2.0-beta.556" />
+    <PackageVersion Include="StyleCop.Analyzers" Version="1.3.180" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
-    <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.7.23" />
+    <PackageVersion Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.12.1" />
 
     <!-- Source link (deterministic builds). -->
     <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />

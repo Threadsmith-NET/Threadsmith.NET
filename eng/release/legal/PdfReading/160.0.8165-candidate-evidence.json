@@ -1,0 +1,112 @@
+{
+  "reviewState": "approved",
+  "releaseOwnerApproval": {
+    "status": "approved",
+    "decisionDate": "2026-11-18",
+    "scope": "The three unmodified bblanchon.PDFium 160.0.8165 packages with their complete matching notices. This does not cover Windows .NET runtime redistribution."
+  },
+  "publisherRelease": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8165",
+  "publisherRevision": "83c18af693945b735503665259b728ba7d409fd0",
+  "pdfiumBranch": "chromium/8165",
+  "pdfiumRevision": "1f02bc7d908ab301fa2a2babd87226a19311ff38",
+  "publisherAttestation": {
+    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-attestation.json",
+    "sha256": "a198e725074f3321c0f21a94218cafc910740e0e0c8395530198855f7a918770",
+    "verification": "Each listed desktop archive passed gh attestation verify against this bundle and bblanchon/pdfium-binaries."
+  },
+  "components": [
+    {
+      "id": "bblanchon.PDFium.Linux",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/160.0.8165",
+      "packageSha512": "EUvL2Xs6bqsx3v9ygHK4IwQZvKhFGW5gAYhawyinonvwssUQVW264zg5oAd081LkZmHt4q+/83eqPif0u019Cg==",
+      "packageArchiveSha256": "ae82c98c94f91b2fe26f19618a853fd65c7d42f1436042bf96e705cffc45e36a",
+      "packageArchiveSha512": "UeHyeQHanssVVZmIHa4XTCvUCfHTt4043LODXv4+BTJqPDvvftr6vOVji/2x3ENKfFMZeawEbsiYARfdHhV4jQ==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "id": "bblanchon.PDFium.macOS",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/160.0.8165",
+      "packageSha512": "wPOOddgr2pu1kqNGrH1E7DW1Fbhil1IrHWFMkVQK2x4/Ro58BjlAFG+yALCdwaLwQVUKawoKh7ohT9bn9GJVuw==",
+      "packageArchiveSha256": "fc201d424c0e558f15e95c245e6c4e181066905d2844f4cd9262d89eedbd4958",
+      "packageArchiveSha512": "zwfBKEC/VaZOe5lj4iW8vNRItxpwwnT2lYaHhQ7CF+ySn+ndM4u5Cj/9cGoUNQ4CAPe5muCDZQavmqgASFAmgQ==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "id": "bblanchon.PDFium.Win32",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/160.0.8165",
+      "packageSha512": "YQzaQpjbP7TEmmjxOd4W7Okub+8/Mj0trnGB4v9VJROXwynxwVBlNGEjMoFrpDGd1FMFeYzKG4oaeTx/UIc6Nw==",
+      "packageArchiveSha256": "9b60428355c74daefd4d1a64438c666ce172d9f32c51368568a2f8879242e824",
+      "packageArchiveSha512": "bf5UskRyHdeDXnRX1h5MStuab1U8c4r2vd7JfY6OYn2cJvV/CMVfSknEO7qqmA5anGxQiAVVGEMhvdgNNjfsqw==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    }
+  ],
+  "nativeSources": [
+    {
+      "rid": "win-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-win-x64.tgz",
+      "archiveSha256": "ca7338ae7779b8b1b82f4580305c4d762d214f8df1d54b47647fe3cc75989ded",
+      "restoredNuGetNativeSha256": "31d249b8535dd5f351ae7f4b714dc4bb1d76b6069b321a309bc99271dd65f566"
+    },
+    {
+      "rid": "win-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-win-arm64.tgz",
+      "archiveSha256": "d65e405c59cffe6fe36c0935b90d40ddf3ce75ef284f3168a28dcf00d0388131",
+      "restoredNuGetNativeSha256": "9b1eb281e6f8b2da9f54fc71619198c90142adab2f57f5251a4824a08da621b3"
+    },
+    {
+      "rid": "linux-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-linux-x64.tgz",
+      "archiveSha256": "ba7865e16c0271daab75256790be06c26272190afe6e2a70eae0bb39bb99089c",
+      "restoredNuGetNativeSha256": "63b70290e3e88eff6b236a4c87cb58461b4fe9fae56217314eeda31aff741479"
+    },
+    {
+      "rid": "linux-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-linux-arm64.tgz",
+      "archiveSha256": "338f5dcc907a20331812ae8ab01b16ff18966f4a247d790c8ad8fb49029d768b",
+      "restoredNuGetNativeSha256": "963309fe119e4614afb750bc6a4e35272bd5b8bad61fb84df282c9c821f7de8b"
+    },
+    {
+      "rid": "osx-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-mac-x64.tgz",
+      "archiveSha256": "07285915b564e46a432a9909dbc1f15892885ca6489e3faeefc70dee77ed371a",
+      "restoredNuGetNativeSha256": "fcbfee9dc7f895289fbfb8f7d1f0d5d643f60fcb790708425daaa0cfa64f330d"
+    },
+    {
+      "rid": "osx-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-mac-arm64.tgz",
+      "archiveSha256": "112e74d717f3e0310273b70f3c8780e8a61ff11b34834124465c8305c841d350",
+      "restoredNuGetNativeSha256": "d421e426bd487de02fa3bd1f2aeaf56947261f790e6116951e26f729ced1b018"
+    }
+  ],
+  "verification": {
+    "packages": "All three signatures passed dotnet nuget verify --all. packageSha512 records NuGet restore content hashes; packageArchiveSha256 and packageArchiveSha512 hash the signed .nupkg files.",
+    "nativeBinaries": "For each listed RID, the SHA-256 of the native binary extracted from the attested upstream archive exactly matched restoredNuGetNativeSha256.",
+    "notices": "Each attested archive contains 19 license payloads: LICENSE and 18 files under licenses/. The payloads are byte-identical between x64 and ARM64 on each platform; platform differences are preserved in the three bundles. Each bundle adds filename headers and separators without changing upstream payload bytes."
+  },
+  "noticeBundles": [
+    {
+      "rids": ["win-x64", "win-arm64"],
+      "path": "PDFium-160.0.8165-win-x64-NOTICES.txt",
+      "sha256": "e19d62e272bbe0df248e006a82a8a776191d79dc27fac84dc677db716a0b0b51"
+    },
+    {
+      "rids": ["linux-x64", "linux-arm64"],
+      "path": "PDFium-160.0.8165-linux-x64-NOTICES.txt",
+      "sha256": "eddd0647adeae58434b07a3586e58231f5fb38824302abb2c55be6898b4ff922"
+    },
+    {
+      "rids": ["osx-x64", "osx-arm64"],
+      "path": "PDFium-160.0.8165-osx-x64-NOTICES.txt",
+      "sha256": "47fcdb8648914a47622118cc4864510dfe67498a0606d1ad7a6e02a5b29ab21c"
+    }
+  ],
+  "limitations": [
+    "Native comparisons cover only the six supported desktop release RIDs, not other assets in the NuGet packages. Runtime validation was performed on Windows x64 only."
+  ]
+}

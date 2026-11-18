@@ -328,18 +328,6 @@ public sealed class SemanticStartupProgress
         private TimeSpan? _elapsed;
         private string? _detail;
 
-        /// <summary>Gets the stable operation identity.</summary>
-        internal string? Id { get; init; }
-
-        /// <summary>Gets the parent identity.</summary>
-        internal string? ParentId { get; init; }
-
-        /// <summary>Gets the display label.</summary>
-        internal string? Label { get; init; }
-
-        /// <summary>Gets the display order.</summary>
-        internal int? Order { get; init; }
-
         /// <summary>Records a recoverable failure with a host-sanitized fallback explanation.</summary>
         public void Fail(string detail)
         {
@@ -371,15 +359,6 @@ public sealed class SemanticStartupProgress
             Finish(_cancellationToken.IsCancellationRequested ? SemanticStartupPhaseState.Cancelled : SemanticStartupPhaseState.Failed);
         }
 
-        /// <summary>Initializes a new instance of the <see cref="Operation"/> class.</summary>
-        internal Operation(SemanticStartupProgress owner, SemanticStartupPhase phase, long started, CancellationToken cancellationToken)
-        {
-            _owner = owner;
-            _phase = phase;
-            _cancellationToken = cancellationToken;
-            _started = started;
-        }
-
         /// <summary>Gets a phase snapshot under the owner's lock.</summary>
         public SemanticStartupPhaseSnapshot Snapshot
         {
@@ -409,6 +388,27 @@ public sealed class SemanticStartupProgress
                     return snapshot;
                 }
             }
+        }
+
+        /// <summary>Gets the stable operation identity.</summary>
+        internal string? Id { get; init; }
+
+        /// <summary>Gets the parent identity.</summary>
+        internal string? ParentId { get; init; }
+
+        /// <summary>Gets the display label.</summary>
+        internal string? Label { get; init; }
+
+        /// <summary>Gets the display order.</summary>
+        internal int? Order { get; init; }
+
+        /// <summary>Initializes a new instance of the <see cref="Operation"/> class.</summary>
+        internal Operation(SemanticStartupProgress owner, SemanticStartupPhase phase, long started, CancellationToken cancellationToken)
+        {
+            _owner = owner;
+            _phase = phase;
+            _cancellationToken = cancellationToken;
+            _started = started;
         }
 
         private void Finish(SemanticStartupPhaseState state)

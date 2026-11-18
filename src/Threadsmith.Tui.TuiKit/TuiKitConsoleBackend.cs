@@ -27,23 +27,6 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
         Capabilities = ApplyRgbOverride(detected, useRgb);
     }
 
-    /// <summary>Changes only color depth while preserving capabilities detected by TUIKit.</summary>
-    internal static TerminalCapabilities ApplyRgbOverride(TerminalCapabilities detected, bool useRgb)
-    {
-        return useRgb
-        ? new TerminalCapabilities(
-                TerminalColorDepth.TrueColor,
-                detected.EnhancedKeyboard,
-                detected.SgrMouse,
-                detected.Hyperlinks,
-                detected.ClipboardOsc52,
-                detected.BracketedPaste,
-                detected.AnyMotionMouse,
-                detected.FocusReporting,
-                detected.SynchronizedOutput)
-        : detected;
-    }
-
     /// <inheritdoc />
     public TerminalCapabilities Capabilities { get; }
 
@@ -87,5 +70,22 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
     public void Dispose()
     {
         _console.Dispose();
+    }
+
+    /// <summary>Changes only color depth while preserving capabilities detected by TUIKit.</summary>
+    internal static TerminalCapabilities ApplyRgbOverride(TerminalCapabilities detected, bool useRgb)
+    {
+        return useRgb
+            ? new TerminalCapabilities(
+                TerminalColorDepth.TrueColor,
+                detected.EnhancedKeyboard,
+                detected.SgrMouse,
+                detected.Hyperlinks,
+                detected.ClipboardOsc52,
+                detected.BracketedPaste,
+                detected.AnyMotionMouse,
+                detected.FocusReporting,
+                detected.SynchronizedOutput)
+            : detected;
     }
 }

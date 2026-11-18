@@ -47,12 +47,16 @@ public static class ModelJsonCleanup
                     next++;
                 }
 
-                var remaining = bytes.AsSpan(next);
-                if (next < bytes.Length && (bytes[next] == (byte)'"'
-                    || (bytes[index] == (byte)'[' && (bytes[next] is (byte)'{' or (byte)'[' or (byte)'-' or >= (byte)'0' and <= (byte)'9'
-                        || remaining.StartsWith("true"u8) || remaining.StartsWith("false"u8) || remaining.StartsWith("null"u8)))))
+                if (next < bytes.Length)
                 {
-                    return trimmed;
+                    var leading = bytes[next];
+                    var remaining = bytes.AsSpan(next);
+                    var arrayValue = leading is (byte)'{' or (byte)'[' or (byte)'-' or (>= (byte)'0' and <= (byte)'9')
+                        || remaining.StartsWith("true"u8) || remaining.StartsWith("false"u8) || remaining.StartsWith("null"u8);
+                    if (leading == (byte)'"' || (bytes[index] == (byte)'[' && arrayValue))
+                    {
+                        return trimmed;
+                    }
                 }
 
                 // Non-JSON braces in surrounding prose are not candidates.

@@ -7,8 +7,6 @@ using TUIKit.Unicode;
 /// <summary>One draft with text-element editing and byte-bounded delta history.</summary>
 internal sealed class ComposerBuffer
 {
-    private readonly TuiResourceLimits _limits;
-
     /// <summary>Initializes a new instance of the <see cref="ComposerBuffer"/> class.</summary>
     internal ComposerBuffer(TuiResourceLimits? limits = null)
     {
@@ -20,6 +18,7 @@ internal sealed class ComposerBuffer
     internal const int MaximumDraftBytes = 1024 * 1024;
     private const int MaximumHistoryBytes = 1024 * 1024;
     private const int MaximumHistoryEntries = 200;
+    private readonly TuiResourceLimits _limits;
     private static readonly UTF8Encoding _strictUtf8 = new(false, true);
     private readonly List<Edit> _undo = [];
     private readonly Stack<Edit> _redo = [];

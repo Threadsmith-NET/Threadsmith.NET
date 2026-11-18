@@ -224,11 +224,6 @@ public sealed class SessionUsageProjection
         }
     }
 
-    private bool IsChild(SessionId sessionId, RunId runId)
-    {
-        return _children.TryGetValue(sessionId, out var children) && children.Contains(runId);
-    }
-
     private readonly Dictionary<SessionId, SessionDurableUsage> _restored = [];
     private readonly Dictionary<SessionId, Dictionary<ModelRequestUsageId, ModelUsage?>> _usage = [];
 
@@ -427,6 +422,11 @@ public sealed class SessionUsageProjection
                 ReasoningTokens = requests.Count > 0 ? reasoningTokens : null,
             };
         }
+    }
+
+    private bool IsChild(SessionId sessionId, RunId runId)
+    {
+        return _children.TryGetValue(sessionId, out var children) && children.Contains(runId);
     }
 
     private static long SaturatingAdd(long current, long value)

@@ -43,6 +43,19 @@ public sealed class PromptModelScope : IDisposable
 /// <summary>Renders cached prompt templates whose code-owned line breaks must follow the current platform.</summary>
 public static class PromptAssetRenderer
 {
+    /// <summary>Renders the shared inspection guidance with the validation text selected by the host.</summary>
+    public static string RenderRepositoryInspection(IPromptLoader prompts, string implementationValidation)
+    {
+        ArgumentNullException.ThrowIfNull(prompts);
+        ArgumentNullException.ThrowIfNull(implementationValidation);
+        return prompts.Render(
+            PromptFileNames.SystemRepositoryInspection,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ImplementationValidation"] = implementationValidation,
+            });
+    }
+
     /// <summary>Renders one prompt after normalizing only its template line endings.</summary>
     public static string RenderWithPlatformLineEndings(
         IPromptLoader prompts,
@@ -155,6 +168,12 @@ public static class PromptFileNames
 
     /// <summary>Gets the shared parent and child repository inspection guidance asset.</summary>
     public const string SystemRepositoryInspection = "System-RepositoryInspection.md";
+
+    /// <summary>Gets the main-agent source-edit validation guidance asset.</summary>
+    public const string SystemImplementationValidationWriteable = "System-ImplementationValidation-Writeable.md";
+
+    /// <summary>Gets the delegated-child validation guidance asset.</summary>
+    public const string SystemImplementationValidationReadOnly = "System-ImplementationValidation-ReadOnly.md";
 
     /// <summary>Gets the conditional session scratchpad guidance asset.</summary>
     public const string SystemScratchpad = "System-Scratchpad.md";
@@ -1059,6 +1078,8 @@ public static class PromptFileNames
         SystemSystemPrompt,
         SystemSkillGuidance,
         SystemRepositoryInspection,
+        SystemImplementationValidationWriteable,
+        SystemImplementationValidationReadOnly,
         SystemScratchpad,
         SystemConversationGuidance,
         SystemConversationOutput,
@@ -1389,6 +1410,8 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemSystemPrompt,
             PromptFileNames.SystemSkillGuidance,
             PromptFileNames.SystemRepositoryInspection,
+            PromptFileNames.SystemImplementationValidationWriteable,
+            PromptFileNames.SystemImplementationValidationReadOnly,
             PromptFileNames.SystemScratchpad,
             PromptFileNames.SystemConversationGuidance,
             PromptFileNames.SystemConversationOutput,
@@ -1602,6 +1625,7 @@ public static class PromptAssetCatalog
             = new ReadOnlyDictionary<string, IReadOnlySet<string>>(
                 new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {
+                    [PromptFileNames.SystemRepositoryInspection] = Set("ImplementationValidation"),
                     [PromptFileNames.SystemScratchpad] = Set("ScratchpadPath"),
                     [PromptFileNames.SystemGovernedRequestState] = Set(
                         "TaskState",

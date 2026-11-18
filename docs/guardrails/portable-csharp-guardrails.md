@@ -215,7 +215,7 @@ public EntityType[] SupportedTypes => [
 | Extension method classes | `public static` (or `internal static` if project-internal) |
 
 ### G-18: XML documentation follows build policy
-Document public product types and members with `/// <summary>` and additional XML tags for non-obvious details. Describe intent and usage, not a restatement of code. Follow configured SA1600/SA1601 requirements for other members. Tests and spikes are exempt from XML-documentation requirements under `Directory.Build.props` and `.editorconfig`.
+Document public product types and members with `/// <summary>` and additional XML tags for non-obvious details. Describe intent and usage, not a restatement of code. Follow configured SA1600/SA1601 requirements for other members. Positional records still require declaration documentation; the build-only compatibility suppressor exempts only SA1600 on positional parameter names, so add `<param>` tags when they explain non-obvious details. Tests and spikes are exempt from XML-documentation requirements under `Directory.Build.props` and `.editorconfig`.
 
 ```csharp
 /// <summary>Acquires source data, caching the parsed result for subsequent calls.</summary>
@@ -284,21 +284,9 @@ public MyService(IEnumerable<IPipelineDefinition> pipelineDefinitions) { /* ... 
 ### G-24: Arrange-Act-Assert
 Always use AAA structure; mark sections with comments when non-obvious.
 
-Functional tests must not require successful work to finish within an arbitrary wall-clock duration on an unknown runner. Synchronize on observable completion or explicit barriers and propagate the test runner's cancellation token. Do not fix timing flakes by increasing per-test deadlines. Keep production timeout defaults unchanged; test their configuration separately from real-process functional coverage. Tests specifically verifying deadline behavior should use a controllable clock or explicit cancellation, without an additional runner-speed assertion. Whole-run infrastructure watchdogs are safety limits, not product performance assertions.
+Functional tests must not require successful work to finish within an arbitrary wall-clock duration on an unknown runner. Synchronize on observable completion or explicit barriers and propagate the test runner's cancellation token. Do not fix timing flakes by increasing per-test deadlines. 
 
 The architecture test gate rejects explicit wall-clock waits, deadline cancellation, stopwatch assertions, and test-level timeouts. Review fixture construction and nested production/SDK defaults as well: a test can inherit a real deadline without containing a timed wait. Passing this source guard does not replace that review.
-
-Before adding a test, trace every dependency that can turn scheduling latency into a failure, including regex match timeouts, HTTP defaults, process startup, compiler/analyzer work, and cleanup. A fake clock at the outer layer does not control a nested API's private clock. For APIs without clock injection, use an instance-scoped execution-bound seam on the existing implementation for functional coverage. Assert production timeout configuration separately and inject timeout failures to verify recovery or fail-closed decisions. Never mutate global defaults, weaken production bounds, or accept either success or timeout in a semantic assertion.
-
-Apply these rules to unit, functional, and integration tests. Do not assume runner hardware, platform, or scheduling latency. Avoid sleeps for ordering, finite polling budgets, and child-process lifetimes used as readiness signals. Use existing completion signals or explicit barriers; retries until green are not a fix.
-
-Moving tests between classes or projects changes their scheduling and resource contention. Re-review deadlines, fixture ownership, and completion semantics when splitting suites or changing runner parallelism, even if the assertions are unchanged.
-
-When using a controllable clock, observe operation entry or timer registration before advancing it. Check nested retry, debounce/settle, and cleanup paths for frozen-clock hangs, and avoid expiring unrelated timers. Keep UTC and elapsed-time calculations consistent where both are used. Account for cancellation, abandonment, late completion, and fixture cleanup without introducing runner-speed deadlines.
-
-Assert the intended semantic result at a defined completion or ownership boundary. Queue admission or acknowledgement does not imply that rendering or background work finished. Do not read or render mutable state concurrently with its owner; rendering may itself mutate layout state. Use an owner-thread snapshot or stop and join the owner before inspecting retained state. Preserve meaningful assertions and production timeout coverage; reuse existing synchronization and clock facilities rather than adding machinery without a concrete need.
-
-When multiple producers share an event type or correlation ID, wait for the producer and phase whose result is asserted. For example, analyzer completion for an edit does not establish compiler completion for that edit. Add a regression that holds the required producer behind a barrier and delivers the competing event first; verify the final returned result, not merely whether a continuation happened to run yet.
 
 ```csharp
 [Fact]

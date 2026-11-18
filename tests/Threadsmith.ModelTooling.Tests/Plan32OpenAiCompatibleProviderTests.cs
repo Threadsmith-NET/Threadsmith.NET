@@ -28,9 +28,9 @@ public static class Plan32OpenAiCompatibleProviderTests
     public static async Task ReasoningCompatibility_CustomEffort_PreservesProviderValue(string reasoning)
     {
         string? requestJson = null;
-        using var client = new HttpClient(new RecordingHandler(request =>
+        using var client = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
@@ -292,9 +292,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         bool expected)
     {
         string? requestJson = null;
-        using var client = new HttpClient(new RecordingHandler(request =>
+        using var client = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
@@ -530,9 +530,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         bool nativeTools)
     {
         string? requestJson = null;
-        using var handler = new RecordingHandler(request =>
+        using var handler = new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             var stream = nativeTools
                 ? "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"function\":{\"name\":\"inspect_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n"
                 : "data: {\"choices\":[{\"delta\":{\"content\":\"{}\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n";
@@ -661,10 +661,10 @@ public static class Plan32OpenAiCompatibleProviderTests
             {
                 string? requestJson = null;
                 var requests = 0;
-                var handler = new RecordingHandler(request =>
+                var handler = new RecordingHandler(async (request, cancellationToken) =>
                 {
                     requests++;
-                    requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+                    requestJson = await ReadRequestBodyAsync(request, cancellationToken);
                     var reasoning = parityCase.ResponseMode switch
                     {
                         OpenAiReasoningResponseMode.ReasoningContent
@@ -795,9 +795,9 @@ public static class Plan32OpenAiCompatibleProviderTests
     public static async Task ReasoningCompatibility_MappedEffort_ProjectsAndNormalizesExactly()
     {
         string? requestJson = null;
-        var handler = new RecordingHandler(request =>
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(
@@ -898,9 +898,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         string expectedEffort)
     {
         string? requestJson = null;
-        var handler = new RecordingHandler(request =>
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
@@ -963,9 +963,9 @@ public static class Plan32OpenAiCompatibleProviderTests
         bool enabled)
     {
         string? requestJson = null;
-        var handler = new RecordingHandler(request =>
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             const string stream = "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking\"}}]}\n\ndata: [DONE]\n";
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
@@ -1025,9 +1025,9 @@ public static class Plan32OpenAiCompatibleProviderTests
     {
         // Arrange: the explicit shape, rather than the model name, selects this protocol.
         string? requestJson = null;
-        using var client = new HttpClient(new RecordingHandler(request =>
+        using var client = new HttpClient(new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
@@ -1112,9 +1112,9 @@ public static class Plan32OpenAiCompatibleProviderTests
     public static async Task StructuredMessages_AdjacentUserProjections_PreserveAlternatingRoles()
     {
         string? requestJson = null;
-        var handler = new RecordingHandler(request =>
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
         {
-            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            requestJson = await ReadRequestBodyAsync(request, cancellationToken);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
@@ -1582,11 +1582,21 @@ public static class Plan32OpenAiCompatibleProviderTests
         OpenAiReasoningControlMode Mode,
         OpenAiReasoningResponseMode ResponseMode);
 
+    private static async Task<string?> ReadRequestBodyAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        return request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _send;
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _send;
 
         public RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> send)
+            : this((request, _) => Task.FromResult(send(request)))
+        {
+        }
+
+        public RecordingHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> send)
         {
             _send = send;
         }
@@ -1595,7 +1605,7 @@ public static class Plan32OpenAiCompatibleProviderTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            return Task.FromResult(_send(request));
+            return _send(request, cancellationToken);
         }
     }
 }

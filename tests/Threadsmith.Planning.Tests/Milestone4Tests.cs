@@ -105,7 +105,7 @@ public static class Milestone4Tests
         Assert.Empty(request.Tools);
         Assert.DoesNotContain("propose_plan", request.Input, StringComparison.Ordinal);
         Assert.Contains(
-            SecurityElement.Escape(TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)),
+            SecurityElement.Escape(TestPromptLoader.Instance.Get(PromptFileNames.SystemImplementationValidationWriteable)),
             request.Input,
             StringComparison.Ordinal);
     }
@@ -1687,9 +1687,12 @@ public static class Milestone4Tests
                 "<conversation_instructions>",
                 StringComparison.Ordinal);
             Assert.True(policyPosition < appendPosition && appendPosition < phasePosition);
-            var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
-                + Environment.NewLine
-                + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
+            var prompts = TestPromptLoader.Instance;
+            var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
+                "{{ImplementationValidation}}",
+                prompts.Get(PromptFileNames.SystemImplementationValidationWriteable),
+                StringComparison.Ordinal);
+            var policy = prompts.Get(PromptFileNames.SystemSystemPrompt) + Environment.NewLine + inspection;
             var expectedPolicy = $"<system_policy>{SecurityElement.Escape(policy)}</system_policy>";
             var policyEnd = assembled.ModelInput.IndexOf(
                 "</system_policy>",

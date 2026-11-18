@@ -43,7 +43,9 @@ internal sealed class ChildAgentPrompt
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(instructions);
         var hostPolicy = _prompts.Get(PromptFileNames.SystemChildAgentHostPolicy)
-            + Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryInspection);
+            + Environment.NewLine + PromptAssetRenderer.RenderRepositoryInspection(
+                _prompts,
+                _prompts.Get(PromptFileNames.SystemImplementationValidationReadOnly));
         if (toolContext?.Scratchpad is { IsActive: true, ModelPath: { } scratchpadPath }
             && HasBuiltInScratchpadTools(registrations))
         {

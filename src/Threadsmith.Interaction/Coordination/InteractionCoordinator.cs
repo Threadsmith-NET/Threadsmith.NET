@@ -687,6 +687,7 @@ public sealed partial class InteractionCoordinator
                                 Notification = InteractionEventSegments.CreateNotification(domainEvent),
                                 Disclosure = InteractionEventSegments.CreateDisclosure(domainEvent, eventSegments),
                                 SourceDetail = InteractionEventSegments.GetSourceDetail(domainEvent),
+                                EndsWithToolDetailPlaceholder = transcript.EndsWithToolDetailPlaceholder,
                                 WakeIdleInput = domainEvent is DiagnosticObserved { Code: "intelligence.refresh.pending" },
                             });
                         }

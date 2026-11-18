@@ -688,7 +688,7 @@ public sealed partial class GitQueryService : IGitQueryService
             for (var index = 0; index < read; index++)
             {
                 var value = buffer[index];
-                binary |= value is 0 or < 0x08 or 0x0B or 0x0C or >= 0x0E and < 0x20;
+                binary |= value is 0 or < 0x08 or 0x0B or 0x0C or (>= 0x0E and < 0x20);
             }
 
             if (!binary)

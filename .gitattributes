@@ -21,6 +21,8 @@
 # Preserve exact, hash-verified upstream license/header evidence.
 eng/release/legal/TUIKit-0.10.1-candidate/*.txt whitespace=-trailing-space
 eng/release/legal/PdfReading/*.txt whitespace=-trailing-space
+eng/release/legal/PdfReading/PDFium-160.0.8165-*-NOTICES.txt -text whitespace=cr-at-eol,-trailing-space
+eng/release/legal/dotnet-runtime-packages-10.0.14-NOTICES.txt -text whitespace=cr-at-eol
 
 # Binary assets — never normalize.
 *.png   binary

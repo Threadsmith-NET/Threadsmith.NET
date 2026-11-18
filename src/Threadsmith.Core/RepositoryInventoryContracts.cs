@@ -333,10 +333,13 @@ public sealed record DotNetInventoryRequest
 
 /// <summary>One target-framework inventory entry.</summary>
 public sealed record TargetFrameworkInventory(string Name);
+
 /// <summary>One project-reference inventory entry.</summary>
 public sealed record ProjectReferenceInventory(string Path);
+
 /// <summary>One package-reference inventory entry.</summary>
 public sealed record PackageReferenceInventory(string Id, string? Version, PackageVersionSource VersionSource);
+
 /// <summary>One normalized project inventory entry.</summary>
 public sealed record ProjectInventory(
     string Name,
@@ -346,8 +349,10 @@ public sealed record ProjectInventory(
     IReadOnlyList<PackageReferenceInventory> PackageReferences,
     bool IsTestProject,
     SemanticConfidenceLevel Confidence);
+
 /// <summary>Selected solution inventory.</summary>
 public sealed record SolutionInventory(string Path, IReadOnlyList<ProjectInventory> Projects);
+
 /// <summary>Normalized .NET inventory with provenance and omissions.</summary>
 public sealed record DotNetInventoryResult(
     SolutionInventory Solution,

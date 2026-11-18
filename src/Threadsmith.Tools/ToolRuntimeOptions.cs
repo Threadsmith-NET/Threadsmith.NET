@@ -241,12 +241,6 @@ internal sealed class ConfiguredTool : ITool
         }
     }
 
-    /// <summary>Returns the implementation that owns tool-specific policy and output behavior.</summary>
-    internal static ITool Unwrap(ITool tool)
-    {
-        return tool is ConfiguredTool configured ? configured.Inner : tool;
-    }
-
     private ITool Inner { get; }
 
     /// <inheritdoc />
@@ -301,6 +295,12 @@ internal sealed class ConfiguredTool : ITool
     public Task<ToolExecutionEnvelope> ExecuteAsync(object input, ToolExecutionContext context, CancellationToken cancellationToken = default)
     {
         return Inner.ExecuteAsync(input, context, cancellationToken);
+    }
+
+    /// <summary>Returns the implementation that owns tool-specific policy and output behavior.</summary>
+    internal static ITool Unwrap(ITool tool)
+    {
+        return tool is ConfiguredTool configured ? configured.Inner : tool;
     }
 }
 

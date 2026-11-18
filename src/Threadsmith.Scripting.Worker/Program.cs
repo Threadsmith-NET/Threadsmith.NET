@@ -2,6 +2,7 @@ namespace Threadsmith.Scripting.Worker;
 
 using System.Diagnostics;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
@@ -14,6 +15,7 @@ using Threadsmith.Core;
 /// <summary>Reads one bounded script request from standard input and writes one JSON result.</summary>
 public static class Program
 {
+    private const string _cryptographyNamespace = "System.Security.Cryptography";
     private static readonly JsonSerializerOptions RequestJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly string[] _prohibitedNamespacePrefixes =
     [
@@ -42,7 +44,9 @@ public static class Program
         if (args.Contains("--warm", StringComparer.Ordinal))
         {
             // Warm compiler infrastructure without executing code or receiving file authority.
-            var options = CreateOptions(["System.Linq", "System.Collections", "System.Collections.Generic", "System.Text.Json"], 128);
+            var options = CreateOptions(
+                PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAllowedAssemblies.Split(','),
+                128);
             var diagnostics = CSharpScript.Create("0", options, typeof(ScriptGlobals)).Compile();
             if (diagnostics.Any(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
             {
@@ -64,11 +68,9 @@ public static class Program
                 ?? throw new InvalidOperationException("The scripting request was empty.");
             if (string.IsNullOrWhiteSpace(request.Code)
                 || request.MaximumCodeCharacters <= 0
-                || request.MaximumAssemblies <= 0
                 || request.MaximumAssemblyNameCharacters <= 0
                 || request.Code.Length > request.MaximumCodeCharacters
                 || request.MaximumOutputBytes <= 0
-                || request.AllowedAssemblies.Count > request.MaximumAssemblies
                 || request.Kind is not ("Expression" or "Statement"))
             {
                 throw new InvalidOperationException("The scripting request exceeded a worker boundary.");
@@ -148,6 +150,15 @@ public static class Program
                             $"Access to '{typeName ?? namespaceName}' is prohibited in scripts. For files, use Scratchpad.");
                     }
 
+                    // A configured reference enables binding, not arbitrary cryptography APIs.
+                    if ((namespaceName == _cryptographyNamespace
+                            || namespaceName.StartsWith(_cryptographyNamespace + ".", StringComparison.Ordinal))
+                        && !IsAllowedCryptographySymbol(symbol, namespaceName, typeName))
+                    {
+                        throw new InvalidOperationException(
+                            $"Access to '{typeName ?? namespaceName}' is prohibited in scripts. Only SHA256.HashData(byte[]) is permitted for cryptography.");
+                    }
+
                     if (namespaceName.StartsWith("System.", StringComparison.Ordinal)
                         && !request.AllowedAssemblies.Any(allowed => namespaceName.Equals(allowed, StringComparison.Ordinal)
                             || namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal)
@@ -214,6 +225,33 @@ public static class Program
         return 0;
     }
 
+    private static bool IsAllowedCryptographySymbol(ISymbol symbol, string namespaceName, string? typeName)
+    {
+        if (namespaceName != _cryptographyNamespace)
+        {
+            return false;
+        }
+
+        if (symbol is INamespaceSymbol)
+        {
+            return true;
+        }
+
+        if (typeName != typeof(SHA256).FullName)
+        {
+            return false;
+        }
+
+        // Named arguments bind to the parameter rather than to the method.
+        var member = symbol is IParameterSymbol parameter ? parameter.ContainingSymbol : symbol;
+        return member is INamedTypeSymbol or IMethodSymbol
+        {
+            Name: nameof(SHA256.HashData),
+            IsStatic: true,
+            Parameters: [{ Type: IArrayTypeSymbol { Rank: 1, ElementType.SpecialType: SpecialType.System_Byte } }],
+        };
+    }
+
     private static ScriptOptions CreateOptions(IReadOnlyList<string> allowedAssemblies, int maximumAssemblyNameCharacters)
     {
         var trustedPlatformAssemblies = (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
@@ -263,8 +301,6 @@ public static class Program
         public int TimeoutMilliseconds { get; init; } = 5000;
 
         public int MaximumCodeCharacters { get; init; } = 65536;
-
-        public int MaximumAssemblies { get; init; } = 32;
 
         public int MaximumAssemblyNameCharacters { get; init; } = 128;
 

@@ -4,16 +4,41 @@ using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Explicit repository memory action with action-specific optional arguments.</summary>
-public sealed record MemoriesInput(string Action, string? Id = null, string? Text = null, string? MemoryType = null,
-    string? Kind = null, IReadOnlyList<string>? Concepts = null,
-    IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null,
-    IReadOnlyList<string>? SupportingPaths = null, string? AfterPath = null, IReadOnlyList<string>? CoveredPaths = null,
-    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0, string? Query = null, string? Ownership = null) : IConceptToolInput;
+public sealed record MemoriesInput(
+    string Action,
+    string? Id = null,
+    string? Text = null,
+    string? MemoryType = null,
+    string? Kind = null,
+    IReadOnlyList<string>? Concepts = null,
+    IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null,
+    long? ExpectedRevision = null,
+    IReadOnlyList<string>? SupportingPaths = null,
+    string? AfterPath = null,
+    IReadOnlyList<string>? CoveredPaths = null,
+    MemoryCoverageInput? Coverage = null,
+    string? AfterKey = null,
+    IReadOnlyList<MemoryCoverageInput>? Survey = null,
+    string? ProposalKey = null,
+    int ProposalOffset = 0,
+    string? Query = null,
+    string? Ownership = null) : IConceptToolInput;
 
 /// <summary>Onboarding investigation update; supporting paths are resolved to host-observed receipts.</summary>
-public sealed record MemoryCoverageInput(string Key, string Area, string Question, string Status,
-    string Conclusion = "", string Gaps = "", IReadOnlyList<string>? MemoryIds = null, IReadOnlyList<string>? SupportingPaths = null,
-    string Limitations = "", IReadOnlyList<string>? FollowUpKeys = null, string Priority = "required", string NoMemoryReason = "", IReadOnlyList<string>? ResolvedProposalKeys = null);
+public sealed record MemoryCoverageInput(
+    string Key,
+    string Area,
+    string Question,
+    string Status,
+    string Conclusion = "",
+    string Gaps = "",
+    IReadOnlyList<string>? MemoryIds = null,
+    IReadOnlyList<string>? SupportingPaths = null,
+    string Limitations = "",
+    IReadOnlyList<string>? FollowUpKeys = null,
+    string Priority = "required",
+    string NoMemoryReason = "",
+    IReadOnlyList<string>? ResolvedProposalKeys = null);
 
 /// <summary>A stored revision explicitly acknowledged as distinct.</summary>
 public sealed record MemoryDistinctnessConfirmation(string Id, long Revision);

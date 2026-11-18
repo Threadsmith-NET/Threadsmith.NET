@@ -1050,12 +1050,26 @@ public sealed partial class SemanticEngine
     // Optional bounded DTO slots; initial origins belong to the project owner, not slot eviction.
     private sealed record EditDiagnosticBasis(EditCompilerSlot Baseline, EditCompilerSlot Candidate);
 
-    private sealed record EditProjectBasis(EditDiagnosticBasis? Compiler = null, Dictionary<string, int>? CompilerInitial = null, EditAnalyzerBasis? AnalyzerBaseline = null,
-        EditAnalyzerBasis? AnalyzerCandidate = null, Dictionary<string, int>? AnalyzerInitial = null,
+    private sealed record EditProjectBasis(
+        EditDiagnosticBasis? Compiler = null,
+        Dictionary<string, int>? CompilerInitial = null,
+        EditAnalyzerBasis? AnalyzerBaseline = null,
+        EditAnalyzerBasis? AnalyzerCandidate = null,
+        Dictionary<string, int>? AnalyzerInitial = null,
         ImmutableHashSet<DocumentId>? AnalyzerInitialDocuments = null);
 
-    private sealed record EditProjectResult(EditFinding[] Current, int Count, int Warnings, int New, int Resolved, bool ComparisonAvailable, bool Filtered, bool Truncated, IReadOnlyList<string> Omissions,
-        EditDiagnosticBasis? Basis = null, Dictionary<string, int>? Initial = null);
+    private sealed record EditProjectResult(
+        EditFinding[] Current,
+        int Count,
+        int Warnings,
+        int New,
+        int Resolved,
+        bool ComparisonAvailable,
+        bool Filtered,
+        bool Truncated,
+        IReadOnlyList<string> Omissions,
+        EditDiagnosticBasis? Basis = null,
+        Dictionary<string, int>? Initial = null);
 
     private sealed class EditCandidate
     {

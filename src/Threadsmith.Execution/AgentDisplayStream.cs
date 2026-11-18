@@ -15,9 +15,6 @@ public sealed class AgentDisplayStream
         Limits.Validate();
     }
 
-    /// <summary>Immutable budgets shared with display writers.</summary>
-    internal ExecutionLimits Limits { get; }
-
     private readonly Queue<AgentDisplayText> _pending = new();
     private readonly Lock _gate = new();
     private long _omitted;
@@ -30,6 +27,9 @@ public sealed class AgentDisplayStream
         get => Volatile.Read(ref _includeReasoning) != 0;
         set => Volatile.Write(ref _includeReasoning, value ? 1 : 0);
     }
+
+    /// <summary>Immutable budgets shared with display writers.</summary>
+    internal ExecutionLimits Limits { get; }
 
     /// <summary>Enables the single retained observer; headless operation retains no display stream.</summary>
     public void Attach()

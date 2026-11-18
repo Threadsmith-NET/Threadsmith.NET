@@ -329,7 +329,6 @@
         "timeout_ms": 5000,
         "max_output_bytes": 65536,
         "max_code_characters": 65536,
-        "max_assemblies": 32,
         "max_assembly_name_characters": 128,
         "max_assembly_setting_characters": 4096
       }

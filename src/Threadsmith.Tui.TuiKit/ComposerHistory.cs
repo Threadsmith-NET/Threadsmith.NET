@@ -8,8 +8,6 @@ using Threadsmith.Interaction.Contracts;
 /// <summary>Retains bounded submissions with prefix-first navigation and draft restoration.</summary>
 internal sealed class ComposerHistory
 {
-    private readonly TuiResourceLimits _limits;
-
     /// <summary>Initializes a new instance of the <see cref="ComposerHistory"/> class.</summary>
     internal ComposerHistory(TuiResourceLimits? limits = null)
     {
@@ -22,6 +20,7 @@ internal sealed class ComposerHistory
 
     /// <summary>Maximum retained UTF-8 history size.</summary>
     internal const int ByteLimit = 1024 * 1024;
+    private readonly TuiResourceLimits _limits;
     private readonly List<Entry> _entries = [];
     private readonly Stack<int> _path = [];
     private string _draft = string.Empty;

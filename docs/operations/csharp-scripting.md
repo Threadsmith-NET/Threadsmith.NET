@@ -6,7 +6,14 @@ For execution rules, available file methods, and tested examples, see the [scrip
 
 ## Configuration and lifecycle
 
-Configure `tools:config:csharp_script:allowed_assemblies`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, and JSON; explicit allowlists replace those defaults. See the [configuration example](../user-guide.md) in the user guide.
+Configure `tools:config:csharp_script:allowed_assemblies`, `assembly_config_action`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, JSON, and SHA-256 hashing of byte arrays.
+
+- `merge` (default) adds the configured comma-separated names to the built-in list and removes exact duplicates.
+- `override` uses only the configured names. An empty `allowed_assemblies` string clears the optional list; omitting `allowed_assemblies` keeps the defaults if no trusted layer supplies a list.
+
+Trusted configuration precedence selects one list and one action; lists from different sources are not combined. Machine-enforced `allowed_assemblies` still narrows the result, and worker restrictions still apply. If you relied on the previous replacement behavior, set `assembly_config_action` to `override`. See the [configuration example](../user-guide.md) in the user guide.
+
+There is no assembly-count cap. The former `max_assemblies` setting is ignored and can be removed from existing configuration. Limits on the length of each name and the total setting still apply; see [scripting resource limits](resource-limits.md#toolsconfigcsharp_script).
 
 The host prepares one unused worker in the background at startup by default. Set `tools:config:csharp_script:NumberOfWarmWorkersInPool` to change that count; `0` disables the pool and starts a fresh worker for each invocation. Set `tools:config:csharp_script:WorkerCreationTimeOut` to change the creation/acquisition timeout in milliseconds (default `3000`). These are ordinary startup preferences, not permission grants; restart the application after changing them.
 
@@ -18,7 +25,7 @@ If a tracked process cannot be confirmed terminated within the shutdown backstop
 
 ## View and copy submitted source
 
-In the interactive terminal, each retained script completion has a collapsed **C# script** control. Click the heading to expand it. The preview shows at most 20 logical lines and 8,192 source characters. A notice identifies a truncated preview. If the normalized preview cannot fit transcript retention, the header says **Preview omitted: retention limits**. Under very small budgets, **[!] C# script** gives the same omission warning without adding rows or bytes to the collapsed controls. The full-source action still works. Execution output and errors remain outside the preview.
+In the interactive terminal, each retained script completion has a collapsed **C# script** control inside its `TOOLS: csharp_script` output block. Click the heading to expand it. The preview shows at most 20 logical lines and 8,192 source characters. A notice identifies a truncated preview. If the normalized preview cannot fit transcript retention, the header says **Preview omitted: retention limits**. Under very small budgets, **[!] C# script** gives the same omission warning without adding rows or bytes to the collapsed controls. The full-source action still works. Execution output and errors remain outside the preview.
 
 **View full script…** stays available while the preview is collapsed. Click it, or use output focus with **Ctrl+Up/Down** to select a control and **Enter/Space** to activate it. The standard read-only modal shows the complete retained submitted source, including scripts longer than normal scrollback. Scroll with arrows or Page Up/Down. Select with the mouse or Shift+arrows. **F6** copies the selection; **F4** copies the full script. **Esc** closes the modal and restores the underlying input focus and draft.
 

@@ -244,8 +244,6 @@ internal sealed class LocalTextCrossEncoderEngine : IDisposable
         }
     }
 
-    private sealed record PreparedQuery(IReadOnlyList<int> Tokens, int OriginalTokenCount);
-
     private static void ValidateMetadata(InferenceSession session)
     {
         foreach (var name in (string[])["input_ids", "attention_mask", "token_type_ids"])
@@ -284,4 +282,6 @@ internal sealed class LocalTextCrossEncoderEngine : IDisposable
         /// <summary>Complete document content length.</summary>
         public int DocumentTokenCount { get; init; }
     }
+
+    private sealed record PreparedQuery(IReadOnlyList<int> Tokens, int OriginalTokenCount);
 }

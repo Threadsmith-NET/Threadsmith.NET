@@ -285,8 +285,13 @@ public sealed partial class SemanticEngine
     // Weak snapshot identity avoids retaining compiler graphs. Any source, reference, configuration,
     // additional-file or generator-input snapshot change is a conservative miss. Exact promotion
     // preserves candidate identity, as it does for the existing compiler feedback path.
-    private sealed record EditAnalyzerBasis(WeakReference<Solution> Snapshot, ImmutableHashSet<DocumentId> Documents,
-        ImmutableArray<string> DiagnosticIds, bool ConcurrentAnalysis, bool Advisory, EditAnalyzerProjectResult Result)
+    private sealed record EditAnalyzerBasis(
+        WeakReference<Solution> Snapshot,
+        ImmutableHashSet<DocumentId> Documents,
+        ImmutableArray<string> DiagnosticIds,
+        bool ConcurrentAnalysis,
+        bool Advisory,
+        EditAnalyzerProjectResult Result)
     {
         public EditAnalyzerProjectResult? Match(Solution snapshot, ImmutableHashSet<DocumentId> documents, EditAnalyzerOptions options, bool advisory)
         {
@@ -301,9 +306,15 @@ public sealed partial class SemanticEngine
 internal sealed record EditAnalyzerComparison(IReadOnlyList<EditAnalyzerProjectResult> Before, IReadOnlyList<EditAnalyzerProjectResult> After, double QueueMilliseconds, double AvailableMilliseconds);
 
 /// <summary>Whole-document coverage and unfiltered evidence for every executed analyzer instance.</summary>
-internal sealed record EditAnalyzerProjectResult(string Project, IReadOnlyList<EditAnalyzerIdentity> Analyzers, IReadOnlyList<string> UnavailableIds,
-    IReadOnlyList<EditAnalyzerFinding> Diagnostics, IReadOnlyList<EditAnalyzerFinding> FullReferenceDiagnostics,
-    IReadOnlyList<string> Omissions, double PreparationMilliseconds, double AnalysisMilliseconds)
+internal sealed record EditAnalyzerProjectResult(
+    string Project,
+    IReadOnlyList<EditAnalyzerIdentity> Analyzers,
+    IReadOnlyList<string> UnavailableIds,
+    IReadOnlyList<EditAnalyzerFinding> Diagnostics,
+    IReadOnlyList<EditAnalyzerFinding> FullReferenceDiagnostics,
+    IReadOnlyList<string> Omissions,
+    double PreparationMilliseconds,
+    double AnalysisMilliseconds)
 {
     /// <summary>Gets whether evidence was reused without a new baseline pass; execution timings are zero in that case.</summary>
     public bool Reused { get; init; }

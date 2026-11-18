@@ -40,13 +40,38 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         };
     }
 
-    /// <summary>JSON is available by default while explicit trusted configuration can remove it.</summary>
+    /// <summary>Trusted settings merge by default and can explicitly replace the defaults.</summary>
     [Fact]
     public void ScriptDefaultsIncludeJsonAndRespectExplicitConfiguration()
     {
         Assert.Contains("System.Text.Json", Load().ScriptAssemblies);
-        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq"}}}}""");
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq,System.Text.RegularExpressions"}}}}""");
+        var merged = Load().ScriptAssemblies;
+        Assert.Contains("System.Text.Json", merged);
+        Assert.Contains("System.Text.RegularExpressions", merged);
+        Assert.Single(merged, name => name == "System.Linq");
+
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq","assembly_config_action":"override"}}}}""");
         Assert.Equal(["System.Linq"], Load().ScriptAssemblies);
+    }
+
+    /// <summary>The removed assembly-count setting does not prevent existing machine policy from loading.</summary>
+    [Fact]
+    public void LegacyScriptAssemblyCapIsIgnored()
+    {
+        const string capKey = "tools:config:csharp_script:max_assemblies";
+        const string nameLimitKey = "tools:config:csharp_script:max_assembly_name_characters";
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"max_assemblies":4}}}}""");
+        File.WriteAllText(_paths.MachineConfiguration, """
+            {"enforced":{"tools":{"config":{"csharp_script":{"max_assemblies":4,"max_assembly_name_characters":64}}}}}
+            """);
+
+        var policy = Load();
+
+        Assert.DoesNotContain(capKey, policy.ResourceLimits.Keys);
+        Assert.Equal(64, policy.ResourceLimits[nameLimitKey]);
+        var defaults = PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAllowedAssemblies.Split(',');
+        Assert.Equal(defaults.Order(StringComparer.Ordinal), policy.ScriptAssemblies.Order(StringComparer.Ordinal));
     }
 
     /// <summary>Ordinary tool preferences cannot broaden the trusted tool allowlist.</summary>
@@ -463,82 +488,6 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         }
     }
 
-    private void AssertPathAdmission(EffectiveSessionPolicy policy, string path, bool allowed)
-    {
-        var context = new ToolInvocationContext
-        {
-            RepositoryPath = _paths.RepositoryRoot,
-            RequestedBy = "test",
-            TrustLevel = RepositoryTrustLevel.TrustedMutation,
-            ProhibitedPaths = policy.ProhibitedPaths,
-            SecurityPolicy = policy,
-        };
-        var read = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
-        var configuration = new ConfigurationBuilder().Build();
-        var write = new WriteFileTool(
-            new WriteFileConfiguration(configuration, configuration, _paths.RepositoryRoot),
-            new UnusedConversationStore(),
-            TestPromptLoader.Instance);
-        var engine = new DefaultPolicyEngine();
-        var readDecision = engine.Evaluate(read, new ReadFileInput { Path = path }, context);
-        var writeDecision = engine.Evaluate(write, new WriteFileInput(path, "fixture"), context);
-        Assert.Equal(allowed, readDecision.IsAllowed);
-        Assert.Equal(allowed, writeDecision.IsAllowed);
-        if (!allowed)
-        {
-            Assert.Contains("prohibited", readDecision.Reason);
-            Assert.Contains("prohibited", writeDecision.Reason);
-        }
-
-        var binding = new SessionPolicyBinding();
-        binding.Publish(policy);
-        var mutations = new MutationApprovalPolicyService(policyBinding: binding);
-        if (allowed)
-        {
-            mutations.ValidatePaths([path], _paths.RepositoryRoot);
-        }
-        else
-        {
-            Assert.Throws<MutationPolicyException>(() => mutations.ValidatePaths([path], _paths.RepositoryRoot));
-        }
-    }
-
-    private sealed class UnusedConversationStore : IConversationStore
-    {
-        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
-
-        public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, ConversationHistoryWindow? historyWindow = null, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task ReplaceSummaryAsync(SessionId sessionId, IReadOnlyList<ConversationMemoryItem> items, ConversationSummarySnapshot snapshot, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task UpdateMemoryAsync(ConversationMemoryItem item, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-    }
-
     /// <summary>A broad export grant cannot create or replace the user-owned secret store.</summary>
     [Theory]
     [InlineData(false)]
@@ -589,7 +538,83 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Equal("allowed", await File.ReadAllTextAsync(artifact, token));
     }
 
+    private void AssertPathAdmission(EffectiveSessionPolicy policy, string path, bool allowed)
+    {
+        var context = new ToolInvocationContext
+        {
+            RepositoryPath = _paths.RepositoryRoot,
+            RequestedBy = "test",
+            TrustLevel = RepositoryTrustLevel.TrustedMutation,
+            ProhibitedPaths = policy.ProhibitedPaths,
+            SecurityPolicy = policy,
+        };
+        var read = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
+        var configuration = new ConfigurationBuilder().Build();
+        var write = new WriteFileTool(
+            new WriteFileConfiguration(configuration, configuration, _paths.RepositoryRoot),
+            new UnusedConversationStore(),
+            TestPromptLoader.Instance);
+        var engine = new DefaultPolicyEngine();
+        var readDecision = engine.Evaluate(read, new ReadFileInput { Path = path }, context);
+        var writeDecision = engine.Evaluate(write, new WriteFileInput(path, "fixture"), context);
+        Assert.Equal(allowed, readDecision.IsAllowed);
+        Assert.Equal(allowed, writeDecision.IsAllowed);
+        if (!allowed)
+        {
+            Assert.Contains("prohibited", readDecision.Reason);
+            Assert.Contains("prohibited", writeDecision.Reason);
+        }
+
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        var mutations = new MutationApprovalPolicyService(policyBinding: binding);
+        if (allowed)
+        {
+            mutations.ValidatePaths([path], _paths.RepositoryRoot);
+        }
+        else
+        {
+            Assert.Throws<MutationPolicyException>(() => mutations.ValidatePaths([path], _paths.RepositoryRoot));
+        }
+    }
+
     private EffectiveSessionPolicy Load() => SecurityPolicyConfigurationLoader.Load(_paths, Guid.NewGuid(), 1);
+
+    private sealed class UnusedConversationStore : IConversationStore
+    {
+        public Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(SessionId sessionId, IReadOnlyCollection<ConversationMessageId> messageIds, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, ConversationHistoryWindow? historyWindow = null, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task ReplaceSummaryAsync(SessionId sessionId, IReadOnlyList<ConversationMemoryItem> items, ConversationSummarySnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task UpdateMemoryAsync(ConversationMemoryItem item, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+    }
 }
 
 /// <summary>Serializes process-wide launch environment changes against other architecture tests.</summary>

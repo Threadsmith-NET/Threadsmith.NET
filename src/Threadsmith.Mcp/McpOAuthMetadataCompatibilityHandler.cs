@@ -95,15 +95,17 @@ internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
                 cancellationToken);
             if (metadata is null)
             {
-                canonicalServers.Add(advertisedServer.AbsoluteUri);
+                canonicalServers.Add(advertisedValue);
                 continue;
             }
 
             var (canonicalIssuer, content) = metadata.Value;
-            canonicalServers.Add(canonicalIssuer.AbsoluteUri);
+
+            // RFC 8414 compares issuer identifiers exactly, including the original trailing slash.
+            canonicalServers.Add(canonicalIssuer.OriginalString);
             changed |= !string.Equals(
-                advertisedServer.AbsoluteUri,
-                canonicalIssuer.AbsoluteUri,
+                advertisedValue,
+                canonicalIssuer.OriginalString,
                 StringComparison.Ordinal);
             _metadataByCanonicalLocation[BuildOAuthMetadataUri(canonicalIssuer).AbsoluteUri] = content;
         }

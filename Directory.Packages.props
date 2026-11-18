@@ -39,7 +39,7 @@
 
     <!-- Model abstraction (strategy Â§6: host-owned facade, optionally backed by Microsoft.Extensions.AI). -->
     <PackageVersion Include="Microsoft.Extensions.AI" Version="10.8.3" />
-    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.8.3" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.11.0" />
 
     <!-- Native Anthropic Messages SDK; isolated in Threadsmith.Models.Anthropic. -->
     <PackageVersion Include="Anthropic" Version="12.46.0" />
@@ -50,11 +50,11 @@
     <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Debug" Version="10.0.10" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.10" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.10" />
     <PackageVersion Include="Microsoft.Extensions.Resilience" Version="10.8.0" />
@@ -68,8 +68,8 @@
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.13" />
 
     <!-- MCP (strategy Â§6: official C# MCP SDK behind a host adapter; ADR for Â§20). Version-isolated in Threadsmith.Mcp only. -->
-    <PackageVersion Include="ModelContextProtocol.Core" Version="2.0.0" />
-    <PackageVersion Include="ModelContextProtocol" Version="2.0.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="2.4.0" />
+    <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
 
     <!-- Testing (strategy Â§6: xUnit + Microsoft.Testing.Platform). xUnit v3 with the MTP v2 variant matches the pinned Microsoft.Testing.Platform 2.3.3. -->
     <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />

@@ -1,10 +1,14 @@
 namespace Threadsmith.McpTransports.Tests;
 
+using System.IO.Pipelines;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
+using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Threadsmith.Core;
 using Threadsmith.Mcp;
@@ -409,6 +413,284 @@ public sealed class SdkHttpTransportTests
         Assert.Equal(1, callback.ReleaseCount);
     }
 
+    /// <summary>Refresh or reauthorization uses the canonical resource and stores a usable grant across reconnects.</summary>
+    [Theory]
+    [InlineData("unchanged")]
+    [InlineData("rotated")]
+    [InlineData("rejected")]
+    public async Task OAuth_refresh_uses_canonical_resource_and_persists_the_provider_grant(string refreshOutcome)
+    {
+        const string endpoint = "https://mcp.example.test/mcp";
+        const string resource = endpoint + "/";
+        const string issuer = "https://login.example.test";
+        const string metadata = "https://mcp.example.test/.well-known/oauth-protected-resource/mcp";
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("threadsmith-mcp-refresh-");
+        try
+        {
+            var cachePath = Path.Combine(directory.FullName, "tokens.json");
+            var secrets = new DictionarySecretStore();
+            var interaction = new CompletingOAuthInteraction(new Uri(issuer + "/authorize"), resource);
+            var profile = CreateProfile(endpoint, McpTransport.Http) with
+            {
+                AllowOAuthUserInteraction = true,
+                OAuth = new McpOAuthOptions { Enabled = true, ClientId = "fixture-client", RedirectPort = 8400 },
+            };
+            var seededOptions = await CreateFlow().CreateOptionsAsync(
+                profile with { AllowOAuthUserInteraction = false }, cancellationToken);
+            var cachedGrant = new TokenContainer
+            {
+                AccessToken = "initial-access",
+                RefreshToken = "unchanged-refresh",
+                TokenType = "Bearer",
+                AuthorizationServer = issuer,
+                ClientId = "fixture-client",
+                TokenEndpointAuthMethod = "none",
+                ObtainedAt = DateTimeOffset.UnixEpoch,
+                ExpiresIn = 1,
+            };
+            await seededOptions.TokenCache!.StoreTokensAsync(cachedGrant, cancellationToken);
+            var refreshCalls = 0;
+            var connected = 0;
+
+            // A fresh flow and store for each reconnect ensures the SDK loads its grant from disk.
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                using var httpClient = new HttpClient(new McpOAuthMetadataCompatibilityHandler(
+                    new DelegateHttpHandler(RespondAsync)))
+                { Timeout = Timeout.InfiniteTimeSpan };
+                await using var transport = new SdkHttpTransport(
+                    secrets,
+                    NullLoggerFactory.Instance,
+                    CreateFlow(),
+                    httpClient,
+                    timeProvider: new FakeTimeProvider());
+                var capabilities = await transport.StartAsync(profile, new Dictionary<string, string>(), cancellationToken);
+                Assert.Equal("echo", Assert.Single(capabilities).ServerName);
+            }
+
+            var restored = await CreateFlow().CreateOptionsAsync(
+                profile with { AllowOAuthUserInteraction = false }, cancellationToken);
+            var grant = await restored.TokenCache!.GetTokensAsync(cancellationToken);
+            Assert.NotNull(grant);
+            Assert.Equal(refreshOutcome + "-refresh", grant.RefreshToken);
+            Assert.Equal(1, refreshCalls);
+            Assert.Equal(refreshOutcome == "rejected" ? 1 : 0, interaction.LaunchCount);
+            Assert.Equal(2, connected);
+
+            McpOAuthFlow CreateFlow() => new(
+                interaction,
+                interaction,
+                new McpOAuthSecretStore(secrets, cachePath),
+                secrets,
+                NullLogger<McpOAuthFlow>.Instance);
+
+            async Task<HttpResponseMessage> RespondAsync(HttpRequestMessage request, CancellationToken token)
+            {
+                var uri = request.RequestUri?.AbsoluteUri;
+                switch (uri)
+                {
+                    case metadata:
+                        return JsonResponse($$"""
+                            {"resource":"{{resource}}","authorization_servers":["https://mcp.example.test/"]}
+                            """);
+                    case "https://mcp.example.test/.well-known/oauth-authorization-server":
+                        return JsonResponse($$"""
+                            {"issuer":"{{issuer}}","authorization_endpoint":"{{issuer}}/authorize","token_endpoint":"{{issuer}}/token","code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"]}
+                            """);
+                    case issuer + "/token":
+                        {
+                            Assert.Equal(HttpMethod.Post, request.Method);
+                            var form = ParseForm(await request.Content!.ReadAsStringAsync(token));
+                            Assert.Equal(resource, form["resource"]);
+                            if (form["grant_type"] == "authorization_code")
+                            {
+                                Assert.Equal("rejected", refreshOutcome);
+                                Assert.Equal("fixture-code", form["code"]);
+                                Assert.False(string.IsNullOrWhiteSpace(form["code_verifier"]));
+                                return JsonResponse("""{"token_type":"Bearer","access_token":"refreshed-access","refresh_token":"rejected-refresh"}""");
+                            }
+
+                            Assert.Equal("refresh_token", form["grant_type"]);
+                            Assert.Equal("unchanged-refresh", form["refresh_token"]);
+                            Interlocked.Increment(ref refreshCalls);
+                            return refreshOutcome switch
+                            {
+                                "rejected" => JsonResponse("""{"error":"invalid_grant"}""", HttpStatusCode.BadRequest),
+                                "rotated" => JsonResponse("""{"token_type":"Bearer","access_token":"refreshed-access","refresh_token":"rotated-refresh"}"""),
+                                _ => JsonResponse("""{"token_type":"Bearer","access_token":"refreshed-access"}"""),
+                            };
+                        }
+
+                    case endpoint:
+                        {
+                            if (request.Method != HttpMethod.Post)
+                            {
+                                return new HttpResponseMessage(HttpStatusCode.MethodNotAllowed);
+                            }
+
+                            if (request.Headers.Authorization?.Parameter != "refreshed-access")
+                            {
+                                return OAuthChallenge(metadata);
+                            }
+
+                            using var message = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                            if (message.RootElement.GetProperty("method").GetString() == "initialize")
+                            {
+                                Interlocked.Increment(ref connected);
+                            }
+
+                            return RespondToMcpRequest(message.RootElement);
+                        }
+
+                    default:
+                        throw new InvalidOperationException($"Unexpected fixture request: {request.Method} {uri}");
+                }
+            }
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>Missing provider metadata fails closed before starting the host OAuth interaction.</summary>
+    [Fact]
+    public async Task OAuth_with_no_provider_metadata_fails_before_starting_authorization()
+    {
+        const string endpoint = "https://mcp.example.test/mcp";
+        var probes = 0;
+        using var httpClient = new HttpClient(new McpOAuthMetadataCompatibilityHandler(
+            new DelegateHttpHandler((request, _) =>
+            {
+                if (request.RequestUri?.AbsoluteUri == endpoint)
+                {
+                    return Task.FromResult(OAuthChallenge());
+                }
+
+                Assert.Equal(HttpMethod.Get, request.Method);
+                Assert.StartsWith("/.well-known/", request.RequestUri?.AbsolutePath, StringComparison.Ordinal);
+                Interlocked.Increment(ref probes);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            })))
+        { Timeout = Timeout.InfiniteTimeSpan };
+        var secrets = new DictionarySecretStore();
+        var browser = new NoOpBrowserLauncher();
+        var callback = new TrackingCallbackListener();
+        var flow = new McpOAuthFlow(browser, callback, new DictionaryTokenStore(), secrets, NullLogger<McpOAuthFlow>.Instance);
+        var profile = CreateProfile(endpoint, McpTransport.Http) with
+        {
+            OAuth = new McpOAuthOptions { Enabled = true, ClientId = "fixture-client", RedirectPort = 8400 },
+        };
+        await using var transport = new SdkHttpTransport(
+            secrets, NullLoggerFactory.Instance, flow, httpClient, timeProvider: new FakeTimeProvider());
+
+        var failure = await Assert.ThrowsAsync<McpException>(() => transport.StartAsync(
+            profile, new Dictionary<string, string>(), TestContext.Current.CancellationToken));
+
+        Assert.Contains("Authorization server metadata could not be discovered", failure.Message, StringComparison.Ordinal);
+        Assert.True(probes > 0);
+        Assert.Equal(0, browser.LaunchCount);
+        Assert.Equal(1, callback.ReleaseCount);
+    }
+
+    /// <summary>A canceled call does not prevent the next SSE capability notification from being delivered.</summary>
+    [Fact]
+    public async Task Sse_delivers_capability_changes_after_cancellation_and_reconnects()
+    {
+        const string endpoint = "https://mcp.example.test/events";
+        var testCancellation = TestContext.Current.CancellationToken;
+        var profile = CreateProfile(endpoint, McpTransport.Sse);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var pipe = new Pipe();
+            var invocationReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var updated = new TaskCompletionSource<IReadOnlyList<McpImportedCapability>>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var listRequests = 0;
+            using var httpClient = new HttpClient(new DelegateHttpHandler(RespondAsync)) { Timeout = Timeout.InfiniteTimeSpan };
+            await using var transport = new SdkHttpTransport(
+                new DictionarySecretStore(), NullLoggerFactory.Instance, httpClient: httpClient, timeProvider: new FakeTimeProvider());
+            try
+            {
+                var initial = await transport.StartAsync(profile, new Dictionary<string, string>(), testCancellation);
+                Assert.Equal("echo", Assert.Single(initial).ServerName);
+                if (attempt == 0)
+                {
+                    transport.SetCapabilityChangeHandler((capabilities, _) =>
+                    {
+                        updated.TrySetResult(capabilities);
+                        return Task.CompletedTask;
+                    });
+                    using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(testCancellation);
+                    var invocation = transport.InvokeAsync("echo", "{}", cancellation.Token);
+                    await Task.WhenAny(invocationReceived.Task, invocation).WaitAsync(testCancellation);
+                    Assert.True(invocationReceived.Task.IsCompletedSuccessfully);
+                    await cancellation.CancelAsync();
+                    try
+                    {
+                        await invocation;
+                    }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                    {
+                        // The canceled task is asserted below.
+                    }
+
+                    Assert.True(invocation.IsCanceled);
+
+                    await WriteEventAsync(
+                        "message",
+                        """{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}""",
+                        testCancellation);
+                    Assert.Equal("updated-echo", Assert.Single(await updated.Task.WaitAsync(testCancellation)).ServerName);
+                }
+
+                Assert.True(await transport.StopAsync(Timeout.InfiniteTimeSpan, testCancellation));
+                Assert.True((await pipe.Writer.FlushAsync(testCancellation)).IsCompleted);
+            }
+            finally
+            {
+                await pipe.Writer.CompleteAsync();
+            }
+
+            async Task<HttpResponseMessage> RespondAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                if (request.Method == HttpMethod.Get)
+                {
+                    Assert.Equal(endpoint, request.RequestUri?.AbsoluteUri);
+                    await WriteEventAsync("endpoint", "/messages", cancellationToken);
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StreamContent(pipe.Reader.AsStream())
+                        {
+                            Headers = { ContentType = new MediaTypeHeaderValue("text/event-stream") },
+                        },
+                    };
+                }
+
+                Assert.Equal(HttpMethod.Post, request.Method);
+                Assert.Equal("/messages", request.RequestUri?.AbsolutePath);
+                using var message = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
+                var root = message.RootElement;
+                var method = root.GetProperty("method").GetString();
+                if (method == "tools/call")
+                {
+                    invocationReceived.TrySetResult();
+                }
+                else if (root.TryGetProperty("id", out var id))
+                {
+                    var tool = method == "tools/list" && Interlocked.Increment(ref listRequests) > 1 ? "updated-echo" : "echo";
+                    await WriteEventAsync("message", CreateMcpResult(id, method, tool), cancellationToken);
+                }
+
+                return new HttpResponseMessage(HttpStatusCode.Accepted);
+            }
+
+            ValueTask<FlushResult> WriteEventAsync(string name, string data, CancellationToken cancellationToken) =>
+                pipe.Writer.WriteAsync(Encoding.UTF8.GetBytes($"event: {name}\ndata: {data}\n\n"), cancellationToken);
+        }
+    }
+
     /// <summary>Every HTTP cleanup starts before any resource can consume the shared shutdown deadline.</summary>
     [Fact]
     public async Task Bounded_shutdown_starts_every_owned_async_resource_before_awaiting_deadline()
@@ -481,6 +763,51 @@ public sealed class SdkHttpTransportTests
         Assert.NotNull(result.Value);
         await adapter.DisconnectAsync(profile.Id);
         await adapter.DisposeAsync();
+    }
+
+    private static Dictionary<string, string> ParseForm(string form)
+    {
+        return form.Split('&').Select(part => part.Split('=', 2)).ToDictionary(
+            pair => WebUtility.UrlDecode(pair[0]), pair => WebUtility.UrlDecode(pair[1]), StringComparer.Ordinal);
+    }
+
+    private static HttpResponseMessage JsonResponse(string json, HttpStatusCode status = HttpStatusCode.OK)
+    {
+        return new HttpResponseMessage(status)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private static HttpResponseMessage OAuthChallenge(string? metadataUri = null)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        response.Headers.WwwAuthenticate.Add(new AuthenticationHeaderValue(
+            "Bearer", metadataUri is null ? null : $"error=\"invalid_token\", resource_metadata=\"{metadataUri}\""));
+        return response;
+    }
+
+    private static HttpResponseMessage RespondToMcpRequest(JsonElement message)
+    {
+        if (!message.TryGetProperty("id", out var id))
+        {
+            return new HttpResponseMessage(HttpStatusCode.Accepted);
+        }
+
+        return JsonResponse(CreateMcpResult(id, message.GetProperty("method").GetString(), "echo"));
+    }
+
+    private static string CreateMcpResult(JsonElement id, string? method, string toolName)
+    {
+        var result = method switch
+        {
+            "initialize" => """
+                {"protocolVersion":"2025-06-18","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"fixture","version":"1"}}
+                """,
+            "tools/list" => $$$"""{"tools":[{"name":"{{{toolName}}}","inputSchema":{"type":"object"}}]}""",
+            _ => throw new InvalidOperationException($"Unexpected fixture MCP method: {method}"),
+        };
+        return $$"""{"jsonrpc":"2.0","id":{{id.GetRawText()}},"result":{{result}}}""";
     }
 
     private static McpConnectionProfile CreateProfile(string endpoint, McpTransport transport)
@@ -571,8 +898,11 @@ public sealed class SdkHttpTransportTests
 
     private sealed class NoOpBrowserLauncher : IBrowserLauncher
     {
+        public int LaunchCount { get; private set; }
+
         public Task LaunchAsync(Uri authorizationUri, CancellationToken cancellationToken = default)
         {
+            LaunchCount++;
             return Task.CompletedTask;
         }
     }
@@ -596,6 +926,45 @@ public sealed class SdkHttpTransportTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromException<Uri>(new InvalidOperationException("Callback was not expected."));
+        }
+    }
+
+    private sealed class CompletingOAuthInteraction : IBrowserLauncher, IOAuthCallbackListener
+    {
+        private readonly TaskCompletionSource<Uri> _callback = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly Uri _expectedAuthorizationEndpoint;
+        private readonly string _expectedResource;
+        private Uri? _redirectUri;
+
+        internal CompletingOAuthInteraction(Uri expectedAuthorizationEndpoint, string expectedResource)
+        {
+            _expectedAuthorizationEndpoint = expectedAuthorizationEndpoint;
+            _expectedResource = expectedResource;
+        }
+
+        public int LaunchCount { get; private set; }
+
+        public Uri ReserveRedirectUri(int requestedPort)
+        {
+            return new Uri($"http://localhost:{requestedPort}/callback");
+        }
+
+        public Task<Uri> WaitForCallbackAsync(Uri redirectUri, CancellationToken cancellationToken = default)
+        {
+            _redirectUri = redirectUri;
+            return _callback.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task LaunchAsync(Uri authorizationUri, CancellationToken cancellationToken = default)
+        {
+            LaunchCount++;
+            Assert.Equal(_expectedAuthorizationEndpoint.AbsoluteUri, authorizationUri.GetLeftPart(UriPartial.Path));
+            var query = ParseForm(authorizationUri.Query[1..]);
+            Assert.Equal(_expectedResource, query["resource"]);
+            Assert.Equal("S256", query["code_challenge_method"]);
+            Assert.NotNull(_redirectUri);
+            _callback.SetResult(new Uri($"{_redirectUri.AbsoluteUri}?code=fixture-code&state={Uri.EscapeDataString(query["state"])}"));
+            return Task.CompletedTask;
         }
     }
 

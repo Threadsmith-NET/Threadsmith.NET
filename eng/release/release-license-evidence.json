@@ -384,10 +384,10 @@
     },
     {
       "id": "Microsoft.Data.Sqlite.Core",
-      "version": "10.0.10",
+      "version": "10.0.15",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Data.Sqlite.Core/10.0.10",
-      "packageSha512": "TPCs0ldm7AWqcKmp6f/Xr+14sat7hx4rHfRlS4RgCURBH2thEWbAKEyX7cCWr63zVJVOJIJZTg2cBiUXa8ys6g==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Data.Sqlite.Core/10.0.15",
+      "packageSha512": "mjDz/zleAF78J1KRN9FludN2bzbsMWoXYSLVcawADle7RBhZYpFZYivGRvbvlH/RtXT/gjO0yhG99tzdFiET+A==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
       "noticeTreatment": "full license text",
@@ -396,10 +396,10 @@
     },
     {
       "id": "Microsoft.Data.Sqlite",
-      "version": "10.0.10",
+      "version": "10.0.15",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Data.Sqlite/10.0.10",
-      "packageSha512": "58JwZ39lCvRXHfV5O6RQfbHEDu8ZsXI7weRoVRR4jrGRxxkS+qyeuGrN2xD+9VYEICApYr0iTSL6PuU+DdsvPg==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Data.Sqlite/10.0.15",
+      "packageSha512": "PtnNCUloQOLAXhB09id+0CL2c9yd+9/wi0QHCHPa+zrTKEJTdu07jlUgblFjorYhKnwcHN1VS0z75jN8vFruuQ==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
       "noticeTreatment": "full license text",
@@ -408,10 +408,10 @@
     },
     {
       "id": "Microsoft.Extensions.AI.Abstractions",
-      "version": "10.8.3",
+      "version": "10.11.0",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.AI.Abstractions/10.8.3",
-      "packageSha512": "K0B05oApxmviWalNHPMBBcRC7erKiDATz3ENNR/jqTR9JwIwLRefgDhj2jCRwL1aca99pXUe0qyQC73/xIuZig==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.AI.Abstractions/10.11.0",
+      "packageSha512": "h4DX/TdJU4fk1GGaf19n6Kujkj6VXbGeL4UEOsQ8+ZJC5fVApPauokCtvBP684BYbczUYZQNfo1mbmyHG4WVSg==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
       "noticeTreatment": "full license text",
@@ -492,15 +492,18 @@
     },
     {
       "id": "Microsoft.Extensions.DependencyInjection.Abstractions",
-      "version": "10.0.10",
+      "version": "10.0.14",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/10.0.10",
-      "packageSha512": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.DependencyInjection.Abstractions/10.0.14",
+      "packageSha512": "QtpQzuSZVyTPCuHW058yCs9Nj0394uUkNyFHS813nOmK9UgUdBdaprJ5PPsBgsQIpxADTsTkbaMMonykem6qdw==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
+      "noticeTreatment": "Full license text and bundled third-party notices; package source https://github.com/dotnet/dotnet at 0427b9abbead3fa64c6655eb4290c537397131fa",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Microsoft.Extensions.DependencyInjection.Abstractions (Microsoft)"
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "additionalNotices": [
+        "legal/dotnet-runtime-packages-10.0.14-NOTICES.txt"
+      ]
     },
     {
       "id": "Microsoft.Extensions.DependencyInjection",
@@ -552,15 +555,18 @@
     },
     {
       "id": "Microsoft.Extensions.Logging.Abstractions",
-      "version": "10.0.10",
+      "version": "10.0.14",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/10.0.10",
-      "packageSha512": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Logging.Abstractions/10.0.14",
+      "packageSha512": "SwcbEBtkECq3D2oywvHkm46fyrX9Dd2JPWphDnHUc2+cUWR1Mdo41atAjh/9iZjgQxuvbKfZKXqostT/LZfefA==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
+      "noticeTreatment": "Full license text and bundled third-party notices; package source https://github.com/dotnet/dotnet at 0427b9abbead3fa64c6655eb4290c537397131fa",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Microsoft.Extensions.Logging.Abstractions (Microsoft)"
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "additionalNotices": [
+        "legal/dotnet-runtime-packages-10.0.14-NOTICES.txt"
+      ]
     },
     {
       "id": "Microsoft.Extensions.Logging.Debug",
@@ -588,27 +594,33 @@
     },
     {
       "id": "Microsoft.Extensions.Options",
-      "version": "10.0.10",
+      "version": "10.0.14",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Options/10.0.10",
-      "packageSha512": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Options/10.0.14",
+      "packageSha512": "EeN/33S418m9oWEaZY4N5T+BNxtOqNTIFoFbIgBKwylh4OJPKIWFAzbIhpTdNbwUs26MhkmbLCAbdY+YCJ1dIQ==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
+      "noticeTreatment": "Full license text and bundled third-party notices; package source https://github.com/dotnet/dotnet at 0427b9abbead3fa64c6655eb4290c537397131fa",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Microsoft.Extensions.Options (Microsoft)"
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "additionalNotices": [
+        "legal/dotnet-runtime-packages-10.0.14-NOTICES.txt"
+      ]
     },
     {
       "id": "Microsoft.Extensions.Primitives",
-      "version": "10.0.10",
+      "version": "10.0.14",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Primitives/10.0.10",
-      "packageSha512": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ==",
+      "provenance": "https://www.nuget.org/packages/Microsoft.Extensions.Primitives/10.0.14",
+      "packageSha512": "1bbZqqCJTPba3inTADExbp/9PsGVyvGOX3zr6tFr7ySCgVkX9Lpw7BV0TizktNItd3SsbUu1sQfSAYm1GZMoNw==",
       "licenseExpression": "MIT",
       "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
+      "noticeTreatment": "Full license text and bundled third-party notices; package source https://github.com/dotnet/dotnet at 0427b9abbead3fa64c6655eb4290c537397131fa",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Microsoft.Extensions.Primitives (Microsoft)"
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "additionalNotices": [
+        "legal/dotnet-runtime-packages-10.0.14-NOTICES.txt"
+      ]
     },
     {
       "id": "Microsoft.VisualStudio.SolutionPersistence",
@@ -636,15 +648,15 @@
     },
     {
       "id": "ModelContextProtocol.Core",
-      "version": "2.0.0",
+      "version": "2.4.0",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/ModelContextProtocol.Core/2.0.0",
-      "packageSha512": "piFR0HtA/2Oc1tgk96EE5Tye6qA2sg3WGRAXBhUqo/BWikdEYEs2UuqtmwLrQZJUge1nUOPgGHYsb15VIBK8iw==",
+      "provenance": "https://www.nuget.org/packages/ModelContextProtocol.Core/2.4.0",
+      "packageSha512": "q98pZMlcxhsh0LpGXcT2ow7sGNveCPhDlJT3zJ7Cz5nNyPmPkm8P57dUIUpzv1w6qWbdSZcR/Z+RbZtNYjEmXQ==",
       "licenseExpression": "Apache-2.0",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "noticeTreatment": "full license text",
       "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of ModelContextProtocol.Core (ModelContextProtocol)"
+      "copyrightText": "© Model Context Protocol a Series of LF Projects, LLC."
     },
     {
       "id": "Roslynator.Analyzers",
@@ -660,10 +672,10 @@
     },
     {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
-      "version": "2.1.11",
+      "version": "2.1.13",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.bundle_e_sqlite3/2.1.11",
-      "packageSha512": "DC4nA7yWnf4UZdgJDF+9Mus4/cb0Y3Sfgi3gDnAoKNAIBwzkskNAbNbyu+u4atT0ruVlZNJfwZmwiEwE5oz9LQ==",
+      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.bundle_e_sqlite3/2.1.13",
+      "packageSha512": "NlDixlC7uHmo+ojXRgkNvN0tQtVGpLDZ3x2OpgNj+G07VHh5cXSszFDrAiC4BpUiPwkcaeuQkMV9WQ123xVtmQ==",
       "licenseExpression": "Apache-2.0",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "noticeTreatment": "SQLite notice included",
@@ -672,10 +684,10 @@
     },
     {
       "id": "SQLitePCLRaw.core",
-      "version": "2.1.11",
+      "version": "2.1.13",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.core/2.1.11",
-      "packageSha512": "PK0GLFkfhZzLQeR3PJf71FmhtHox+U3vcY6ZtswoMjrefkB9k6ErNJEnwXqc5KgXDSjige2XXrezqS39gkpQKA==",
+      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.core/2.1.13",
+      "packageSha512": "2joofoinuHBFs0nMX3nKuXgxpXryRkCOdM2Ua6HBqQLLy6IW+5f28ZI+HAvMyF8vG7XfNz/lwfBfE6V4juru8Q==",
       "licenseExpression": "Apache-2.0",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "noticeTreatment": "SQLite notice included",
@@ -684,10 +696,10 @@
     },
     {
       "id": "SQLitePCLRaw.lib.e_sqlite3",
-      "version": "2.1.12",
+      "version": "2.1.13",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.lib.e_sqlite3/2.1.12",
-      "packageSha512": "fWi8Dbknuhgg72fWinIdjXVaqO1hHL4YBBwVLnr7e1c9TAZwJ0QE38j9syW1hwx6HaqEVTwI+O07WPdZn8Rp0w==",
+      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.lib.e_sqlite3/2.1.13",
+      "packageSha512": "D2UAuiGxFYBqeRXjjjGgvJ5UQifzn6wefmSqeKU7XcNGKLbJRP6X7kcPZ6opOBJGdCIlgbSxTvDpBbLvsN594A==",
       "licenseExpression": "Apache-2.0",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "noticeTreatment": "SQLite notice included",
@@ -696,10 +708,10 @@
     },
     {
       "id": "SQLitePCLRaw.provider.e_sqlite3",
-      "version": "2.1.11",
+      "version": "2.1.13",
       "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.provider.e_sqlite3/2.1.11",
-      "packageSha512": "Y/0ZkR+r0Cg3DQFuCl1RBnv/tmxpIZRU3HUvelPw6MVaKHwYYR8YNvgs0vuNuXCMvlyJ+Fh88U1D4tah1tt6qw==",
+      "provenance": "https://www.nuget.org/packages/SQLitePCLRaw.provider.e_sqlite3/2.1.13",
+      "packageSha512": "ZU60dSqoSNRe49KcQDUmOVgdRtjITOssVXFtiISs+zJXDI4D2Sndwpn2NOtzDQNPu0ZAvpoLPQ+GLKv6iEZn8Q==",
       "licenseExpression": "Apache-2.0",
       "licenseText": "legal/licenses/Apache-2.0.txt",
       "noticeTreatment": "SQLite notice included",

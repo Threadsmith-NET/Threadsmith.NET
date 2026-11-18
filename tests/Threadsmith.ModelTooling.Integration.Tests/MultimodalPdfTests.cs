@@ -2,6 +2,7 @@ namespace Threadsmith.ModelTooling.Integration.Tests;
 
 using System.Text;
 using System.Text.Json;
+using SkiaSharp;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 using Xunit;
@@ -81,6 +82,23 @@ public sealed partial class MultimodalTests
         Assert.False(all.IsTruncated);
     }
 
+    /// <summary>Checks that the annotation appears in the PNG emitted by the production renderer.</summary>
+    [Fact]
+    public async Task PdfRenderIncludesAnnotationsInPng()
+    {
+        var token = TestContext.Current.CancellationToken;
+
+        var plain = await PdfPageRenderer.RenderAsync(CreatePdf(), 1, 1, ToolLimits.Default, token);
+        var annotated = await PdfPageRenderer.RenderAsync(CreatePdf(withAnnotation: true), 1, 1, ToolLimits.Default, token);
+
+        using var plainBitmap = SKBitmap.Decode(Assert.Single(plain.Pages));
+        using var annotatedBitmap = SKBitmap.Decode(Assert.Single(annotated.Pages));
+        Assert.NotNull(plainBitmap);
+        Assert.NotNull(annotatedBitmap);
+        Assert.Equal(SKColors.White, plainBitmap.GetPixel(500, 90));
+        Assert.Equal(SKColors.Red, annotatedBitmap.GetPixel(500, 90));
+    }
+
     /// <summary>Rejects invalid PDF requests without admitting image evidence.</summary>
     [Theory]
     [InlineData("{\"path\":\"pages.pdf\",\"mode\":\"text\"}")]
@@ -135,18 +153,22 @@ public sealed partial class MultimodalTests
         Assert.Empty(result.Images);
     }
 
-    private static byte[] CreatePdf()
+    private static byte[] CreatePdf(bool withAnnotation = false)
     {
+        const string annotation = "1 0 0 rg 0 0 60 50 re f";
+        var annotations = withAnnotation ? " /Annots [8 0 R]" : string.Empty;
         const string text = "BT /F1 24 Tf 20 130 Td (PDF text K7Q2) Tj ET 1 0 0 rg 20 20 60 60 re f";
         const string scan = "q 200 0 0 150 20 20 cm BI /W 2 /H 2 /CS /RGB /BPC 8 /F /AHx ID FF00000000FF00FF00000000> EI Q";
         string[] objects = [
             "<< /Type /Catalog /Pages 2 0 R >>",
             "<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>",
+            $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R{annotations} >>",
             "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << >> /Contents 7 0 R >>",
             "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
             $"<< /Length {text.Length} >>\nstream\n{text}\nendstream",
             $"<< /Length {scan.Length} >>\nstream\n{scan}\nendstream",
+            "<< /Type /Annot /Subtype /Square /Rect [220 130 280 180] /AP << /N 9 0 R >> >>",
+            $"<< /Type /XObject /Subtype /Form /BBox [0 0 60 50] /Resources << >> /Length {annotation.Length} >>\nstream\n{annotation}\nendstream",
         ];
         var builder = new StringBuilder("%PDF-1.4\n");
         var offsets = new List<int>();

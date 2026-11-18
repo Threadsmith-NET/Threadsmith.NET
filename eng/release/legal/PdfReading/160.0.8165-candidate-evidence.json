@@ -1,0 +1,81 @@
+{
+  "reviewState": "pending",
+  "releaseOwnerApproval": {
+    "status": "approved",
+    "decisionDate": "2026-11-18",
+    "scope": "The three unmodified bblanchon.PDFium 160.0.8165 packages with their complete matching notices. Evidence verification remains pending; this does not cover Windows .NET runtime redistribution."
+  },
+  "publisherRelease": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/8165",
+  "publisherRevision": "83c18af693945b735503665259b728ba7d409fd0",
+  "pdfiumBranch": "chromium/8165",
+  "pdfiumRevision": "1f02bc7d908ab301fa2a2babd87226a19311ff38",
+  "publisherAttestation": {
+    "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-attestation.json",
+    "sha256": "a198e725074f3321c0f21a94218cafc910740e0e0c8395530198855f7a918770",
+    "verification": "Each listed desktop archive passed gh attestation verify against this bundle and bblanchon/pdfium-binaries."
+  },
+  "components": [
+    {
+      "id": "bblanchon.PDFium.Linux",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/160.0.8165",
+      "packageSha512": "EUvL2Xs6bqsx3v9ygHK4IwQZvKhFGW5gAYhawyinonvwssUQVW264zg5oAd081LkZmHt4q+/83eqPif0u019Cg==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "id": "bblanchon.PDFium.macOS",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/160.0.8165",
+      "packageSha512": "wPOOddgr2pu1kqNGrH1E7DW1Fbhil1IrHWFMkVQK2x4/Ro58BjlAFG+yALCdwaLwQVUKawoKh7ohT9bn9GJVuw==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "id": "bblanchon.PDFium.Win32",
+      "version": "160.0.8165",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/160.0.8165",
+      "packageSha512": "YQzaQpjbP7TEmmjxOd4W7Okub+8/Mj0trnGB4v9VJROXwynxwVBlNGEjMoFrpDGd1FMFeYzKG4oaeTx/UIc6Nw==",
+      "licenseExpression": "Apache-2.0",
+      "licenseConcluded": "NOASSERTION"
+    }
+  ],
+  "nativeSources": [
+    {
+      "rid": "win-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-win-x64.tgz",
+      "archiveSha256": "ca7338ae7779b8b1b82f4580305c4d762d214f8df1d54b47647fe3cc75989ded"
+    },
+    {
+      "rid": "win-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-win-arm64.tgz",
+      "archiveSha256": "d65e405c59cffe6fe36c0935b90d40ddf3ce75ef284f3168a28dcf00d0388131"
+    },
+    {
+      "rid": "linux-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-linux-x64.tgz",
+      "archiveSha256": "ba7865e16c0271daab75256790be06c26272190afe6e2a70eae0bb39bb99089c"
+    },
+    {
+      "rid": "linux-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-linux-arm64.tgz",
+      "archiveSha256": "338f5dcc907a20331812ae8ab01b16ff18966f4a247d790c8ad8fb49029d768b"
+    },
+    {
+      "rid": "osx-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-mac-x64.tgz",
+      "archiveSha256": "07285915b564e46a432a9909dbc1f15892885ca6489e3faeefc70dee77ed371a"
+    },
+    {
+      "rid": "osx-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8165/pdfium-mac-arm64.tgz",
+      "archiveSha256": "112e74d717f3e0310273b70f3c8780e8a61ff11b34834124465c8305c841d350"
+    }
+  ],
+  "limitations": [
+    "NuGet restore content hashes matched dotnet nuget verify --all. Raw signed NuGet archive SHA-512 digests were not collected.",
+    "The NuGet nuspecs identify the attested publisher revision, but the six native binary pairs were not compared byte-for-byte.",
+    "Exact LICENSE and NOTICE payloads and notice-bundle digests were not collected. Do not reuse the 152.0.7961 notices for this version without comparison.",
+    "This is candidate evidence only. The canonical release evidence still lists 152.0.7961."
+  ]
+}

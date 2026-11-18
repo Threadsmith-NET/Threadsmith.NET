@@ -18,9 +18,9 @@
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="4.150.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.macOS" Version="4.150.1" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Win32" Version="4.150.1" />
-    <PackageVersion Include="bblanchon.PDFium.Linux" Version="152.0.7961" />
-    <PackageVersion Include="bblanchon.PDFium.macOS" Version="152.0.7961" />
-    <PackageVersion Include="bblanchon.PDFium.Win32" Version="152.0.7961" />
+    <PackageVersion Include="bblanchon.PDFium.Linux" Version="160.0.8165" />
+    <PackageVersion Include="bblanchon.PDFium.macOS" Version="160.0.8165" />
+    <PackageVersion Include="bblanchon.PDFium.Win32" Version="160.0.8165" />
     <PackageVersion Include="StbImageSharp" Version="2.30.15" />
     <!-- Markdown and retained interactive terminal. -->
     <PackageVersion Include="LibGit2Sharp" Version="0.32.0" />

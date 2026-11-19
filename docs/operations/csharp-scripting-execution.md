@@ -51,7 +51,7 @@ Declare `csharp_script` as a required tool when a native skill needs it. Packagi
 
 ## Calling host tools
 
-Use tools marked “Callable from C# scripts.” Their advertised descriptions include the JSON schema for `ResultJson`, not for the reply envelope. `Tools.Available` lists the current names. Pass ordinary tool arguments as a JSON string and await each call before the next:
+Use tools marked “Callable from C# scripts.” `Tools.Available` lists the names enabled for this script. The schemas below describe `ResultJson`, not the reply envelope; being documented here does not enable a tool. Pass ordinary tool arguments as a JSON string and await each call before the next:
 
 ```csharp
 var reply = await Tools.InvokeAsync("find_symbol", "{\"query\":\"Widget\"}");
@@ -59,6 +59,31 @@ return reply.Succeeded ? reply.ResultJson : reply.Error;
 ```
 
 Check `Succeeded` and `IsTruncated` before using `ResultJson`; failures include `ErrorClassification` and `Error`. Calls use the caller's tool policy, approvals, and read scope. A listed tool can be disabled before dispatch. The exchange allows 64 attempts, 16 KiB of argument JSON per call and 8 MiB of aggregate result data per script. The script's execution deadline includes time spent waiting for nested calls. Nested activity has the `(csharp_scripting)` prefix; the outer script keeps its ordinary activity and output.
+
+### `find_symbol` and `find_references`
+
+Both return an array (empty when there are no matches). Property names are case-sensitive: use `match.GetProperty("Symbol").GetProperty("Id").GetString()`. Read `SemanticConfidence` with `GetInt32()`: 0 = None, 1 = TextOnly, 2 = ProjectGraphOnly, 3 = PartialCompilation, 4 = FullSemantic.
+
+```json
+{"type":["array","null"],"items":{"type":["object","null"],"properties":{
+  "Symbol":{"type":"object","properties":{"Id":{"type":"string"},"DisplayName":{"type":"string"},"Kind":{"type":"string"}},"required":["Id","DisplayName","Kind"]},
+  "Location":{"type":"object","properties":{"ProjectName":{"type":"string"},"TargetFramework":{"type":"string"},"FilePath":{"type":"string"},"Range":{"type":"object","properties":{"StartLine":{"type":"integer"},"StartColumn":{"type":"integer"},"EndLine":{"type":"integer"},"EndColumn":{"type":"integer"}},"required":["StartLine","StartColumn","EndLine","EndColumn"]},"IsGenerated":{"type":"boolean"},"IsLinked":{"type":"boolean"}},"required":["ProjectName","TargetFramework","FilePath","Range","IsGenerated","IsLinked"]},
+  "SemanticConfidence":{"type":"integer"}},"required":["Symbol","Location","SemanticConfidence"]}}
+```
+
+### `read_file`
+
+Use `Lines` for ordinary text reads and `Content` for snapshot reads. `Image` and `Pdf.Pages` contain artifact metadata, not image bytes.
+
+```json
+{"type":["object","null"],"properties":{
+  "Path":{"type":"string"},"StartLine":{"type":"integer"},"EndLine":{"type":["integer","null"]},"TotalLines":{"type":"integer"},"Lines":{"type":"array","items":{"type":["string","null"]}},"IsTruncated":{"type":"boolean"},"NextStartLine":{"type":["integer","null"]},"TruncationReason":{"enum":["LineLimit","ContentByteLimit",null]},
+  "BytesRead":{"type":["integer","null"]},
+  "Pdf":{"type":["object","null"],"properties":{"TotalPages":{"type":"integer"},"StartPage":{"type":"integer"},"EndPage":{"type":"integer"},"NextStartPage":{"type":["integer","null"]},"Pages":{"type":"array","items":{"type":["object","null"],"properties":{"Id":{"type":"string"},"ContentHash":{"type":"string"},"MediaType":{"type":"string"},"ByteLength":{"type":"integer"},"Width":{"type":"integer"},"Height":{"type":"integer"},"Source":{"type":"string"},"CreatedAt":{"type":"string","format":"date-time"},"ResponseId":{"type":["string","null"]}},"required":["Id","ContentHash","MediaType","ByteLength","Width","Height","Source"]}}},"required":["TotalPages","StartPage","EndPage","NextStartPage","Pages"]},
+  "Image":{"type":["object","null"],"properties":{"Id":{"type":"string"},"ContentHash":{"type":"string"},"MediaType":{"type":"string"},"ByteLength":{"type":"integer"},"Width":{"type":"integer"},"Height":{"type":"integer"},"Source":{"type":"string"},"CreatedAt":{"type":"string","format":"date-time"},"ResponseId":{"type":["string","null"]}},"required":["Id","ContentHash","MediaType","ByteLength","Width","Height","Source"]},
+  "FileSha256":{"type":["string","null"]},"VisibleRangeSha256":{"type":["string","null"]},"SourceReceipt":{"type":["object","null"],"properties":{"ToolCallId":{"type":"string"},"EvidenceId":{"type":"string","format":"uuid"},"FileSha256":{"type":"string"},"VisibleRangeSha256":{"type":"string"},"StartLine":{"type":"integer"},"EndLine":{"type":"integer"},"RecoveryTool":{"type":"string"}},"required":["ToolCallId","EvidenceId","FileSha256","VisibleRangeSha256","StartLine","EndLine","RecoveryTool"]},
+  "Content":{"type":["string","null"]},"ContentDigest":{"type":["string","null"]},"NextSnapshotOffset":{"type":["integer","null"]}},"required":["Path","StartLine","EndLine","TotalLines","Lines","IsTruncated","NextStartLine","TruncationReason"]}
+```
 
 ## Files and limits
 

@@ -110,8 +110,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.DoesNotContain(request.Tools, item => item.Name == "outside_snapshot");
         });
         var scriptDescription = Assert.Single(provider.Requests[0].Tools, item => item.Name == read.Definition.Id).Description;
-        Assert.Contains("Callable from C# scripts.", scriptDescription, StringComparison.Ordinal);
-        Assert.EndsWith(read.Definition.OutputSchema.JsonSchema, scriptDescription, StringComparison.Ordinal);
+        Assert.Equal(read.Definition.Description + " Callable from C# scripts.", scriptDescription);
         Assert.Equal(read.Definition.Description, Assert.Single(provider.Requests[1].Tools, item => item.Name == read.Definition.Id).Description);
     }
 

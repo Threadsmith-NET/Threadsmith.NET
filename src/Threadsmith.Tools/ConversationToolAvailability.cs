@@ -56,9 +56,7 @@ internal static class ConversationToolAvailability
                 definitions[index] = definition with
                 {
                     DescriptionResolver = () => definition.Description + " "
-                        + prompts.Get(PromptFileNames.ToolScriptCallableMarker)
-                        + " JSON schema for ResultJson (not the reply envelope): "
-                        + definition.OutputSchema.JsonSchema,
+                        + prompts.Get(PromptFileNames.ToolScriptCallableMarker),
                 };
             }
         }

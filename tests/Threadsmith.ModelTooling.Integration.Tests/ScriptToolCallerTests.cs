@@ -46,7 +46,7 @@ public sealed class ScriptToolCallerTests
             foreach (var tool in tools)
             {
                 var expected = tool.Definition.Description + (scripting && tool == read
-                    ? " Callable from C# scripts. JSON schema for ResultJson (not the reply envelope): " + tool.Definition.OutputSchema.JsonSchema
+                    ? " Callable from C# scripts."
                     : string.Empty);
                 Assert.Equal(expected, Assert.Single(advertised, item => item.Name == tool.Definition.Id).Description);
             }
@@ -122,6 +122,37 @@ public sealed class ScriptToolCallerTests
         }
     }
 
+    /// <summary>Scripts can read the documented fields from a nonempty semantic lookup.</summary>
+    [Fact]
+    public static async Task NestedSymbolLookupReturnsDocumentedFields()
+    {
+        using var fixture = new ScriptFixture();
+        await using var events = new DomainEventStream();
+        var process = new ScriptProcessProbe("find_symbol", "{\"query\":\"Widget\"}");
+        await using var engine = fixture.CreateEngine(process);
+        var resolver = new TestSemanticResolver(fixture.Workspace);
+        var pipeline = fixture.CreatePipeline(events, [new CSharpScriptTool(engine, TestPromptLoader.Instance), new FindSymbolTool(resolver, TestPromptLoader.Instance)], unlimited: true);
+        var session = SessionId.New();
+        var run = RunId.New();
+        var snapshots = new ConversationToolSnapshotStore();
+        var snapshot = snapshots.Capture(session, run, pipeline.Registry.GetRegistrations(session, run));
+        var request = new ToolInvocationRequest
+        {
+            SessionId = session,
+            RunId = run,
+            ToolId = "csharp_script",
+            ArgumentsJson = "{\"code\":\"42\"}",
+            Context = fixture.Invocation with { ModelVisibleToolSnapshotId = snapshot, ScriptCaller = new(snapshots, new ToolCallHistory()) },
+        };
+        var result = await pipeline.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded, result.Error);
+        using var json = JsonDocument.Parse(process.NestedReply!.ResultJson!);
+        var match = Assert.Single(json.RootElement.EnumerateArray());
+        Assert.Equal("T:Widget", match.GetProperty("Symbol").GetProperty("Id").GetString());
+        Assert.Equal((int)SemanticConfidenceLevel.FullSemantic, match.GetProperty("SemanticConfidence").GetInt32());
+    }
+
     /// <summary>An admitted semantic attempt permits a text fallback in the owning turn.</summary>
     [Fact]
     public static async Task EmptyNestedSymbolLookupAllowsTextSearchInOwningTurn()
@@ -129,7 +160,7 @@ public sealed class ScriptToolCallerTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var fixture = new ScriptFixture();
         await using var events = new DomainEventStream();
-        var resolver = new EmptySemanticResolver(fixture.Workspace);
+        var resolver = new TestSemanticResolver(fixture.Workspace);
         var search = new RecordingSearchTool();
         const string arguments = "{\"query\":\"MissingWidget\"}";
         var process = new ScriptProcessProbe("find_symbol", arguments, "No candidates.");
@@ -490,11 +521,11 @@ public sealed class ScriptToolCallerTests
         protected override void ValidateInput(SearchInput input) => ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
     }
 
-    private sealed class EmptySemanticResolver : ISemanticEngineResolver
+    private sealed class TestSemanticResolver : ISemanticEngineResolver
     {
         private readonly WorkspaceId _workspace;
 
-        public EmptySemanticResolver(WorkspaceId workspace)
+        public TestSemanticResolver(WorkspaceId workspace)
         {
             _workspace = workspace;
         }
@@ -508,9 +539,13 @@ public sealed class ScriptToolCallerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal(_workspace, workspaceId);
-            Assert.Equal("MissingWidget", query);
             Calls++;
-            return Task.FromResult<IReadOnlyList<SymbolResult>>([]);
+            return Task.FromResult<IReadOnlyList<SymbolResult>>(query switch
+            {
+                "MissingWidget" => [],
+                "Widget" => [new(new("T:Widget", "Widget", "Class"), new("App", "net10.0", "Widget.cs", new(1, 1, 1, 7), false, false), SemanticConfidenceLevel.FullSemantic)],
+                _ => throw new InvalidOperationException("Unexpected symbol query."),
+            });
         }
 
         public Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(WorkspaceId workspaceId, string symbolId, bool allowTextFallback = false, CancellationToken cancellationToken = default)
@@ -523,4 +558,3 @@ public sealed class ScriptToolCallerTests
             => throw new InvalidOperationException("Only find_symbol is expected.");
     }
 }
-

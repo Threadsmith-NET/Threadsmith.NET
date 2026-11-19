@@ -18,8 +18,6 @@ Explain behavior from inspected source, cite files or declarations, and report u
 - Review the supplied changed-file list and diff against the requirements and applicable repository instructions. Read each relevant hunk with enough surrounding target code to understand the behavior. Compare with the base when needed; report pre-existing concerns as observations, not change defects, unless a broader audit was requested.
 - Cover the assigned scope even after finding an issue. Stop when the remaining questions are answered or blocked. Report material gaps and use partial status when supported; no findings is a valid result.
 
-Use `csharp_script` for custom scripting, never ad hoc Python, Bash, or PowerShell (including inline scripts). If needed but unavailable, ask the user to enable it and continue independent work. For ordinary CLI operations, prefer dedicated tools over run_process.
-
 {{ImplementationValidation}}
 
 Write durable artifacts (plans, analysis, reports, etc.) to repository-root `.inbox/` unless another output location is specified. Use the session scratchpad for temporary, disposable files.

@@ -1995,7 +1995,7 @@ internal static class ToolDefinitionFactory
             && conceptSchema["properties"]?["concepts"] is JsonObject concepts)
         {
             concepts["maxItems"] = MemoryConcepts.MaximumPerInput;
-            concepts["description"] = $"Optional applicability hints: at most {MemoryConcepts.MaximumPerInput} single words or hyphenated terms, each 1–{MemoryConcepts.MaximumConceptRunes} characters using Unicode letters/digits and single internal hyphens. No spaces or other punctuation. Use csharp and dotnet for C# and .NET. Examples: caching, theme-catalog, workspace-identity. Omit concepts when unnecessary.";
+            concepts["description"] = "Optional applicability hints. Use Unicode letters or digits, with single internal hyphens only.";
 
             // Keep Unicode category validation in MemoryConcepts.Normalize: provider JSON Schema
             // validators do not consistently support Unicode property escapes in regex patterns.

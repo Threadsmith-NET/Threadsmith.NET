@@ -24,8 +24,7 @@ internal static class SemanticFirstSearchPolicy
             || semanticToolAttempted
             || !string.Equals(tool.ToolName, "search", StringComparison.OrdinalIgnoreCase)
             || !TryGetDiscoverySearchQuery(tool.ArgumentsJson, invocationContext.RepositoryPath, out var query, out var glob)
-            || !TargetsCSharpFiles(query, glob)
-            || !LooksLikeCSharpSymbolOrFileQuery(query))
+            || !IsCSharpDiscoveryQuery(query, glob))
         {
             return false;
         }
@@ -83,6 +82,22 @@ internal static class SemanticFirstSearchPolicy
             || string.Equals(toolName, "symbol_impact", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "csharp_pattern_search", StringComparison.OrdinalIgnoreCase)
             || string.Equals(toolName, "generated_code_query", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Detects file, declaration, and whole-symbol searches targeting C# files.</summary>
+    internal static bool IsCSharpDiscoveryQuery(string query, string? glob)
+    {
+        if (!TargetsCSharpFiles(query, glob))
+        {
+            return false;
+        }
+
+        var trimmed = query.Trim();
+        return trimmed.Contains(".cs", StringComparison.OrdinalIgnoreCase)
+            || ContainsDeclarationKeyword(trimmed)
+            || (LooksLikeExactCSharpSymbolQuery(trimmed)
+                && ExtractIdentifierTokens(trimmed).Any(static token =>
+                    token.Length >= 3 && token.Any(char.IsUpper) && token.Any(char.IsLower)));
     }
 
     private static bool TryGetDiscoverySearchQuery(
@@ -151,28 +166,6 @@ internal static class SemanticFirstSearchPolicy
             && filePattern[(extensionListStart + 2)..^1]
                 .Split(',', StringSplitOptions.TrimEntries)
                 .Any(extension => extension.Equals("cs", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool LooksLikeCSharpSymbolOrFileQuery(string query)
-    {
-        var trimmed = query.Trim();
-        if (trimmed.Contains(".cs", StringComparison.OrdinalIgnoreCase)
-            || ContainsDeclarationKeyword(trimmed))
-        {
-            return true;
-        }
-
-        foreach (var token in ExtractIdentifierTokens(trimmed))
-        {
-            if (token.Length >= 3
-                && token.Any(char.IsUpper)
-                && token.Any(char.IsLower))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static bool ContainsDeclarationKeyword(string query)

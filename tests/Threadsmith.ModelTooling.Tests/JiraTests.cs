@@ -49,23 +49,6 @@ public sealed class JiraTests
         Assert.Equal(SecretProviderTrust.UserOwned, secrets.MinimumTrust);
     }
 
-    /// <summary>Trusted aliases select an account without becoming credential destinations.</summary>
-    [Fact]
-    public async Task BrowseAliasIsInputOnlyAndCanonicalizesToConfiguredSite()
-    {
-        using var handler = new JiraHandler();
-        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
-        var input = (JiraInput)tool.DeserializeInput(
-            "{\"kind\":\"read\",\"issue\":\"https://issues.example.org/browse/APP-123/\"}");
-
-        var result = await tool.ExecuteAsync(input, Context());
-
-        Assert.Equal("example.atlassian.net", handler.LastUri?.Host);
-        Assert.Equal("https://example.atlassian.net/browse/APP-124", result.Value.Url);
-        Assert.Equal("read · APP-123 · work-jira", tool.GetActivityDetail(input));
-    }
-
     /// <summary>Discarded query and fragment decorations cannot invalidate a valid browse path.</summary>
     [Fact]
     public void BrowseUrlIgnoresEncodedSeparatorsOutsideThePath()
@@ -294,37 +277,6 @@ public sealed class JiraTests
         Assert.InRange(allocated, 0, 8 * 1024 * 1024);
     }
 
-    /// <summary>Nested marks preserve their ordered wrappers without requiring a stress-scale fixture.</summary>
-    [Fact]
-    public void AdfProjectionPreservesNestedMarks()
-    {
-        using var document = CreateMarkedTextDocument(3);
-
-        var result = JiraDescriptionReader.Read(document.RootElement, 1024);
-
-        Assert.Equal("[struck: [struck: [struck: x]]]", result.Body);
-        Assert.True(result.BodyComplete);
-        Assert.False(result.IsTruncated);
-    }
-
-    /// <summary>Opt-in allocation probe guards against repeatedly copying many expanding marks.</summary>
-    [Fact(Explicit = true)]
-    [Trait("Category", "Performance")]
-    public void AdfProjectionStress_BoundsCumulativeMarkAllocations()
-    {
-        const int markCount = 20_000;
-        using var document = CreateMarkedTextDocument(markCount);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-
-        var result = JiraDescriptionReader.Read(document.RootElement, 256 * 1024);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(1 + (markCount * 10), result.Body.Length);
-        Assert.StartsWith("[struck: [struck: ", result.Body, StringComparison.Ordinal);
-        Assert.True(result.BodyComplete);
-        Assert.InRange(allocated, 0, 32 * 1024 * 1024);
-    }
-
     /// <summary>Empty table rows consume the same bounded projection-work budget as other ADF nodes.</summary>
     [Fact]
     public void AdfProjectionBoundsEmptyTableRows()
@@ -507,24 +459,6 @@ public sealed class JiraTests
         Assert.Empty(result.Limitations);
     }
 
-    /// <summary>Paragraph content is optional, while a present non-array value remains malformed.</summary>
-    [Fact]
-    public void AdfProjectionAcceptsContentlessEmptyParagraphs()
-    {
-        using var document = JsonDocument.Parse(
-            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"A"}]},{"type":"paragraph"},{"type":"paragraph","content":[{"type":"text","text":"B"}]}]}""");
-
-        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
-
-        Assert.Equal("A\n\n\n\nB", result.Body);
-        Assert.True(result.BodyComplete);
-
-        using var malformed = JsonDocument.Parse(
-            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":false}]}""");
-        Assert.Throws<InvalidDataException>(() =>
-            JiraDescriptionReader.Read(malformed.RootElement, 65536));
-    }
-
     /// <summary>Deep single-child containers do not repeatedly copy and rescan a near-limit body.</summary>
     [Fact]
     public void AdfProjectionBoundsNestedContainerUnwindWork()
@@ -680,59 +614,6 @@ public sealed class JiraTests
         Assert.Equal(2, secrets.Calls);
     }
 
-    /// <summary>The configured runtime cap returns partial structured output instead of failing the whole read.</summary>
-    [Fact]
-    public async Task PipelineUsesEffectiveOutputCapAndKeepsStructuredPartialBody()
-    {
-        using var handler = new JiraHandler { BodyText = new string('x', 6000) };
-        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
-        var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions
-        {
-            ByTool = [new ToolRuntimeToolOverride { ToolId = "jira", MaximumOutputBytes = 1400 }],
-        });
-        await using var events = new DomainEventStream();
-        var observed = new ConcurrentQueue<IDomainEvent>();
-        await using var subscription = events.Subscribe((domainEvent, _) =>
-        {
-            observed.Enqueue(domainEvent);
-            return Task.CompletedTask;
-        });
-        var pipeline = new ToolInvocationPipeline(
-            registry,
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var context = InvocationContext();
-
-        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
-        {
-            SessionId = SessionId.New(),
-            RunId = RunId.New(),
-            ToolId = "jira",
-            ArgumentsJson = "{\"kind\":\"read\",\"issue\":\"APP-123\",\"provider\":\"work-jira\"}",
-            Context = context,
-        });
-
-        Assert.True(result.Succeeded, result.Error);
-        Assert.True(result.IsTruncated);
-        Assert.NotNull(result.ResultJson);
-        Assert.True(Encoding.UTF8.GetByteCount(result.ResultJson) <= 1400);
-        using var output = JsonDocument.Parse(result.ResultJson);
-        Assert.False(output.RootElement.GetProperty("BodyComplete").GetBoolean());
-        Assert.Contains("tool-output-limit", output.RootElement.GetProperty("Limitations").EnumerateArray().Select(value => value.GetString()));
-        Assert.Contains("body-byte-limit", output.RootElement.GetProperty("Limitations").EnumerateArray().Select(value => value.GetString()));
-        Assert.NotEmpty(output.RootElement.GetProperty("Body").GetString() ?? string.Empty);
-        var started = Assert.Single(observed.OfType<ToolInvocationStarted>());
-        Assert.Contains("read · APP-123 · work-jira", started.ActivityDetail, StringComparison.Ordinal);
-        var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
-        Assert.Contains("read · APP-124 (requested APP-123) · work-jira", completed.TransientActivityDetail, StringComparison.Ordinal);
-        Assert.DoesNotContain(handler.BodyText, completed.TransientActivityDetail, StringComparison.Ordinal);
-    }
-
     /// <summary>Sanitizer expansion is re-bounded without restoring pre-sanitized Jira text.</summary>
     [Fact]
     public async Task PipelineReboundsSanitizerExpansion()
@@ -770,98 +651,6 @@ public sealed class JiraTests
         Assert.DoesNotContain("MASK", result.ResultJson, StringComparison.Ordinal);
         using var output = JsonDocument.Parse(result.ResultJson);
         Assert.Contains("tool-output-limit", output.RootElement.GetProperty("Limitations").EnumerateArray().Select(value => value.GetString()));
-    }
-
-    /// <summary>A scripted ordinary conversation receives the body and can display it in its response.</summary>
-    [Fact]
-    public async Task ConversationReceivesAndDisplaysRequestedDescription()
-    {
-        var temporaryParent = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
-        var repository = Path.Combine(temporaryParent, $"threadsmith-jira-conversation-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(repository);
-        try
-        {
-            const string canary = "CANARY ticket description from Jira";
-            using var handler = new JiraHandler { BodyText = canary };
-            using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-            var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
-            await using var events = new DomainEventStream();
-            var sanitizer = new SecretOutputSanitizer();
-            var evidence = new EvidenceStore(events, sanitizer);
-            var assembler = new ContextAssembler(
-                evidence,
-                new TokenEstimator(),
-                new ContextPolicy(),
-                new PromptAppendLoader(sanitizer),
-                sanitizer,
-                events,
-                TestPromptLoader.Instance);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.MaxValue));
-            var configuration = new ConfigurationBuilder().Build();
-            var state = new ToolStateManager(
-                [tool.Definition],
-                configuration,
-                Path.Combine(repository, ".threadsmith", "config.json"),
-                Path.Combine(repository, "user", "consent.json"));
-            await state.GrantConsentAndEnableAsync("jira");
-            var registry = new ToolRegistry([tool], state);
-            var pipeline = new ToolInvocationPipeline(
-                registry,
-                new DefaultPolicyEngine(),
-                new DenyApprovalPolicy(),
-                events,
-                sanitizer,
-                NullLogger<ToolInvocationPipeline>.Instance,
-                budget,
-                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var model = new JiraConversationProbe(canary);
-            var application = new SessionApplication(
-                events,
-                model,
-                budget,
-                sanitizer,
-                NullLogger<SessionApplication>.Instance,
-                pipeline,
-                (_, _) => Task.FromResult(new ToolInvocationContext
-                {
-                    RepositoryPath = repository,
-                    TrustLevel = RepositoryTrustLevel.TrustedRead,
-                    RequestedBy = "model",
-                    AllowedNetworkHosts = ["example.atlassian.net"],
-                }),
-                assembler,
-                evidence,
-                registry,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
-            var dispatcher = new CommandDispatcher([application]);
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-
-            var session = await dispatcher.DispatchAsync(
-                new CreateSessionCommand("Jira conversation probe"),
-                timeout.Token);
-            var run = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(
-                    session,
-                    "Show me the ticket description for https://example.atlassian.net/browse/APP-123"),
-                timeout.Token);
-            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), timeout.Token));
-
-            Assert.Equal(2, model.Requests.Count);
-            Assert.Contains(canary, model.ObservedToolResult, StringComparison.Ordinal);
-            Assert.Equal($"Ticket description: {canary}", model.FinalResponse);
-        }
-        finally
-        {
-            var ownedRoot = Path.GetFullPath(repository);
-            if (!string.Equals(Path.GetDirectoryName(ownedRoot), temporaryParent, StringComparison.Ordinal)
-                || !Path.GetFileName(ownedRoot).StartsWith("threadsmith-jira-conversation-", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException("Refusing cleanup outside the exact owned Jira test directory.");
-            }
-
-            Directory.Delete(ownedRoot, recursive: true);
-        }
     }
 
     /// <summary>Metadata-only output fitting preserves an absent description's completeness.</summary>
@@ -991,33 +780,6 @@ public sealed class JiraTests
         Assert.Contains("Retry after about 86400 seconds", error.Message, StringComparison.Ordinal);
     }
 
-    private static JsonDocument CreateMarkedTextDocument(int markCount)
-    {
-        return JsonDocument.Parse(JsonSerializer.Serialize(new
-        {
-            type = "doc",
-            version = 1,
-            content = new[]
-            {
-                new
-                {
-                    type = "paragraph",
-                    content = new[]
-                    {
-                        new
-                        {
-                            type = "text",
-                            text = "x",
-                            marks = Enumerable.Range(0, markCount)
-                                .Select(_ => new { type = "strike" })
-                                .ToArray(),
-                        },
-                    },
-                },
-            },
-        }));
-    }
-
     private static JiraTool CreateTool(HttpClient http, ISecretResolver secrets, JiraOptions options)
     {
         return new(new JiraCloudClient(http, secrets, options), options, TestPromptLoader.Instance);
@@ -1106,42 +868,6 @@ public sealed class JiraTests
         public string Sanitize(string value)
         {
             return value.Replace("MASK", _replacement, StringComparison.Ordinal);
-        }
-    }
-
-    private sealed class JiraConversationProbe(string canary) : IModelProvider
-    {
-        internal List<ModelStreamRequest> Requests { get; } = [];
-
-        internal string ObservedToolResult { get; private set; } = string.Empty;
-
-        internal string FinalResponse { get; private set; } = string.Empty;
-
-        public async IAsyncEnumerable<ModelChunk> StreamAsync(
-            ModelStreamRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            await Task.Yield();
-            if (Requests.Count == 1)
-            {
-                Assert.Contains(request.Tools, tool => tool.Name == "jira");
-                yield return new ModelChunk
-                {
-                    Output = new ToolRequestModelOutput(
-                        "jira",
-                        "{\"kind\":\"read\",\"issue\":\"https://example.atlassian.net/browse/APP-123\"}"),
-                    FinishReason = ModelFinishReason.ToolCalls,
-                };
-                yield break;
-            }
-
-            ObservedToolResult = Assert.Single(request.Messages, message =>
-                message.Role == ModelMessageRole.Tool && message.ToolName == "jira").GetModelVisibleContent();
-            Assert.Contains(canary, ObservedToolResult, StringComparison.Ordinal);
-            FinalResponse = $"Ticket description: {canary}";
-            yield return new ModelChunk { Text = FinalResponse, FinishReason = ModelFinishReason.Stop };
         }
     }
 

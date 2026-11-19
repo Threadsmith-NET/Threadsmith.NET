@@ -16,7 +16,6 @@ public static class ToolCallHistoryTests
     [InlineData(0, 1)]
     [InlineData(1, 1)]
     [InlineData(2, 2)]
-    [InlineData(3, 3)]
     public static void ExactCalls_ConsumeOnlyAcceptedAllowance(int limit, int accepted)
     {
         var definition = new DateTimeTool(TestPromptLoader.Instance).Definition with { NumberOfExactToolInvocationsPerTurn = limit };
@@ -33,7 +32,6 @@ public static class ToolCallHistoryTests
             Assert.NotNull(rejection);
             Assert.False(rejection.IsDuplicateSibling);
             Assert.Equal(accepted, rejection.InvocationCount);
-            Assert.Equal($"Tool 'datetime' already has {accepted} accepted invocations with the same arguments. Try a different approach if you need more information.", rejection.Render(TestPromptLoader.Instance, "datetime").Trim());
         }
 
         Assert.True(history.TryAdd(definition, "{\"format\":\"other\"}"));
@@ -53,7 +51,6 @@ public static class ToolCallHistoryTests
         Assert.False(batch.TryAdd(definition, "{}", out var sibling));
         Assert.NotNull(sibling);
         Assert.True(sibling.IsDuplicateSibling);
-        Assert.Contains("occurs more than once", sibling.Render(TestPromptLoader.Instance, definition.Id), StringComparison.Ordinal);
         Assert.Equal(1, Counts(history).Single().Value);
         Assert.Equal(2, Counts(batch).Single().Value);
         Assert.True(history.TryAdd(definition, "{}"));

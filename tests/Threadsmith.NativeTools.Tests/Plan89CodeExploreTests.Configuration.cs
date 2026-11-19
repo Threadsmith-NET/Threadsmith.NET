@@ -11,93 +11,6 @@ using Xunit;
 
 public sealed partial class Plan89CodeExploreTests
 {
-    /// <summary>Exact continuation pages use configured caps, retain identity, and reuse prior partial source.</summary>
-    [Theory]
-    [InlineData(5000, false)]
-    [InlineData(900, false)]
-    [InlineData(5000, true)]
-    public async Task CodeExplore_SourceCursorUsesConfiguredPageAndPreservesDigest(int perFileCap, bool changed)
-    {
-        var options = new CodeExploreOptions
-        {
-            Limits = new CodeExploreLimits { MaximumSourceCharacters = 5000, MaximumPerFileSourceCharacters = perFileCap },
-            Tiny = new CodeExploreAdaptiveOptions { MaximumFiles = 2, MaximumSourceCharacters = 700, MaximumPerFileSourceCharacters = 700 },
-        };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var tool = new CodeExploreOutputFormattingTool(fixture.Tool, new CodeExploreOutputOptions(), TestPromptLoader.Instance, options);
-        var first = await tool.ExecuteAsync(new CodeExploreInput { Query = "Large.cs" }, fixture.Context, TestContext.Current.CancellationToken);
-        var firstResult = Assert.IsType<CodeExploreResult>(first.Value);
-        var firstSource = Assert.Single(firstResult.FileSections).Source;
-        Assert.Equal(CodeExploreSourceCompleteness.Partial, firstSource.Completeness);
-        var target = Assert.Single(firstResult.ContinuationTargets);
-        Assert.Equal(firstSource.FileSha256, target.ExpectedFileSha256);
-        var cursor = (first.ModelResultContent ?? string.Empty).Split('`')
-            .First(text => text.StartsWith("code_explore:continue:", StringComparison.Ordinal));
-        var frontier = ModelVisibleSourceFrontierBuilder.Build(
-            [
-                new ModelMessage
-                {
-                    Role = ModelMessageRole.Tool,
-                    ToolName = "code_explore",
-                    ToolCallId = "first",
-                    SectionId = "source",
-                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(firstResult) }],
-                },
-            ],
-            fixture.Root,
-            fixture.Context.Invocation.WorkspaceId,
-            1);
-        var repeated = await fixture.Tool.ExecuteAsync(
-            new CodeExploreRequest
-            {
-                Query = "Large.cs",
-                PathAnchors =
-                [
-                    new CodeExplorePathAnchor
-                    {
-                        Path = "Large.cs",
-                        Line = firstSource.Range.StartLine,
-                        EndLine = firstSource.Range.EndLine,
-                        SelectionMode = CodeExplorePathSelectionMode.ExactLineRange,
-                    },
-                ],
-            },
-            fixture.Context with { Invocation = fixture.Context.Invocation with { VisibleSourceFrontier = frontier } },
-            TestContext.Current.CancellationToken);
-        Assert.Empty(repeated.Value.FileSections);
-        Assert.Single(repeated.Value.BackReferences ?? []);
-
-        if (changed)
-        {
-            await File.AppendAllTextAsync(Path.Combine(fixture.Root, "Large.cs"), "\n// changed", TestContext.Current.CancellationToken);
-        }
-
-        var next = await tool.ExecuteAsync(new CodeExploreInput { Query = cursor }, fixture.Context, TestContext.Current.CancellationToken);
-        var result = Assert.IsType<CodeExploreResult>(next.Value);
-        var source = Assert.Single(result.FileSections).Source;
-
-        Assert.True(result.IsSourceContinuation);
-        Assert.False(result.AdaptiveBudget?.AdaptiveDefaultsApplied);
-        Assert.Equal(perFileCap, result.AdaptiveBudget?.EffectiveMaximumPerFileSourceCharacters);
-        Assert.Null(result.Flow);
-        Assert.Null(result.BlastRadius);
-        Assert.Null(result.AssociatedArtifacts);
-        Assert.DoesNotContain("**Selected evidence**", next.ModelResultContent ?? string.Empty);
-        Assert.True(result.Allocation?.SpentSourceCharacters <= perFileCap);
-        if (changed)
-        {
-            Assert.Equal(CodeExploreSourceCompleteness.Drifted, source.Completeness);
-            Assert.Empty(source.NumberedLines);
-        }
-        else
-        {
-            Assert.Equal(firstSource.Range.EndLine + 1, source.Range.StartLine);
-            Assert.Equal(firstSource.FileSha256, source.FileSha256);
-            Assert.Equal(perFileCap == 5000 ? CodeExploreSourceCompleteness.Complete : CodeExploreSourceCompleteness.Partial, source.Completeness);
-            Assert.Contains(source.NumberedLines[^1], next.ModelResultContent ?? string.Empty);
-        }
-    }
-
     /// <summary>The outer deadline leaves enough time for the default semantic timeout to return a partial result.</summary>
     [Fact]
     public void CodeExplore_DefaultTimeouts_PreserveGracefulSemanticTimeout()
@@ -139,91 +52,34 @@ public sealed partial class Plan89CodeExploreTests
         Assert.False(execution.Value.AdaptiveBudget?.AdaptiveDefaultsApplied);
         Assert.All(execution.Value.FileSections, section => Assert.Equal(CodeExploreSourceCompleteness.Complete, section.Source.Completeness));
         _ = fixture.Tool.DeserializeInput(JsonSerializer.Serialize(new CodeExploreInput { Query = new string('x', 2049) }));
-    }
 
-    /// <summary>A disabled controlling cap cannot be restored by a smaller adaptive tier.</summary>
-    [Fact]
-    public async Task CodeExplore_DisabledCapAndNarrowHint_SurviveAdaptation()
-    {
-        var options = new CodeExploreOptions
+        if (total == 0)
         {
-            Limits = new CodeExploreLimits { MaximumSourceCharacters = 0, MaximumFiles = 32 },
-            Tiny = new CodeExploreAdaptiveOptions { MaximumFiles = 4, MaximumSourceCharacters = 50, MaximumPerFileSourceCharacters = 0 },
-        };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var input = new CodeExploreInput { Query = "Small.cs", MaxFiles = 1 };
-        var result = (await fixture.Tool.ExecuteAsync(input, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.Equal(int.MaxValue, result.AdaptiveBudget?.EffectiveMaximumSourceCharacters);
-        Assert.Equal(1, result.AdaptiveBudget?.EffectiveMaximumFiles);
-        Assert.Equal(16_384, result.AdaptiveBudget?.EffectiveMaximumPerFileSourceCharacters);
-        Assert.True(result.AdaptiveBudget?.AdaptiveDefaultsApplied);
-    }
+            var formatter = new CodeExploreOutputFormattingTool(
+                fixture.Tool, new CodeExploreOutputOptions(), TestPromptLoader.Instance, options);
+            var output = await formatter.ExecuteAsync(new CodeExploreInput { Query = "Large.cs" }, fixture.Context, TestContext.Current.CancellationToken);
+            var result = Assert.IsType<CodeExploreResult>(output.Value);
+            Assert.Equal(int.MaxValue, fixture.Tool.Definition.MaximumOutputBytes);
+            Assert.Equal(int.MaxValue, result.EffectiveMaximumMarkdownBytes);
+            Assert.Equal(CodeExploreSourceCompleteness.Complete, Assert.Single(result.FileSections).Source.Completeness);
+            var json = JsonSerializer.Serialize(result);
+            var markdown = Assert.IsType<string>(output.ModelResultContent);
+            const int cap = 1024;
+            Assert.True(Encoding.UTF8.GetByteCount(json) > cap);
+            Assert.True(Encoding.UTF8.GetByteCount(markdown) > cap);
 
-    /// <summary>Explicit host limits equal to old defaults do not accidentally trigger adaptation.</summary>
-    [Fact]
-    public async Task CodeExplore_ExplicitDefaultValues_RetainTheirOrigin()
-    {
-        await using var fixture = await AllocationFixture.CreateAsync();
-        var request = new CodeExploreRequest { Query = "Small.cs", Limits = new CodeExploreLimits() };
-        var result = (await fixture.Tool.ExecuteAsync(request, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.Equal(50_000, result.AdaptiveBudget?.EffectiveMaximumSourceCharacters);
-        Assert.False(result.AdaptiveBudget?.AdaptiveDefaultsApplied);
-    }
+            var cappedOptions = options with { MaximumResultBytes = cap, MaximumMarkdownBytes = cap };
+            var cappedFormatter = new CodeExploreOutputFormattingTool(
+                new CodeExploreTool(fixture.Service, TestPromptLoader.Instance, options: cappedOptions),
+                new CodeExploreOutputOptions(),
+                TestPromptLoader.Instance,
+                cappedOptions);
+            var capped = await cappedFormatter.ExecuteAsync(new CodeExploreInput { Query = "Large.cs" }, fixture.Context, TestContext.Current.CancellationToken);
 
-    /// <summary>Explicit host requests normalize disabled values and retain narrower caller settings within administration.</summary>
-    [Fact]
-    public async Task CodeExplore_InternalRequest_UsesConfiguredCeilingsAndZeroSemantics()
-    {
-        var options = new CodeExploreOptions { AdaptiveSizingEnabled = false, Limits = new CodeExploreLimits { MaximumFiles = 1, MaximumSourceCharacters = 5000 } };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var request = new CodeExploreRequest
-        {
-            Query = "Small.cs Large.cs",
-            Limits = new CodeExploreLimits { MaximumFiles = 2, MaximumSourceCharacters = 0, MaximumPerFileSourceCharacters = 2000 },
-        };
-        var result = (await fixture.Tool.ExecuteAsync(request, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.Equal(1, result.AdaptiveBudget?.EffectiveMaximumFiles);
-        Assert.Equal(5000, result.AdaptiveBudget?.EffectiveMaximumSourceCharacters);
-        Assert.Equal(2000, result.AdaptiveBudget?.EffectiveMaximumPerFileSourceCharacters);
-        Assert.Single(result.FileSections, section => section.Source.NumberedLines.Count > 0);
-        Assert.False(result.AdaptiveBudget?.AdaptiveDefaultsApplied);
-    }
-
-    /// <summary>Compact presentation respects a configured smaller summary cap.</summary>
-    [Fact]
-    public async Task CodeExplore_CompactSummary_UsesConfiguredCap()
-    {
-        var options = new CodeExploreOptions { MaximumPresentationSummaryCharacters = 100 };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var result = (await fixture.Tool.ExecuteAsync(new CodeExploreInput { Query = "Small.cs Large.cs" }, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.True(result.Presentation?.ModelSummary.Length <= 100);
-    }
-
-    /// <summary>Optional summary limits do not displace exact source when multiple anchors are selected.</summary>
-    [Fact]
-    public async Task CodeExplore_LowSummaryCap_RetainsExactSource()
-    {
-        var options = new CodeExploreOptions { AdaptiveSizingEnabled = false, MaximumNaturalLanguageCandidateSummaries = 1 };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var result = (await fixture.Tool.ExecuteAsync(new CodeExploreInput { Query = "Small.cs Large.cs" }, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.Equal(2, result.FileSections.Count);
-        Assert.True(result.CandidateSummaries?.Count <= 1);
-    }
-
-    /// <summary>Structured trimming cannot erase the tier's independently configured Markdown allowance.</summary>
-    [Fact]
-    public async Task CodeExplore_StructuredTrim_PreservesMarkdownTierCap()
-    {
-        var options = new CodeExploreOptions
-        {
-            MaximumResultBytes = 2500,
-            Tiny = new CodeExploreAdaptiveOptions { MaximumMarkdownBytes = 500 },
-        };
-        await using var fixture = await AllocationFixture.CreateAsync(options);
-        var tool = new CodeExploreOutputFormattingTool(fixture.Tool, new CodeExploreOutputOptions(), TestPromptLoader.Instance, options);
-        var execution = await tool.ExecuteAsync(new CodeExploreInput { Query = "Small.cs Large.cs" }, fixture.Context, TestContext.Current.CancellationToken);
-        Assert.Equal(500, Assert.IsType<CodeExploreResult>(execution.Value).EffectiveMaximumMarkdownBytes);
-        Assert.True(Encoding.UTF8.GetByteCount(execution.ModelResultContent ?? string.Empty) <= 500);
+            Assert.True(capped.IsTruncated);
+            Assert.InRange(Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(capped.Value)), 1, cap);
+            Assert.InRange(Encoding.UTF8.GetByteCount(Assert.IsType<string>(capped.ModelResultContent)), 1, cap);
+        }
     }
 
     /// <summary>Negative operational values fail binding even when enforcement is disabled.</summary>
@@ -241,42 +97,6 @@ public sealed partial class Plan89CodeExploreTests
         }).Build();
         using var ownedConfiguration = configuration as IDisposable;
         Assert.Throws<ArgumentOutOfRangeException>(() => CodeExploreConfiguration.FromConfiguration(configuration));
-    }
-
-    /// <summary>Small source does not reserve capacity that a larger exact target needs.</summary>
-    [Fact]
-    public async Task CodeExplore_SmallFile_ReleasesSpaceAndCompletesNearbyFile()
-    {
-        await using var fixture = await AllocationFixture.CreateAsync();
-        var request = new CodeExploreRequest
-        {
-            Query = "Small.cs Large.cs",
-            Limits = new CodeExploreLimits { MaximumSourceCharacters = 2400, MaximumPerFileSourceCharacters = 2400, MaximumFiles = 2 },
-        };
-        var result = (await fixture.Tool.ExecuteAsync(request, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        Assert.Equal(2, result.FileSections.Count);
-        Assert.All(result.FileSections, section => Assert.Equal(CodeExploreSourceCompleteness.Complete, section.Source.Completeness));
-        Assert.Empty(result.ContinuationTargets);
-        Assert.True(result.Allocation?.SpentSourceCharacters <= 2400);
-    }
-
-    /// <summary>Exact one-line source and small partial ranges remain useful under tight caps.</summary>
-    [Fact]
-    public async Task CodeExplore_TinyExactRange_RemainsAvailable()
-    {
-        await using var fixture = await AllocationFixture.CreateAsync();
-        var request = new CodeExploreRequest
-        {
-            Query = "requested source",
-            PathAnchors = [new CodeExplorePathAnchor { Path = "Small.cs", Line = 4, SelectionMode = CodeExplorePathSelectionMode.SingleLine }],
-            Limits = new CodeExploreLimits { MaximumSourceCharacters = 40, MaximumPerFileSourceCharacters = 40 },
-        };
-        var result = (await fixture.Tool.ExecuteAsync(request, fixture.Context, TestContext.Current.CancellationToken)).Value;
-        var section = Assert.Single(result.FileSections);
-        Assert.Equal(4, section.Source.Range.StartLine);
-        Assert.Equal(4, section.Source.Range.EndLine);
-        Assert.Single(section.Source.NumberedLines);
-        Assert.True(Assert.Single(result.Allocation?.Files ?? []).UsefulSection);
     }
 
     /// <summary>Actual model capacity remains enforced when all operational caps are disabled.</summary>

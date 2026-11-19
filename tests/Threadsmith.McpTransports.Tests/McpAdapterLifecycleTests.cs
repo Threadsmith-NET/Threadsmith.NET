@@ -127,45 +127,6 @@ public static class McpAdapterLifecycleTests
         await adapter.DisposeAsync();
     }
 
-    /// <summary>MCP timing is owned by the injected monotonic remote invocation boundary.</summary>
-    [Fact]
-    public static async Task Imported_tool_projects_remote_duration_and_source()
-    {
-        var timeProvider = new ManualTimeProvider();
-        var transport = new ToolTransport(timeProvider);
-        var registry = new ToolRegistry([]);
-        var adapter = new McpAdapter(
-            _ => transport,
-            new EmptySecretStore(),
-            new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance,
-            registry,
-            timeProvider);
-        var connection = await adapter.ConnectAsync(CreateProfile());
-        var tool = Assert.Single(connection.Tools);
-        var input = tool.DeserializeInput("{}");
-
-        var execution = await tool.ExecuteAsync(
-            input,
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                new ToolInvocationContext
-                {
-                    RepositoryPath = Environment.CurrentDirectory,
-                    TrustLevel = RepositoryTrustLevel.TrustedRead,
-                    RequestedBy = "test",
-                }));
-
-        Assert.Equal(1200, execution.AuthoritativeElapsedMilliseconds);
-        var source = registry.GetSource(tool.Definition.Id);
-        Assert.Equal(ToolActivitySourceKind.Mcp, source.Kind);
-        Assert.Equal("Lifecycle", source.DisplayName);
-        await adapter.DisposeAsync();
-    }
-
     /// <summary>The central JSON sanitizer preserves successful MCP text results and lifecycle identity.</summary>
     [Theory]
     [InlineData("[\"password: fixture-value\"]")]

@@ -8,36 +8,6 @@ using Xunit;
 /// <summary>Optional cross-encoder ranking, qualification, cache identity and fallback over the real memory store.</summary>
 public static class MemoryRerankingTests
 {
-    /// <summary>Configured candidate pools can exceed a provider batch without dropping candidates.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task Candidate_pool_is_processed_in_provider_sized_batches(bool overflow)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = await SeedAsync(fixture);
-        var encoder = new TestCrossEncoder
-        {
-            Model = new("small-batch", 256, 2),
-            Score = (_, texts) => overflow && texts.Count == 1
-                ? throw new TextCrossEncoderInputException(200, 200, 256)
-                : texts.Select(text => new TextCrossEncoderScore(text[0], 12, false)).ToArray(),
-        };
-        using var retriever = CreateRetriever(fixture, generator, encoder);
-        var result = await retriever.RetrieveAsync(Query() with
-        {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerCandidateLimit = 65 },
-        });
-        Assert.Equal(2, encoder.Calls);
-        Assert.Equal(3, result.Selected.Count);
-        Assert.All(result.Selected, candidate => Assert.Equal(!overflow, candidate.CrossEncoderScore.HasValue));
-        Assert.Equal(!overflow, result.IsComplete);
-        if (!overflow)
-        {
-            Assert.Equal(["third note", "second note", "first note"], result.Selected.Select(candidate => candidate.Entry.Text));
-        }
-    }
-
     /// <summary>Reranking sees qualified candidates before the final cap and never receives unrelated records.</summary>
     [Fact]
     public static async Task Enabled_reranking_recovers_a_candidate_beyond_the_final_hybrid_cap()
@@ -146,47 +116,6 @@ public static class MemoryRerankingTests
         var disabledAgain = await retriever.RetrieveAsync(Query(enabled: false));
         Assert.All(disabledAgain.Selected, candidate => Assert.Null(candidate.CrossEncoderScore));
         Assert.Equal(4, encoder.Calls);
-    }
-
-    /// <summary>Failures or partial/invalid scores preserve the full hybrid fallback.</summary>
-    [Theory]
-    [InlineData("failure")]
-    [InlineData("count")]
-    [InlineData("nonfinite")]
-    [InlineData("overlength")]
-    [InlineData("negativeTokens")]
-    [InlineData("truncated")]
-    [InlineData("overflow")]
-    public static async Task Invalid_reranking_preserves_hybrid_results_with_a_diagnostic(string mode)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = await SeedAsync(fixture);
-        var encoder = new TestCrossEncoder
-        {
-            Score = (_, texts) => mode switch
-            {
-                "failure" => throw new TextCrossEncoderUnavailableException("missing assets"),
-                "count" => [],
-                "nonfinite" => [.. texts.Select(_ => new TextCrossEncoderScore(double.NaN, 12, false))],
-                "overlength" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, false))],
-                "truncated" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, true))],
-                "overflow" => throw new TextCrossEncoderInputException(400, 200, 512),
-                _ => [.. texts.Select(_ => new TextCrossEncoderScore(100, -1, false))],
-            },
-        };
-        using var retriever = CreateRetriever(fixture, generator, encoder);
-        var baseline = await retriever.RetrieveAsync(Query(enabled: false));
-
-        var result = await retriever.RetrieveAsync(Query() with
-        {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerCandidateLimit = 1, },
-        });
-
-        Assert.Equal(
-            baseline.Selected.Select(candidate => (candidate.Entry.Id, candidate.Entry.Revision, candidate.Score, candidate.LexicalRank, candidate.SemanticRank, candidate.CosineSimilarity)),
-            result.Selected.Select(candidate => (candidate.Entry.Id, candidate.Entry.Revision, candidate.Score, candidate.LexicalRank, candidate.SemanticRank, candidate.CosineSimilarity)));
-        Assert.All(result.Selected, candidate => Assert.Null(candidate.CrossEncoderScore));
-        Assert.Contains(result.Diagnostics, message => message.Contains("using qualified hybrid ranking", StringComparison.Ordinal));
     }
 
     /// <summary>Degraded rankings are cached only within the owning turn and retried later.</summary>

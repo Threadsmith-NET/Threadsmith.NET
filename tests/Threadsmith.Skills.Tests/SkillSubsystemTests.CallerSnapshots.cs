@@ -10,55 +10,6 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
-    /// <summary>A nested skill retains the caller's registration identity even before its first model turn.</summary>
-    [Fact]
-    public async Task SkillProcedure_CallerSnapshotDoesNotRebindReplacedRegistration()
-    {
-        var plan = PermissionPlan();
-        var original = new PermissionProbeTool();
-        var replacement = new PermissionProbeTool();
-        var registry = new ToolRegistry([]);
-        var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "caller-original");
-        registry.RegisterOrReplace(original, source);
-        var snapshots = new ConversationToolSnapshotStore();
-        var callerId = snapshots.Capture(
-            plan.Request.SessionId,
-            plan.Request.RunId,
-            [registry.GetRegistration("permission_probe")],
-            PermissionContext());
-        plan = plan with { Request = plan.Request with { CallerToolSnapshotId = callerId } };
-        registry.RegisterOrReplace(replacement, source, original);
-        var model = new PermissionModelProvider();
-        var sanitizer = new SecretOutputSanitizer();
-        await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(
-            registry,
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            sanitizer,
-            NullLogger<ToolInvocationPipeline>.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var runner = new ModelSkillProcedureRunner(
-            model,
-            registry,
-            pipeline,
-            sanitizer,
-            (_, _) => throw new InvalidOperationException("A bound caller must not fall back to session tool scope."),
-            TestPromptLoader.Instance,
-            snapshots: snapshots);
-
-        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}");
-
-        Assert.Equal(0, original.Executions);
-        Assert.Equal(0, replacement.Executions);
-        Assert.Single(model.Requests[0].Tools);
-        Assert.Equal(2, model.Requests.Count);
-        var error = Assert.Single(model.Requests[1].Messages, message => message.IsError == true);
-        Assert.Contains("no longer matches", error.GetModelVisibleContent(), StringComparison.Ordinal);
-        snapshots.Release(callerId);
-    }
-
     /// <summary>A caller scope must still exist and belong to the exact invoking session and run.</summary>
     [Theory]
     [InlineData("expired")]

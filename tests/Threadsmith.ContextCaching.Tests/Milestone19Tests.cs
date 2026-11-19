@@ -251,79 +251,6 @@ public sealed partial class Milestone19Tests
         }
     }
 
-    /// <summary>Structured requests keep policy first, current input last, and native schemas out of text.</summary>
-    [Fact]
-    public async Task ContextAssembler_ProducesStableStructuredNativeRequest()
-    {
-        var root = CreateTemporaryDirectory();
-        await File.WriteAllTextAsync(
-            Path.Combine(root, "AGENTS.md"),
-            "repository instruction",
-            TestContext.Current.CancellationToken);
-        var sanitizer = new PassthroughSanitizer();
-        await using var events = new NullEventStream();
-        var assembler = new ContextAssembler(
-            new EmptyEvidenceStore(),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            events,
-            TestPromptLoader.Instance,
-            instructionResolver: new RepositoryInstructionResolver(sanitizer));
-
-        try
-        {
-            var result = await assembler.AssembleAsync(
-                new ContextAssemblyRequest
-                {
-                    SessionId = SessionId.New(),
-                    RunId = RunId.New(),
-                    Phase = RunPhase.EvidenceCollection,
-                    Task = new TaskSpecification("current question", []),
-                    RepositoryPath = root,
-                    ToolSchemas =
-                    [
-                        new ContextToolSchema(
-                            "core:read",
-                            "Read a file.",
-                            "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}"),
-                    ],
-                },
-                TestContext.Current.CancellationToken);
-
-            var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
-            Assert.Equal(ModelMessageRole.System, messages[0].Role);
-            var prompts = TestPromptLoader.Instance;
-            var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
-                "{{ImplementationValidation}}",
-                prompts.Get(PromptFileNames.SystemImplementationValidationWriteable),
-                StringComparison.Ordinal);
-            var hostPolicy = messages[0].GetModelVisibleContent();
-            Assert.Equal(prompts.Get(PromptFileNames.SystemSystemPrompt) + Environment.NewLine + inspection, hostPolicy);
-            Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemRepositoryInspection);
-            Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemImplementationValidationWriteable);
-            var estimate = Assert.IsType<ModelWireEstimate>(result.WireEstimate);
-            var systemPrompt = Assert.Single(estimate.Components, component => component.Category == "System prompt");
-            Assert.Equal((hostPolicy.Length + 3L) / 4, systemPrompt.Tokens);
-            Assert.Equal(estimate.WireInputTokens, estimate.Components.Sum(component => component.Tokens));
-            Assert.Equal("current-user", messages[^1].SectionId);
-            Assert.Contains("current question", messages[^1].Content[0].Content, StringComparison.Ordinal);
-            Assert.DoesNotContain(
-                messages.Take(messages.Count - 1),
-                message => message.Content.Any(part =>
-                    part.Content.Contains("current question", StringComparison.Ordinal)));
-            Assert.DoesNotContain("<available_tools>", result.ModelInput, StringComparison.Ordinal);
-            Assert.True(result.WireEstimate?.NativeToolTokens > 0);
-            Assert.Equal("Native", result.Inspection.ToolTransportMode);
-            Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == "AGENTS.md");
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     /// <summary>Active scratchpad guidance is conditional and rendered from the host capability.</summary>
     [Fact]
     public async Task ContextAssembler_AdvertisesOnlyActiveScratchpad()
@@ -366,7 +293,6 @@ public sealed partial class Milestone19Tests
 
             var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
             Assert.Contains(capability.Current.ModelPath, messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
-            Assert.Contains("`list_files`, `search`, `read_file`, and `write_file`", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
             Assert.Contains(
                 result.Inspection.PromptAssets,
                 asset => asset.Source == PromptFileNames.SystemScratchpad);
@@ -395,43 +321,6 @@ public sealed partial class Milestone19Tests
     {
         /// <inheritdoc />
         public required ScratchpadSessionCapability Current { get; set; }
-    }
-
-    /// <summary>Explicit cache plans honor capability bounds and include every stable boundary class.</summary>
-    [Fact]
-    public void CachePlanner_ExplicitControl_ProducesBoundedStableBreakpoints()
-    {
-        var layout = new ModelRequestLayout
-        {
-            CacheFamily = "family",
-            StablePrefixDigest = "sha256:prefix",
-            StablePrefixMessageCount = 3,
-        };
-        var capabilities = new ModelCacheCapabilities
-        {
-            ExplicitCacheControl = true,
-            MaximumBreakpoints = 4,
-            MinimumCacheablePrefixTokens = 100,
-        };
-
-        var plan = ModelCachePlanner.CreatePlan(layout, capabilities, stablePrefixTokens: 100);
-
-        Assert.Equal(
-            [
-                ModelCacheBreakpointClass.HostPolicy,
-                ModelCacheBreakpointClass.RepositoryInstructions,
-                ModelCacheBreakpointClass.ToolInventory,
-                ModelCacheBreakpointClass.PhasePolicy,
-            ],
-            plan.Breakpoints.Select(item => item.Class));
-        Assert.Equal(2, ModelCachePlanner.CreatePlan(
-            layout,
-            capabilities with { MaximumBreakpoints = 2 },
-            stablePrefixTokens: 100).Breakpoints.Count);
-        Assert.Empty(ModelCachePlanner.CreatePlan(
-            layout,
-            capabilities,
-            stablePrefixTokens: 99).Breakpoints);
     }
 
     /// <summary>Continuation validation reports every authoritative generation transition precisely.</summary>

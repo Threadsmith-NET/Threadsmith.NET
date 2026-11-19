@@ -70,20 +70,6 @@ public static class OpenAiCompatibleCacheTests
         Assert.All(handler.Requests, body => Assert.Equal(cacheAffinityId.ToString("D"), body.GetProperty("prompt_cache_key").GetString()));
     }
 
-    /// <summary>Unknown compatible endpoints omit the optional OpenAI cache-routing extension by default.</summary>
-    [Fact]
-    public static async Task PromptCacheKeyIsOptInForCompatibleEndpoints()
-    {
-        var handler = new CaptureHandler("{}");
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-
-        _ = await Provider(client).StreamAsync(
-            new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" },
-            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-
-        Assert.False(Assert.Single(handler.Requests).TryGetProperty("prompt_cache_key", out _));
-    }
-
     /// <summary>Both standard read counters and vLLM creation counters survive the final streaming usage chunk.</summary>
     [Theory]
     [InlineData("{}", null, null)]

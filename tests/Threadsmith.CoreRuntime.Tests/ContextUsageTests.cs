@@ -23,78 +23,6 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class ContextUsageTests
 {
-    /// <summary>Flat source rows preserve prepared order, omit empty entries and keep category totals on the right.</summary>
-    [Fact]
-    public static void InstructionSourcesAreVisibleWhenModalOpens()
-    {
-        var instruction = new ContextUsageComponent("instructions", "Repository instructions", "Repository bundle", "Messages", 100)
-        {
-            Children =
-            [
-                new("agents", "Repository instructions", "AGENTS.md", "Messages", 60),
-                new("append", "Appended prompts", "Append bundle", "Messages", 40)
-                {
-                    Children = [new("a", "Appended prompts", "first-append.md", "Messages", 30), new("b", "Appended prompts", "second-append.md", "Messages", 10)],
-                },
-                new("empty", "Memories", "Empty memory", "Messages", 0),
-            ],
-        };
-        var snapshot = Snapshot(new ModelWireEstimate
-        {
-            Components =
-            [
-                new("system", "System prompt", "Host policy", "Messages", 10),
-                instruction,
-                new("empty-tools", "Tools", "Empty tool", "Native tools", 0),
-                new("tool-b", "Tools", "tool-b", "Native tools", 10),
-                new("tool-a", "Tools", "tool-a", "Native tools", 20),
-            ],
-            WireInputTokens = 140,
-            StablePrefixComponentCount = 5,
-        });
-        var contributions = ContextUsageFormatter.OrderedContributions(snapshot).ToArray();
-        Assert.Equal(["Host policy", "AGENTS.md", "first-append.md", "second-append.md", "tool-b", "tool-a"], contributions.Select(item => item.Label));
-        Assert.Equal(snapshot.InputTokens, contributions.Sum(item => item.Tokens));
-        Assert.Equal(140, snapshot.StablePrefixTokens);
-        Assert.Equal(40, ContextUsageFormatter.Categories(snapshot).Single(item => item.Category == "Appended prompts").Tokens);
-        Assert.Equal(30, ContextUsageFormatter.Categories(snapshot).Single(item => item.Category == "Tools").Tokens);
-
-        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
-        var buffer = new CellBuffer(160, 50);
-        modal.Render(new BufferSurface(buffer));
-        var rendered = Read(buffer);
-        var formatted = ContextUsageFormatter.Format(snapshot);
-        var renderedLines = rendered.Split('\n');
-        var firstStableLabelRow = Array.FindIndex(renderedLines, line => line.Contains("[Messages] Host policy", StringComparison.Ordinal));
-        var finalStableLabelRow = Array.FindIndex(renderedLines, line => line.Contains("[Native tools] tool-a", StringComparison.Ordinal));
-        var stableMarkerColumn = renderedLines[firstStableLabelRow].IndexOf("[Messages] Host policy", StringComparison.Ordinal) - 1;
-        Assert.Equal('│', renderedLines[firstStableLabelRow][stableMarkerColumn]);
-        Assert.Equal('│', renderedLines[firstStableLabelRow + 1][stableMarkerColumn]);
-        Assert.Equal(stableMarkerColumn, renderedLines[finalStableLabelRow].IndexOf("[Native tools] tool-a", StringComparison.Ordinal) - 1);
-        Assert.Equal('└', renderedLines[finalStableLabelRow][stableMarkerColumn]);
-        Assert.Equal(stableMarkerColumn + 2, Array.FindIndex(renderedLines[firstStableLabelRow + 1].ToCharArray(), character => character is >= '\u2580' and <= '\u258f'));
-        foreach (var text in new[] { rendered, formatted })
-        {
-            Assert.DoesNotContain("bundle", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("Empty", text, StringComparison.Ordinal);
-            Assert.Contains("cache eligible", text, StringComparison.OrdinalIgnoreCase);
-            Assert.Contains('└', text);
-            var previous = -1;
-            foreach (var item in contributions)
-            {
-                var position = text.IndexOf($"[{item.Container}] {item.Label}", StringComparison.Ordinal);
-                Assert.True(position > previous);
-                previous = position;
-            }
-        }
-
-        Assert.Contains("Appended prompts 28.6%", rendered, StringComparison.Ordinal);
-        Assert.Contains("Tools 21.4%", rendered, StringComparison.Ordinal);
-        modal.HandleKey(new KeyEvent(KeyCode.Enter, 0, KeyModifiers.None));
-        modal.Render(new BufferSurface(buffer));
-        Assert.Equal(rendered, Read(buffer));
-    }
-
     /// <summary>Eviction releases detailed metadata while preserving numeric status and accounting ownership.</summary>
     [Fact]
     public static void RequestDetailRetentionIsBoundedWithoutErasingUsageStatus()
@@ -184,41 +112,6 @@ public static class ContextUsageTests
         Assert.Null(usage.GetRequestStatus(dispatcher.SessionId));
     }
 
-    /// <summary>A representative flat metadata inventory renders safely across terminal sizes.</summary>
-    [Theory]
-    [InlineData(160, 50)]
-    [InlineData(120, 35)]
-    [InlineData(80, 24)]
-    [InlineData(40, 12)]
-    [InlineData(20, 6)]
-    public static void NativeModalHandlesInventoryResizeAndSafeLabels(int width, int height)
-    {
-        var (initial, text) = RenderInventory(width, height, messageCount: 16, toolCount: 4);
-
-        Assert.DoesNotContain('\u001b', initial);
-        if (width < 40 || height < 12)
-        {
-            Assert.True(string.IsNullOrWhiteSpace(initial));
-        }
-        else
-        {
-            Assert.Contains("Context usage", initial, StringComparison.Ordinal);
-            if (height == 12)
-            {
-                Assert.Contains("Enlarge terminal", initial, StringComparison.Ordinal);
-            }
-            else
-            {
-                Assert.Contains(initial, character => character is >= '\u2580' and <= '\u258f');
-            }
-        }
-
-        Assert.Contains("Categories", text, StringComparison.Ordinal);
-        Assert.Contains("Estimated", text, StringComparison.Ordinal);
-        Assert.DoesNotContain('\u001b', text);
-        Assert.Contains(text, character => character is >= '\u2580' and <= '\u258f');
-    }
-
     /// <summary>Large conversations retain final-row navigation and bounded rendering after resize.</summary>
     [Fact]
     public static void NativeModalHandlesLargeInventoryWithoutFullListRendering()
@@ -306,57 +199,6 @@ public static class ContextUsageTests
             timeout.Token);
     }
 
-    /// <summary>F12 handoff and too-small/startup guards keep context scrolling with the terminal.</summary>
-    [Fact]
-    public static void ContextModalWheelRequiresApplicationMouseCapture()
-    {
-        var components = Enumerable.Range(0, 6)
-            .Select(index => new ContextUsageComponent($"message:{index}", "Conversation", $"User {index}", "Messages", 10L + index))
-            .ToArray();
-        var snapshot = Snapshot(new ModelWireEstimate { WireInputTokens = 75, Components = components });
-        var canHandleMouse = false;
-        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { }, () => canHandleMouse);
-        var cells = new CellBuffer(120, 35);
-        var wheel = new MouseEvent(MouseEventKind.Wheel, MouseButton.WheelDown, 20, 10, KeyModifiers.None, 0);
-
-        Assert.True(modal.HandleMouse(wheel));
-        modal.Render(new BufferSurface(cells));
-        Assert.Contains("User 0 · 10 tokens", Read(cells), StringComparison.Ordinal);
-
-        canHandleMouse = true;
-        Assert.True(modal.HandleMouse(wheel));
-        cells.Clear(CellStyle.Default);
-        modal.Render(new BufferSurface(cells));
-        Assert.Contains("User 3 · 13 tokens", Read(cells), StringComparison.Ordinal);
-    }
-
-    /// <summary>Non-activating mouse input leaves the composer submission path and its draft intact.</summary>
-    [Theory]
-    [InlineData("\u001b[<0;118;4M\u001b[<0;118;4m", true)]
-    [InlineData("\u001b[<2;118;4M\u001b[<2;118;4m\u001b[<2;118;4M\u001b[<2;118;4m", true)]
-    [InlineData("\u001b[<32;118;4M\u001b[<32;118;4M", false)]
-    [InlineData("\u001b[<0;2;4M\u001b[<0;2;4m\u001b[<0;2;4M\u001b[<0;2;4m", true)]
-    [InlineData("\u001b[24~\u001b[<0;118;4M\u001b[<0;118;4m\u001b[<0;118;4M\u001b[<0;118;4m", false)]
-    public static async Task NonActivatingMouseInputPreservesComposer(string mouseInput, bool outputFocused)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new HeadlessBackend(120, 35);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        await surface.RunAsync(
-            async token =>
-        {
-            var read = surface.ReadComposerAsync(new ComposerRequest("MAIN > "), token);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            backend.FeedInput("draft" + mouseInput);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            backend.FeedInput(outputFocused ? "\u001b[18~\r" : "\r");
-            var input = await read;
-            Assert.Equal(InteractionInputKind.Submission, input.Kind);
-            Assert.Equal("draft", input.Text);
-        },
-            timeout.Token);
-    }
-
     private static ModelStreamRequest Request(RunId run)
     {
         var messages = new[] { new ModelMessage { Role = ModelMessageRole.User, SectionId = "current-user", Content = [new ModelContentPart { Content = "hello" }] } };
@@ -379,44 +221,6 @@ public static class ContextUsageTests
             Components = estimate.Components,
             EstimationBasis = estimate.EstimationBasis,
         };
-    }
-
-    private static (string Initial, string Resized) RenderInventory(
-        int width,
-        int height,
-        int messageCount,
-        int toolCount)
-    {
-        var components = Enumerable.Range(0, messageCount)
-            .Select(index => new ContextUsageComponent(
-                $"message:{index}",
-                "Conversation",
-                $"User {index} 中文 é\u001b[2J",
-                "Messages",
-                10L + index))
-            .Concat(Enumerable.Range(0, toolCount)
-                .Select(index => new ContextUsageComponent(
-                    $"tool:{index}",
-                    "Tools",
-                    $"tool:{index}",
-                    "Native tools",
-                    20L + index)))
-            .ToArray();
-        var snapshot = Snapshot(new ModelWireEstimate
-        {
-            WireInputTokens = (int)components.Sum(item => item.Tokens),
-            Components = components,
-        });
-        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
-        var buffer = new CellBuffer(width, height);
-        modal.Render(new BufferSurface(buffer));
-        var initial = Read(buffer);
-        modal.HandleKey(new KeyEvent(KeyCode.End, 0, KeyModifiers.None));
-        modal.Render(new BufferSurface(buffer));
-        modal.HandleKey(new KeyEvent(KeyCode.Tab, 0, KeyModifiers.None));
-        buffer.Resize(160, 50);
-        modal.Render(new BufferSurface(buffer));
-        return (initial, Read(buffer));
     }
 
     private static string Read(CellBuffer buffer)

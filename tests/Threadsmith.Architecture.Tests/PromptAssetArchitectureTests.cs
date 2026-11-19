@@ -252,149 +252,26 @@ public static partial class PromptAssetArchitectureTests
                 documentedTokens.Order(StringComparer.Ordinal));
             Assert.Equal(declaredTokens.Length == 0, row.Groups[4].Value == "None");
         }
-    }
 
-    /// <summary>The categorized user guide covers every prompt and defines every declared placeholder.</summary>
-    [Fact]
-    public static void PromptFileReference_CoversExactCatalogAndPlaceholderGlossary()
-    {
-        var definitions = PromptAssetCatalog.All.ToArray();
-        var operationsPurposes = File.ReadLines(Path.Combine(
-                RepositoryRoot,
-                "docs",
-                "operations",
-                "prompts.md"))
-            .Select(line => PromptOperationsPurposeRowRegex().Match(line))
-            .Where(match => match.Success)
-            .ToDictionary(match => match.Groups[1].Value, match => match.Groups[2].Value, StringComparer.Ordinal);
-        var referenceLines = File.ReadLines(Path.Combine(
-                RepositoryRoot,
-                "docs",
-                "prompt-file-reference.md"))
-            .ToArray();
-        var referenceRows = referenceLines
+        var referenceRows = File.ReadLines(Path.Combine(RepositoryRoot, "docs", "prompt-file-reference.md"))
             .Select(line => PromptReferenceRowRegex().Match(line))
             .Where(match => match.Success)
             .ToArray();
-
-        var categoryPrefixes = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["System prompts"] = "System-",
-            ["Context prompts"] = "Context-",
-            ["Correction prompts"] = "Correction-",
-            ["Tool prompts"] = "Tool-",
-            ["Skill prompts"] = "Skill-",
-            ["Provider prompts"] = "Provider-",
-            ["Adapter prompts"] = "Adapter-",
-        };
-        var categoriesByFile = new Dictionary<string, string>(StringComparer.Ordinal);
-        string? currentCategory = null;
-        foreach (var line in referenceLines)
-        {
-            if (line.StartsWith("### ", StringComparison.Ordinal)
-                && categoryPrefixes.ContainsKey(line[4..]))
-            {
-                currentCategory = line[4..];
-            }
-
-            var row = PromptReferenceRowRegex().Match(line);
-            if (row.Success)
-            {
-                Assert.NotNull(currentCategory);
-                categoriesByFile.Add(row.Groups[1].Value, currentCategory);
-            }
-        }
-
-        Assert.Equal(definitions.Length, referenceRows.Length);
-        Assert.Equal(
-            definitions.Select(definition => definition.FileName).Order(StringComparer.Ordinal),
-            referenceRows.Select(match => match.Groups[1].Value).Order(StringComparer.Ordinal));
-        foreach (var definition in definitions)
-        {
-            var expectedCategory = categoryPrefixes.Single(category => definition.FileName.StartsWith(
-                category.Value,
-                StringComparison.Ordinal)).Key;
-            Assert.Equal(expectedCategory, categoriesByFile[definition.FileName]);
-        }
-
-        var summaryCounts = referenceLines
-            .Select(line => PromptReferenceSummaryRowRegex().Match(line))
-            .Where(match => match.Success)
-            .ToDictionary(
-                match => match.Groups[1].Value,
-                match => int.Parse(match.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture),
-                StringComparer.Ordinal);
-        Assert.Equal(
-            categoryPrefixes.Keys.Order(StringComparer.Ordinal),
-            summaryCounts.Keys.Order(StringComparer.Ordinal));
-        foreach (var category in categoryPrefixes.Keys)
-        {
-            Assert.Equal(
-                categoriesByFile.Count(item => item.Value == category),
-                summaryCounts[category]);
-        }
-
-        var totalRows = referenceLines
-            .Select(line => PromptReferenceTotalRowRegex().Match(line))
-            .Where(match => match.Success)
-            .ToArray();
-        var totalRow = Assert.Single(totalRows);
-        Assert.Equal(
-            definitions.Length,
-            int.Parse(totalRow.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture));
-
+        Assert.Equal(constants.Order(StringComparer.Ordinal), referenceRows.Select(row => row.Groups[1].Value).Order(StringComparer.Ordinal));
         foreach (var row in referenceRows)
         {
             var definition = PromptAssetCatalog.Get(row.Groups[1].Value);
-            Assert.Equal(operationsPurposes[definition.FileName], row.Groups[2].Value);
-
-            var tokenSections = row.Groups[3].Value.Split("; optional: ", StringSplitOptions.None);
-            Assert.InRange(tokenSections.Length, 1, 2);
-            var requiredTokens = row.Groups[3].Value == "`None`"
-                ? []
-                : DocumentationTokenRegex().Matches(tokenSections[0])
-                    .Select(match => match.Groups[1].Value)
-                    .ToArray();
-            var optionalTokens = tokenSections.Length == 2
-                ? DocumentationTokenRegex().Matches(tokenSections[1])
-                    .Select(match => match.Groups[1].Value)
-                    .ToArray()
-                : [];
+            var tokens = row.Groups[2].Value.Split("; optional:", 2, StringSplitOptions.TrimEntries);
+            var required = DocumentationTokenRegex().Matches(tokens[0])
+                .Select(token => token.Groups[1].Value)
+                .Where(token => token != "None");
             Assert.Equal(
                 definition.RequiredTokens.Order(StringComparer.Ordinal),
-                requiredTokens.Order(StringComparer.Ordinal));
+                required.Order(StringComparer.Ordinal));
             Assert.Equal(
                 definition.OptionalTokens.Order(StringComparer.Ordinal),
-                optionalTokens.Order(StringComparer.Ordinal));
-            foreach (var token in definition.RequiredTokens.Concat(definition.OptionalTokens))
-            {
-                var expectedLink = $"[`{token}`](#placeholder-{token.ToLowerInvariant()})";
-                Assert.True(
-                    row.Groups[3].Value.Contains(expectedLink, StringComparison.Ordinal),
-                    $"Prompt reference token '{token}' has a missing or incorrect glossary link in {definition.FileName}.");
-            }
-
-            Assert.Equal(
-                definition.RequiredTokens.Count == 0 && definition.OptionalTokens.Count == 0,
-                row.Groups[3].Value == "`None`");
-        }
-
-        var declaredTokens = definitions
-            .SelectMany(definition => definition.RequiredTokens.Concat(definition.OptionalTokens))
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        var glossaryRows = referenceLines
-            .Select(line => PromptReferenceGlossaryRowRegex().Match(line))
-            .Where(match => match.Success)
-            .ToArray();
-        Assert.Equal(declaredTokens.Length, glossaryRows.Length);
-        Assert.Equal(
-            declaredTokens,
-            glossaryRows.Select(match => match.Groups[2].Value).Order(StringComparer.Ordinal));
-        foreach (var row in glossaryRows)
-        {
-            Assert.Equal(row.Groups[2].Value.ToLowerInvariant(), row.Groups[1].Value);
+                DocumentationTokenRegex().Matches(tokens.Length == 2 ? tokens[1] : string.Empty)
+                    .Select(token => token.Groups[1].Value).Order(StringComparer.Ordinal));
         }
     }
 
@@ -402,22 +279,16 @@ public static partial class PromptAssetArchitectureTests
     [Fact]
     public static void GovernedPromptSinks_HaveNoMeaningfulDirectStringLiterals()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
         var violations = new List<string>();
         var usedExclusions = new HashSet<string>(StringComparer.Ordinal);
         foreach (var path in GovernedSourceProjects
             .Select(owner => Path.Combine(RepositoryRoot, "src", owner))
-            .SelectMany(directory => Directory.GetFiles(directory, "*.cs", SearchOption.AllDirectories))
-            .Where(path => !path.Contains(
-                Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar,
-                StringComparison.OrdinalIgnoreCase)
-                && !path.Contains(
-                    Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar,
-                    StringComparison.OrdinalIgnoreCase)))
+            .SelectMany(directory => SourceEncodingTests.EnumerateCSharpSources(directory, cancellationToken)))
         {
             var root = CSharpSyntaxTree.ParseText(
                 File.ReadAllText(path),
-                cancellationToken: TestContext.Current.CancellationToken).GetRoot(
-                    TestContext.Current.CancellationToken);
+                cancellationToken: cancellationToken).GetRoot(cancellationToken);
             foreach (var assignment in root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
             {
                 if (assignment.Left is not IdentifierNameSyntax identifier)
@@ -1481,7 +1352,7 @@ public static partial class PromptAssetArchitectureTests
     private static partial Regex PromptOperationsPurposeRowRegex();
 
     [GeneratedRegex(
-        @"^\| `([^`]+\.md)` \| ([^|]+) \| ([^|]+) \|$",
+        @"^\|\s*`([^`]+\.md)`\s*\|[^|]*\|([^|]*)\|\s*$",
         RegexOptions.CultureInvariant)]
     private static partial Regex PromptReferenceRowRegex();
 

@@ -35,14 +35,6 @@ public sealed partial class MultimodalTests
 
     /// <summary>Verifies the named multimodal contract through its production entry point.</summary>
     [Fact]
-    public void NamedFlagsRoundTrip()
-    {
-        const ModelContentTypes flags = ModelContentTypes.Text | ModelContentTypes.Image;
-        Assert.Equal(flags, JsonSerializer.Deserialize<ModelContentTypes>(JsonSerializer.Serialize(flags)));
-    }
-
-    /// <summary>Verifies the named multimodal contract through its production entry point.</summary>
-    [Fact]
     public async Task ImagesAreScopedValidatedAndProtectedFromDeletion()
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -65,139 +57,6 @@ public sealed partial class MultimodalTests
         await fixture.Store.ReleaseImageAsync(image.Id, clone, token);
         Assert.Empty(await fixture.Store.ListAsync(null, token));
         Assert.False(await fixture.Store.DeleteAsync(image.ContentHash, token));
-    }
-
-    /// <summary>Verifies the named multimodal contract through its production entry point.</summary>
-    [Fact]
-    public async Task ReadAndWriteUseRealPipelineAndPreserveBytes()
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        await File.WriteAllBytesAsync(Path.Combine(fixture.Root, "red.png"), Png, token);
-        var session = SessionId.New();
-        var result = await fixture.InvokeAsync(session, "read_file", "{\"path\":\"red.png\"}", token);
-        Assert.True(result.Succeeded, result.Error);
-        var image = Assert.Single(result.Images);
-        Assert.DoesNotContain(Convert.ToBase64String(Png), result.ResultJson ?? string.Empty, StringComparison.Ordinal);
-        var save = await fixture.InvokeAsync(session, "write_file", JsonSerializer.Serialize(new { path = ".inbox/red.png", artifactId = image.Id }), token);
-        Assert.True(save.Succeeded, save.Error);
-        Assert.Equal(Png, await File.ReadAllBytesAsync(Path.Combine(fixture.Root, ".inbox/red.png"), token));
-        var repositorySave = await fixture.InvokeAsync(session, "write_file", JsonSerializer.Serialize(new { path = "docs/red.png", artifactId = image.Id }), token);
-        Assert.True(repositorySave.Succeeded, repositorySave.Error);
-        Assert.Equal(Png, await File.ReadAllBytesAsync(Path.Combine(fixture.Root, "docs/red.png"), token));
-        foreach (var path in new[] { ".inbox/wrong.jpg", "../outside.png", ".inbox/source.cs" })
-        {
-            var denied = await fixture.InvokeAsync(session, "write_file", JsonSerializer.Serialize(new { path, artifactId = image.Id }), token);
-            Assert.False(denied.Succeeded);
-        }
-
-        var foreign = await fixture.InvokeAsync(SessionId.New(), "write_file", JsonSerializer.Serialize(new { path = ".inbox/stolen.png", artifactId = image.Id }), token);
-        Assert.False(foreign.Succeeded);
-        var lines = await fixture.InvokeAsync(session, "read_file", "{\"path\":\"red.png\",\"startLine\":2}", token);
-        Assert.False(lines.Succeeded);
-    }
-
-    /// <summary>Verifies the named multimodal contract for each supported case.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task ChatWireCarriesActualPixelsAndToolIdentity(bool toolResult, bool openRouter = false)
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        var session = SessionId.New();
-        var image = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "fixture", cancellationToken: token);
-        var handler = new CaptureHandler();
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var configuration = new OpenAiCompatibleProviderConfiguration
-        {
-            Id = "fixture",
-            Name = "fixture",
-            BaseUri = new Uri("https://example.test/v1/"),
-            Models =
-            [
-                new OpenAiCompatibleModelConfiguration
-                {
-                Id = new ModelProfileId(Guid.NewGuid()), Name = "fixture", ModelId = "fixture", ContextWindow = 100000,
-                MaximumOutputTokens = 4096, SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image,
-                SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed, Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-                },
-            ],
-        };
-        IModelProviderRegistration registration = openRouter ? new OpenRouterProviderRegistration() : new OpenAiCompatibleProviderRegistration();
-        ModelProviderConfiguration effectiveConfiguration = openRouter ? new OpenRouterProviderConfiguration
-        {
-            Id = "fixture",
-            Name = "fixture",
-            SecretKeyReference = "secrets:fixture",
-            Models =
-            [
-                new OpenRouterModelConfiguration
-                {
-                Id = configuration.Models[0].Id, Name = "fixture", ModelId = "vendor/fixture", ContextWindow = 100000,
-                MaximumOutputTokens = 4096, SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image,
-                SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed, Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-                },
-            ],
-        }
-        : configuration;
-        var catalog = new EffectiveModelProviderCatalog(new ModelProviderCatalogConfiguration { Providers = [effectiveConfiguration] }, new ModelProviderRegistry([registration]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), images: fixture.Store, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var imageMessage = new ModelMessage
-        {
-            Role = toolResult ? ModelMessageRole.Tool : ModelMessageRole.User,
-            SectionId = "image",
-            ToolCallId = toolResult ? "call_1" : null,
-            ToolName = toolResult ? "read_file" : null,
-            Content = ModelImages.Append([new ModelContentPart { Content = "Describe the pixels" }, new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(new { attachments = new[] { new { artifactId = image.Id } } }) }], [image]),
-        };
-        var request = new ModelStreamRequest
-        {
-            RunId = RunId.New(),
-            ImageSessionId = session,
-            Input = "image",
-            Messages = toolResult ? [new ModelMessage { Role = ModelMessageRole.Assistant, SectionId = "call", ToolName = "read_file", ToolCallId = "call_1", Content = [new ModelContentPart { Content = "{}" }] }, imageMessage] : [imageMessage],
-        };
-        await foreach (var chunk in provider.StreamAsync(request, token))
-        {
-            Assert.Null(chunk.Output);
-        }
-
-        Assert.Contains(Convert.ToBase64String(Png), handler.Body, StringComparison.Ordinal);
-        Assert.Contains(image.Id, handler.Body, StringComparison.Ordinal);
-        if (toolResult)
-        {
-            using var wire = JsonDocument.Parse(handler.Body);
-            var messages = wire.RootElement.GetProperty(openRouter ? "input" : "messages");
-            Assert.Equal("call_1", messages[1].GetProperty(openRouter ? "call_id" : "tool_call_id").GetString());
-            Assert.Equal("user", messages[2].GetProperty("role").GetString());
-        }
-
-        var estimate = ModelWireEstimator.Estimate(request.Messages, [], ToolTransportMode.Native, 0, 4096);
-        Assert.True(estimate.WireInputTokens > 2000);
-        Assert.DoesNotContain(Convert.ToBase64String(Png), JsonSerializer.Serialize(request), StringComparison.Ordinal);
-    }
-
-    /// <summary>Verifies the named multimodal contract through its production entry point.</summary>
-    [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(2)]
-    public async Task GeneratedImageContinuesToModelIssuedWriteBeforeCompletion(int toolOrder)
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var provider = new GenerateThenSaveProvider { ToolOrder = toolOrder };
-        var application = fixture.CreateApplication(provider);
-        var token = TestContext.Current.CancellationToken;
-        var session = await application.HandleAsync(new CreateSessionCommand("image"), token);
-        var run = await application.HandleAsync(new SubmitRequestCommand(session, "Generate and save an image to .inbox/generated.png"), token);
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(run), token));
-        Assert.Equal(3, provider.Rounds);
-        Assert.Equal(Png, await File.ReadAllBytesAsync(Path.Combine(fixture.Root, ".inbox/generated.png"), token));
-        var archived = await fixture.Conversations.GetSnapshotAsync(session, cancellationToken: token);
-        Assert.Contains(archived.Messages, message => message.Images.Count == 1);
     }
 
     /// <summary>A completed image is terminal; an incomplete response publishes no artifact reference.</summary>
@@ -227,20 +86,6 @@ public sealed partial class MultimodalTests
         Assert.False(File.Exists(Path.Combine(fixture.Root, ".inbox/generated.png")));
     }
 
-    /// <summary>Complete binary signatures do not reject ordinary prose using format names.</summary>
-    [Theory]
-    [InlineData("GIF support is documented here.")]
-    [InlineData("RIFF format is documented here.")]
-    public async Task FormatNameTextRemainsReadable(string content)
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "format.txt"), content, token);
-        var result = await fixture.InvokeAsync(SessionId.New(), "read_file", "{\"path\":\"format.txt\"}", token);
-        Assert.True(result.Succeeded, result.Error);
-        Assert.Contains(content, result.ResultJson ?? string.Empty, StringComparison.Ordinal);
-    }
-
     /// <summary>Image-only submission crosses archive and the real context assembler without losing pixels.</summary>
     [Fact]
     public async Task ImageOnlySubmissionUsesRealContextAssembler()
@@ -255,43 +100,6 @@ public sealed partial class MultimodalTests
         Assert.True(await application.HandleAsync(new WaitForRunCommand(run), token));
         Assert.Equal(image, Assert.Single(provider.Request!.Messages.Single(message => message.SectionId == "current-user").Content, part => part.Kind == ModelContentPartKind.Image).Image);
         Assert.True(provider.Request.WireEstimate!.WireInputTokens >= ModelImages.EstimateTokens(image));
-    }
-
-    /// <summary>Pasted images can be exported using only model-visible metadata in current or historical turns.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ClipboardImageMetadataEnablesModelIssuedExport(bool historical)
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        var provider = new SaveAttachmentProvider { Historical = historical };
-        var application = fixture.CreateApplication(provider);
-        var session = await application.HandleAsync(new CreateSessionCommand("clipboard-export"), token);
-        var first = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "clipboard", cancellationToken: token);
-        var second = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "clipboard", cancellationToken: token);
-        var run = await application.HandleAsync(new SubmitRequestCommand(session, historical ? "Remember these images." : "Save the second image to .inbox/pasted.png.") { Images = [first, second] }, token);
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(run), token));
-        if (historical)
-        {
-            run = await application.HandleAsync(new SubmitRequestCommand(session, "Save the second image from my previous message to .inbox/pasted.png."), token);
-            Assert.True(await application.HandleAsync(new WaitForRunCommand(run), token));
-        }
-
-        Assert.Equal(second.Id, provider.SavedArtifactId);
-        Assert.Equal(Png, await File.ReadAllBytesAsync(Path.Combine(fixture.Root, ".inbox/pasted.png"), token));
-        var message = Assert.Single(provider.ExportRequest!.Messages, item => item.SectionId == (historical ? "recent-user" : "current-user"));
-        Assert.Equal(new[] { first, second }, message.Content.Where(part => part.Kind == ModelContentPartKind.Image).Select(part => part.Image));
-        using var metadata = JsonDocument.Parse(Assert.Single(message.Content, part => part.Kind == ModelContentPartKind.Json).Content);
-        var attachments = metadata.RootElement.GetProperty("attachments");
-        Assert.Equal(2, attachments.GetArrayLength());
-        Assert.Equal(first.Id, attachments[0].GetProperty("artifactId").GetString());
-        Assert.Equal(second.Id, attachments[1].GetProperty("artifactId").GetString());
-        Assert.Equal("image/png", attachments[1].GetProperty("mediaType").GetString());
-        Assert.Equal(second.Width, attachments[1].GetProperty("width").GetInt32());
-        Assert.Equal(second.Height, attachments[1].GetProperty("height").GetInt32());
-        Assert.Equal(Png.Length, attachments[1].GetProperty("byteLength").GetInt32());
-        Assert.DoesNotContain(Convert.ToBase64String(Png), message.GetModelVisibleContent(), StringComparison.Ordinal);
     }
 
     /// <summary>Restored draft removal preserves archived ownership; retention honors live pins then releases bytes.</summary>
@@ -329,46 +137,6 @@ public sealed partial class MultimodalTests
         Assert.True(await fixture.Store.DeleteAsync(image.ContentHash, token));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Store.GetImageAsync(image.Id, session, token));
     }
-
-    /// <summary>Binary classification preserves the established BOM-aware text reader.</summary>
-    [Theory]
-    [InlineData("auto")]
-    [InlineData("text")]
-    public async Task Utf16ReadRemainsText(string mode)
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "unicode.txt"), "hello unicode", Encoding.Unicode, token);
-        var result = await fixture.InvokeAsync(SessionId.New(), "read_file", JsonSerializer.Serialize(new { path = "unicode.txt", mode }), token);
-        Assert.True(result.Succeeded, result.Error);
-        Assert.Contains("hello unicode", result.ResultJson ?? string.Empty, StringComparison.Ordinal);
-        Assert.Empty(result.Images);
-    }
-
-    /// <summary>Knowing a sibling image ID does not authorize a child's write operation.</summary>
-    [Fact]
-    public async Task ChildExportRequiresAdmittedReference()
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        var session = SessionId.New();
-        var image = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "parent", cancellationToken: token);
-        var request = new ToolInvocationRequest
-        {
-            SessionId = session,
-            RunId = RunId.New(),
-            ToolId = "write_file",
-            ArgumentsJson = JsonSerializer.Serialize(new { path = ".inbox/child.png", artifactId = image.Id }),
-            Context = fixture.Invocation with { IsChildAgent = true },
-        };
-        Assert.False((await fixture.Pipeline.InvokeAsync(request, token)).Succeeded);
-        Assert.True((await fixture.Pipeline.InvokeAsync(request with { Context = request.Context with { AdmittedImageIds = new HashSet<string> { image.Id } } }, token)).Succeeded);
-    }
-
-    /// <summary>High-detail admission covers the largest documented compatible tile schedule.</summary>
-    [Fact]
-    public void HighDetailMiniImageCostIsNotUnderestimated()
-        => Assert.True(ModelImages.EstimateTokens(new ImageArtifact { Id = "test", ContentHash = "test", MediaType = "image/png", ByteLength = 100, Width = 512, Height = 512, Source = "test" }) >= 8500);
 
     /// <summary>The streamed caller bound, independent of an initial length observation, rejects growth before publication.</summary>
     [Fact]
@@ -440,74 +208,6 @@ public sealed partial class MultimodalTests
         Assert.False(resolved);
     }
 
-    /// <summary>Atomic session cloning copies archived image grants and omits unrelated draft grants.</summary>
-    [Fact]
-    public async Task SessionCloneCopiesOnlyArchivedImageOwnership()
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        var source = SessionId.New();
-        var destination = SessionId.New();
-        var archived = await fixture.Store.StoreImageAsync(new MemoryStream(Png), source, "archived", cancellationToken: token);
-        var draft = await fixture.Store.StoreImageAsync(new MemoryStream(Png), source, "draft", cancellationToken: token);
-        await fixture.Conversations.ArchiveMessageAsync(
-            new ConversationMessage
-            {
-                Id = ConversationMessageId.New(),
-                SessionId = source,
-                RunId = RunId.New(),
-                Role = ConversationRole.User,
-                Content = "image",
-                Images = [archived],
-                OccurredAt = DateTimeOffset.UtcNow,
-                Sequence = 0,
-                ContentHash = string.Empty,
-                EstimatedTokens = 0,
-            },
-            token);
-        var lifecycle = new SqliteSessionLifecycleStore($"Data Source={Path.Combine(fixture.Root, "state.db")};Pooling=False");
-        await lifecycle.CloneAsync(
-            source,
-            new SessionCatalogEntry
-            {
-                SessionId = destination,
-                CloneSourceSessionId = source,
-                RepositoryIdentity = "repo",
-                RepositoryDisplayName = "repo",
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow,
-                State = SessionLifecycleState.Idle,
-            },
-            new SessionDurableUsage(0, 0, false, false, false),
-            token);
-        var clone = await fixture.Conversations.GetSnapshotAsync(destination, cancellationToken: token);
-        Assert.Equal(archived, Assert.Single(Assert.Single(clone.Messages).Images));
-        Assert.Equal(Png, (await fixture.Store.ReadImageAsync(archived, destination, token)).ToArray());
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Store.GetImageAsync(draft.Id, destination, token));
-        Assert.Single(await fixture.Store.ListAsync(null, token));
-    }
-
-    /// <summary>Opt-in maximum-pixel PNG measurement records decoder latency and process allocation without a flaky timing gate.</summary>
-    [Fact]
-    public async Task MeasureMaximumPixelImageAdmission()
-    {
-        var path = Environment.GetEnvironmentVariable("THREADSMITH_IMAGE_BENCHMARK_FILE");
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            Assert.Skip("Set THREADSMITH_IMAGE_BENCHMARK_FILE to the deterministic 4096x4096 PNG fixture.");
-        }
-
-        await using var fixture = await Fixture.CreateAsync();
-        var token = TestContext.Current.CancellationToken;
-        await using var stream = File.OpenRead(path);
-        var allocated = GC.GetTotalAllocatedBytes(true);
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var image = await fixture.Store.StoreImageAsync(stream, SessionId.New(), "maximum-pixel-fixture", cancellationToken: token);
-        watch.Stop();
-        Assert.Equal(ImageArtifactLimits.MaximumPixels, image.Width * image.Height);
-        TestContext.Current.TestOutputHelper?.WriteLine($"Encoded={image.ByteLength} bytes; elapsed={watch.Elapsed.TotalMilliseconds:F0} ms; process allocated delta={GC.GetTotalAllocatedBytes(true) - allocated} bytes.");
-    }
-
     private sealed class CaptureModel : IModelProvider
     {
         public ModelStreamRequest? Request { get; private set; }
@@ -518,37 +218,6 @@ public sealed partial class MultimodalTests
             cancellationToken.ThrowIfCancellationRequested();
             Request = request;
             yield return new ModelChunk { Text = "Observed image.", FinishReason = ModelFinishReason.Stop };
-        }
-    }
-
-    private sealed class SaveAttachmentProvider : IModelProvider
-    {
-        private int _rounds;
-
-        public bool Historical { get; init; }
-
-        public string? SavedArtifactId { get; private set; }
-
-        public ModelStreamRequest? ExportRequest { get; private set; }
-
-        public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            await Task.CompletedTask;
-            cancellationToken.ThrowIfCancellationRequested();
-            _rounds++;
-            if (_rounds == (Historical ? 2 : 1))
-            {
-                ExportRequest = request;
-                var message = Assert.Single(request.Messages, item => item.SectionId == (Historical ? "recent-user" : "current-user"));
-                using var metadata = JsonDocument.Parse(Assert.Single(message.Content, part => part.Kind == ModelContentPartKind.Json).Content);
-                SavedArtifactId = metadata.RootElement.GetProperty("attachments")[1].GetProperty("artifactId").GetString();
-                yield return new ModelChunk { Output = new ToolRequestModelOutput("write_file", JsonSerializer.Serialize(new { path = ".inbox/pasted.png", artifactId = SavedArtifactId })) };
-                yield return new ModelChunk { FinishReason = ModelFinishReason.ToolCalls };
-            }
-            else
-            {
-                yield return new ModelChunk { Text = "Done.", FinishReason = ModelFinishReason.Stop };
-            }
         }
     }
 

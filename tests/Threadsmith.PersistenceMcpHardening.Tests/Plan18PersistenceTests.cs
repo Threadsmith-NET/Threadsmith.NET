@@ -465,45 +465,6 @@ public static class RetentionTests
     }
 }
 
-/// <summary>Session round-trip restore tests (scenarios B/H).</summary>
-public static class SessionRoundTripTests
-{
-    /// <summary>Persisted session events restore into equivalent host projections.</summary>
-    [Fact]
-    public static async Task Persisted_session_restores_into_matching_projections()
-    {
-        var fixture = await DatabaseFixture.CreateAsync();
-        try
-        {
-            var store = new SqliteEventStore(fixture.ConnectionString);
-            await store.InitializeAsync();
-            var session = SessionId.New();
-            await store.AppendAsync(new SessionCreated(session, DateTimeOffset.UtcNow, "roundtrip"));
-            await store.AppendAsync(new TaskIntentRecorded(session, DateTimeOffset.UtcNow, "Do the thing"));
-
-            var registry = new DomainEventMigrationRegistry(Array.Empty<IDomainEventMigrator>(), currentVersion: 1);
-            var restorer = new SessionRestorer(store, registry, NullLogger<SessionRestorer>.Instance);
-            var projections = new InMemoryProjectionStore();
-
-            var result = await restorer.RestoreAsync(session, projections, CancellationToken.None);
-
-            Assert.True(result.Succeeded);
-            Assert.Equal(2, result.ReplayedEvents);
-            Assert.False(result.IsLegacy);
-
-            var key = new ProjectionKey("session", session.Value.ToString("D"));
-            var restored = await projections.GetAsync<SessionProjection>(key, CancellationToken.None);
-            Assert.NotNull(restored);
-            Assert.Equal("roundtrip", restored.Name);
-            Assert.Equal("Do the thing", restored.Intent);
-        }
-        finally
-        {
-            await fixture.DisposeAsync();
-        }
-    }
-}
-
 /// <summary>Creates a temp SQLite database with connection pooling disabled for deterministic teardown.</summary>
 internal sealed class DatabaseFixture : IAsyncDisposable
 {

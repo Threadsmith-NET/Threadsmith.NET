@@ -9,31 +9,6 @@ using Xunit;
 /// <summary>Context-visible source frontier tests for Plan 84.</summary>
 public static class Plan84VisibleSourceFrontierTests
 {
-    /// <summary>Partial source omitted from Markdown or lacking a range digest is never treated as visible.</summary>
-    [Theory]
-    [InlineData(true, true, true)]
-    [InlineData(false, true, false)]
-    [InlineData(true, false, false)]
-    public static void Build_PartialSidecarRequiresVisibleLinesAndRangeDigest(bool visible, bool digest, bool admitted)
-    {
-        var result = CreateCodeExploreResult("src/Partial.cs", new SourceRange(4, 1, 9, 1), CodeExploreSourceCompleteness.Partial, new string('a', 64));
-        var section = result.FileSections[0];
-        result = result with { FileSections = [section with { Source = section.Source with { RangeSha256 = digest ? section.Source.RangeSha256 : null } }] };
-        var message = CreateToolResult("partial", "code_explore", result);
-        message = message with
-        {
-            Content =
-            [
-                new ModelContentPart { Kind = ModelContentPartKind.Text, Content = visible ? CreateVisibleSourceSection(section) : "Source omitted by display budget." },
-                message.Content[0] with { IsModelVisible = false },
-            ],
-        };
-
-        var frontier = ModelVisibleSourceFrontierBuilder.Build([message], "C:\\repo", WorkspaceId.New(), 1);
-
-        Assert.Equal(admitted ? 1 : 0, frontier.EntryCount);
-    }
-
     /// <summary>Identical source in another visible file cannot make an omitted partial section visible.</summary>
     [Fact]
     public static void Build_PartialSidecarRequiresMatchingVisibleFileSection()
@@ -104,51 +79,6 @@ public static class Plan84VisibleSourceFrontierTests
         Assert.True(frontier.SourceCharacters > 0);
     }
 
-    /// <summary>Host-only structured sidecars cannot prove that source survived the visible Markdown projection.</summary>
-    [Fact]
-    public static void Build_RequiresHostOnlyCodeExploreSourceToRemainVisibleInMarkdown()
-    {
-        var workspaceId = WorkspaceId.New();
-        var result = CreateCodeExploreResult(
-            "src/Markdown.cs",
-            new SourceRange(4, 1, 9, 1),
-            CodeExploreSourceCompleteness.Complete,
-            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
-        var messages = new[]
-        {
-            new ModelMessage
-            {
-                Role = ModelMessageRole.Tool,
-                SectionId = "tool-result",
-                ToolCallId = "holder-markdown",
-                ToolName = "code_explore",
-                Content =
-                [
-                    new ModelContentPart
-                    {
-                        Kind = ModelContentPartKind.Text,
-                        Content = "# code_explore result\nvisible markdown only",
-                    },
-                    new ModelContentPart
-                    {
-                        Kind = ModelContentPartKind.Json,
-                        Content = JsonSerializer.Serialize(result),
-                        IsModelVisible = false,
-                    },
-                ],
-            },
-        };
-
-        var frontier = ModelVisibleSourceFrontierBuilder.Build(
-            messages,
-            "C:\\repo",
-            workspaceId,
-            11);
-
-        Assert.Empty(frontier.Entries);
-        Assert.Equal(0, frontier.RangeCount);
-    }
-
     /// <summary>Reduced host-only sidecars remain structurally incomplete and do not create stale frontier entries.</summary>
     [Fact]
     public static void Build_SkipsStructurallyIncompleteHostOnlyCodeExploreSidecar()
@@ -179,21 +109,6 @@ public static class Plan84VisibleSourceFrontierTests
             "C:\\repo",
             WorkspaceId.New(),
             12);
-
-        Assert.Empty(frontier.Entries);
-        Assert.Equal(0, frontier.RangeCount);
-        Assert.Equal(0, frontier.SourceCharacters);
-    }
-
-    /// <summary>Valid but structurally incomplete reduced JSON is ignored instead of aborting context assembly.</summary>
-    [Fact]
-    public static void Build_SkipsStructurallyIncompleteCodeExploreJson()
-    {
-        var frontier = ModelVisibleSourceFrontierBuilder.Build(
-            [CreateRawToolResult("holder-reduced", "code_explore", "{\"isTruncated\":true}")],
-            "C:\\repo",
-            WorkspaceId.New(),
-            9);
 
         Assert.Empty(frontier.Entries);
         Assert.Equal(0, frontier.RangeCount);

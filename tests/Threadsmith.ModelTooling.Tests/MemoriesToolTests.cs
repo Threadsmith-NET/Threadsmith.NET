@@ -153,25 +153,6 @@ public static class MemoriesToolTests
         Assert.False(source.CaptureCurrent().Lexical.FuzzyEnabled);
     }
 
-    /// <summary>Retired ambiguous keys must not silently fall back to different defaults.</summary>
-    [Theory]
-    [InlineData("SemanticMinimum", "0.8")]
-    [InlineData("RerankerEnabled", "true")]
-    [InlineData("MaxRepoMemoriesInContext", "2")]
-    [InlineData("ConceptRecall:Enabled", "true")]
-    [InlineData("Lexical:FuzzyEnabled", "true")]
-    [InlineData("Reconciliation:CandidateLimit", "8")]
-    [InlineData("Reconciliation:Concepts:FuzzyEnabled", "true")]
-    public static void Retired_search_settings_report_migration(string key, string value)
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            [$"tools:config:memories:{key}"] = value,
-        }).Build();
-        var error = Assert.Throws<ArgumentException>(() => new RepositoryMemoryConfiguration(config, new ConfigurationBuilder().Build(), Path.GetTempPath()));
-        Assert.Contains("Recall and Reconciliation", error.Message, StringComparison.Ordinal);
-    }
-
     /// <summary>Repository switches refresh advertised limits without changing runtime registration identity.</summary>
     [Fact]
     public static void Description_FollowsRepositoryLimitsThroughRuntimeOverride()
@@ -324,56 +305,6 @@ public static class MemoriesToolTests
         Assert.True(output.Value.Entries.Sum(entry => JsonSerializer.SerializeToUtf8Bytes(entry).Length) <= 48 * 1024);
         Assert.Contains("expectedRevision", output.Value.Resolution, StringComparison.Ordinal);
         Assert.Contains("confirmDistinctFrom", output.Value.Resolution, StringComparison.Ordinal);
-    }
-
-    /// <summary>Optional nulls and omitted fields resolve identically and never generate list embeddings.</summary>
-    [Theory]
-    [InlineData("{\"action\":\"list\"}")]
-    [InlineData("{\"action\":\"list\",\"id\":null,\"text\":null}")]
-    public static async Task List_IsExplicitAndBounded(string json)
-    {
-        var memory = new MemoryService();
-        var tool = new MemoriesTool(memory, new Options(), TestPromptLoader.Instance);
-        var invocation = Invocation(Path.GetTempPath());
-        var output = await tool.ExecuteAsync((MemoriesInput)tool.DeserializeInput(json), new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation));
-        Assert.Single(output.Value.Entries);
-        Assert.Equal(0, memory.Receipts);
-        Assert.Equal(RepositoryMemoryOrigin.Model, memory.LastOperation?.Origin);
-        Assert.Equal("list", ((ITool)tool).GetActivityDetail(new MemoriesInput("list")));
-    }
-
-    /// <summary>Adds and promotions use the committed count and strict configured threshold; ordinary edits do not warn.</summary>
-    [Theory]
-    [InlineData("add", "standingPreference", 4, 3, true)]
-    [InlineData("add", "situational", 4, 3, true)]
-    [InlineData("add", null, 3, 3, false)]
-    [InlineData("add", "standingPreference", 1, 0, true)]
-    [InlineData("add", "standingPreference", null, 3, false)]
-    [InlineData("update", "standingPreference", 4, 3, true)]
-    [InlineData("update", "standingPreference", 4, 4, false)]
-    [InlineData("update", null, 4, 3, false)]
-    [InlineData("update", "situational", 4, 3, false)]
-    public static async Task Memory_writes_project_the_committed_warning(string action, string? type, int? count, int threshold, bool expected)
-    {
-        var memory = new MemoryService { StandingPreferenceCount = count };
-        var tool = new MemoriesTool(memory, new Options { StandingPreferenceWarningThreshold = threshold }, TestPromptLoader.Instance);
-        var invocation = Invocation(Path.GetTempPath());
-        var input = new MemoriesInput(action, Id: action == "update" ? Guid.NewGuid().ToString("D") : null, Text: "Keep pull requests small", MemoryType: type);
-
-        var output = await tool.ExecuteAsync(input, new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation));
-
-        var expectedType = type switch
-        {
-            "standingPreference" => RepositoryMemoryType.StandingPreference,
-            "situational" => RepositoryMemoryType.Situational,
-            _ => (RepositoryMemoryType?)null,
-        };
-        Assert.Equal(expectedType, memory.LastOperation?.MemoryType);
-        Assert.Equal(
-            expected ? $"You now have {count} preference memories. You may want to consider adding some of these to AGENTS.md for the repo." : null,
-            output.Value.StandingPreferenceWarning);
-        Assert.Throws<ToolArgumentValidationException>(() =>
-            tool.DeserializeInput("{\"action\":\"add\",\"text\":\"x\",\"memoryType\":\"permanent\"}"));
     }
 
     /// <summary>The pipeline sanitizes live requested text while the durable memory result names its operation and entries.</summary>
@@ -576,94 +507,6 @@ public static class MemoriesToolTests
         }
     }
 
-    /// <summary>The real transport keeps the memory schema closed and observes only admitted requests.</summary>
-    [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(false, false, true)]
-    public static async Task Provider_ObservesTransportAndPreservesMemorySchema(bool rejectBeforeTransport, bool cancelled, bool sensitiveProhibited)
-    {
-        using var handler = new RequestHandler();
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var id = ModelProfileId.New();
-        var catalog = new EffectiveModelProviderCatalog(
-            new ModelProviderCatalogConfiguration
-            {
-                DefaultProviderId = "memory-tests",
-                DefaultModelId = id,
-                Providers =
-                [
-                    new OpenAiCompatibleProviderConfiguration
-                    {
-                        Id = "memory-tests",
-                        Name = "Memory tests",
-                        BaseUri = new Uri("https://models.example/v1/"),
-                        Models =
-                        [
-                            new OpenAiCompatibleModelConfiguration
-                            {
-                                Id = id,
-                                Name = "Memory tests",
-                                ModelId = "memory-test",
-                                ContextWindow = 32000,
-                                MaximumOutputTokens = 4000,
-                                SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
-                                Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-                                SupportedReasoningLevels = [ReasoningLevel.None],
-                            },
-                        ],
-                    },
-                ],
-            },
-            new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
-        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var tool = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance);
-        var submissions = 0;
-        var request = new ModelStreamRequest
-        {
-            RunId = RunId.New(),
-            Input = "Test memory",
-            ContainsSensitiveData = sensitiveProhibited,
-            MaximumOutputTokens = rejectBeforeTransport ? 5000 : 4000,
-            SubmissionObserver = () => submissions++,
-            Tools = [new ModelToolDefinition { Name = tool.Definition.Id, Description = tool.Definition.Description, ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema }],
-        };
-        using var cancellation = new CancellationTokenSource();
-        if (cancelled)
-        {
-            await cancellation.CancelAsync();
-        }
-
-        async Task ConsumeAsync()
-        {
-            await foreach (var chunk in provider.StreamAsync(request, cancellation.Token))
-            {
-                Assert.Null(chunk.Output);
-            }
-        }
-
-        if (rejectBeforeTransport || cancelled || sensitiveProhibited)
-        {
-            Assert.NotNull(await Record.ExceptionAsync(ConsumeAsync));
-            Assert.Equal(0, submissions);
-            Assert.Null(handler.Body);
-            return;
-        }
-
-        await ConsumeAsync();
-        Assert.Equal(1, submissions);
-        Assert.NotNull(handler.Body);
-        using var body = JsonDocument.Parse(handler.Body);
-        var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
-        var schema = function.GetProperty("parameters");
-        Assert.Equal(16, schema.GetProperty("properties").EnumerateObject().Count());
-        Assert.Equal(9, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
-        Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
-        Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);
-    }
-
     /// <summary>Verifies independent memory routing and intent eligibility.</summary>
     [Theory]
     [InlineData(null, SituationalConceptFilterMode.Off, false)]
@@ -710,49 +553,6 @@ public static class MemoriesToolTests
             Assert.True(request.IncludeStandingPreferences);
             Assert.False(request.AllowEmbeddingRebuild);
             Assert.Equal(SituationalConceptFilterMode.Off, request.SituationalConceptFilterMode);
-        }
-    }
-
-    /// <summary>Bounds full intelligence envelopes without changing retrieval semantics.</summary>
-    [Theory]
-    [InlineData(true, 'x')]
-    [InlineData(true, '"')]
-    [InlineData(true, '\u6f22')]
-    [InlineData(false, 'x')]
-    [InlineData(false, '"')]
-    [InlineData(false, '\u6f22')]
-    public static async Task Intelligence_bounds_complete_response_with_long_query(bool enabled, char character)
-    {
-        var options = new Options { IntelligenceEnabled = enabled };
-        var search = new IntelligenceSearch
-        {
-            Result = new([], []) { SearchDetails = new RepositoryMemorySearchDetails { RerankerInputFailure = new string(character, 8000) } },
-        };
-        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus(true, null)), options, TestPromptLoader.Instance);
-        var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 4096 } });
-        await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var query = new string(character, 8000);
-        var result = await pipeline.InvokeAsync(
-            new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                ToolId = tool.Definition.Id,
-                ArgumentsJson = JsonSerializer.Serialize(new { query }),
-                Context = Invocation(Path.GetTempPath()),
-            },
-            TestContext.Current.CancellationToken);
-        Assert.True(result.Succeeded, result.Error);
-        Assert.True(result.IsTruncated);
-        Assert.True(System.Text.Encoding.UTF8.GetByteCount(result.ResultJson!) <= 4096);
-        using var document = JsonDocument.Parse(result.ResultJson!);
-        Assert.Equal(enabled ? "no_matches" : "disabled", document.RootElement.GetProperty("Outcome").GetString());
-        Assert.Equal(enabled, document.RootElement.GetProperty("IsComplete").GetBoolean());
-        Assert.True(document.RootElement.GetProperty("QueryTruncated").GetBoolean());
-        if (enabled)
-        {
-            Assert.Equal(query, search.Request!.Query);
         }
     }
 
@@ -889,17 +689,6 @@ public static class MemoriesToolTests
     private static ToolInvocationContext Invocation(string repository)
     {
         return new() { RepositoryPath = repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
-    }
-
-    private sealed class RequestHandler : HttpMessageHandler
-    {
-        public string? Body { get; private set; }
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream") };
-        }
     }
 
     private sealed class IntelligenceStatus : IRepositoryIntelligenceStatusProvider

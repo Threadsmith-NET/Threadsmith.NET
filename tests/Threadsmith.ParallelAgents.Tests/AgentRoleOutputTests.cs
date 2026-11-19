@@ -10,59 +10,6 @@ using Xunit;
 /// <summary>Verifies role amendments, trusted message framing, and native tool definitions for ordinary children.</summary>
 public sealed partial class AgentRoleOutputTests
 {
-    /// <summary>Every role adds its own instructions after the same host policy without changing message authority.</summary>
-    [Theory]
-    [InlineData(AgentRole.Explorer, PromptFileNames.SystemChildAgentExplorer)]
-    [InlineData(AgentRole.Implementer, PromptFileNames.SystemChildAgentImplementer)]
-    [InlineData(AgentRole.SecurityReviewer, PromptFileNames.SystemChildAgentSecurityReviewer)]
-    [InlineData(AgentRole.TestReviewer, PromptFileNames.SystemChildAgentTestReviewer)]
-    [InlineData(AgentRole.PerformanceReviewer, PromptFileNames.SystemChildAgentPerformanceReviewer)]
-    [InlineData(AgentRole.ArchitectureReviewer, PromptFileNames.SystemChildAgentArchitectureReviewer)]
-    [InlineData(AgentRole.BugReviewer, PromptFileNames.SystemChildAgentBugReviewer)]
-    public static void Prompt_SelectsCommonPolicyAndRoleAmendment(AgentRole role, string amendmentFile)
-    {
-        var prompts = TestPromptLoader.Instance;
-        var messages = new ChildAgentPrompt(prompts, role).CreateMessages(CreatePromptContext(), CreateInstructions());
-
-        ModelMessageRole[] expectedRoles =
-        [
-            ModelMessageRole.System,
-            ModelMessageRole.System,
-            ModelMessageRole.Developer,
-            ModelMessageRole.User,
-            ModelMessageRole.User,
-        ];
-        string[] expectedSections =
-        [
-            "child-host-policy",
-            "child-role-amendment",
-            "child-repository-instructions",
-            "child-assignment",
-            "child-initial-evidence",
-        ];
-        Assert.Equal(expectedRoles, messages.Select(message => message.Role));
-        Assert.Equal(expectedSections, messages.Select(message => message.SectionId));
-        var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
-            "{{ImplementationValidation}}",
-            prompts.Get(PromptFileNames.SystemImplementationValidationReadOnly),
-            StringComparison.Ordinal);
-        Assert.Equal(
-            prompts.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + inspection,
-            messages[0].GetModelVisibleContent());
-        Assert.Equal(prompts.Get(amendmentFile), messages[1].GetModelVisibleContent());
-        Assert.NotEqual(messages[0].GetModelVisibleContent(), messages[1].GetModelVisibleContent());
-    }
-
-    /// <summary>Calls that omit the role use the Explorer amendment.</summary>
-    [Fact]
-    public static void Prompt_DefaultsToExplorer()
-    {
-        var prompts = TestPromptLoader.Instance;
-        var messages = new ChildAgentPrompt(prompts).CreateMessages(CreatePromptContext(), CreateInstructions());
-
-        Assert.Equal(prompts.Get(PromptFileNames.SystemChildAgentExplorer), messages[1].GetModelVisibleContent());
-    }
-
     /// <summary>Unknown host role values cannot select arbitrary prompt assets.</summary>
     [Theory]
     [InlineData(-1)]

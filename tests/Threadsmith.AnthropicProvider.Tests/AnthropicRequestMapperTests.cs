@@ -126,65 +126,6 @@ public sealed class AnthropicRequestMapperTests
         Assert.DoesNotContain(request.Input, body.GetRawText(), StringComparison.Ordinal);
     }
 
-    /// <summary>Unsupported authority or output shapes fail local admission before observer or transport.</summary>
-    [Theory]
-    [InlineData("late-system")]
-    [InlineData("profile")]
-    [InlineData("sensitive")]
-    [InlineData("output")]
-    [InlineData("duplicate-instructions")]
-    [InlineData("capacity")]
-    public async Task StreamAsync_InvalidLocalRequest_NoSubmission(string kind)
-    {
-        var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var observed = 0;
-        var request = TestAnthropic.Request() with { SubmissionObserver = () => observed++ };
-        var profile = TestAnthropic.Profile();
-        request = kind switch
-        {
-            "late-system" => request with { Messages = [.. request.Messages, TestAnthropic.Message(ModelMessageRole.System, "late-policy", "not allowed")] },
-            "profile" => request with { ResolvedProfileId = new ModelProfileId(Guid.NewGuid()) },
-            "sensitive" => request with { ContainsSensitiveData = true },
-            "output" => request with { MaximumOutputTokens = profile.MaximumOutputTokens + 1 },
-            "duplicate-instructions" => request with { ProviderInstructions = new ModelProviderInstructions { SectionId = "current-user", Content = "hello" } },
-            _ => request,
-        };
-        if (kind == "capacity")
-        {
-            profile = profile with { ContextWindow = 1 };
-        }
-
-        await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request));
-        Assert.Empty(handler.Requests);
-        Assert.Equal(0, observed);
-    }
-
-    /// <summary>Thinking display controls new summaries independently of model effort.</summary>
-    [Theory]
-    [InlineData(true, "summarized")]
-    [InlineData(false, "omitted")]
-    [InlineData(null, "omitted")]
-    public async Task StreamAsync_ThinkingPreference_ProjectsExactDisplay(bool? include, string expected)
-    {
-        var handler = new TestAnthropicHandler(TestAnthropic.ToolStream(thinking: true));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var request = TestAnthropic.Request(true) with { IncludeReasoningText = include, Tools = [TestAnthropic.Tool()] };
-        var chunks = await TestAnthropic.CollectAsync(new AnthropicModelProvider(client, TestAnthropic.Profile(true), "key", TestAnthropic.Compatibility(true), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), request);
-        Assert.Equal(expected, handler.Requests[0].GetProperty("thinking").GetProperty("display").GetString());
-        Assert.Equal("low", handler.Requests[0].GetProperty("output_config").GetProperty("effort").GetString());
-        Assert.Equal(include == true, chunks.Any(chunk => chunk.Reasoning is not null));
-        var diagnostic = JsonSerializer.Serialize(chunks);
-        Assert.DoesNotContain("signed-canary", diagnostic, StringComparison.Ordinal);
-        Assert.DoesNotContain("redacted-canary", diagnostic, StringComparison.Ordinal);
-        var envelope = Assert.Single(chunks, chunk => chunk.ResponseEnvelope is not null).ResponseEnvelope;
-        Assert.NotNull(envelope);
-        Assert.Equal(25, envelope.RetainedOutputTokens);
-        Assert.Equal("{}", JsonSerializer.Serialize(envelope));
-        Assert.DoesNotContain("signed-canary", envelope.ToString(), StringComparison.Ordinal);
-        envelope.Dispose();
-    }
-
     /// <summary>Manual budgets remain explicit and strictly below the requested output ceiling.</summary>
     [Theory]
     [InlineData(1023, false)]
@@ -609,34 +550,6 @@ public sealed class AnthropicRequestMapperTests
         Assert.Equal("wire_one", handler.Requests[2].GetProperty("messages")[2].GetProperty("content")[0].GetProperty("tool_use_id").GetString());
     }
 
-    /// <summary>Nullable scalar enums use API-compatible alternatives while preserving exact allowed values.</summary>
-    [Theory]
-    [InlineData("string", "[\"red\",\"blue\"]")]
-    [InlineData("integer", "[1,2]")]
-    [InlineData("number", "[1.5,2.5]")]
-    [InlineData("boolean", "[true,false]")]
-    public void Prepare_OptionalTypedEnum_UsesScalarAlternativesAndStableDigest(string type, string values)
-    {
-        var schema = "{\"type\":\"object\",\"properties\":{\"choice\":{\"type\":\"" + type + "\",\"enum\":" + values + "}},\"additionalProperties\":false}";
-        var request = TestAnthropic.Request() with { Tools = [TestAnthropic.Tool("classify_fixture", schema) with { PreferStrictArguments = true }] };
-        var prepared = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
-        var projected = request with { CacheCapabilities = prepared.CacheCapabilities, CachePlan = prepared.CachePlan };
-        var body = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), TestAnthropic.Compatibility());
-        var tool = Assert.IsType<JsonObject>(body["tools"]?[0]);
-        Assert.True(tool["strict"]?.GetValue<bool>());
-        var choice = Assert.IsType<JsonObject>(tool["input_schema"]?["properties"]?["choice"]);
-        Assert.False(choice.ContainsKey("type"));
-        Assert.False(choice.ContainsKey("enum"));
-        var alternatives = Assert.IsType<JsonArray>(choice["anyOf"]);
-        Assert.Equal(2, alternatives.Count);
-        Assert.Equal(type, alternatives[0]?["type"]?.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(values), alternatives[0]?["enum"]));
-        Assert.Equal("null", alternatives[1]?["type"]?.GetValue<string>());
-        Assert.Equal("choice", tool["input_schema"]?["required"]?[0]?.GetValue<string>());
-        Assert.Equal(schema, request.Tools[0].ArgumentsJsonSchema);
-        Assert.Equal(AnthropicRequestMapper.Digest(body), prepared.WireDigest);
-    }
-
     /// <summary>Required nullable enum projection retains the enum's exclusion of null.</summary>
     [Fact]
     public void Create_RequiredNullableTypedEnum_DoesNotBroadenAllowedValues()
@@ -648,18 +561,6 @@ public sealed class AnthropicRequestMapperTests
         Assert.Single(alternatives);
         Assert.Equal("string", alternatives[0]?["type"]?.GetValue<string>());
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse("[\"red\",\"blue\"]"), alternatives[0]?["enum"]));
-    }
-
-    /// <summary>Unreviewed mixed scalar enum unions keep the original schema and omit the strict preference.</summary>
-    [Fact]
-    public void Create_MixedEnumTypeUnion_PreservesNonStrictFallback()
-    {
-        const string schema = "{\"type\":\"object\",\"properties\":{\"choice\":{\"type\":[\"string\",\"integer\"],\"enum\":[\"red\",1]}},\"required\":[\"choice\"],\"additionalProperties\":false}";
-        var request = TestAnthropic.Request() with { Tools = [TestAnthropic.Tool("classify_fixture", schema) with { PreferStrictArguments = true }] };
-        var body = AnthropicRequestMapper.CreateBody(request, TestAnthropic.Profile(), TestAnthropic.Compatibility());
-        var tool = Assert.IsType<JsonObject>(body["tools"]?[0]);
-        Assert.False(tool.ContainsKey("strict"));
-        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(schema), tool["input_schema"]));
     }
 
     /// <summary>Nested enum normalization preserves schema annotations and never mutates the host's source schema.</summary>

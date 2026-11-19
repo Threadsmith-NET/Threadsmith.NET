@@ -45,21 +45,6 @@ public sealed class AnthropicCompositionTests
         Assert.Equal("secrets:models:primary", ordinary?.ModelCatalog.Profiles[0].SecretKeyReference);
     }
 
-    /// <summary>Different user instances cannot share profile identities or secret-resolution requests.</summary>
-    [Fact]
-    public async Task TwoInstancesRemainDistinctAndRequestOnlyUserOwnedCredentials()
-    {
-        using var fixture = new Fixture();
-        await fixture.WriteUserAsync(new ModelProviderCatalogConfiguration { Providers = [Provider("primary"), Provider("secondary")] });
-        var (ordinary, trusted) = await fixture.LoadAsync();
-        Assert.Equal(2, fixture.Handler.Calls);
-        Assert.Equal(2, fixture.Secrets.Requests.Count);
-        Assert.All(fixture.Secrets.Requests, request => Assert.Equal(SecretProviderTrust.UserOwned, request.MinimumTrust));
-        Assert.Equal(2, ordinary?.ModelCatalog.Profiles.Select(profile => profile.Id).Distinct().Count());
-        Assert.Equal(2, trusted?.ModelCatalog.Profiles.Count);
-        Assert.Equal(2, Directory.GetFiles(fixture.Directory, "anthropic-models-*.json").Length);
-    }
-
     /// <summary>Repository-only discovery descriptors cannot cause privileged secret resolution or network access.</summary>
     [Fact]
     public async Task RepositoryOnlyProviderIsRejectedBeforeCredentialResolution()

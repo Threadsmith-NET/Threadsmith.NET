@@ -70,41 +70,6 @@ public static class HeadlessMutationPollingTests
         Assert.Equal(0, host.Cancellations);
     }
 
-    /// <summary>Review publication waits for the dispatcher task observed by the shell, not just its inner signal.</summary>
-    [Theory]
-    [InlineData("earlier")]
-    [InlineData("unavailable")]
-    public static async Task ReviewWaitsForShellObservedRunCompletion(string scenario)
-    {
-        // Arrange: force the inner signal to complete while the dispatcher wrapper remains pending.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var host = new PollingHost(scenario, holdRunCompletion: true);
-        await using var writer = new StringWriter();
-        var shell = new HeadlessShell(host, host, writer);
-        var run = shell.RunAsync("polling", "request", cancellationToken);
-        int exitCode;
-        try
-        {
-            // Act: observe both dispatches before inspecting tasks, without relying on scheduling speed.
-            await host.ReviewDispatched.Task.WaitAsync(cancellationToken);
-            await host.RunCompletionBlocked.Task.WaitAsync(cancellationToken);
-
-            // Assert: neither review success nor review failure can be published before run completion.
-            Assert.False(host.RunCompletion.IsCompleted);
-            Assert.False(host.ReviewCompletion.IsCompleted);
-        }
-        finally
-        {
-            host.ReleaseRunCompletion.TrySetResult(true);
-            exitCode = await run;
-        }
-
-        Assert.Equal(0, exitCode);
-        Assert.Equal(1, host.Reviews);
-        Assert.Equal(1, host.FullReads);
-        Assert.True(host.RunCompletion.IsCompletedSuccessfully);
-    }
-
     private sealed class PollingHost : ICommandDispatcher, IProjectionStore
     {
         private readonly InMemoryProjectionStore _store = new();

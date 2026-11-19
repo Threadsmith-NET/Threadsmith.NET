@@ -12,74 +12,6 @@ using Xunit;
 
 public static partial class Milestone5Tests
 {
-    /// <summary>Reports first-staging latency with and without materialized recovery snapshots.</summary>
-    [Fact(Explicit = true)]
-    [Trait("Category", "Performance")]
-    public static async Task MeasureDeferredStagingLatency()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var output = TestContext.Current.TestOutputHelper!;
-        output.WriteLine($"{System.Runtime.InteropServices.RuntimeInformation.OSDescription}; {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}; CPUs={Environment.ProcessorCount}");
-        output.WriteLine("Local temporary files; OS cache not flushed. First means recovery snapshots absent, not cold storage. Five samples after one warmup; fixture creation and optional hydration excluded.");
-        foreach (var count in new[] { 1, 2, 10, 20, 100 })
-        {
-            foreach (var size in new[] { 4096, 1048576 })
-            {
-                var content = new string('x', size);
-                var files = Enumerable.Range(0, count).ToDictionary(index => $"file{index}.txt", _ => content);
-                await using var repository = await TestRepository.CreateAsync(files);
-                var first = new List<double>();
-                var serial = new List<double>();
-                var cached = new List<double>();
-                for (var sample = 0; sample < 6; sample++)
-                {
-                    // Rotate cached, serial and bounded capture to reduce order bias.
-                    for (var pass = 0; pass < 3; pass++)
-                    {
-                        var mode = (sample + pass) % 3;
-                        var hydrate = mode == 0;
-                        await using var events = new DomainEventStream();
-                        await using var coordinator = new TransactionalWorkspaceCoordinator(events, resourceLimits: new()
-                        {
-                            MaximumConcurrentBaselineHashes = mode == 1 ? 1 : 8,
-                        });
-                        await coordinator.RegisterBaselineAsync(repository.Baseline, null, null, deferRecovery: true, ct);
-                        var workspace = Assert.IsType<TransactionalWorkspace>(coordinator.GetWorkspace(repository.WorkspaceId));
-                        if (hydrate)
-                        {
-                            foreach (var path in files.Keys)
-                            {
-                                await workspace.ReadBaselineTextAsync(path, ct);
-                            }
-                        }
-
-                        var mutations = files.Keys.Select(path => new Mutation
-                        {
-                            MutationId = MutationId.New(),
-                            Type = MutationType.DeleteFile,
-                            RelativePath = path,
-                        }).ToArray();
-                        var set = CreateMutationSet(repository, mutations);
-                        var start = Stopwatch.GetTimestamp();
-                        var staged = await workspace.StageAsync(set, ct);
-                        var elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-                        Assert.False(staged.Conflicts.HasConflicts);
-                        Assert.Equal((long)count * size, workspace.RetainedBaselineBytes);
-                        if (sample > 0)
-                        {
-                            (hydrate ? cached : mode == 1 ? serial : first).Add(elapsed);
-                        }
-                    }
-                }
-
-                first.Sort();
-                serial.Sort();
-                cached.Sort();
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"files={count}; bytes/file={size}; bounded median={first[2]:F3}ms range={first[0]:F3}..{first[^1]:F3}; serial median={serial[2]:F3}ms range={serial[0]:F3}..{serial[^1]:F3}; cached median={cached[2]:F3}ms range={cached[0]:F3}..{cached[^1]:F3}"));
-            }
-        }
-    }
-
     /// <summary>Staging captures each deferred endpoint once; commit still hashes cached endpoints.</summary>
     [Theory]
     [InlineData(2, 4096)]
@@ -396,46 +328,6 @@ public static partial class Milestone5Tests
         await using var held = new FileStream(repository.PathOf("file.txt"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => workspace.ReadBaselineTextAsync("file.txt", ct));
         Assert.Equal(0, workspace.RetainedBaselineBytes);
-    }
-
-    /// <summary>Repository binding and later consent choices do not retire original-content identities.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task StartupBaselineUsesCurrentConsentForHydration(bool changeConsent)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
-        {
-            ["read.txt"] = "before",
-            ["stage.txt"] = "before",
-        });
-        await using var events = new DomainEventStream();
-        var policy = new EffectiveSessionPolicy
-        {
-            BindingId = Guid.NewGuid(),
-            Generation = 1,
-            RepositoryPath = repository.Root,
-            Fingerprint = "startup-policy",
-            EditableRoots = [repository.Root],
-            MutationRoots = [repository.Root],
-        };
-        var binding = new SessionPolicyBinding();
-        binding.Publish(policy);
-        var approval = new MutationApprovalPolicyService(policyBinding: binding);
-        await approval.BindRepositoryAsync(repository.Root, ct);
-        await using var coordinator = new TransactionalWorkspaceCoordinator(events, mutationApprovalPolicy: approval);
-        await coordinator.RegisterBaselineAsync(repository.Baseline with { SecurityPolicy = policy }, null, null, deferRecovery: true, ct);
-        var workspace = Assert.IsType<TransactionalWorkspace>(coordinator.GetWorkspace(repository.WorkspaceId));
-        if (changeConsent)
-        {
-            await approval.SetPolicyAsync(MutationApprovalPolicy.TrustSession, ct);
-        }
-
-        Assert.Equal("before", await workspace.ReadBaselineTextAsync("read.txt", ct));
-        var staged = await workspace.StageAsync(CreateMutationSet(repository, [CreateReplacement(repository, "stage.txt", 0, "before", "after")]), ct);
-        Assert.False(staged.Conflicts.HasConflicts);
-        Assert.Equal(12, workspace.RetainedBaselineBytes);
     }
 
     /// <summary>Startup keeps identities and materializes only requested original bytes.</summary>

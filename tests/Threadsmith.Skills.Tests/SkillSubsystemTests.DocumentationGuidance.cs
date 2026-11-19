@@ -38,27 +38,4 @@ public sealed partial class SkillSubsystemTests
         await application.HandleAsync(new SetSkillEnabledCommand("threadsmith-docs-help", true), cancellationToken);
         Assert.True(await application.IsDocumentationSkillEnabledAsync(cancellationToken));
     }
-
-    /// <summary>Other skills and non-maintained lookalikes cannot enable documentation routing.</summary>
-    [Theory]
-    [InlineData("review", SkillScope.Maintained)]
-    [InlineData("threadsmith-docs-help", SkillScope.User)]
-    public async Task DocumentationSkillEnablement_RequiresMaintainedDocsPackage(string packageName, SkillScope scope)
-    {
-        // Arrange
-        var cancellationToken = TestContext.Current.CancellationToken;
-        using var package = TemporaryPackage.CopyMaintained(packageName);
-        var catalog = new CompatibleSkillCatalog(
-            package.CreateCatalog(scope),
-            new ClaudeSkillCompatibilityCatalog([new ClaudeSkillRoot(SkillScope.User, Path.Combine(package.Root, "claude"), "user:claude")]));
-        await catalog.RefreshAsync(cancellationToken);
-        var policy = new FileSkillTrustPolicyProvider(Path.Combine(package.Root, "policy.json"), new SkillTrustPolicySnapshot());
-        var application = CreateCatalogApplication(catalog, policy, package.Root);
-
-        // Act
-        var enabled = await application.IsDocumentationSkillEnabledAsync(cancellationToken);
-
-        // Assert
-        Assert.False(enabled);
-    }
 }

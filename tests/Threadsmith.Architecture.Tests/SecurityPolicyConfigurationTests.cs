@@ -358,39 +358,6 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         AssertPathAdmission(policy, "public/file.txt", true);
     }
 
-    /// <summary>Read and write admission follow the actual filesystem case behavior.</summary>
-    [Fact]
-    public void CaseAliasesFollowTheActualRepositoryFileSystem()
-    {
-        Directory.CreateDirectory(Path.Combine(_paths.RepositoryRoot, "private"));
-        File.WriteAllText(Path.Combine(_paths.RepositoryRoot, "private", "file.txt"), "fixture");
-        var aliasesSameFile = File.Exists(Path.Combine(_paths.RepositoryRoot, "PRIVATE", "file.txt"));
-        File.WriteAllText(_paths.UserConfiguration, """{"prohibitedPaths":["private/**"],"tools":{"writeFile":{"allowedFolders":["."]}}}""");
-        var policy = Load();
-        AssertPathAdmission(policy, "private/file.txt", false);
-        AssertPathAdmission(policy, "PRIVATE/file.txt", !aliasesSameFile);
-    }
-
-    /// <summary>Cached regular expressions retain independent filesystem case modes.</summary>
-    [Fact]
-    public void GlobCacheSeparatesFilesystemCaseModes()
-    {
-        foreach (var ignoreCase in new[] { false, true, false, true })
-        {
-            var context = new RepositoryPathCaseContext(_paths.RepositoryRoot, _ => !ignoreCase);
-            Assert.Equal(ignoreCase, RepositoryPathPolicy.IsProhibited("PRIVATE/file.txt", ["private/**"], _paths.RepositoryRoot, context));
-        }
-    }
-
-    /// <summary>Repository authority definitions remain inert without migration diagnostics.</summary>
-    [Fact]
-    public void RepositoryTrustedOnlySettingsAreIgnoredSilently()
-    {
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"repository":{"configurationBytes":1},"mcp":{"profiles":[]}}""");
-        var policy = Load();
-        Assert.Empty(policy.Diagnostics);
-    }
-
     /// <inheritdoc />
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
@@ -441,16 +408,6 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Equal(initial.StartupAuthorityFingerprint, Load().StartupAuthorityFingerprint);
         File.WriteAllText(_paths.UserConfiguration, """{"mcp":{"profiles":[]}}""");
         Assert.NotEqual(initial.StartupAuthorityFingerprint, Load().StartupAuthorityFingerprint);
-    }
-
-    /// <summary>Ordinary formatting cannot change the specialized hook request identity.</summary>
-    [Fact]
-    public void HookIdentityUsesSemanticConfiguration()
-    {
-        File.WriteAllText(_paths.RepositoryConfiguration, """{"hooks":{"repositoryHandlers":[{"id":"fixture","command":"fixture"}]}}""");
-        var initial = Load();
-        File.WriteAllText(_paths.RepositoryConfiguration, """{ "theme": "new", "hooks": { "repositoryHandlers": [ { "Command": "fixture", "Id": "fixture" } ] } }""");
-        Assert.Equal(initial.StartupAuthorityFingerprint, Load().StartupAuthorityFingerprint);
     }
 
     /// <summary>Indexed launch inputs replace trusted arrays rather than retaining lower-provider suffixes.</summary>

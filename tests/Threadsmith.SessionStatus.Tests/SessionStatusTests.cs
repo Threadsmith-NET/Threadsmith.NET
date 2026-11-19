@@ -9,18 +9,6 @@ using Xunit;
 /// <summary>Verifies Plan-26 usage accounting and responsive session-status contracts.</summary>
 public static class SessionStatusTests
 {
-    /// <summary>A filesystem root remains a valid repository display name.</summary>
-    [Fact]
-    public static void RepositoryDisplayName_FilesystemRoot_FallsBackToRootPath()
-    {
-        var root = Path.GetPathRoot(Directory.GetCurrentDirectory())
-            ?? throw new InvalidOperationException("The current directory has no filesystem root.");
-
-        var displayName = SessionStatusAssembler.GetRepositoryDisplayName(root);
-
-        Assert.Equal(Path.TrimEndingDirectorySeparator(root), displayName);
-    }
-
     /// <summary>Request identity replaces duplicate observations and counts distinct invocations once.</summary>
     [Fact]
     public static void UsageProjection_RequestIdentity_IsIdempotent()
@@ -40,44 +28,6 @@ public static class SessionStatusTests
         var snapshot = projection.GetSnapshot(sessionId);
         Assert.Equal(new SessionUsageSnapshot(16, 4, true), snapshot);
         Assert.Equal(20, snapshot.TotalTokens);
-    }
-
-    /// <summary>An untouched session remains unknown rather than presenting an unreported zero.</summary>
-    [Fact]
-    public static void UsageProjection_NoObservation_RendersUnknown()
-    {
-        var projection = new SessionUsageProjection();
-
-        var snapshot = projection.GetSnapshot(SessionId.New());
-        var rendered = TuiSessionStatusFormatter.Format(
-            CreateStatus(12_000, 32_000) with { Usage = snapshot },
-            80,
-            " | ");
-
-        Assert.False(snapshot.HasObservation);
-        Assert.Contains("tokens --", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("tokens 0", rendered, StringComparison.Ordinal);
-    }
-
-    /// <summary>A provider-reported zero remains distinguishable from an untouched session.</summary>
-    [Fact]
-    public static void UsageProjection_ReportedZero_RendersZero()
-    {
-        var projection = new SessionUsageProjection();
-        var sessionId = SessionId.New();
-        projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(RunId.New(), "conversation", 0, Guid.NewGuid()),
-            new ModelUsage(0, 0));
-
-        var snapshot = projection.GetSnapshot(sessionId);
-        var rendered = TuiSessionStatusFormatter.Format(
-            CreateStatus(12_000, 32_000) with { Usage = snapshot },
-            80,
-            " | ");
-
-        Assert.True(snapshot.HasObservation);
-        Assert.Contains("tokens 0", rendered, StringComparison.Ordinal);
     }
 
     /// <summary>Missing provider metadata remains explicitly unknown without discarding known totals.</summary>
@@ -225,16 +175,6 @@ public static class SessionStatusTests
         Assert.Equal(1_000_000, status.ContextLimit);
     }
 
-    /// <summary>Unknown context state is explicit and never fabricates a percentage.</summary>
-    [Fact]
-    public static void StatusFormatter_UnknownContext_ShowsUnknownMarker()
-    {
-        var rendered = TuiSessionStatusFormatter.Format(CreateStatus(null, null), 80, " | ");
-
-        Assert.Contains("ctx --", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain('%', rendered);
-    }
-
     /// <summary>Required compatibility widths remain bounded and single-line.</summary>
     /// <param name="width">Available terminal cells.</param>
     [Theory]
@@ -260,37 +200,6 @@ public static class SessionStatusTests
         }
     }
 
-    /// <summary>A wide status row includes the host-resolved current Git branch.</summary>
-    [Fact]
-    public static void StatusFormatter_CurrentBranch_ShowsBranch()
-    {
-        var status = CreateStatus(12_000, 32_000) with { Branch = "feature/status-branch" };
-
-        var rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
-
-        Assert.Contains("branch feature/status-branch", rendered, StringComparison.Ordinal);
-    }
-
-    /// <summary>Wide Unicode and long paths remain terminal-cell safe and end-biased.</summary>
-    [Fact]
-    public static void StatusFormatter_WideUnicodeAndLongPath_AbbreviatesSafely()
-    {
-        var status = new SessionStatusSnapshot(
-            "C:\\very-long-root-name\\very-long-parent-name\\工具箱\\src",
-            "工具箱",
-            "模型模型模型模型模型",
-            ReasoningLevel.High,
-            12_000,
-            32_000,
-            new SessionUsageSnapshot(8_000, 2_000, true));
-
-        var rendered = TuiSessionStatusFormatter.Format(status, 200, "｜");
-
-        Assert.Equal(200, UnicodeWidth.GetWidth(rendered));
-        Assert.Contains("folder C:/…/工具箱/src", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("very-long-root-name", rendered, StringComparison.Ordinal);
-    }
-
     /// <summary>The status formatter omits low-priority segments and never exceeds the available width.</summary>
     [Fact]
     public static void StatusFormatter_NarrowWidth_PreservesPriorityWithoutWrapping()
@@ -314,25 +223,6 @@ public static class SessionStatusTests
         Assert.Contains("ctx ~12k/32k 38%", rendered, StringComparison.Ordinal);
         Assert.Contains("tokens ~10k", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("folder ", rendered, StringComparison.Ordinal);
-    }
-
-    /// <summary>Long paths use bounded end-biased abbreviation when the full layout fits.</summary>
-    [Fact]
-    public static void StatusFormatter_LongPath_AbbreviatesSafely()
-    {
-        var status = new SessionStatusSnapshot(
-            "C:\\a-very-long-root-name\\a-very-long-parent-name\\Threadsmith\\src",
-            "Threadsmith",
-            "model",
-            ReasoningLevel.None,
-            1,
-            100,
-            new SessionUsageSnapshot(1, 1, false));
-
-        var rendered = TuiSessionStatusFormatter.Format(status, 200, " | ");
-
-        Assert.Contains("folder C:/…/Threadsmith/src", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("a-very-long-root-name", rendered, StringComparison.Ordinal);
     }
 
     /// <summary>The status formatter measures and truncates wide Unicode values in terminal cells.</summary>

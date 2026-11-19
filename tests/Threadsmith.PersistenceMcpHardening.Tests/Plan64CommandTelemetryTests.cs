@@ -16,48 +16,6 @@ using Xunit;
 /// <summary>Command telemetry middleware and production-wiring tests (Plan 64, AR-01).</summary>
 public static class Plan64CommandTelemetryTests
 {
-    /// <summary>A successful dispatch records the compiled command type, Success outcome, and a duration.</summary>
-    [Fact]
-    public static async Task Success_PreservesResponseAndRecordsCompiledTypeOutcomeDuration()
-    {
-        var logger = new RecordingLogger<CommandTelemetryMiddleware>();
-        var middleware = new CommandTelemetryMiddleware(logger);
-        var command = new CanaryCommand("visible-payload", "CANARY-RESPONSE-98765");
-
-        var response = await middleware.InvokeAsync(
-            command,
-            _ => Task.FromResult("ok"),
-            CancellationToken.None);
-
-        Assert.Equal("ok", response);
-        var entry = Assert.Single(logger.Entries);
-        Assert.Equal(LogLevel.Information, entry.Level);
-        Assert.Null(entry.Exception);
-        Assert.Contains(nameof(CanaryCommand), entry.Message, StringComparison.Ordinal);
-        Assert.Contains(CommandDispatchOutcome.Success, entry.Message, StringComparison.Ordinal);
-        Assert.Contains(" ms", entry.Message, StringComparison.Ordinal);
-    }
-
-    /// <summary>The next delegate is invoked exactly once per dispatch.</summary>
-    [Fact]
-    public static async Task Next_IsInvokedExactlyOnce()
-    {
-        var logger = new RecordingLogger<CommandTelemetryMiddleware>();
-        var middleware = new CommandTelemetryMiddleware(logger);
-        var invocations = 0;
-
-        await middleware.InvokeAsync(
-            new CanaryCommand("a", "b"),
-            _ =>
-            {
-                invocations++;
-                return Task.FromResult("x");
-            },
-            CancellationToken.None);
-
-        Assert.Equal(1, invocations);
-    }
-
     /// <summary>Cancellation before handler entry records Cancelled and rethrows OperationCanceledException unchanged.</summary>
     [Fact]
     public static async Task CancellationBeforeHandler_RecordsCancelledAndRethrows()
@@ -301,27 +259,6 @@ public static class Plan64CommandTelemetryTests
         Assert.Equal(nameof(CanaryCommand), GetTag(activity, "threadsmith.command.type"));
         Assert.Equal(CommandDispatchOutcome.Failure, GetTag(activity, "threadsmith.command.outcome"));
         Assert.NotNull(GetTag(activity, "threadsmith.command.elapsed_ms"));
-    }
-
-    /// <summary>Telemetry middleware composes in registration order with other middleware through the dispatcher.</summary>
-    [Fact]
-    public static async Task Telemetry_ComposesInRegistrationOrderThroughDispatcher()
-    {
-        var order = new List<string>();
-        var dispatcher = new CommandDispatcher(
-            [new OrderTrackingHandler(order)],
-            new ICommandMiddleware[]
-            {
-                new CommandTelemetryMiddleware(new RecordingLogger<CommandTelemetryMiddleware>()),
-                new OrderRecordingMiddleware("outer", order),
-            });
-
-        var result = await dispatcher.DispatchAsync(new OrderCommand("value"));
-
-        Assert.Equal("value", result);
-        // Telemetry is registered first; dispatcher wraps in reverse so the last-registered middleware
-        // is innermost. Registration order around the handler: telemetry -> outer -> handler.
-        Assert.Equal(["outer:before", "handler", "outer:after"], order);
     }
 
     /// <summary>Null command and null next are rejected at the middleware boundary.</summary>

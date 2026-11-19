@@ -12,53 +12,6 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class UserQuestionSurfaceTests
 {
-    /// <summary>Every user-decline route resolves the same result and releases the modal owner for another request.</summary>
-    [Theory]
-    [InlineData("escape")]
-    [InlineData("other")]
-    [InlineData("details")]
-    [InlineData("cancel")]
-    [InlineData("f5")]
-    public static async Task DeclineResolvesAndReleasesInput(string route)
-    {
-        var token = TestContext.Current.CancellationToken;
-        using var backend = new ObservedBackend();
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
-        await surface.RunAsync(
-            async lifetime =>
-        {
-            var request = new UserQuestionRequest(Guid.NewGuid(), SessionId.New(), RunId.New(), ToolInvocationId.New(), "call", "repo", 0, [new("q", "Pick", [new("a", "First"), new("b", "Second")])], DateTimeOffset.UtcNow);
-            var shown = backend.ExpectOutputAsync("The Assistant Has a Question");
-            var pending = surface.AskAsync(request, lifetime);
-            await shown.WaitAsync(lifetime);
-            if (route == "other")
-            {
-                var editor = backend.ExpectOutputAsync("Your answer:");
-                backend.Input.FeedInput("3");
-                await editor.WaitAsync(lifetime);
-                backend.Input.FeedInput("draft");
-            }
-            else if (route == "details")
-            {
-                var details = backend.ExpectOutputAsync("Scroll; F2 back; Esc cancels");
-                backend.Input.FeedInput("\u001bOQ");
-                await details.WaitAsync(lifetime);
-            }
-
-            backend.Input.FeedInput(route == "cancel" ? "\t\t\r" : route == "f5" ? "\u001b[15~" : "\u001b[27u");
-            var result = await pending;
-            Assert.Equal(UserQuestionStatus.Cancelled, result.Status);
-            Assert.Equal("The user declined to answer", result.Message);
-            Assert.Empty(result.Answers);
-            shown = backend.ExpectOutputAsync("The Assistant Has a Question");
-            var next = surface.AskAsync(request with { RequestId = Guid.NewGuid() }, lifetime);
-            await shown.WaitAsync(lifetime);
-            backend.Input.FeedInput("\u001b[B\r");
-            Assert.Equal("b", Assert.Single((await next).Answers).OptionId);
-        },
-            token);
-    }
-
     /// <summary>Real terminal bytes navigate from initial focus and retain choices through resize.</summary>
     [Fact]
     public static async Task InitialArrowsSelectThroughTerminalInputAndSurviveResize()

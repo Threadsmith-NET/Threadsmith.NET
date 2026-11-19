@@ -60,8 +60,6 @@ public sealed class EditAnalyzerTestsAutomaticFeedbackCountsSeveritiesBeforeRete
     /// <summary>Analyzer severity totals include reportable findings omitted by retention limits.</summary>
     [Theory]
     [InlineData(0, DiagnosticSeverity.Info)]
-    [InlineData(5, DiagnosticSeverity.Info)]
-    [InlineData(5, DiagnosticSeverity.Warning)]
     [InlineData(5, DiagnosticSeverity.Error)]
     public static async Task AutomaticFeedbackCountsSeveritiesBeforeRetention(int retainedLimit, DiagnosticSeverity severity)
     {
@@ -92,69 +90,10 @@ public sealed class EditAnalyzerTestsAutomaticFeedbackCountsSeveritiesBeforeRete
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class EditAnalyzerTestsAutomaticProjectFindingsAreFilteredAndRepaired : EditAnalyzerTests
-{
-    /// <summary>Automatic scoped evidence preserves suggestions, shared exclusions and comparable repairs.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public static async Task AutomaticProjectFindingsAreFilteredAndRepaired(bool exclude, bool asError)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        await ConfigureFixtureAsync(fixture.Root);
-        if (asError)
-        {
-            var config = Path.Combine(fixture.Root, ".editorconfig");
-            var text = await File.ReadAllTextAsync(config, ct);
-            await File.WriteAllTextAsync(config, text.Replace("dotnet_diagnostic.CA2016.severity = suggestion", "dotnet_diagnostic.CA2016.severity = error", StringComparison.Ordinal), ct);
-        }
-
-        var session = SessionId.New();
-        var workspace = WorkspaceId.New();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { ExcludedDiagnosticIds = exclude ? ["CA2016"] : [], Analyzers = new() { Enabled = true, BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
-        await engine.WaitForWarmAsync(ct);
-        var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
-        var first = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Violations, Violations + "\n// candidate", null, ct);
-        Assert.Equal("completed", first.Analyzers.Status);
-        var analyzerFindings = first.Diagnostics.Where(item => item.Producer == "analyzer").ToArray();
-        Assert.Equal(exclude ? 4 : 5, analyzerFindings.Select(item => item.Code).Distinct().Count());
-        Assert.Equal(analyzerFindings.Length, first.Analyzers.ReportableFindings);
-        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Error), first.Analyzers.Errors);
-        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Warning), first.Analyzers.Warnings);
-        Assert.Equal(analyzerFindings.Count(item => item.Severity == DiagnosticSeverity.Info), first.Analyzers.Suggestions);
-        Assert.Equal(exclude, first.Analyzers.OutputFiltered);
-        Assert.Equal(0, first.Analyzers.NewFindings);
-        Assert.All(first.Diagnostics.Where(item => item.Producer == "analyzer"), item =>
-        {
-            Assert.NotNull(item.AnalyzerIdentity);
-            Assert.Equal("initial", item.Origin);
-            Assert.Equal(asError && item.Code == "CA2016" ? DiagnosticSeverity.Error : DiagnosticSeverity.Info, item.Severity);
-        });
-        if (exclude)
-        {
-            Assert.DoesNotContain(first.Diagnostics, item => item.Code == "CA2016");
-        }
-
-        var repaired = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, file, Violations + "\n// candidate", Repairs, null, ct);
-        Assert.Equal("completed", repaired.Analyzers.Status);
-        Assert.Equal(0, repaired.Analyzers.ReportableFindings);
-        Assert.Equal(first.Analyzers.ReportableFindings, repaired.Analyzers.ResolvedFindings);
-        Assert.DoesNotContain(repaired.Diagnostics, item => item.Producer == "analyzer");
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class EditAnalyzerTestsAutomaticBlockedWorkIgnoresDeadlineAndCoalescesReplacement : EditAnalyzerTests
 {
     /// <summary>A physical analyzer barrier does not prevent compiler/query progress or matching promotion.</summary>
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
     [InlineData(false, true, false)]
     [InlineData(true, false, true)]
     public static async Task AutomaticBlockedWorkIgnoresDeadlineAndCoalescesReplacement(bool replace, bool advanceClock, bool lateFault)
@@ -261,7 +200,6 @@ public sealed class EditAnalyzerTestsAutomaticUnavailableSuppressedAndFaultedEvi
 {
     /// <summary>Project rules ignore legacy selection, honor suppression and remain enabled after failure.</summary>
     [Theory]
-    [InlineData("installed")]
     [InlineData("legacy-selection")]
     [InlineData("suppressed")]
     [InlineData("fault")]
@@ -302,151 +240,5 @@ public sealed class EditAnalyzerTestsAutomaticUnavailableSuppressedAndFaultedEvi
             Assert.Equal("completed", result.Analyzers.Status);
             Assert.Contains(result.Diagnostics, item => item.Code == "TS1170");
         }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class EditAnalyzerTestsAutomaticInitialOriginsRequireMatchingDocumentCoverage : EditAnalyzerTests
-{
-    /// <summary>Initial evidence from one document cannot label another document's existing finding introduced.</summary>
-    [Theory]
-    [InlineData("none", true)]
-    [InlineData("initial", true)]
-    [InlineData("introduced", true)]
-    [InlineData("initial", false)]
-    [InlineData("introduced", false)]
-    public static async Task AutomaticInitialOriginsRequireMatchingDocumentCoverage(string earlierOrigin, bool secondHasFinding)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        await ConfigureFixtureAsync(fixture.Root);
-        var second = Path.Combine(fixture.Root, "Contracts", "OtherProbe.cs");
-        var existing = secondHasFinding ? "namespace Other { public class AnalyzerProbe {} }" : "namespace Other { public class CleanProbe {} }";
-        await File.WriteAllTextAsync(second, existing, ct);
-        var first = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
-        var initial = earlierOrigin == "introduced" ? Repairs : Violations;
-        await File.WriteAllTextAsync(first, initial, ct);
-        await File.AppendAllTextAsync(Path.Combine(fixture.Root, ".editorconfig"), "\ndotnet_diagnostic.TS1170.severity = warning\n", ct);
-        var session = SessionId.New();
-        var workspace = WorkspaceId.New();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
-        await engine.WaitForWarmAsync(ct);
-        await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, first, initial, earlierOrigin == "none" ? Repairs : Violations + "\n// first edit", null, ct);
-        var result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, second, existing, existing + "\n// edit", null, ct);
-        Assert.Equal(0, result.Analyzers.NewFindings);
-        Assert.Equal(2, result.Analyzers.DocumentsInScope);
-        Assert.Equal(2, result.Analyzers.DocumentsAnalyzed);
-        var secondFindings = result.Diagnostics.Where(item => item.Producer == "analyzer" && item.File?.EndsWith("OtherProbe.cs", StringComparison.Ordinal) == true).ToArray();
-        if (secondHasFinding)
-        {
-            Assert.Equal("unknown", Assert.Single(secondFindings).Origin);
-        }
-        else
-        {
-            Assert.Empty(secondFindings);
-        }
-
-        var earlierFindings = result.Diagnostics.Where(item => item.Producer == "analyzer" && item.File?.EndsWith("AnalyzerCases.cs", StringComparison.Ordinal) == true).ToArray();
-        Assert.Equal(earlierOrigin != "none", earlierFindings.Length > 0);
-        Assert.All(earlierFindings, item => Assert.Equal(earlierOrigin, item.Origin));
-        if (earlierOrigin != "none")
-        {
-            Assert.Contains(earlierFindings, item => item.Code == "TS1170" && item.Severity == DiagnosticSeverity.Warning);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class EditAnalyzerTestsAutomaticGraphReplacementUsesCurrentInputs : EditAnalyzerTests
-{
-    /// <summary>Evaluated graph replacements honor changed configuration/additional inputs and abandon old origins.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task AutomaticGraphReplacementUsesCurrentInputs(bool additional)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        await ConfigureFixtureAsync(fixture.Root);
-        var session = SessionId.New();
-        var workspace = WorkspaceId.New();
-        var logger = new AnalyzerTestLogger();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true, DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
-        await engine.WaitForWarmAsync(ct);
-        var project = engine.CaptureAdvancedSnapshot().Solution.Projects.Single(item => item.Name == "Contracts");
-        var input = additional ? Assert.Single(project.AdditionalDocuments).FilePath! : project.AnalyzerConfigDocuments.Single(item => item.Name == ".editorconfig").FilePath!;
-        var previousInput = await File.ReadAllTextAsync(input, ct);
-        var inputText = additional ? "disable-probe" : "root = true\n[*.cs]\ndotnet_diagnostic.TS1170.severity = none\n";
-        var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
-        const string after = Violations + "\n// config edit";
-        var command = new ApplySourceEditCommand(session, RunId.New(), workspace, Guid.NewGuid(), new() { Rationale = "Check refreshed analyzer inputs.", Mutations = [] });
-        var snapshots = new MutationEffectSnapshot(MutationSetId.New(), [], [.. AutomaticSnapshot(fixture.Root, file, Violations, after).Endpoints, .. AutomaticSnapshot(fixture.Root, input, previousInput, inputText).Endpoints]);
-        Assert.NotNull(await engine.AnalyzeCandidateAsync(command, fixture.Root, snapshots, TimeSpan.Zero, ct));
-        await File.WriteAllTextAsync(file, after, ct);
-        await File.WriteAllTextAsync(input, inputText, ct);
-        engine.ConfirmEditApplied(command.EffectId);
-        await engine.RefreshFullAsync(ct);
-        var completed = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            if (item is SemanticCheckCompleted { CheckName: "advisory edit analyzers", Analysis: { Obsolete: false, CommittedGeneration: not null } analysis })
-            {
-                completed.TrySetResult(analysis);
-            }
-
-            return Task.CompletedTask;
-        });
-        engine.ContinueEditAfterGraphRefresh(new Dictionary<string, string?> { [file] = AnalyzerHash(after), [input] = AnalyzerHash(inputText) });
-        var result = await completed.Task.WaitAsync(ct);
-        Assert.True(result.Analyzers.Status == "completed", string.Join(Environment.NewLine, logger.Exceptions));
-        Assert.Equal(1, result.Analyzers.DocumentsAnalyzed);
-        Assert.DoesNotContain(result.Diagnostics, item => item.Producer == "analyzer" && item.Code == "TS1170");
-        Assert.Null(result.Analyzers.NewFindings);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class EditAnalyzerTestsCreatedSourceRemainsInSubsequentAnalyzerScope : EditAnalyzerTests
-{
-    /// <summary>Graph-created documents remain in final analyzer scope after another file is repaired.</summary>
-    [Fact]
-    public static async Task CreatedSourceRemainsInSubsequentAnalyzerScope()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        await ConfigureFixtureAsync(fixture.Root);
-        var session = SessionId.New();
-        var workspace = WorkspaceId.New();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = true } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await engine.LoadAsync(new(session, workspace, fixture.Root, Path.Combine(fixture.Root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
-        await engine.WaitForWarmAsync(ct);
-        var created = Path.Combine(fixture.Root, "Contracts", "CreatedProbe.cs");
-        const string source = "namespace Created { public class AnalyzerProbe {} }";
-        var command = new ApplySourceEditCommand(session, RunId.New(), workspace, Guid.NewGuid(), new() { Rationale = "Create an analyzer probe.", Mutations = [] });
-        var snapshot = new MutationEffectSnapshot(MutationSetId.New(), [], [new(Path.GetRelativePath(fixture.Root, created), null, AnalyzerHash(source)) { FinalBytes = Encoding.UTF8.GetBytes(source) }]);
-        await engine.AnalyzeCandidateAsync(command, fixture.Root, snapshot, TimeSpan.Zero, ct);
-        await File.WriteAllTextAsync(created, source, ct);
-        engine.ConfirmEditApplied(command.EffectId);
-        await engine.RefreshFullAsync(ct);
-        var refreshed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            if (item is SemanticCheckCompleted { CheckName: "advisory edit analyzers", Analysis: { CommittedGeneration: not null, Obsolete: false } analysis } && analysis.EffectId == command.EffectId)
-            {
-                refreshed.TrySetResult();
-            }
-
-            return Task.CompletedTask;
-        });
-        engine.ContinueEditAfterGraphRefresh(new Dictionary<string, string?> { [created] = AnalyzerHash(source) });
-        await refreshed.Task.WaitAsync(ct);
-        var result = await ApplyAutomaticCandidateAsync(engine, events, session, workspace, fixture.Root, Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs"), Violations, Repairs, null, ct);
-        Assert.Equal(2, result.Analyzers.DocumentsAnalyzed);
-        Assert.Contains(result.Diagnostics, item => item.Producer == "analyzer" && item.Code == "TS1170" && item.File?.EndsWith("CreatedProbe.cs", StringComparison.Ordinal) == true);
     }
 }

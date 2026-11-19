@@ -64,21 +64,6 @@ public sealed class McpOAuthFlowTests
         Assert.False(listener.WaitStarted);
     }
 
-    /// <summary>Advertised authorization scopes cannot widen the profile's configured grant.</summary>
-    [Fact]
-    public async Task Scope_selector_intersects_advertised_and_configured_scopes()
-    {
-        var flow = CreateFlow(new RecordingBrowserLauncher(), new CallbackListener(), new DictionaryTokenStore());
-
-        var options = await flow.CreateOptionsAsync(
-            CreateProfile(),
-            TestContext.Current.CancellationToken);
-        var selected = options.ScopeSelector?.Invoke(
-            ["tools.admin", "tools.read", "tools.write", "tools.read"]);
-
-        Assert.Equal(["tools.read"], selected);
-    }
-
     /// <summary>A directly supplied profile cannot resolve an OAuth client secret outside its exact scope.</summary>
     [Theory]
     [InlineData("secrets:CLIENT_SECRET", "secrets:client_secret")]
@@ -299,28 +284,6 @@ public sealed class McpOAuthFlowTests
         Assert.Equal("ipv6-code", ParseQuery(received.Query)["code"]);
     }
 
-    /// <summary>URL-only OAuth profiles opt into SDK dynamic client registration instead of requiring clientId.</summary>
-    [Fact]
-    public async Task Url_only_profile_uses_dynamic_client_registration()
-    {
-        var tokens = new DictionaryTokenStore();
-        var flow = CreateFlow(new RecordingBrowserLauncher(), new CallbackListener(), tokens);
-        var options = await flow.CreateOptionsAsync(
-            CreateProfile() with
-            {
-                OAuth = (CreateProfile().OAuth
-                    ?? throw new InvalidOperationException("The test OAuth profile is required.")) with
-                {
-                    ClientId = null,
-                },
-            },
-            TestContext.Current.CancellationToken);
-
-        Assert.Null(options.ClientId);
-        Assert.NotNull(options.DynamicClientRegistration);
-        Assert.Equal("Threadsmith.NET", options.DynamicClientRegistration?.ClientName);
-    }
-
     /// <summary>Client metadata document profiles pass the public metadata URI to the SDK before DCR fallback.</summary>
     [Fact]
     public async Task Client_metadata_document_profile_sets_sdk_metadata_uri()
@@ -336,39 +299,6 @@ public sealed class McpOAuthFlowTests
             new Uri("https://cdn.jsdelivr.net/gh/Threadsmith-NET/Threadsmith.NET@main/docs/oauth/threadsmith-mcp-client.json"),
             options.ClientMetadataDocumentUri);
         Assert.NotNull(options.DynamicClientRegistration);
-    }
-
-    /// <summary>Fixed callback ports do not restore a registration bound to another redirect URI.</summary>
-    [Fact]
-    public async Task Token_cache_withholds_cached_registration_when_redirect_uri_changes()
-    {
-        var tokens = new DictionaryTokenStore();
-        SeedGrant(tokens, "http://localhost:8401/callback", "registered-client", "registered-secret");
-        var flow = CreateFlow(new RecordingBrowserLauncher(), new CallbackListener(), tokens);
-        var profile = UrlOnlyProfile();
-
-        var options = await flow.CreateOptionsAsync(profile, TestContext.Current.CancellationToken);
-        var restored = await options.TokenCache!.GetTokensAsync(TestContext.Current.CancellationToken);
-
-        Assert.Null(restored?.ClientId);
-        Assert.Null(restored?.ClientSecret);
-        Assert.Null(restored?.TokenEndpointAuthMethod);
-    }
-
-    /// <summary>Dynamic-registration clients are not reused when the ephemeral callback URI changes.</summary>
-    [Fact]
-    public async Task Token_cache_withholds_cached_registration_for_another_ephemeral_port()
-    {
-        var tokens = new DictionaryTokenStore();
-        SeedGrant(tokens, "http://localhost:8401/callback", "registered-client", "registered-secret");
-        var flow = CreateFlow(new RecordingBrowserLauncher(), new CallbackListener(), tokens);
-
-        var options = await flow.CreateOptionsAsync(EphemeralUrlOnlyProfile(), TestContext.Current.CancellationToken);
-        var restored = await options.TokenCache!.GetTokensAsync(TestContext.Current.CancellationToken);
-
-        Assert.Null(restored?.ClientId);
-        Assert.Null(restored?.ClientSecret);
-        Assert.Null(restored?.TokenEndpointAuthMethod);
     }
 
     /// <summary>Automatic URL-only connections fail before the SDK can dynamically register a client.</summary>

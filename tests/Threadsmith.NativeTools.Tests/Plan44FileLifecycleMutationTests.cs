@@ -226,48 +226,6 @@ public sealed class Plan44FileLifecycleMutationTests
         Assert.Equal("source", await File.ReadAllTextAsync(repository.PathOf("src/Source.cs"), TestContext.Current.CancellationToken));
     }
 
-    /// <summary>A case-only move preserves one final identity and rolls back without deleting the restored source.</summary>
-    [Fact]
-    public async Task CaseOnlyMove_UsesFilesystemCaseSemantics()
-    {
-        await using var repository = await LifecycleRepository.CreateAsync(new Dictionary<string, string>
-        {
-            ["src/Name.cs"] = "content\n",
-        });
-        await using var events = new DomainEventStream();
-        await using var workspace = await TransactionalWorkspace.CreateAsync(
-            repository.Baseline,
-            events,
-            cancellationToken: TestContext.Current.CancellationToken);
-        var set = repository.CreateSet([repository.Move("src/Name.cs", "src/name.cs")]);
-        var staged = await workspace.StageAsync(set, TestContext.Current.CancellationToken);
-
-        var lifecycle = Assert.Single(staged.Preview.LifecycleChanges);
-        var caseInsensitiveFileSystem = File.Exists(repository.PathOf("src/name.cs"));
-        Assert.Equal(caseInsensitiveFileSystem, lifecycle.IsCaseOnlyMove);
-        _ = await workspace.CommitAsync(
-            set.MutationSetId,
-            new MutationApproval
-            {
-                Level = MutationApprovalLevel.EntireSet,
-                ApprovalId = staged.ApprovalId,
-            },
-            TestContext.Current.CancellationToken);
-        Assert.True(File.Exists(repository.PathOf("src/name.cs")));
-
-        var rollback = await workspace.RollbackAsync(
-            set.MutationSetId,
-            TestContext.Current.CancellationToken);
-
-        Assert.False(rollback.Conflicts.HasConflicts);
-        Assert.True(File.Exists(repository.PathOf("src/Name.cs")));
-        Assert.Equal("content\n", await File.ReadAllTextAsync(repository.PathOf("src/Name.cs"), TestContext.Current.CancellationToken));
-        if (!caseInsensitiveFileSystem)
-        {
-            Assert.False(File.Exists(repository.PathOf("src/name.cs")));
-        }
-    }
-
     /// <summary>A move with explicit content remains one lifecycle operation and previews both relocation and edit.</summary>
     [Fact]
     public async Task MovePlusEdit_IsExplicitAndExact()
@@ -299,49 +257,6 @@ public sealed class Plan44FileLifecycleMutationTests
         Assert.Equal("src/After.cs", preview.DestinationRelativePath);
         Assert.Contains("-before", preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Contains("+after", preview.UnifiedDiff, StringComparison.Ordinal);
-    }
-
-    /// <summary>Move-plus-edit omission preserves the captured source encoding, BOM, and submitted endings.</summary>
-    [Fact]
-    public async Task MovePlusEdit_OmittedFormatting_PreservesSourceEncodingAndSubmittedEndings()
-    {
-        byte[] original = [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes("before\r\n")];
-        const string edited = "after\r\nmixed\n";
-        await using var repository = await LifecycleRepository.CreateAsync(new Dictionary<string, byte[]>
-        {
-            ["src/Before.cs"] = original,
-        });
-        await using var events = new DomainEventStream();
-        await using var workspace = await TransactionalWorkspace.CreateAsync(
-            repository.Baseline,
-            events,
-            cancellationToken: TestContext.Current.CancellationToken);
-        var move = repository.Move("src/Before.cs", "src/After.cs") with
-        {
-            Content = new FileContentDescriptor
-            {
-                Text = edited,
-                Encoding = null,
-                Newline = null,
-            },
-        };
-        var set = repository.CreateSet([move]);
-        var staged = await workspace.StageAsync(set, TestContext.Current.CancellationToken);
-
-        await workspace.CommitAsync(
-            set.MutationSetId,
-            new MutationApproval
-            {
-                Level = MutationApprovalLevel.EntireSet,
-                ApprovalId = staged.ApprovalId,
-            },
-            TestContext.Current.CancellationToken);
-
-        byte[] expected = [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(edited)];
-        var actual = await File.ReadAllBytesAsync(
-            repository.PathOf("src/After.cs"),
-            TestContext.Current.CancellationToken);
-        Assert.Equal(expected, actual);
     }
 
     /// <summary>Reconciliation distinguishes untouched staging from an unexpected external identity.</summary>

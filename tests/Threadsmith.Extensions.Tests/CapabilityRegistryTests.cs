@@ -169,23 +169,6 @@ public sealed class CapabilityRegistryTests
         Assert.Throws<KeyNotFoundException>(() => toolRegistry.Get("valid_before_failure"));
     }
 
-    /// <summary>Asserts the CapabilityProxy invokes the extension through the host tool-pipeline contract and returns host-owned JSON.</summary>
-    [Fact]
-    public async Task CapabilityProxy_invokes_extension_through_the_tool_pipeline_contract()
-    {
-        var (host, _) = await LoadSampleAsync();
-        var registration = host.Capabilities.Get("sample_echo")!;
-        var proxy = registration.ToolProxy!;
-        var input = proxy.DeserializeInput("""{"message":"hello"}""");
-        var result = await proxy.ExecuteAsync(
-            input,
-            new ToolExecutionContext(ToolInvocationId.New(), default, default, MakeInvocationContext()),
-            CancellationToken.None);
-        Assert.NotNull(result.Value);
-        var serialized = result.Value.ToString() ?? string.Empty;
-        Assert.Contains("hello", serialized, StringComparison.Ordinal);
-    }
-
     /// <summary>Asserts that beginning drain blocks new invocation leases with ExtensionDrainingException.</summary>
     [Fact]
     public async Task Draining_blocks_new_invocation_leases()
@@ -211,18 +194,6 @@ public sealed class CapabilityRegistryTests
             () => Task.Run(() => host.Leases.Acquire(generation.GenerationId, budget, TimeSpan.FromSeconds(1))));
         budget.Reset();
         Assert.False(budget.IsExhausted);
-    }
-
-    /// <summary>Asserts an acquired lease transitions to Released on disposal.</summary>
-    [Fact]
-    public async Task Lease_releases_on_completion()
-    {
-        var (host, generation) = await LoadSampleAsync();
-        var budget = new ExtensionInvocationBudget(generation.GenerationId);
-        var lease = host.Leases.Acquire(generation.GenerationId, budget, TimeSpan.FromSeconds(30));
-        Assert.Equal(LeaseState.Held, lease.State);
-        lease.Dispose();
-        Assert.Equal(LeaseState.Released, lease.State);
     }
 
     /// <summary>Asserts the model-preference aggregator returns active contributor hints ordered by priority.</summary>

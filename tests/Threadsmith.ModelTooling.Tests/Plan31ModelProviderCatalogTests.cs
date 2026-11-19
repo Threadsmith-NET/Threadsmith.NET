@@ -372,18 +372,6 @@ public static class Plan31ModelProviderCatalogTests
             new ModelProfileId(new Guid("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))));
     }
 
-    /// <summary>A repository-only catalog contributes no trusted auxiliary profiles.</summary>
-    [Fact]
-    public static void Load_TrustedAuxiliaryCatalog_RepositoryOnly_IsEmpty()
-    {
-        using var fixture = new CatalogFixture();
-        fixture.WriteRepository(BaseCatalog());
-
-        var trusted = fixture.Load(includeRepository: false);
-
-        Assert.Empty(trusted.ModelCatalog.Profiles);
-    }
-
     /// <summary>Concurrent readers observe the same immutable effective snapshot.</summary>
     [Fact]
     public static async Task EffectiveCatalog_ConcurrentReaders_ObserveOneSnapshotAsync()

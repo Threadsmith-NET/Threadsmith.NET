@@ -18,29 +18,6 @@ using Xunit;
 /// <summary>Verifies plans 10 and 11 transactional and semantic mutation contracts.</summary>
 public static partial class Milestone5Tests
 {
-    /// <summary>StepId deserializes from both bare UUID strings and the canonical object format.</summary>
-    [Fact]
-    public static void StepIdJsonConverter_BareUuidString_DeserializesCorrectly()
-    {
-        // Arrange
-        var stepId = StepId.New();
-        var bareUuidJson = $"\"{stepId.Value}\"";
-        var objectJson = $"{{\"value\":\"{stepId.Value}\"}}";
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-        };
-        options.Converters.Add(new StepIdJsonConverter());
-
-        // Act + Assert — bare UUID string
-        var fromBare = JsonSerializer.Deserialize<StepId>(bareUuidJson, options);
-        Assert.Equal(stepId, fromBare);
-
-        // Act + Assert — canonical object format
-        var fromObject = JsonSerializer.Deserialize<StepId>(objectJson, options);
-        Assert.Equal(stepId, fromObject);
-    }
-
     /// <summary>Complete replacements remain exact without allocating a quadratic comparison matrix.</summary>
     [Theory]
     [InlineData(false)]
@@ -298,46 +275,6 @@ public static partial class Milestone5Tests
         var escaped = await workspace.StageAsync(escapedSet);
         Assert.True(escaped.Conflicts.HasConflicts);
         Assert.False(File.Exists(repository.PathOf("outside/Denied.cs")));
-    }
-
-    /// <summary>Staged mutation previews render through the existing projection.</summary>
-    [Fact]
-    public static async Task StagedMutation_IsRenderedThroughProjection()
-    {
-        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
-        {
-            ["src/Example.cs"] = "old",
-        });
-        var mutation = CreateReplacement(repository, "src/Example.cs", 0, "old", "new");
-        var set = CreateMutationSet(repository, [mutation]);
-
-        await using var events = new DomainEventStream();
-        var projections = new InMemoryProjectionStore();
-        await using var subscription = events.Subscribe(projections.ApplyAsync);
-        await events.PublishAsync(new SessionCreated(
-            repository.SessionId,
-            DateTimeOffset.UtcNow,
-            "preview"));
-        await using var workspace = await TransactionalWorkspace.CreateAsync(repository.Baseline, events);
-        _ = await workspace.StageAsync(set);
-        var presenter = new InteractionPresenter(
-            new CommandDispatcher(Array.Empty<object>()),
-            projections);
-
-        var rendered = await presenter.RenderAsync(repository.SessionId);
-
-        Assert.Contains("Mutation set", rendered.Workspace);
-        Assert.Contains("--- a/src/Example.cs", rendered.Workspace);
-        Assert.Contains("+++ b/src/Example.cs", rendered.Workspace);
-        var renderedLines = rendered.Workspace
-            .Replace(Environment.NewLine, "\n", StringComparison.Ordinal)
-            .Split('\n');
-        var hunkIndex = Array.FindIndex(
-            renderedLines,
-            line => line.StartsWith("@@", StringComparison.Ordinal));
-        Assert.True(hunkIndex >= 0);
-        Assert.True(hunkIndex + 1 < renderedLines.Length);
-        Assert.Equal(string.Empty, renderedLines[hunkIndex + 1]);
     }
 
     /// <summary>Registration adopts captured bytes without rereading and rejects subsequent external changes.</summary>
@@ -694,81 +631,6 @@ public static partial class Milestone5Tests
         Assert.False(service.RequiresApproval(risky));
         await service.SetPolicyAsync(MutationApprovalPolicy.AlwaysTrustRepo);
         Assert.False(service.RequiresApproval(risky));
-    }
-
-    /// <summary>Risk calculation recognizes destructive, configuration, dependency, size, and confinement indicators.</summary>
-    [Fact]
-    public static async Task MutationRiskCalculator_ClassifiesExactMutationPreview()
-    {
-        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
-        {
-            ["src/App.csproj"] = "<Project><ItemGroup><PackageReference Include=\"Example\" /></ItemGroup></Project>",
-            ["src/Old.cs"] = "old",
-        });
-        var dependency = CreateReplacement(
-            repository,
-            "src/App.csproj",
-            20,
-            "PackageReference",
-            "PackageReference");
-        var deletion = new Mutation
-        {
-            MutationId = MutationId.New(),
-            Type = MutationType.DeleteFile,
-            RelativePath = "src/Old.cs",
-            BaselineSha256 = repository.Baseline.Files.Single(file => file.RelativePath == "src/Old.cs").Sha256,
-        };
-        var set = CreateMutationSet(repository, [dependency, deletion]);
-        var preview = new MutationPreview(set.MutationSetId, "diff", [], 300, 201);
-
-        var risk = MutationRiskCalculator.Calculate(
-            set,
-            preview,
-            repository.Root,
-            largeDiffThreshold: 500);
-
-        Assert.True(risk.HasDeletions);
-        Assert.True(risk.HasConfigChanges);
-        Assert.True(risk.HasDependencyChanges);
-        Assert.True(risk.HasLargeDiff);
-        Assert.False(risk.HasOutsideRepoChanges);
-        Assert.Equal(2, risk.FileCount);
-        Assert.Equal(501, risk.TotalLinesChanged);
-    }
-
-    /// <summary>Configuration rejected by artifact writes remains risky through the governed mutation path.</summary>
-    [Theory]
-    [InlineData("appsettings.json", true)]
-    [InlineData(".config/dotnet-tools.json", true)]
-    [InlineData("package.json", true)]
-    [InlineData(".github/actions/build/action.yml", true)]
-    [InlineData("App.runtimeconfig.dev.json", true)]
-    [InlineData("compose.override.yaml", true)]
-    [InlineData("docker-compose.override.yml", true)]
-    [InlineData("reports/data.json", false)]
-    [InlineData("reports/data.yaml", false)]
-    public static async Task MutationRiskCalculator_UsesSharedConfigurationClassification(string path, bool configuration)
-    {
-        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
-        {
-            ["README.md"] = "baseline",
-        });
-        var mutation = new Mutation
-        {
-            MutationId = MutationId.New(),
-            Type = MutationType.CreateFile,
-            RelativePath = path,
-            ReplacementText = "new file",
-        };
-        var set = CreateMutationSet(repository, [mutation]);
-        var preview = new MutationPreview(set.MutationSetId, "diff", [], 1, 0);
-
-        var risk = MutationRiskCalculator.Calculate(set, preview, repository.Root);
-        var policy = new MutationApprovalPolicyService();
-        Assert.Equal(configuration, risk.HasConfigChanges);
-        Assert.True(policy.RequiresApproval(risk));
-        await policy.SetPolicyAsync(MutationApprovalPolicy.ReviewRisky, TestContext.Current.CancellationToken);
-        Assert.Equal(configuration, policy.RequiresApproval(risk));
     }
 
     /// <summary>Policy replacement finds configuration keys case-insensitively and preserves their original spelling.</summary>

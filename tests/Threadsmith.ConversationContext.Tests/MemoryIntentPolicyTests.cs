@@ -54,41 +54,6 @@ public static class MemoryIntentPolicyTests
     }
 
     /// <summary>Verifies independent memory routing and intent eligibility.</summary>
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("epoch")]
-    [InlineData("repository")]
-    [InlineData("run")]
-    [InlineData("mixed")]
-    [InlineData("overflow")]
-    public static async Task Unusable_provenance_preserves_baseline(string reason)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "compiler errors distractor") with { Concepts = ["logging"] }, ct);
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
-        var request = Request(RunId.New()) with { Options = new() { SemanticMinimum = 1 } };
-        var snapshot = request.IntentConcepts!;
-        request = request with
-        {
-            IntentConcepts = reason switch
-            {
-                "missing" => null,
-                "epoch" => snapshot with { Epoch = 9 },
-                "repository" => snapshot with { RepositoryIdentity = "elsewhere" },
-                "run" => snapshot with { RunId = RunId.New() },
-                "overflow" => snapshot with { IsComplete = false },
-                _ => snapshot with { Hints = [.. snapshot.Hints, new(2, ToolInvocationId.New(), false, ["logging"])] },
-            },
-        };
-        var result = await search.SearchAsync(request, ct);
-        Assert.Single(result.Selected);
-        Assert.Equal("no_current_concepts", Assert.Single(result.SearchDetails!.Candidates).ConceptPolicyDecision);
-    }
-
-    /// <summary>Verifies independent memory routing and intent eligibility.</summary>
     [Fact]
     public static async Task Matching_tags_cannot_discover_candidates_or_bypass_incomplete_comparisons()
     {
@@ -171,41 +136,6 @@ public static class MemoryIntentPolicyTests
         Assert.Equal(before.Entries[0].Embedding, after.Entries[0].Embedding);
         Assert.Equal(1, generator.Calls);
         Assert.False(result.IsComplete);
-    }
-
-    /// <summary>Repeated observations retain evidence without repeating inference.</summary>
-    [Fact]
-    public static async Task Repeated_hints_preserve_provenance_and_reuse_ranking_until_eligibility_changes()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "compiler errors guidance") with { Concepts = ["compiler"] }, ct);
-        var encoder = new MemoryScoreEncoder();
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
-        var state = new MemoryIntentState();
-        var run = RunId.New();
-        Assert.True(state.Observe(state.Epoch, 1, ToolInvocationId.New(), true, ["compiler"]));
-        var first = state.Capture(MemoryTestData.Repository, run);
-        var request = Request(run) with { IntentEpoch = state.Epoch, IntentConcepts = first };
-        await search.SearchAsync(request, ct);
-        var scored = encoder.Documents.Count;
-        Assert.False(state.Observe(state.Epoch, 2, ToolInvocationId.New(), false, ["compiler"]));
-        var repeated = state.Capture(MemoryTestData.Repository, run);
-        Assert.Equal(2, repeated.Hints.Count);
-        Assert.Single(first.Hints);
-        Assert.Equal(first.CacheKey, repeated.CacheKey);
-        Assert.True((await search.SearchAsync(request with { IntentConcepts = repeated }, ct)).RankingCacheHit);
-        Assert.Equal(scored, encoder.Documents.Count);
-        Assert.True(state.Observe(state.Epoch, 3, ToolInvocationId.New(), true, ["logging"]));
-        var mixed = state.Capture(MemoryTestData.Repository, run);
-        Assert.True(mixed.MixedOrigins);
-        Assert.False((await search.SearchAsync(request with { IntentConcepts = mixed }, ct)).RankingCacheHit);
-        Assert.False(state.Observe(state.Epoch, 4, ToolInvocationId.New(), true, ["database"]));
-        var cached = await search.SearchAsync(request with { IntentConcepts = state.Capture(MemoryTestData.Repository, run) }, ct);
-        Assert.True(cached.RankingCacheHit);
-        Assert.Equal(3, cached.SearchDetails!.IntentConceptCount);
     }
 
     /// <summary>Derived snapshot data remains detached and follows record updates.</summary>

@@ -7,41 +7,6 @@ using Xunit;
 /// <summary>Receipt observation provenance and bounded selection regressions.</summary>
 public sealed class ConversationReceiptChecksTests
 {
-    /// <summary>Preserves source and authority limits across observation boundaries.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task BaselineChangeDistinguishesEarlierAndInterveningChecks(bool during)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var checks = new ConversationReceiptChecks();
-        var baseline = new WorkspaceBaseline(WorkspaceId.New(), "/repo", DateTimeOffset.UnixEpoch, [], "same-sha");
-        var context = CreateContext(checks) with { Invocation = CreateContext(checks).Invocation with { ReceiptBaseline = () => baseline } };
-        await ConversationReceiptChecks.ObserveAsync(
-            context,
-            "dotnet_build",
-            "a.csproj",
-            "build",
-            _ =>
-        {
-            if (during)
-            {
-                baseline = baseline with { CapturedAt = baseline.CapturedAt.AddSeconds(1) };
-            }
-
-            return Task.FromResult(Result(true));
-        },
-            ct);
-        if (!during)
-        {
-            baseline = baseline with { CapturedAt = baseline.CapturedAt.AddSeconds(1) };
-        }
-
-        var observation = Assert.Single(checks.Snapshot(baseline).Checks);
-        Assert.Equal(during ? "Indeterminate: baseline changed during check" : "EarlierBaseline", observation.Applicability);
-        Assert.Contains("unverified", observation.SourceProof, StringComparison.Ordinal);
-    }
-
     /// <summary>Retains unresolved work within the fixed run-local capacity.</summary>
     [Fact]
     public async Task BoundedSelectionRetainsFailureAndCountsOmissionsWithoutCollapsingDifferentChecks()

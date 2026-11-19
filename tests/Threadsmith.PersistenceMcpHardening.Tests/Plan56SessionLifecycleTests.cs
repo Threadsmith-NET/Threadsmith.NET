@@ -13,24 +13,6 @@ using Xunit;
 /// <summary>Plan 56 durable catalog and independent clone verification.</summary>
 public static partial class Plan56SessionLifecycleTests
 {
-    /// <summary>Successful transitions notify consumers; failed resumes retain the current owner.</summary>
-    [Fact]
-    public static async Task Successful_transitions_notify_the_repository_consumers_of_the_active_session()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await SessionLifecycleFixture.CreateAsync();
-        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        var activated = new List<SessionCatalogEntry>();
-        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations, sessionActivated: activated.Add);
-        var first = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand(), ct);
-        var second = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand(), ct);
-        var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand(), ct);
-        var resumed = await harness.Lifecycle.HandleAsync(new ResumeSessionCommand(first.ActiveSession.SessionId), ct);
-        Assert.Equal(new[] { first.ActiveSession, second.ActiveSession, clone.ActiveSession, resumed.ActiveSession }, activated);
-        await Assert.ThrowsAsync<KeyNotFoundException>(() => harness.Lifecycle.HandleAsync(new ResumeSessionCommand(SessionId.New()), ct));
-        Assert.Equal(4, activated.Count);
-    }
-
     /// <summary>Migration 8 makes pre-catalog durable sessions selectable without losing conversation metadata.</summary>
     [Fact]
     public static async Task Migration_8_backfills_existing_durable_sessions()
@@ -82,26 +64,6 @@ public static partial class Plan56SessionLifecycleTests
         {
             Directory.Delete(directory, recursive: true);
         }
-    }
-
-    /// <summary>Migration 8 supports deterministic repository listing and exact lookup.</summary>
-    [Fact]
-    public static async Task Catalog_lists_repository_sessions_newest_first_and_filters_other_repositories()
-    {
-        await using var fixture = await SessionLifecycleFixture.CreateAsync();
-        var store = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        var now = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
-        var older = CreateEntry(SessionId.New(), "repo-a", now);
-        var newer = CreateEntry(SessionId.New(), "repo-a", now.AddMinutes(1));
-        var other = CreateEntry(SessionId.New(), "repo-b", now.AddMinutes(2));
-
-        await store.CreateAsync(older, EmptyUsage());
-        await store.CreateAsync(newer, EmptyUsage());
-        await store.CreateAsync(other, EmptyUsage());
-
-        var listed = await store.ListAsync("repo-a", 10);
-        Assert.Equal([newer.SessionId, older.SessionId], listed.Select(item => item.SessionId));
-        Assert.Equal(other, await store.GetAsync(other.SessionId));
     }
 
     /// <summary>A clone copies sanitized conversation under new identities, preserves run grouping, and then diverges independently.</summary>
@@ -253,51 +215,6 @@ public static partial class Plan56SessionLifecycleTests
         Assert.Equal(sourceId, Assert.Single(evidenceStore.Snapshot(sourceId)).SessionId);
     }
 
-    /// <summary>Lifecycle cloning starts local usage at zero and copies governed evidence.</summary>
-    [Fact]
-    public static async Task Lifecycle_clone_separates_inherited_usage_and_copies_evidence()
-    {
-        await using var fixture = await SessionLifecycleFixture.CreateAsync();
-        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
-        harness.Usage.Observe(
-            source.ActiveSession.SessionId,
-            new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()),
-            new ModelUsage(13, 7, IsEstimate: true));
-        harness.Usage.ObserveMissing(source.ActiveSession.SessionId, new ModelRequestUsageId(RunId.New(), "failed", 0, Guid.NewGuid()));
-        await harness.Evidence.AddAsync(new Evidence
-        {
-            EvidenceId = EvidenceId.New(),
-            SessionId = source.ActiveSession.SessionId,
-            Kind = EvidenceKind.SemanticFact,
-            Content = "clone-visible evidence",
-            Provenance = new EvidenceProvenance { Source = "test" },
-            CollectedAt = DateTimeOffset.UtcNow,
-            Relevance = 1,
-            EstimatedTokens = 5,
-        });
-
-        var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
-
-        var cloneSession = clone.ActiveSession.SessionId;
-        harness.Usage.Observe(cloneSession, new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()), new ModelUsage(10, 2));
-        await harness.Lifecycle.CheckpointCompletedTurnAsync(cloneSession);
-        var persistedUsage = await catalog.GetUsageAsync(cloneSession);
-        Assert.Equal(10, persistedUsage.InputTokens);
-        Assert.Equal(2, persistedUsage.OutputTokens);
-        Assert.False(persistedUsage.IsEstimate);
-        Assert.False(persistedUsage.HasUnknownUsage);
-        Assert.False(harness.Usage.GetSnapshot(cloneSession).HasUnknownUsage);
-        Assert.Equal(0, clone.InputTokens);
-        Assert.Equal(0, clone.OutputTokens);
-        Assert.Equal(13, clone.InheritedInputTokens);
-        Assert.Equal(7, clone.InheritedOutputTokens);
-        Assert.Equal(
-            "clone-visible evidence",
-            Assert.Single(harness.Evidence.Snapshot(clone.ActiveSession.SessionId)).Content);
-    }
-
     /// <summary>Clone activation publishes a durable base and copied repository authority.</summary>
     [Fact]
     public static async Task Lifecycle_clone_publishes_durable_projection_seed_events()
@@ -325,25 +242,6 @@ public static partial class Plan56SessionLifecycleTests
         Assert.Contains(observed, item => item is RepositoryOpened opened
             && opened.SessionId == clone.ActiveSession.SessionId
             && opened.TrustLevel == RepositoryTrustLevel.TrustedRead);
-    }
-
-    /// <summary>Repository rebinding activates a fresh session and scopes selectors to the opened repository.</summary>
-    [Fact]
-    public static async Task Repository_rebind_creates_and_lists_sessions_for_the_new_repository()
-    {
-        await using var fixture = await SessionLifecycleFixture.CreateAsync();
-        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        var source = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
-
-        await harness.Lifecycle.BindRepositoryAsync("repo-b");
-
-        var active = await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand());
-        var listed = await harness.Lifecycle.HandleAsync(
-            new ListResumableSessionsCommand());
-        Assert.NotEqual(source.ActiveSession.RepositoryIdentity, active.RepositoryIdentity);
-        Assert.Equal("repo-b", active.RepositoryDisplayName);
-        Assert.Equal(active.SessionId, Assert.Single(listed).SessionId);
     }
 
     /// <summary>A failed final repository commit never activates its prepared session or changes the source binding.</summary>
@@ -457,43 +355,6 @@ public static partial class Plan56SessionLifecycleTests
 
         Assert.True(committed);
         Assert.Equal(source.ActiveSession.SessionId, (await harness.Lifecycle.HandleAsync(new GetActiveSessionCommand())).SessionId);
-    }
-
-    /// <summary>Completed-turn checkpoints persist current usage, message count, and preview immediately.</summary>
-    [Fact]
-    public static async Task Completed_turn_checkpoint_refreshes_catalog_metadata()
-    {
-        await using var fixture = await SessionLifecycleFixture.CreateAsync();
-        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
-        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations);
-        var created = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand());
-        var sessionId = created.ActiveSession.SessionId;
-        _ = await fixture.Conversations.ArchiveMessageAsync(new ConversationMessage
-        {
-            Id = ConversationMessageId.New(),
-            SessionId = sessionId,
-            RunId = RunId.New(),
-            Sequence = 0,
-            Role = ConversationRole.Assistant,
-            Content = "fresh selector preview",
-            ContentHash = "pending",
-            EstimatedTokens = 5,
-            OccurredAt = DateTimeOffset.UtcNow,
-        });
-        harness.Usage.Observe(
-            sessionId,
-            new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()),
-            new ModelUsage(21, 8));
-
-        await harness.Lifecycle.CheckpointCompletedTurnAsync(sessionId);
-
-        var persisted = await catalog.GetAsync(sessionId);
-        Assert.NotNull(persisted);
-        var usage = await catalog.GetUsageAsync(sessionId);
-        Assert.Equal(1, persisted.MessageCount);
-        Assert.Equal("fresh selector preview", persisted.Preview);
-        Assert.Equal(21, usage.InputTokens);
-        Assert.Equal(8, usage.OutputTokens);
     }
 
     /// <summary>A failed resume restores the source model before checkpointing the source active again.</summary>

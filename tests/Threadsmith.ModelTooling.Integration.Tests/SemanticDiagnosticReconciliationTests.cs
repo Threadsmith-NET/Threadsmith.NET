@@ -112,49 +112,6 @@ public static class SemanticDiagnosticReconciliationTests
         }
     }
 
-    /// <summary>Reports warmed end-to-end allocations without an elapsed-time or allocation CI threshold.</summary>
-    [Fact(Explicit = true)]
-    [Trait("Category", "Performance")]
-    public static async Task MeasureRepeatedValidationAllocations()
-    {
-        using var fixture = new RepositoryFixture(24, 96_000);
-        await using var events = new DomainEventStream();
-        using var measurement = new ReconciliationMeasurement();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
-        await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
-        measurement.Reset();
-        const int iterations = 5;
-        var before = GC.GetTotalAllocatedBytes(precise: true);
-        for (var iteration = 0; iteration < iterations; iteration++)
-        {
-            await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
-        }
-
-        var allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-        TestContext.Current.TestOutputHelper?.WriteLine(
-            $"Unchanged baseline: reads/op={measurement.Reads / iterations}, characters/op={measurement.Characters / iterations}, texts/op={measurement.Texts / iterations}, allocated bytes/op={allocated / iterations}");
-        Assert.Equal(24 * iterations, measurement.Reads);
-        Assert.Equal(fixture.TotalCharacters * iterations, measurement.Characters);
-
-        var path = Path.Combine(fixture.Root, "File0.cs");
-        var content = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-        await File.WriteAllTextAsync(path, content.Replace("Value;", "Other;", StringComparison.Ordinal), TestContext.Current.CancellationToken);
-        await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
-        measurement.Reset();
-        before = GC.GetTotalAllocatedBytes(precise: true);
-        for (var iteration = 0; iteration < iterations; iteration++)
-        {
-            await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
-        }
-
-        allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-        TestContext.Current.TestOutputHelper?.WriteLine(
-            $"One changed file: reads/op={measurement.Reads / iterations}, characters/op={measurement.Characters / iterations}, texts/op={measurement.Texts / iterations}, allocated bytes/op={allocated / iterations}");
-        Assert.Equal(24 * iterations, measurement.Reads);
-        Assert.Equal(iterations, measurement.Texts);
-    }
-
     private sealed class BlockingPublicationGate : ISemanticRefreshPublicationGate
     {
         public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

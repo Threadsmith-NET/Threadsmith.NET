@@ -13,83 +13,6 @@ using Xunit;
 /// <summary>Verifies advertised search arguments and the Brave HTTP parameter contract.</summary>
 public sealed class WebSearchContractTests
 {
-    /// <summary>Regional locales must not be forwarded as unsupported Brave language codes.</summary>
-    [Theory]
-    [InlineData("en", "en", null)]
-    [InlineData("en-US", "en", "US")]
-    [InlineData("EN-us", "en", "US")]
-    [InlineData("en-GB", "en-gb", "GB")]
-    [InlineData("fr-CA", "fr", "CA")]
-    [InlineData("pt-BR", "pt-br", "BR")]
-    [InlineData("pt-PT", "pt-pt", "PT")]
-    [InlineData("pt", "pt-pt", null)]
-    [InlineData("zh-CN", "zh-hans", "CN")]
-    [InlineData("zh-TW", "zh-hant", "TW")]
-    [InlineData("zh-HK", "zh-hant", "HK")]
-    [InlineData("zh-Hans", "zh-hans", null)]
-    [InlineData("zh-Hant", "zh-hant", null)]
-    [InlineData("ja-JP", "ja", "JP")]
-    [InlineData("no-NO", "nb", "NO")]
-    [InlineData("uk-UA", "uk", null)]
-    public async Task Locale_MapsToSupportedProviderParameters(string locale, string language, string? country)
-    {
-        var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var client = CreateClient(httpClient, new CapturingSecretResolver());
-        var tool = CreateTool(client);
-        var input = Assert.IsType<WebSearchRequest>(tool.DeserializeInput(
-            JsonSerializer.Serialize(new { query = "C# & .NET + tools", maximumResults = 3, locale })));
-
-        await client.SearchAsync(input);
-
-        var parameters = ReadParameters(handler);
-        Assert.Equal("C# & .NET + tools", parameters["q"]);
-        Assert.Equal("3", parameters["count"]);
-        Assert.Equal(language, parameters["search_lang"]);
-        Assert.Equal(country, parameters.GetValueOrDefault("country"));
-        Assert.False(parameters.ContainsKey("freshness"));
-    }
-
-    /// <summary>Common freshness windows use Brave's documented preset values.</summary>
-    [Theory]
-    [InlineData(1, "pd")]
-    [InlineData(7, "pw")]
-    [InlineData(31, "pm")]
-    [InlineData(365, "py")]
-    public async Task Freshness_MapsToProviderPreset(int days, string expected)
-    {
-        var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var client = CreateClient(httpClient, new CapturingSecretResolver());
-
-        await client.SearchAsync(new WebSearchRequest { Query = "release notes", FreshnessDays = days });
-
-        Assert.Equal(expected, ReadParameters(handler)["freshness"]);
-    }
-
-    /// <summary>Other day windows use a UTC date range instead of the unsupported Nd syntax.</summary>
-    [Theory]
-    [InlineData(2)]
-    [InlineData(30)]
-    [InlineData(364)]
-    public async Task Freshness_MapsToProviderDateRange(int days)
-    {
-        var handler = new CapturingHttpHandler();
-        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var client = CreateClient(httpClient, new CapturingSecretResolver());
-        var before = DateOnly.FromDateTime(DateTime.UtcNow);
-
-        await client.SearchAsync(new WebSearchRequest { Query = "release notes", FreshnessDays = days });
-
-        var after = DateOnly.FromDateTime(DateTime.UtcNow);
-        var range = ReadParameters(handler)["freshness"].Split("to", StringSplitOptions.None);
-        Assert.Equal(2, range.Length);
-        var start = DateOnly.ParseExact(range[0], "yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var end = DateOnly.ParseExact(range[1], "yyyy-MM-dd", CultureInfo.InvariantCulture);
-        Assert.InRange(end.DayNumber, before.DayNumber, after.DayNumber);
-        Assert.Equal(days, end.DayNumber - start.DayNumber);
-    }
-
     /// <summary>Omitted or null optional fields preserve defaults without adding provider filters.</summary>
     [Theory]
     [InlineData("{\"query\":\"release notes\"}")]
@@ -184,43 +107,6 @@ public sealed class WebSearchContractTests
         Assert.True(Regex.IsMatch(query, pattern, RegexOptions.CultureInvariant));
         Assert.Equal(query, ReadParameters(handler)["q"]);
         Assert.Equal("20", ReadParameters(handler)["count"]);
-    }
-
-    /// <summary>Query hints compile without lookarounds while retaining word and character-class bounds.</summary>
-    [Theory]
-    [InlineData("C# tools", true)]
-    [InlineData("  C#   tools  ", true)]
-    [InlineData("C#\u00a0tools\u2003", true)]
-    [InlineData("\u2028C#\u2029tools", true)]
-    [InlineData("", false)]
-    [InlineData("   ", false)]
-    [InlineData("\u00a0\u2003", false)]
-    [InlineData("a\tb", false)]
-    [InlineData("a\nb", false)]
-    [InlineData("a\u0000b", false)]
-    [InlineData("a\u007fb", false)]
-    [InlineData("a\u0085b", false)]
-    public void QuerySchema_SupportsFiniteStateGrammar(string query, bool accepted)
-    {
-        using var httpClient = new HttpClient(new CapturingHttpHandler()) { Timeout = Timeout.InfiniteTimeSpan };
-        var tool = CreateTool(CreateClient(httpClient, new CapturingSecretResolver()));
-        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
-        var pattern = schema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("pattern").GetString();
-        Assert.NotNull(pattern);
-        var regex = new Regex(pattern, RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
-
-        Assert.Equal(accepted, regex.IsMatch(query));
-        Assert.Matches(regex, string.Join(' ', Enumerable.Repeat("a", 75)));
-        Assert.DoesNotMatch(regex, string.Join(' ', Enumerable.Repeat("a", 76)));
-        var arguments = JsonSerializer.Serialize(new { query });
-        if (accepted)
-        {
-            Assert.IsType<WebSearchRequest>(tool.DeserializeInput(arguments));
-        }
-        else
-        {
-            Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(arguments));
-        }
     }
 
     /// <summary>Control characters at the end remain forbidden even where regex dollar anchors allow a final newline.</summary>

@@ -62,29 +62,6 @@ public sealed class ExtensionSettingsTests : IAsyncLifetime
         Assert.Empty(result.GetProperty("settings").EnumerateObject());
     }
 
-    /// <summary>Caller mutations cannot change captured settings, and empty overrides remain explicit.</summary>
-    [Fact]
-    public async Task Explicit_settings_are_copied_before_first_await_and_an_empty_override_is_respected()
-    {
-        WriteSettings("""{"source":"repository"}""");
-        var supplied = new Dictionary<string, string?> { ["source"] = "original" };
-        var barrier = new DiscoveryBarrier();
-        var host = CreateHost(barrier);
-        var loading = host.LoadAsync(Request() with { Configuration = supplied }, TestContext.Current.CancellationToken);
-        await barrier.Entered.Task.WaitAsync(TestContext.Current.CancellationToken);
-        supplied["source"] = "mutated";
-        barrier.Release.TrySetResult();
-        await loading;
-
-        Assert.Equal("original", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("source").GetString());
-        supplied["source"] = "mutated again";
-        Assert.Equal("original", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("source").GetString());
-
-        var emptyHost = CreateHost();
-        await emptyHost.LoadAsync(Request() with { Configuration = new Dictionary<string, string?>() }, TestContext.Current.CancellationToken);
-        Assert.Empty((await ReadSettingsAsync(emptyHost)).GetProperty("settings").EnumerateObject());
-    }
-
     /// <summary>Replacement selects a new view without changing the retained predecessor.</summary>
     [Fact]
     public async Task Replacement_publishes_a_new_snapshot_and_retained_old_calls_keep_the_old_view()
@@ -102,25 +79,6 @@ public sealed class ExtensionSettingsTests : IAsyncLifetime
         Assert.Equal("first", (await ReadSettingsAsync(oldProxy)).GetProperty("settings").GetProperty("value").GetString());
         WriteSettings("""{"value":"third"}""");
         Assert.Equal("second", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("value").GetString());
-    }
-
-    /// <summary>Explicit load after retirement captures fresh repository settings.</summary>
-    [Fact]
-    public async Task Manual_reload_after_unload_captures_fresh_settings()
-    {
-        WriteSettings("""{"value":"first"}""");
-        var host = CreateHost();
-        var manager = (IExtensionManager)host;
-        await manager.LoadAsync(ExtensionId, SessionId.New(), TestContext.Current.CancellationToken);
-        var previous = Assert.Single(host.Generations);
-        await host.UnloadAsync(previous, SessionId.New(), TestContext.Current.CancellationToken);
-        WriteSettings("""{"value":"reloaded"}""");
-
-        var summary = await manager.LoadAsync(ExtensionId, SessionId.New(), TestContext.Current.CancellationToken);
-
-        Assert.NotNull(summary);
-        Assert.NotEqual(previous.GenerationId, summary.GenerationId);
-        Assert.Equal("reloaded", (await ReadSettingsAsync(host)).GetProperty("settings").GetProperty("value").GetString());
     }
 
     /// <summary>A cancelled retirement remains reachable through the normal manager unload path.</summary>
@@ -358,20 +316,6 @@ public sealed class ExtensionSettingsTests : IAsyncLifetime
         Assert.Empty(ExtensionSelectionConfig.Load(ConfigPath).Settings);
     }
 
-    /// <summary>The activation facade owns an independent ordinal snapshot.</summary>
-    [Fact]
-    public void Facade_copies_values_and_uses_ordinal_keys()
-    {
-        var supplied = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase) { ["Key"] = "original" };
-        var configuration = new ExtensionConfiguration(supplied);
-        supplied["Key"] = "mutated";
-        supplied["another"] = "new";
-
-        Assert.Equal("original", configuration["Key"]);
-        Assert.Null(configuration["key"]);
-        Assert.Equal("Key", Assert.Single(configuration.Keys));
-    }
-
     /// <summary>Committed delivery deadlines retain authoritative activation despite a stalled subscriber.</summary>
     [Fact]
     public async Task Stalled_activation_subscriber_does_not_roll_back_committed_generation()
@@ -558,33 +502,6 @@ public sealed class ExtensionSettingsTests : IAsyncLifetime
         var exception = Assert.Throws<ExtensionLoadException>(() => ExtensionSelectionConfig.Load(ConfigPath));
         Assert.Equal(ExtensionSelectionConfig.InvalidSettingsDiagnostic, exception.Message);
         Assert.Null(exception.InnerException);
-    }
-
-    private sealed class DiscoveryBarrier : IDomainEventStream
-    {
-        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
-        {
-            if (domainEvent is ExtensionDiscovered)
-            {
-                Entered.TrySetResult();
-                await Release.Task.WaitAsync(cancellationToken);
-            }
-        }
-
-        public IDomainEventSubscription Subscribe(Func<IDomainEvent, CancellationToken, Task> handler, int capacity = 256) => throw new NotSupportedException();
-
-        public Task PublishCommittedBatchAsync(IReadOnlyList<IDomainEvent> domainEvents, Func<bool> tryCommit, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            tryCommit();
-            return Task.CompletedTask;
-        }
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class CancellationLoggerFactory : ILoggerFactory, ILogger

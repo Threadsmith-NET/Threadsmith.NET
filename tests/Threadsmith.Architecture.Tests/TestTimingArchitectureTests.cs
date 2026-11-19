@@ -12,10 +12,10 @@ public static class TestTimingArchitectureTests
     [Fact]
     public static void TestsDoNotUseWallClockCompletionLimits()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
         var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        var violations = Directory.EnumerateFiles(Path.Combine(root, "tests"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar).Any(part => part is "bin" or "obj"))
-            .SelectMany(path => FindViolations(File.ReadAllText(path)).Select(node =>
+        var violations = SourceEncodingTests.EnumerateCSharpSources(Path.Combine(root, "tests"), cancellationToken)
+            .SelectMany(path => FindViolations(File.ReadAllText(path), cancellationToken).Select(node =>
                 $"{Path.GetRelativePath(root, path)}:{node.GetLocation().GetLineSpan().StartLinePosition.Line + 1}: {node}"))
             .ToArray();
 
@@ -51,19 +51,19 @@ public static class TestTimingArchitectureTests
     [InlineData("var source = \"await Task.Delay(500);\";", false)]
     public static void GuardRecognizesExecutableTiming(string body, bool prohibited)
     {
-        Assert.Equal(prohibited, FindViolations("class Fixture { async Task Run() { " + body + " } }").Any());
+        Assert.Equal(prohibited, FindViolations("class Fixture { async Task Run() { " + body + " } }", TestContext.Current.CancellationToken).Any());
     }
 
     /// <summary>Test-runner attributes must not encode performance assumptions.</summary>
     [Fact]
     public static void GuardRejectsTestAttributeDeadlines()
     {
-        Assert.Single(FindViolations("class Fixture { [Fact(Timeout = 500)] void Run() {} }"));
+        Assert.Single(FindViolations("class Fixture { [Fact(Timeout = 500)] void Run() {} }", TestContext.Current.CancellationToken));
     }
 
-    private static IEnumerable<SyntaxNode> FindViolations(string source)
+    private static IEnumerable<SyntaxNode> FindViolations(string source, CancellationToken cancellationToken = default)
     {
-        var root = CSharpSyntaxTree.ParseText(source).GetRoot();
+        var root = CSharpSyntaxTree.ParseText(source, cancellationToken: cancellationToken).GetRoot(cancellationToken);
         var initializers = root.DescendantNodes().OfType<VariableDeclaratorSyntax>()
             .Where(variable => variable.Initializer is not null)
             .GroupBy(variable => variable.Identifier.ValueText)

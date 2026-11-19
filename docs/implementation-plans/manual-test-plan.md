@@ -1358,7 +1358,7 @@ Expected: invalid/untrusted profiles fail closed; the fixture receives curated O
 
 1. Select an MCP endpoint you are authorized to call and add its host to `tools:allowedNetworkHosts`.
 2. Set `THREADSMITH_MCP_HTTP_ENDPOINT`, `THREADSMITH_MCP_HTTP_TOOL`, `THREADSMITH_MCP_HTTP_ARGUMENTS`, and `THREADSMITH_MCP_HTTP_MODE` (`http` or `sse`) as documented in `docs/operations/mcp-connections.md`.
-3. Run the MCP transport test executable, then unset all four variables.
+3. Run the explicit `ConfiguredEndpointCompletesMcpLifecycle` probe using the command in the operations guide, then unset all four variables. Exercise the host allowlist separately through the application.
 
 Expected: the real endpoint connects, imports the named tool, invokes it, and disconnects. A missing host allowlist is denied by standard tool policy. No credential or header value appears in output.
 

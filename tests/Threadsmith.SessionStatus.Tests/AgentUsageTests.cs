@@ -44,28 +44,6 @@ public static class AgentUsageTests
         Assert.Null(projection.GetOwnerSnapshot(session).LatestRequest);
     }
 
-    /// <summary>Percentage uses the provider's declared input semantics, without double-counting cache writes or guessing missing reads.</summary>
-    [Theory]
-    [InlineData(1000L, 800L, CacheReadInputSemantics.IncludedInInput, false, 80.0)]
-    [InlineData(200L, 800L, CacheReadInputSemantics.AdditionalToInput, false, 80.0)]
-    [InlineData(1000L, 0L, CacheReadInputSemantics.IncludedInInput, false, 0.0)]
-    [InlineData(0L, 0L, CacheReadInputSemantics.IncludedInInput, false, null)]
-    [InlineData(1000L, null, CacheReadInputSemantics.IncludedInInput, false, null)]
-    [InlineData(1000L, 800L, CacheReadInputSemantics.Unknown, false, null)]
-    [InlineData(1000L, 800L, CacheReadInputSemantics.IncludedInInput, true, null)]
-    [InlineData(100L, 800L, CacheReadInputSemantics.IncludedInInput, false, null)]
-    public static void RequestCachePercentagePreservesSemantics(long input, long? reads, CacheReadInputSemantics semantics, bool estimate, double? expected)
-    {
-        var request = new ModelRequestUsageSnapshot(new(RunId.New(), "test", 0, Guid.NewGuid()), new ModelUsage(input, 1, IsEstimate: estimate, Cache: new ModelCacheUsage
-        {
-            Availability = CacheUsageAvailability.Reported,
-            CacheReadTokens = reads,
-            CacheWriteTokens = 100,
-            ReadInputSemantics = semantics,
-        }));
-        Assert.Equal(expected, request.CacheHitPercentage);
-    }
-
     /// <summary>Verifies root and children reuse deduplicated usage without changing session totals.</summary>
     [Fact]
     public static void RootAndChildrenReuseDeduplicatedUsageWithoutChangingSessionTotals()

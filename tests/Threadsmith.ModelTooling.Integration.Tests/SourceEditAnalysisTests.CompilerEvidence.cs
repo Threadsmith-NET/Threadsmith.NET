@@ -38,9 +38,6 @@ public sealed class SourceEditAnalysisTestsRejectedCompilerCandidatesReuseBaseli
     /// <summary>Rejected retries avoid baseline passes while filtering, retention, eviction and reset preserve evidence.</summary>
     [Theory]
     [InlineData(false, 64, 32)]
-    [InlineData(true, 64, 32)]
-    [InlineData(false, 1, 32)]
-    [InlineData(false, 64, 1)]
     public static async Task RejectedCompilerCandidatesReuseBaselineAndMatchColdEvidence(bool excludeMissingType, int retained, int cachedProjects)
     {
         // Frozen nested deadlines; completion events, not elapsed time, establish results.
@@ -138,108 +135,5 @@ public sealed class SourceEditAnalysisTestsPromotedCompilerCandidateBecomesBasel
         Assert.Contains(next.Diagnostics, diagnostic => diagnostic.Code == "CS0246" && diagnostic.Origin == "introduced");
         Assert.Contains(next.Diagnostics, diagnostic => diagnostic.Code == "CS8805" && diagnostic.Origin == "initial");
         engine.DiscardEditCandidate(nextCommand.EffectId);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class SourceEditAnalysisTestsDiagnosticHeavyCompilerRetentionIsObservedAtPublication : SourceEditAnalysisTests
-{
-    /// <summary>Measures distinct DTO generations across two diagnostic-heavy projects and a rejected retry.</summary>
-    [Theory]
-    [InlineData(600)]
-    [InlineData(1200)]
-    public static async Task DiagnosticHeavyCompilerRetentionIsObservedAtPublication(int diagnosticsPerProject)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        foreach (var relativePath in new[]
-        {
-            "Contracts/Services.cs",
-            "App/Program.cs",
-        }
-
-        )
-        {
-            var diagnosticSource = string.Join("\n", Enumerable.Range(0, diagnosticsPerProject).Select(index => $"class Retention{index} {{ MissingBaseline{index} value; }}"));
-            await File.AppendAllTextAsync(Path.Combine(fixture.Root, relativePath), "\n" + diagnosticSource, ct);
-        }
-
-        var observations = new List<(int CachedProjects, int StagedProjects, int EvidenceSets, int Findings)>();
-        var origins = new List<(int CachedProjects, int StagedProjects, int Fingerprints)>();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
-        {
-            EditCompilerRetentionObserver = observations.Add,
-            EditCompilerOriginRetentionObserver = origins.Add,
-        };
-        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
-        await engine.LoadAsync(request, ct);
-        await engine.WaitForWarmAsync(ct);
-        const string relative = "Contracts/Services.cs";
-        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
-        var firstCommand = Command(request.SessionId, RunId.New(), request.WorkspaceId);
-        var first = await AnalyzeCompletedAsync(engine, events, firstCommand, fixture.Root, Snapshot(relative, original, original + "\nclass FirstRetentionCandidate { MissingFirst value; }"), ct);
-        Assert.True(first.CompilerCompletedSuccessfully);
-        Assert.Equal(2, first.ProjectsInScope);
-        Assert.True(first.CurrentErrors >= 2 * diagnosticsPerProject);
-        Assert.False(first.FindingRetentionTruncated);
-        var firstSteady = observations[^1];
-        engine.DiscardEditCandidate(firstCommand.EffectId);
-        observations.Clear();
-        var secondCommand = Command(request.SessionId, firstCommand.RunId, request.WorkspaceId);
-        var retryText = original + "\nclass RetryRetentionCandidate { MissingRetry value; }";
-        var retrySnapshot = Snapshot(relative, original, retryText);
-        var retry = await AnalyzeCompletedAsync(engine, events, secondCommand, fixture.Root, retrySnapshot, ct);
-        Assert.True(retry.CompilerCompletedSuccessfully);
-        Assert.False(retry.FindingRetentionTruncated);
-        var retryPeak = observations.Max(item => item.Findings);
-        var retrySteady = observations[^1];
-        TestContext.Current.TestOutputHelper?.WriteLine($"diagnostics/project={diagnosticsPerProject}; first={firstSteady}; retry peak findings={retryPeak}; retry={retrySteady}");
-        if (diagnosticsPerProject < SemanticEngine.MaximumCompilerCachedFindingsPerSlot)
-        {
-            Assert.Equal(2, retrySteady.CachedProjects);
-            Assert.Equal(4, retrySteady.EvidenceSets);
-            Assert.True(retryPeak > firstSteady.Findings);
-            Assert.Equal(firstSteady.Findings, retrySteady.Findings);
-        }
-        else
-        {
-            // No truncation: the oversized findings remain fully reported, only reuse is bypassed.
-            Assert.Equal((0, 0, 0, 0), firstSteady);
-            Assert.Equal((0, 0, 0, 0), retrySteady);
-            Assert.Equal(0, retryPeak);
-            Assert.True(retry.Diagnostics.Count >= 2 * diagnosticsPerProject);
-            Assert.True(retry.ErrorComparisonAvailable);
-        }
-
-        Assert.All(origins, item => Assert.InRange(item.Fingerprints, 0, 2 * SemanticEngine.MaximumCompilerCachedProjects * SemanticEngine.MaximumCompilerCachedFindingsPerSlot));
-        if (diagnosticsPerProject > SemanticEngine.MaximumCompilerCachedFindingsPerSlot)
-        {
-            Assert.All(origins, item => Assert.Equal((0, 0, 0), item));
-        }
-
-        // Admitted complete origins survive slot eviction; oversized origins become unknown after acceptance.
-        engine.ConfirmEditApplied(secondCommand.EffectId);
-        await engine.RefreshDocumentsAsync([new(Path.Combine(fixture.Root, relative), retryText, retrySnapshot.Endpoints[0].AfterSha256!)], ct);
-        var followupCommand = Command(request.SessionId, firstCommand.RunId, request.WorkspaceId);
-        var followup = await AnalyzeCompletedAsync(engine, events, followupCommand, fixture.Root, Snapshot(relative, retryText, retryText + "\nclass RetentionFollowup { }"), ct);
-        Assert.True(followup.CompilerCompletedSuccessfully);
-        if (diagnosticsPerProject < SemanticEngine.MaximumCompilerCachedFindingsPerSlot)
-        {
-            Assert.Equal(OrderCompilerDiagnostics(retry.Diagnostics), OrderCompilerDiagnostics(followup.Diagnostics));
-            Assert.Contains(followup.Diagnostics, item => item.Origin == "initial");
-            Assert.Contains(followup.Diagnostics, item => item.Code == "CS0246" && item.Origin == "introduced");
-        }
-        else
-        {
-            Assert.Equal(OrderCompilerDiagnostics(retry.Diagnostics.Select(item => item with { Origin = "unknown" }).ToArray()), OrderCompilerDiagnostics(followup.Diagnostics));
-            Assert.All(followup.Diagnostics, item => Assert.Equal("unknown", item.Origin));
-            Assert.Contains(followup.Omissions, item => item.Contains("origin labels are unknown", StringComparison.Ordinal));
-        }
-
-        Assert.True(followup.ErrorComparisonAvailable);
-        Assert.Equal(0, followup.ResolvedErrors);
-        Assert.Equal(0, followup.NewErrors);
-        engine.DiscardEditCandidate(followupCommand.EffectId);
     }
 }

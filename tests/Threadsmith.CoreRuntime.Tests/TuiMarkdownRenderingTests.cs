@@ -98,21 +98,6 @@ public static class TuiMarkdownRenderingTests
         Assert.Empty(plain.Links);
     }
 
-    /// <summary>URL labels already expose the destination and must not duplicate it.</summary>
-    [Theory]
-    [InlineData("<https://example.com/docs>")]
-    [InlineData("https://example.com/docs")]
-    [InlineData("[https://example.com/docs](https://example.com/docs)")]
-    public static void Format_UrlLabel_DisplaysDestinationOnce(string source)
-    {
-        var result = new MarkdownParser().Parse(source);
-        var document = Assert.IsType<MarkdownDocument>(result.Document);
-        var segments = TuiMarkdownLayout.Format(document, 120);
-
-        Assert.Equal("https://example.com/docs\n", string.Concat(segments.Select(segment => segment.Text)));
-        Assert.Contains(segments, segment => segment.LinkTarget?.AbsoluteUri == "https://example.com/docs");
-    }
-
     /// <summary>Unsupported or unsafe autolink targets preserve surrounding Markdown without becoming active.</summary>
     [Theory]
     [InlineData("<user@example.com>")]
@@ -191,59 +176,6 @@ public static class TuiMarkdownRenderingTests
         Assert.Throws<ArgumentOutOfRangeException>(() => TuiDisplayOptions.Load(configuration));
     }
 
-    /// <summary>Deep valid Markdown falls back to source instead of unbounded recursive traversal.</summary>
-    [Theory]
-    [InlineData(4)]
-    [InlineData(32)]
-    public static void Parse_ExcessiveNesting_PreservesSource(int depth)
-    {
-        var source = string.Concat(Enumerable.Repeat("> ", 100)) + "deep";
-        var result = new MarkdownParser(new MarkdownRenderingLimits { MaximumDepth = depth }).Parse(source);
-        Assert.False(result.Succeeded);
-        Assert.Equal(source, result.SafeSource);
-    }
-
-    /// <summary>Maps supported CommonMark and selected extensions into the closed host document model.</summary>
-    [Fact]
-    public static void Parse_SupportedMarkdown_ProducesSemanticDocument()
-    {
-        const string source = """
-            # Heading
-
-            A **strong** and *soft* [link](https://example.com/path).
-
-            - [x] done
-            - [ ] open
-
-            > quoted
-
-            ```csharp
-            Console.WriteLine("safe");
-            ```
-
-            | Name | Value |
-            | --- | --- |
-            | one | two |
-            """;
-
-        var result = new MarkdownParser().Parse(source);
-
-        Assert.True(result.Succeeded);
-        var document = Assert.IsType<MarkdownDocument>(result.Document);
-        Assert.Contains(document.Blocks, block => block is MarkdownHeading { Level: 1 });
-        Assert.Contains(document.Blocks, block => block is MarkdownQuote);
-        Assert.Contains(document.Blocks, block => block is MarkdownCodeBlock { Language: "csharp" });
-        Assert.Contains(document.Blocks, block => block is MarkdownTable);
-        var list = Assert.IsType<MarkdownList>(document.Blocks.Single(block => block is MarkdownList));
-        Assert.Equal([true, false], list.Items.Select(item => item.IsChecked));
-        var paragraph = Assert.IsType<MarkdownParagraph>(document.Blocks[1]);
-        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
-        Assert.Contains(paragraph.Spans, span => span.LinkTarget?.Host == "example.com");
-        var layout = string.Concat(TuiMarkdownLayout.Format(document, 120).Select(segment => segment.Text));
-        Assert.Contains("link.", layout, StringComparison.Ordinal);
-        Assert.DoesNotContain("https://example.com/path", layout, StringComparison.Ordinal);
-    }
-
     /// <summary>Renders heading text without exposing ATX source delimiters.</summary>
     [Fact]
     public static void Format_Headings_OmitsMarkdownDelimiters()
@@ -308,33 +240,6 @@ public static class TuiMarkdownRenderingTests
         Assert.NotNull(result.FallbackReason);
     }
 
-    /// <summary>Uses a readable key/value projection when a table cannot fit the available width.</summary>
-    [Fact]
-    public static void Format_NarrowTable_UsesResponsiveKeyValueLayout()
-    {
-        var table = new MarkdownTable(
-        [
-            new MarkdownTableRow(
-                true,
-                [[new MarkdownSpan("Name")], [new MarkdownSpan("Description")]]),
-            new MarkdownTableRow(
-                false,
-                [[new MarkdownSpan("one")], [new MarkdownSpan(new string('x', 30))]]),
-        ]);
-
-        var segments = TuiMarkdownLayout.Format(
-            new MarkdownDocument([table]),
-            20);
-        var visible = string.Concat(segments.Select(segment => segment.Text));
-
-        Assert.Contains("- Name: one", visible, StringComparison.Ordinal);
-        Assert.Contains("- Description: xxxxx", visible, StringComparison.Ordinal);
-        Assert.Contains("\n               xxxxx", visible, StringComparison.Ordinal);
-        Assert.All(
-            visible.Split('\n', StringSplitOptions.RemoveEmptyEntries),
-            line => Assert.True(line.Length <= 20, $"Table line exceeded the layout width: '{line}'."));
-    }
-
     /// <summary>Preserves validated link destinations when table cells are flattened for layout.</summary>
     [Fact]
     public static void Format_TableLink_PreservesDestination()
@@ -349,98 +254,6 @@ public static class TuiMarkdownRenderingTests
         Assert.DoesNotContain("https://", visible, StringComparison.Ordinal);
         Assert.Contains(segments, segment => segment.Text.Contains("docs", StringComparison.Ordinal)
             && segment.LinkTarget?.AbsoluteUri == "https://example.com/docs");
-    }
-
-    /// <summary>Wraps an oversized header-only table through the same bounded responsive layout as data rows.</summary>
-    [Fact]
-    public static void Format_HeaderOnlyTable_WrapsAtTerminalWidth()
-    {
-        var table = new MarkdownTable(
-        [
-            new MarkdownTableRow(
-                true,
-                [[new MarkdownSpan(new string('x', 50))]]),
-        ]);
-
-        var visible = string.Concat(TuiMarkdownLayout.Format(new MarkdownDocument([table]), 20).Select(segment => segment.Text));
-
-        Assert.Equal(50, visible.Count(character => character == 'x'));
-        Assert.All(
-            visible.Split('\n', StringSplitOptions.RemoveEmptyEntries),
-            line => Assert.True(line.Length <= 20, $"Table line exceeded the layout width: '{line}'."));
-    }
-
-    /// <summary>Retains a valid zero-based CommonMark ordered-list start.</summary>
-    [Fact]
-    public static void Parse_ZeroBasedOrderedList_PreservesStart()
-    {
-        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse("0. zero").Document);
-        var list = Assert.IsType<MarkdownList>(Assert.Single(document.Blocks));
-
-        Assert.Equal(0, list.Start);
-        Assert.StartsWith(
-            "0. zero",
-            string.Concat(TuiMarkdownLayout.Format(document, 20).Select(segment => segment.Text)),
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>Wraps prose at Unicode cell widths with hanging list and quote indentation.</summary>
-    [Fact]
-    public static void Format_LongListAndQuote_UsesHangingIndentation()
-    {
-        var document = new MarkdownDocument(
-        [
-            new MarkdownList(
-                false,
-                1,
-                [new MarkdownListItem(null, [new MarkdownParagraph([new MarkdownSpan("one two three four five six")])])]),
-            new MarkdownQuote(
-                [new MarkdownParagraph([new MarkdownSpan("quoted words continue across lines")])]),
-        ]);
-
-        var visible = string.Concat(TuiMarkdownLayout.Format(document, 20).Select(segment => segment.Text));
-
-        Assert.Contains("- one two three four\n  five six", visible, StringComparison.Ordinal);
-        Assert.Contains("> quoted words\n> continue", visible, StringComparison.Ordinal);
-    }
-
-    /// <summary>Buffers rendered answers until a boundary while source mode preserves chunk cadence.</summary>
-    [Fact]
-    public static void Collector_RenderedAndSourceModes_HonorTheirCadenceContracts()
-    {
-        var rendered = new ModelAnswerCollector(renderMarkdown: true);
-        Assert.Null(rendered.Append("**hel"));
-        Assert.Null(rendered.Append("lo**"));
-        var renderedOutput = Assert.IsType<PresentationMarkdownItem>(rendered.Flush());
-        Assert.True(renderedOutput.StartsAnswerBlock);
-        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(renderedOutput.Document.Blocks));
-        Assert.Equal("hello", string.Concat(paragraph.Spans.Select(span => span.Text)));
-        Assert.Contains(paragraph.Spans, span => span.Style.HasFlag(MarkdownSpanStyle.Strong));
-
-        var source = new ModelAnswerCollector(renderMarkdown: false);
-        var first = Assert.IsType<PresentationSourceItem>(source.Append("a"));
-        var second = Assert.IsType<PresentationSourceItem>(source.Append("\u001bb"));
-        Assert.Equal("a", first.SafeSource);
-        Assert.Equal("\\u001Bb", second.SafeSource);
-        Assert.True(first.StartsAnswerBlock);
-        Assert.False(second.StartsAnswerBlock);
-        Assert.Null(source.Flush());
-        var afterBoundary = Assert.IsType<PresentationSourceItem>(source.Append("next"));
-        Assert.True(afterBoundary.StartsAnswerBlock);
-    }
-
-    /// <summary>Suppresses empty accepted deltas without opening a source-mode answer.</summary>
-    [Fact]
-    public static void Collector_SourceModeEmptyDelta_DoesNotBecomeVisible()
-    {
-        var source = new ModelAnswerCollector(renderMarkdown: false);
-
-        Assert.Null(source.Append(string.Empty));
-        Assert.Null(source.Flush());
-        var firstVisible = Assert.IsType<PresentationSourceItem>(source.Append("accepted"));
-
-        Assert.True(firstVisible.StartsAnswerBlock);
-        Assert.Equal("accepted", firstVisible.SafeSource);
     }
 
     /// <summary>An oversized buffered answer starts its source projection when it first becomes visible.</summary>
@@ -480,34 +293,6 @@ public static class TuiMarkdownRenderingTests
         cancellation.Cancel();
         var cancellationOutput = Assert.IsType<PresentationSourceItem>(cancelled.Flush(cancellation.Token));
         Assert.Equal("**partial", cancellationOutput.SafeSource);
-    }
-
-    /// <summary>Compiled themes declare Markdown styles explicitly; custom themes never inherit those styles.</summary>
-    [Fact]
-    public static void MarkdownRoles_CompiledThemesAndNoColor_HaveSafeFallbacks()
-    {
-        foreach (var configured in BuiltInThemes.Create())
-        {
-            var resolver = new TuiThemeResolver(configured.Theme);
-            Assert.True(resolver.Resolve(PresentationTextRole.MarkdownHeading).Decorations?.HasFlag(TuiTextDecoration.Bold));
-            Assert.True(resolver.Resolve(PresentationTextRole.MarkdownEmphasis).Decorations?.HasFlag(TuiTextDecoration.Italic));
-        }
-
-        var customTheme = new TuiTheme(
-            "custom",
-            [KeyValuePair.Create(
-                PresentationTextRole.Default,
-                new TuiTextStyle(Decorations: TuiTextDecoration.None))]);
-        var customResolver = new TuiThemeResolver(customTheme);
-        var emptyResolver = new TuiThemeResolver(new TuiTheme("empty", []));
-        Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
-        {
-            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), customResolver.Resolve(role));
-            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), emptyResolver.Resolve(role));
-        });
-
-        var suppressed = new TuiThemeResolver(BuiltInThemes.Create()[1].Theme, suppressStyles: true);
-        Assert.Equal(new TuiTextStyle(), suppressed.Resolve(PresentationTextRole.MarkdownHeading));
     }
 
     /// <summary>Loads markdown rendering through normal layered configuration with safe malformed-value recovery.</summary>

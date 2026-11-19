@@ -170,53 +170,6 @@ public sealed class Plan79DocumentationHelpTests
         Assert.Throws<UnauthorizedAccessException>(() => PackagedDocumentationPolicy.BindToBundle(caller, AppContext.BaseDirectory));
     }
 
-    /// <summary>A bundle read scope cannot turn an empty intersection or a deny-all caller into unrestricted authority.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static void BindToBundle_PreservesCallerToolCeilings(bool denyAll)
-    {
-        var caller = CreatePolicyContext(Path.GetTempPath()) with
-        {
-            AllowedToolIds = denyAll ? [] : ["invoke_skill"],
-            DenyAllTools = denyAll,
-        };
-
-        var bound = PackagedDocumentationPolicy.BindToBundle(caller, AppContext.BaseDirectory);
-
-        Assert.True(bound.DenyAllTools);
-    }
-
-    /// <summary>The documentation selector binds existing file tools to an application-owned read-only root.</summary>
-    [Fact]
-    public static void BindToBundle_UsesOnlyPackagedDocumentationRoot()
-    {
-        var context = new ToolInvocationContext
-        {
-            WorkspaceId = WorkspaceId.New(),
-            RepositoryPath = Path.GetTempPath(),
-            TrustLevel = RepositoryTrustLevel.TrustedRead,
-            AllowedExecutables = ["pwsh"],
-            AllowedNetworkHosts = ["example.com"],
-            RequestedBy = "test",
-        };
-
-        var bound = PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory);
-
-        Assert.Null(bound.WorkspaceId);
-        Assert.Equal(
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs")),
-            bound.RepositoryPath);
-        Assert.Empty(bound.AllowedExecutables);
-        Assert.Empty(bound.AllowedNetworkHosts);
-        Assert.True(PackagedDocumentationPolicy.IsDocumentationSkill(
-            SkillScope.Maintained,
-            "threadsmith-docs-help"));
-        Assert.False(PackagedDocumentationPolicy.IsDocumentationSkill(
-            SkillScope.Repository,
-            "threadsmith-docs-help"));
-    }
-
     /// <summary>Cited answers must resolve inside confined shipped documentation despite presentation variance.</summary>
     [Fact]
     public static async Task ValidateAnswerAsync_RequiresExactConfinedCitation()

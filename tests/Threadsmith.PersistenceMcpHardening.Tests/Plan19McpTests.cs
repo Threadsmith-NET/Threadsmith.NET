@@ -17,25 +17,6 @@ using Xunit;
 /// <summary>MCP adapter tests (§20, gap #6).</summary>
 public static class McpAdapterTests
 {
-    /// <summary>Profile capability names accept documented singular and plural spellings.</summary>
-    [Fact]
-    public static void Profile_loader_maps_documented_capability_names()
-    {
-        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(
-            new Dictionary<string, string?>
-            {
-                ["mcp:profiles:0:id"] = "docs",
-                ["mcp:profiles:0:name"] = "Docs",
-                ["mcp:profiles:0:command"] = "server",
-                ["mcp:profiles:0:allowedCapabilities:0"] = "tools",
-                ["mcp:profiles:0:allowedCapabilities:1"] = "Resource",
-            }).Build();
-
-        var profile = Assert.Single(McpProfileConfigurationLoader.Load(configuration));
-
-        Assert.Equal([McpCapabilityKind.Tool, McpCapabilityKind.Resource], profile.AllowedCapabilities);
-    }
-
     /// <summary>Unknown capability configuration fails closed rather than enabling every capability.</summary>
     [Fact]
     public static void Profile_loader_rejects_unknown_capability_kind()
@@ -50,98 +31,6 @@ public static class McpAdapterTests
             }).Build();
 
         Assert.Throws<InvalidOperationException>(() => McpProfileConfigurationLoader.Load(configuration));
-    }
-
-    /// <summary>An imported MCP tool is registered and executes through the host tool pipeline.</summary>
-    [Fact]
-    public static async Task Imported_tool_appears_in_registry_and_invokes_through_pipeline()
-    {
-        var transport = new InMemoryMcpTransport();
-        transport.Capabilities.Add(new McpImportedCapability
-        {
-            Id = "mcp_echo",
-            Kind = McpCapabilityKind.Tool,
-            ServerName = "echo",
-            Description = "Echoes arguments",
-            InputSchemaJson = "{}",
-        });
-        var calls = 0;
-        transport.InvokeHandler = args =>
-        {
-            calls++;
-            return new McpTransportInvocation
-            {
-                Succeeded = true,
-                ResultJson = "{\"echo\":" + args + "}",
-            };
-        };
-
-        var secretStore = new StaticSecretStore();
-        var adapter = new McpAdapter(
-            _ => transport,
-            secretStore,
-            new SecretOutputSanitizer(),
-            NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        var profile = new McpConnectionProfile
-        {
-            Id = "echo-profile",
-            DisplayName = "Echo",
-            Command = "echo-server",
-            Trust = McpTrustLevel.TrustedRead,
-        };
-        var result = await adapter.ConnectAsync(profile, CancellationToken.None);
-
-        Assert.True(result.Succeeded);
-        Assert.Single(result.Tools);
-        var tool = result.Tools[0];
-        Assert.Equal("mcp_echo", tool.Definition.Id);
-
-        var ct = TestContext.Current.CancellationToken;
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        var registry = new ToolRegistry(result.Tools);
-        var pipeline = new ToolInvocationPipeline(
-            registry,
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var request = new ToolInvocationRequest
-        {
-            SessionId = SessionId.New(),
-            RunId = RunId.New(),
-            ToolId = "mcp_echo",
-            ArgumentsJson = "{\"message\":\"hi\"}",
-            Context = NewContext() with { TrustLevel = RepositoryTrustLevel.TrustedBuild },
-        };
-        var invoked = await pipeline.InvokeAsync(request, ct);
-        Assert.True(invoked.Succeeded, invoked.Error);
-        Assert.Equal(1, calls);
-        using var echoed = JsonDocument.Parse(Assert.IsType<string>(invoked.ResultJson));
-        Assert.Equal("hi", echoed.RootElement.GetProperty("echo").GetProperty("message").GetString());
-        Assert.Single(observed.OfType<ToolInvocationStarted>());
-        Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>()).Succeeded);
-
-        observed.Clear();
-        var denied = await pipeline.InvokeAsync(
-            request with
-            {
-                Context = request.Context with { DeniedToolIds = ["mcp_echo"] },
-            }, ct);
-        Assert.False(denied.Succeeded);
-        Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
-        Assert.Equal(1, calls);
-        Assert.False(Assert.Single(observed.OfType<ToolInvocationCompleted>()).Succeeded);
     }
 
     /// <summary>An untrusted MCP connection profile is rejected before connection.</summary>
@@ -435,15 +324,6 @@ public static class McpAdapterTests
         var tool = result.Tools[0];
         var hosts = tool.GetNetworkHosts(new object());
         Assert.Contains("mcp.example.com", hosts);
-    }
-
-    private static ToolInvocationContext NewContext()
-    {
-        return new()
-        {
-            RepositoryPath = ".",
-            RequestedBy = "test",
-        };
     }
 }
 

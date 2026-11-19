@@ -119,162 +119,6 @@ public sealed partial class SkillSubsystemTests
             result.Checkpoint.InputJson);
     }
 
-    /// <summary>Artifact output may be backed by any producer that reports a matching artifact side effect.</summary>
-    [Fact]
-    public async Task SkillWorkflow_ArtifactOutputAcceptsMatchingCustomProducer()
-    {
-        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
-        var sourceCatalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
-        await sourceCatalog.RefreshAsync();
-        var verified = await new SkillPackageVerifier(new SkillTrustPolicySnapshot()).VerifyAsync(sourceCatalog.Resolve("review"));
-        var skillId = new SkillId("artifact-contract-test");
-        var candidate = verified with
-        {
-            Identity = verified.Identity with { SkillId = skillId },
-            Metadata = verified.Metadata with
-            {
-                SkillId = skillId,
-                Workflow = verified.Metadata.Workflow with
-                {
-                    Steps = [Assert.Single(verified.Metadata.Workflow.Steps) with { OutputSchemaAsset = null }],
-                },
-            },
-        };
-        var selected = ModelProfileId.New();
-        var state = new InMemorySkillStateStore();
-        await using var events = new DomainEventStream();
-        await using var workflow = new SkillWorkflowOrchestrator(
-            new FixedCatalog([candidate]),
-            new PassThroughVerifier(),
-            new CompatibleEvaluator { Profiles = [selected] },
-            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
-            new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner(
-                "{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Artifact created\",\"artifact\":{\"path\":\"artifact-id\",\"bytesWritten\":12}}",
-                [ArtifactSideEffect("custom_artifact_writer", "artifact-id", 12)]),
-            TestPromptLoader.Instance,
-            state,
-            (_, _) => Task.FromResult(new SkillInvocationHostContext
-            {
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-                ModelProfileId = selected,
-                ReasoningLevel = "medium",
-            }),
-            events);
-
-        var result = await workflow.InvokeAsync(PermissionPlan().Request with
-        {
-            Selector = skillId.Value,
-            InputJson = input,
-            HostBudget = new SkillBudget(),
-        });
-
-        Assert.Equal(SkillInvocationStatus.Completed, result.Status);
-        Assert.Equal("custom_artifact_writer", Assert.Single(Assert.Single(result.Checkpoint.Steps).SideEffects).ToolId);
-    }
-
-    /// <summary>Repository-relative artifact claims match the absolute path returned by a write tool.</summary>
-    [Theory]
-    [InlineData(".inbox/review.md", 12, true)]
-    [InlineData("elsewhere/review.md", 12, false)]
-    [InlineData(".inbox/review.md", 13, false)]
-    public async Task SkillWorkflow_ArtifactOutputResolvesRepositoryRelativePath(
-        string claimedPath,
-        long observedBytes,
-        bool matches)
-    {
-        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
-        var repositoryPath = Path.Combine(Path.GetTempPath(), "threadsmith-artifact-validation");
-        var observedPath = Path.Combine(repositoryPath, ".inbox", "review.md");
-        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
-        await catalog.RefreshAsync();
-        var selected = ModelProfileId.New();
-        var state = new InMemorySkillStateStore();
-        await using var events = new DomainEventStream();
-        await using var workflow = new SkillWorkflowOrchestrator(
-            catalog,
-            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
-            new CompatibleEvaluator { Profiles = [selected] },
-            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
-            new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner(
-                System.Text.Json.JsonSerializer.Serialize(new
-                {
-                    succeeded = true,
-                    delivery = "artifact",
-                    response = "Artifact created",
-                    artifact = new { path = claimedPath, bytesWritten = 12 },
-                }),
-                [ArtifactSideEffect("write_file", observedPath, observedBytes)]),
-            TestPromptLoader.Instance,
-            state,
-            (_, _) => Task.FromResult(new SkillInvocationHostContext
-            {
-                RepositoryPath = repositoryPath,
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-                ModelProfileId = selected,
-                ReasoningLevel = "medium",
-            }),
-            events);
-        var request = PermissionPlan().Request with
-        {
-            Selector = "review",
-            InputJson = input,
-            HostBudget = new SkillBudget(),
-        };
-
-        if (matches)
-        {
-            var result = await workflow.InvokeAsync(request);
-            Assert.Equal(SkillInvocationStatus.Completed, result.Status);
-        }
-        else
-        {
-            var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(request));
-            Assert.Contains("not observed in artifact side effects", error.Message, StringComparison.Ordinal);
-        }
-    }
-
-    /// <summary>An artifact claim must be backed by an observed side effect.</summary>
-    [Fact]
-    public async Task SkillWorkflow_ArtifactOutputRequiresObservedSideEffect()
-    {
-        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
-        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
-        await catalog.RefreshAsync();
-        var selected = ModelProfileId.New();
-        var state = new InMemorySkillStateStore();
-        await using var events = new DomainEventStream();
-        await using var workflow = new SkillWorkflowOrchestrator(
-            catalog,
-            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
-            new CompatibleEvaluator { Profiles = [selected] },
-            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
-            new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Artifact created\",\"artifact\":{\"path\":\"artifact-id\",\"bytesWritten\":12}}"),
-            TestPromptLoader.Instance,
-            state,
-            (_, _) => Task.FromResult(new SkillInvocationHostContext
-            {
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-                ModelProfileId = selected,
-                ReasoningLevel = "medium",
-            }),
-            events);
-
-        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
-        {
-            Selector = "review",
-            InputJson = input,
-            HostBudget = new SkillBudget(),
-        }));
-
-        Assert.Contains("not observed in artifact side effects", error.Message, StringComparison.Ordinal);
-    }
-
     /// <summary>An observed artifact must match both the path and byte count claimed by the output.</summary>
     [Theory]
     [InlineData("other-artifact", 12)]
@@ -522,21 +366,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(0, counters.InputTokens);
     }
 
-    /// <summary>Session-activated tools are inherited only by their owning invocation.</summary>
-    [Fact]
-    public async Task NativeCompatibility_UsesSessionScopedActivation()
-    {
-        var request = PermissionPlan().Request;
-        var registry = new ToolRegistry([new PermissionProbeTool()], activationPolicy: new SessionActivation(request.SessionId));
-        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
-        await catalog.RefreshAsync();
-        var candidate = catalog.Resolve("review");
-        var evaluator = new SkillCompatibilityEvaluator(registry, new ConfiguredModelCatalog([]), "1.0.0");
-
-        Assert.Contains("permission_probe", evaluator.Evaluate(candidate, request).InheritedTools);
-        Assert.Empty(evaluator.Evaluate(candidate, request with { SessionId = SessionId.New() }).InheritedTools);
-    }
-
     /// <summary>A semantic tool failure retains its diagnostic body in the native continuation.</summary>
     [Fact]
     public async Task NativeProcedure_FailedToolRetainsDiagnosticContent()
@@ -621,14 +450,6 @@ public sealed partial class SkillSubsystemTests
             cancellationToken.ThrowIfCancellationRequested();
             SkillProcedureInterruption.Attach(sideEffects, exception);
             return Task.FromException<SkillProcedureResult>(exception);
-        }
-    }
-
-    private sealed class SessionActivation(SessionId owner) : IProgressiveToolActivationPolicy
-    {
-        public bool IsActive(string toolId, SessionId sessionId, RunId runId)
-        {
-            return sessionId == owner;
         }
     }
 

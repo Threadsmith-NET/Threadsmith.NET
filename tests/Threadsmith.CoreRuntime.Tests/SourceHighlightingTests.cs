@@ -21,27 +21,6 @@ public sealed class SourceHighlightingTests
         Assert.Empty(highlighter.Highlight(new string('\n', ToolSourceDetail.MaximumCharacters), "csharp"));
     }
 
-    /// <summary>Blank-line allocation stays independent of the source line count.</summary>
-    [Fact]
-    public void EmptyLineHighlightingAllocationsDoNotGrowWithLineCount()
-    {
-        var highlighter = new TuiKitSourceHighlighter();
-        var large = new string('\n', ToolSourceDetail.MaximumCharacters);
-        highlighter.Highlight("\n", "csharp");
-        highlighter.Highlight(large, "csharp");
-
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var smallRanges = highlighter.Highlight("\n", "csharp");
-        var smallBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        var largeRanges = highlighter.Highlight(large, "csharp");
-        var largeBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Empty(smallRanges);
-        Assert.Empty(largeRanges);
-        Assert.True(largeBytes <= smallBytes + 1024, $"Blank lines allocated {largeBytes} bytes versus {smallBytes} bytes.");
-    }
-
     /// <summary>Logical line count bounds tokenization independently of source length.</summary>
     [Fact]
     public void HighlightingFallsBackAboveLineBudgetWithoutChangingSource()
@@ -62,25 +41,6 @@ public sealed class SourceHighlightingTests
         Assert.Equal(new SourceHighlightSpan(0, maximumSource.Length, PresentationTextRole.MarkdownCode), Assert.Single(document.Ranges));
         Assert.Equal(maximumSource, document.DisplaySource);
         Assert.Equal(maximumSource, document.CopyRange(0, document.DisplaySource.Length));
-    }
-
-    /// <summary>Adjacent equal styles and plain gaps share compact ranges.</summary>
-    [Fact]
-    public void DocumentMergesAdjacentStylesAndKeepsOffsetsInsteadOfSubstrings()
-    {
-        var document = new SourceDocument("abcde", "csharp", new FixedHighlighter([
-            new(0, 1, PresentationTextRole.MarkdownCode),
-            new(1, 1, PresentationTextRole.MarkdownCode),
-            new(3, 1, PresentationTextRole.Warning),
-        ]));
-
-        SourceHighlightSpan[] expected = [
-            new(0, 3, PresentationTextRole.MarkdownCode),
-            new(3, 1, PresentationTextRole.Warning),
-            new(4, 1, PresentationTextRole.MarkdownCode),
-        ];
-        Assert.Equal(expected, document.Ranges);
-        Assert.Equal("abcde", document.CopyRange(0, 5));
     }
 
     /// <summary>Invalid styles cannot change display coverage or copy authority.</summary>

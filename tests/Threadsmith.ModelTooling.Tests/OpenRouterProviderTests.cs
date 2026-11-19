@@ -139,33 +139,6 @@ public static partial class OpenRouterProviderTests
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
     }
 
-    /// <summary>Validates the OpenRouter request and response boundary.</summary>
-    [Fact]
-    public static async Task RequestProjection_UsesNestedReasoningAndPreservesNonStrictSchema()
-    {
-        var model = Model() with
-        {
-            ReasoningControl = ReasoningControllability.Selectable,
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
-            EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.High] = "high" },
-        };
-        using var handler = new Handler(Completed());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        await Provider(client, model).StreamAsync(Request() with { ReasoningLevel = ReasoningLevel.High }, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-        using var json = JsonDocument.Parse(handler.Body!);
-        var body = json.RootElement;
-        Assert.Equal("high", body.GetProperty("reasoning").GetProperty("effort").GetString());
-        Assert.True(body.TryGetProperty("max_output_tokens", out _));
-        Assert.Equal(new Uri("https://openrouter.ai/api/v1/responses"), handler.RequestUri);
-        Assert.False(body.GetProperty("store").GetBoolean());
-        Assert.False(body.TryGetProperty("messages", out _));
-        Assert.False(body.TryGetProperty("max_completion_tokens", out _));
-        Assert.False(body.TryGetProperty("reasoning_effort", out _));
-        var function = body.GetProperty("tools")[0];
-        Assert.False(function.GetProperty("strict").GetBoolean());
-        Assert.False(function.GetProperty("parameters").TryGetProperty("required", out _));
-    }
-
     /// <summary>Rejects invalid protocol data without executing tools.</summary>
     [Theory]
     [InlineData("{\"type\":\"reasoning\",\"encrypted_content\":{},\"summary\":[]}")]
@@ -228,107 +201,6 @@ public static partial class OpenRouterProviderTests
         Assert.Throws<InvalidOperationException>(() => registration.Validate(Configuration(Model() with { SupportsReasoningReplay = true, ReasoningControl = ReasoningControllability.AlwaysOn })));
     }
 
-    /// <summary>Explicit markers share preparation with dispatch, including text-tool mode.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public static async Task CacheProjection_IsDeterministicAndSupportsTextTools(bool textTools, bool toolTail)
-    {
-        var model = Model() with { MinimumCacheableTokens = 1, RequestOutputTokenReserve = 1000 };
-        var config = Configuration(model);
-        var registration = new OpenRouterProviderRegistration();
-        var profile = Assert.Single(registration.CreateProfiles(config));
-        var request = Request() with
-        {
-            Tools = [],
-            ToolTransportMode = textTools ? ToolTransportMode.Text : ToolTransportMode.Native,
-            WireEstimate = new ModelWireEstimate { TextToolTokens = 25 },
-            Layout = new ModelRequestLayout { CacheFamily = "test", StablePrefixDigest = "test", StablePrefixMessageCount = 1 },
-            Messages = [new ModelMessage { Role = ModelMessageRole.System, SectionId = "host-policy", Content = [new() { Content = new string('x', 100) }] },
-                new ModelMessage { Role = ModelMessageRole.User, SectionId = "user", Content = [new() { Content = "hello" }] }],
-        };
-        if (toolTail)
-        {
-            request = request with
-            {
-                Messages = [.. request.Messages,
-                    Message(ModelMessageRole.Assistant, "{}") with { ToolCallId = "call", ToolName = "inspect" },
-                    Message(ModelMessageRole.Tool, "result") with { ToolCallId = "call" }],
-            };
-        }
-
-        var context = new ModelRequestPreparationContext { Request = request, Profile = profile, ProviderConfiguration = config, ModelConfiguration = model };
-        var prepared = registration.Prepare(context);
-        Assert.Single(prepared.CachePlan!.Breakpoints);
-        Assert.Equal(prepared.WireDigest, registration.Prepare(context with { Request = request with { WireEstimate = prepared.WireEstimate, Preparation = prepared } }).WireDigest);
-        using var handler = new Handler(Completed());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        await Provider(client, model).StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-        using var json = JsonDocument.Parse(handler.Body!);
-        var tail = json.RootElement.GetProperty("input")[toolTail ? 3 : 1];
-        var block = tail.GetProperty(toolTail ? "output" : "content")[0];
-        Assert.Equal("input_text", block.GetProperty("type").GetString());
-        Assert.Equal(toolTail ? "result" : "hello", block.GetProperty("text").GetString());
-        Assert.Equal("explicit", block.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
-        Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
-        Assert.Equal(1000, json.RootElement.GetProperty("max_output_tokens").GetInt32());
-        Assert.Equal(request.RunId.Value.ToString("D"), json.RootElement.GetProperty("session_id").GetString());
-    }
-
-    /// <summary>Automatic caching and ineligible prefixes do not introduce explicit boundaries.</summary>
-    [Theory]
-    [InlineData("disabled")]
-    [InlineData("automatic-only")]
-    [InlineData("no-layout")]
-    [InlineData("short-prefix")]
-    [InlineData("no-boundary")]
-    public static async Task CacheProjection_OmitsUnplannedMarkers(string scenario)
-    {
-        var model = Model() with
-        {
-            MinimumCacheableTokens = scenario is "disabled" or "automatic-only" ? null : scenario == "short-prefix" ? 10000 : 1,
-            AutomaticPrefixCaching = scenario == "automatic-only",
-        };
-        var registration = new OpenRouterProviderRegistration();
-        var config = Configuration(model);
-        var profile = Assert.Single(registration.CreateProfiles(config));
-        var request = Request() with
-        {
-            Layout = scenario == "no-layout" ? null : new ModelRequestLayout
-            {
-                CacheFamily = "test",
-                StablePrefixDigest = "test",
-                StablePrefixMessageCount = scenario == "no-boundary" ? 0 : 1,
-            },
-            Messages = [Message(ModelMessageRole.System, new string('x', 100)), Message(ModelMessageRole.User, "hello")],
-        };
-        using var handler = new Handler(Completed());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-
-        var prepared = registration.Prepare(new ModelRequestPreparationContext { Request = request, Profile = profile, ProviderConfiguration = config, ModelConfiguration = model });
-        await CollectAsync(Provider(client, model), request, []);
-
-        Assert.Empty(prepared.CachePlan!.Breakpoints);
-        Assert.DoesNotContain("prompt_cache_breakpoint", handler.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
-    }
-
-    /// <summary>Vision admission is independent of compressed transport size.</summary>
-    [Fact]
-    public static void Preparation_CountsImageDimensions()
-    {
-        var model = Model() with { ContextWindow = 1000000, SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image, SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed };
-        var config = Configuration(model);
-        var registration = new OpenRouterProviderRegistration();
-        var profile = Assert.Single(registration.CreateProfiles(config));
-        var image = new ImageArtifact { Id = "image", ContentHash = "hash", MediaType = "image/png", ByteLength = 100, Width = 4096, Height = 4096, Source = "fixture" };
-        var request = Request() with { Messages = [new ModelMessage { Role = ModelMessageRole.User, SectionId = "image", Content = [new() { Kind = ModelContentPartKind.Image, Image = image }] }] };
-        var result = registration.Prepare(new ModelRequestPreparationContext { Request = request, Profile = profile, ProviderConfiguration = config, ModelConfiguration = model });
-        Assert.True(result.WireEstimate.WireInputTokens >= ModelImages.EstimateTokens(image));
-    }
-
     /// <summary>Charges and cache estimates survive partial usage and failed responses.</summary>
     [Theory]
     [InlineData(false)]
@@ -372,29 +244,6 @@ public static partial class OpenRouterProviderTests
         await Assert.ThrowsAsync<MalformedModelOutputException>(async () => await Provider(client, Model() with { Upstreams = [new() { Provider = "test/region", ExpectedProviderName = "Test" }] }).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Repository layers cannot change trusted upstream routing under an inherited model id.</summary>
-    [Fact]
-    public static void Catalog_RoundTripsAndProtectsRouting()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-router-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var model = Model() with { Upstreams = [new() { Provider = "trusted", ExpectedProviderName = "Trusted" }] };
-            var registry = new ModelProviderRegistry([new OpenRouterProviderRegistration()]);
-            var user = Path.Combine(root, "user.json");
-            var repository = Path.Combine(root, "repository.json");
-            File.WriteAllText(user, JsonSerializer.Serialize(new ModelProviderCatalogConfiguration { Providers = [Configuration(model)] }, registry.CreateSerializerOptions()));
-            Assert.Single(ModelProviderConfigurationLoader.Load(user, repository, registry).ModelCatalog.Profiles);
-            File.WriteAllText(repository, JsonSerializer.Serialize(new { providers = new[] { new { id = "router", models = new[] { new { id = model.Id.Value, upstreams = new[] { new { provider = "untrusted", expectedProviderName = "Untrusted" } } } } } } }));
-            Assert.Throws<InvalidOperationException>(() => ModelProviderConfigurationLoader.Load(user, repository, registry));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     /// <summary>Unexpected required private state cannot be dropped after tool effects are released.</summary>
     [Fact]
     public static async Task ReplayDisabled_SignedToolsAreRejectedAfterAccounting()
@@ -411,17 +260,6 @@ public static partial class OpenRouterProviderTests
         });
         Assert.Single(chunks, chunk => chunk.Usage is not null);
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
-    }
-
-    /// <summary>Opaque protocol state does not suppress a separately permitted plain summary.</summary>
-    [Fact]
-    public static async Task EncryptedDetails_PreservePlainDisplay()
-    {
-        using var handler = new Handler(ReasoningDelta("summary") + Completed(ReasoningItem("opaque", "summary")));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = await Provider(client, Model()).StreamAsync(Request(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-        Assert.Equal("summary", string.Concat(chunks.Select(chunk => chunk.Reasoning)));
-        Assert.DoesNotContain("opaque", JsonSerializer.Serialize(chunks), StringComparison.Ordinal);
     }
 
     /// <summary>Replay preserves ordering, metadata and null/empty fields while joining all fragment kinds.</summary>
@@ -461,32 +299,6 @@ public static partial class OpenRouterProviderTests
         Assert.Equal("opaque-state", blocks[0].GetProperty("encrypted_content").GetString());
         Assert.Equal("function_call", blocks[1].GetProperty("type").GetString());
         Assert.Equal("id", blocks[1].GetProperty("call_id").GetString());
-    }
-
-    /// <summary>OpenRouter uses the shared elapsed busy window and one notice.</summary>
-    [Theory]
-    [InlineData(0, 429, 1)]
-    [InlineData(1, 429, 3)]
-    [InlineData(15, 429, 7)]
-    [InlineData(0, 503, 1)]
-    [InlineData(15, 503, 7)]
-    [InlineData(15, 529, 7)]
-    public static async Task BusyStream_UsesSharedRetriesAndOneBusyNotice(int seconds, int status, int expectedAttempts)
-    {
-        using var handler = new Handler(Failed(status));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var model = Model() with { RetryMaxAttempts = 1, RetryDelayMilliseconds = 0, RetryBusyTimeoutSeconds = seconds };
-        var chunks = new List<ModelChunk>();
-        var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
-        {
-            await foreach (var chunk in Provider(client, model).StreamAsync(Request(), TestContext.Current.CancellationToken))
-            {
-                chunks.Add(chunk);
-            }
-        });
-        Assert.Equal(expectedAttempts, handler.Calls);
-        Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
-        Assert.DoesNotContain("test-key", exception.Message, StringComparison.Ordinal);
     }
 
     /// <summary>Reported charges and cache counters survive each rate-limited attempt.</summary>

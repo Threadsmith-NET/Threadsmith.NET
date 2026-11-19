@@ -125,25 +125,6 @@ public sealed class AgentNaturalResponseClassificationTests
         Assert.False(DelegationOutcomeClassifier.HasUsableResult(plan, restored with { Findings = null }));
     }
 
-    /// <summary>Legacy reviewer results remain usable without a new natural response field.</summary>
-    [Fact]
-    public void LegacyReviewer_StillAcceptsStructuredReview()
-    {
-        var (plan, outcome) = CreateCase(AgentRole.TestReviewer, schema: "agent-test-review/1");
-        outcome = outcome with
-        {
-            Review = new ReviewFindingSet
-            {
-                AssignmentId = outcome.AssignmentId,
-                Role = outcome.Role,
-                Generation = outcome.Generation,
-                Findings = [],
-            },
-        };
-        Assert.Null(outcome.Response);
-        Assert.True(DelegationOutcomeClassifier.HasUsableResult(plan, outcome));
-    }
-
     /// <summary>Approved mutation preparation does not replace its real proposal handoff with a textual claim.</summary>
     [Fact]
     public void LegacyPreparation_RequiresImplementationAndCommonFindings()

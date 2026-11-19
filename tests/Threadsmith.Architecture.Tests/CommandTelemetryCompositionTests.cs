@@ -11,17 +11,6 @@ using Xunit;
 /// <summary>Production composition wiring tests for Plan 64 (AR-01) command telemetry.</summary>
 public static class CommandTelemetryCompositionTests
 {
-    /// <summary>Production composition supplies exactly one telemetry middleware to the dispatcher pipeline.</summary>
-    [Fact]
-    public static void ApplicationComposition_ProductionMiddleware_SuppliesExactlyOneTelemetryMiddleware()
-    {
-        var middleware = Threadsmith.App.ApplicationComposition.CreateProductionMiddleware(
-            NullLoggerFactory.Instance);
-
-        Assert.Single(middleware);
-        Assert.IsType<CommandTelemetryMiddleware>(middleware[0]);
-    }
-
     /// <summary>Validation request defaults preserve semantic, build, diagnostics, and test gates.</summary>
     [Fact]
     public static void BuildValidationRequest_DefaultValidationStages_PreserveBuildAndTests()

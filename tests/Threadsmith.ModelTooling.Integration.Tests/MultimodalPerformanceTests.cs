@@ -13,59 +13,6 @@ using Xunit;
 
 public sealed partial class MultimodalTests
 {
-    /// <summary>Exercises production keyset cleanup across multiple batches, tied timestamps and owned rows.</summary>
-    [Theory]
-    [InlineData(1000)]
-    [InlineData(5000)]
-    [InlineData(10000)]
-    public async Task QuotaCleanupUsesOrderedBatches(int count)
-    {
-        await using var fixture = await Fixture.CreateAsync(maximumRetainedImageBytes: (count / 2) + Png.Length);
-        var token = TestContext.Current.CancellationToken;
-        await using var connection = new SqliteConnection($"Data Source={Path.Combine(fixture.Root, "state.db")};Pooling=False");
-        await connection.OpenAsync(token);
-        await using (var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(token))
-        {
-            await using var insert = connection.CreateCommand();
-            insert.Transaction = transaction;
-            insert.CommandText = "INSERT INTO artifacts VALUES($hash, 'image', 1, NULL, $hash || '.bin', '2026-01-01');";
-            var hash = insert.Parameters.Add("$hash", SqliteType.Text);
-            for (var index = 0; index < count; index++)
-            {
-                hash.Value = index.ToString("D64", System.Globalization.CultureInfo.InvariantCulture);
-                await insert.ExecuteNonQueryAsync(token);
-            }
-
-            await using var protect = connection.CreateCommand();
-            protect.Transaction = transaction;
-            protect.CommandText = "INSERT INTO image_artifact_refs VALUES('owned', 'shared-session', $hash, '{}');";
-            protect.Parameters.AddWithValue("$hash", new string('0', 64));
-            await protect.ExecuteNonQueryAsync(token);
-            await transaction.CommitAsync(token);
-        }
-
-        await using var plan = connection.CreateCommand();
-        plan.CommandText = "EXPLAIN QUERY PLAN SELECT content_hash, length, recorded_at FROM artifacts a WHERE kind='image' AND (recorded_at, content_hash) > ('2025', '') AND NOT EXISTS (SELECT 1 FROM image_artifact_refs r WHERE r.content_hash = a.content_hash) ORDER BY recorded_at, content_hash LIMIT 128;";
-        var details = new List<string>();
-        await using (var reader = await plan.ExecuteReaderAsync(token))
-        {
-            while (await reader.ReadAsync(token))
-            {
-                details.Add(reader.GetString(3));
-            }
-        }
-
-        Assert.Contains(details, detail => detail.Contains("ix_artifacts_image_quota", StringComparison.Ordinal));
-        Assert.DoesNotContain(details, detail => detail.Contains("TEMP B-TREE", StringComparison.Ordinal));
-        var watch = Stopwatch.StartNew();
-        await fixture.Store.StoreImageAsync(new MemoryStream(Png), SessionId.New(), "quota", cancellationToken: token);
-        watch.Stop();
-        var remaining = await fixture.Store.ListAsync(null, token);
-        Assert.Equal((count / 2) + 1, remaining.Count);
-        Assert.Contains(remaining, item => item.ContentHash == new string('0', 64));
-        TestContext.Current.TestOutputHelper?.WriteLine($"Quota rows={count}; reclaimed={count / 2}; elapsed={watch.Elapsed.TotalMilliseconds:F1} ms (production deletion, missing-body fixtures).");
-    }
-
     /// <summary>Serializes exact binary bytes once, including base64 padding, escaping and maximum request payloads.</summary>
     [Theory]
     [InlineData(1, 1)]

@@ -112,6 +112,10 @@ Use `--include` with the changed file paths to focus whitespace and analyzer che
 
 ## Testing changes
 
+Use small, isolated unit tests for business rules, validation, mapping, and state transitions. Keep them under 50 ms and use in-memory inputs with fakes at external boundaries. Use integration tests when the behavior depends on a real database, subprocess, network boundary, or evaluated workspace. Keep each integration case under 60 seconds by limiting the fixture and exercising one distinct behavior per case.
+
+Keep repository traversal and repeated inference benchmarks out of Test Explorer. CI checks the duration of each executed case from its xUnit report and rejects cases that reach 60 seconds.
+
 Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
 
 Before submitting new or changed tests, review these sources of local/CI differences:

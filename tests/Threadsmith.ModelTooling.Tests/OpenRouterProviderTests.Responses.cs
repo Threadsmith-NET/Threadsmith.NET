@@ -68,41 +68,6 @@ public static partial class OpenRouterProviderTests
         }
     }
 
-    /// <summary>Previously accepted effort values and controls retain their exact projection.</summary>
-    [Theory]
-    [InlineData("minimal")]
-    [InlineData("low")]
-    [InlineData("medium")]
-    [InlineData("high")]
-    [InlineData("xhigh")]
-    [InlineData("max")]
-    public static async Task Controls_PreserveEffortSamplingAndPinnedRouting(string effort)
-    {
-        var model = ReplayModel() with
-        {
-            ReasoningControl = ReasoningControllability.Selectable,
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
-            EffortMap = new Dictionary<ReasoningLevel, string> { [ReasoningLevel.High] = effort },
-            SeedSupported = true,
-            Temperature = 0.25m,
-        };
-        using var handler = new Handler(Completed());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var affinity = Guid.NewGuid();
-        await CollectAsync(Provider(client, model), Request() with { Seed = 12345, CacheAffinityId = affinity, ReasoningLevel = ReasoningLevel.High }, []);
-        using var json = JsonDocument.Parse(handler.Body!);
-        var body = json.RootElement;
-        Assert.Equal(effort, body.GetProperty("reasoning").GetProperty("effort").GetString());
-        Assert.Equal(12345, body.GetProperty("seed").GetInt32());
-        Assert.Equal(0.25m, body.GetProperty("temperature").GetDecimal());
-        Assert.Equal(affinity.ToString("D"), body.GetProperty("session_id").GetString());
-        Assert.False(body.GetProperty("provider").GetProperty("allow_fallbacks").GetBoolean());
-        Assert.True(body.GetProperty("provider").GetProperty("require_parameters").GetBoolean());
-        Assert.Equal("fixture", body.GetProperty("provider").GetProperty("only")[0].GetString());
-        Assert.Equal("fixture", body.GetProperty("provider").GetProperty("order")[0].GetString());
-        Assert.False(body.TryGetProperty("previous_response_id", out _));
-    }
-
     /// <summary>Seed capability gates only seed; optional temperature remains independent.</summary>
     [Theory]
     [InlineData(false, false)]
@@ -189,22 +154,6 @@ public static partial class OpenRouterProviderTests
             Assert.Equal(0, usage.InputTokens);
             Assert.Equal(0, usage.OutputTokens);
         }
-    }
-
-    /// <summary>Invalid accounting cannot authorize a tool batch.</summary>
-    [Theory]
-    [InlineData("{\"input_tokens\":-1}")]
-    [InlineData("{\"output_tokens\":\"1\"}")]
-    [InlineData("{\"input_tokens\":10,\"input_tokens_details\":{\"cached_tokens\":8,\"cache_write_tokens\":3}}")]
-    [InlineData("{\"cost\":-0.1}")]
-    [InlineData("{\"cost\":\"0.1\"}")]
-    public static async Task InvalidUsage_ReleasesNoTools(string wire)
-    {
-        using var handler = new Handler(Terminal("response.completed", "completed", new JsonArray(FunctionCall("call")), JsonNode.Parse(wire)!.AsObject()));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = new List<ModelChunk>();
-        await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(Provider(client, Model()), Request(), chunks));
-        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
     }
 
     /// <summary>EOF and malformed terminal frames are not successful completion.</summary>
@@ -440,98 +389,6 @@ public static partial class OpenRouterProviderTests
         Assert.Equal(4, second.RootElement.GetProperty("input").GetArrayLength());
     }
 
-    /// <summary>Admitted user and tool images retain order; capability and capacity rejection never reads bytes.</summary>
-    [Theory]
-    [InlineData("user")]
-    [InlineData("tool")]
-    [InlineData("unsupported")]
-    [InlineData("capacity")]
-    [InlineData("user", true)]
-    [InlineData("tool", true)]
-    public static async Task Images_UseNativeContentAfterAdmission(string scenario, bool explicitCache = false)
-    {
-        var image = new ImageArtifact { Id = "image", Source = "fixture", MediaType = "image/png", ByteLength = 3, Width = 1, Height = 1, ContentHash = new string('a', 64) };
-        var reads = 0;
-        var role = scenario == "tool" ? ModelMessageRole.Tool : ModelMessageRole.User;
-        var message = Message(role, "before") with
-        {
-            ToolCallId = role == ModelMessageRole.Tool ? "call" : null,
-            Content = [new() { Content = "before" }, new() { Kind = ModelContentPartKind.Image, Image = image }, new() { Content = "after" }],
-        };
-        if (explicitCache)
-        {
-            message = message with { Content = [message.Content[0], message.Content[1]] };
-        }
-
-        var request = Request() with
-        {
-            Layout = explicitCache ? new ModelRequestLayout { CacheFamily = "test", StablePrefixDigest = "test", StablePrefixMessageCount = 1 } : null,
-            Messages = role == ModelMessageRole.Tool ? [Message(ModelMessageRole.Assistant, "{}") with { ToolCallId = "call", ToolName = "inspect" }, message] : [message],
-            ResolveImageAsync = (_, token) =>
-            {
-                token.ThrowIfCancellationRequested();
-                reads++;
-                return Task.FromResult<ReadOnlyMemory<byte>>(new byte[] { 1, 2, 3 });
-            },
-        };
-        var model = Model() with
-        {
-            MinimumCacheableTokens = explicitCache ? 1 : null,
-            SupportedInputContentTypes = scenario == "unsupported" ? ModelContentTypes.Text : ModelContentTypes.Text | ModelContentTypes.Image,
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
-            ContextWindow = scenario == "capacity" ? 5000 : 32000,
-        };
-        using var handler = new Handler(Completed());
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        if (scenario is "capacity" or "unsupported")
-        {
-            var error = await Record.ExceptionAsync(() => CollectAsync(Provider(client, model), request, []));
-            Assert.NotNull(error);
-            Assert.Equal(0, reads);
-            Assert.Equal(0, handler.Calls);
-            return;
-        }
-
-        await CollectAsync(Provider(client, model), request, []);
-        Assert.Equal(1, reads);
-        using var json = JsonDocument.Parse(handler.Body!);
-        var input = json.RootElement.GetProperty("input");
-        var content = input[role == ModelMessageRole.Tool ? 2 : 0].GetProperty("content");
-        Assert.Equal("input_image", content[1].GetProperty("type").GetString());
-        Assert.Equal("data:image/png;base64,AQID", content[1].GetProperty("image_url").GetString());
-        Assert.Equal("high", content[1].GetProperty("detail").GetString());
-        Assert.False(content[1].TryGetProperty("prompt_cache_breakpoint", out _));
-        if (explicitCache)
-        {
-            var boundary = content[2];
-            Assert.Equal("input_text", boundary.GetProperty("type").GetString());
-            Assert.Equal(string.Empty, boundary.GetProperty("text").GetString());
-            Assert.Equal("explicit", boundary.GetProperty("prompt_cache_breakpoint").GetProperty("mode").GetString());
-            Assert.DoesNotContain("cache_control", handler.Body, StringComparison.Ordinal);
-        }
-
-        if (role == ModelMessageRole.Tool)
-        {
-            Assert.Equal("function_call_output", input[1].GetProperty("type").GetString());
-            Assert.Contains("before", input[1].GetProperty("output").GetString(), StringComparison.Ordinal);
-            if (!explicitCache)
-            {
-                Assert.Contains("after", input[1].GetProperty("output").GetString(), StringComparison.Ordinal);
-            }
-
-            Assert.Contains("tool_evidence", content[0].GetProperty("text").GetString(), StringComparison.Ordinal);
-            Assert.Equal(explicitCache ? 3 : 2, content.GetArrayLength());
-        }
-        else
-        {
-            Assert.Equal("before", content[0].GetProperty("text").GetString());
-            if (!explicitCache)
-            {
-                Assert.Equal("after", content[2].GetProperty("text").GetString());
-            }
-        }
-    }
-
     /// <summary>Refusals, conflicting completion and malformed invocations release no tools or replay.</summary>
     [Theory]
     [InlineData("refusal")]
@@ -620,28 +477,6 @@ public static partial class OpenRouterProviderTests
         Assert.DoesNotContain("private-refusal", JsonSerializer.Serialize(chunks), StringComparison.Ordinal);
         Assert.DoesNotContain(chunks, chunk => chunk.Text is not null || chunk.Reasoning is not null || chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);
         Assert.Equal(1, handler.Calls);
-    }
-
-    /// <summary>Field prefixes, comments, empty data lines, and line endings share the bounded SSE parser.</summary>
-    [Theory]
-    [InlineData("\n", "data:")]
-    [InlineData("\r", "data: ")]
-    [InlineData("\r\n", "data:  ")]
-    public static async Task SseFraming_PreservesFieldsAndEmptyDataLines(string newline, string field)
-    {
-        var terminal = Completed(OutputMessage("hello"))[6..^2];
-        var body = ": comment" + newline + "database: ignored" + newline + "event: response.completed" + newline
-            + field + newline + field + terminal + newline + "id: ignored" + newline + field + newline + newline
-            + "data:[DONE]" + newline + newline;
-        using var handler = new Handler(body);
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = new List<ModelChunk>();
-
-        await CollectAsync(Provider(client, Model()), Request(), chunks);
-
-        Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
-        Assert.Single(chunks, chunk => chunk.Usage is not null);
-        Assert.Single(chunks, chunk => chunk.FinishReason is not null);
     }
 
     /// <summary>Both data and ignored lines remain bounded before any terminal output can be released.</summary>

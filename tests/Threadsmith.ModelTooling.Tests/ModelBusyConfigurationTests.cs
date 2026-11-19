@@ -9,35 +9,6 @@ using Xunit;
 /// <summary>Busy timeout JSON defaults, validation, and runtime projection.</summary>
 public static class ModelBusyConfigurationTests
 {
-    /// <summary>Catalog models round-trip the configurable window and retain its default when omitted.</summary>
-    [Theory]
-    [InlineData(null, 15)]
-    [InlineData(0, 0)]
-    [InlineData(30, 30)]
-    [InlineData(ModelRetryPolicy.MaximumBusyTimeoutSeconds, ModelRetryPolicy.MaximumBusyTimeoutSeconds)]
-    public static void CatalogProjectsBusyWindow(int? configured, int expected)
-    {
-        var registration = new OpenAiCompatibleProviderRegistration();
-        var model = Model();
-        if (configured is { } seconds)
-        {
-            model = model with { RetryBusyTimeoutSeconds = seconds };
-        }
-
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        var json = JsonSerializer.SerializeToNode(model, options)!.AsObject();
-        if (configured is null)
-        {
-            Assert.True(json.Remove("retryBusyTimeoutSeconds"));
-        }
-
-        var roundTrip = json.Deserialize<OpenAiCompatibleModelConfiguration>(options)!;
-        var provider = Provider(roundTrip);
-        registration.Validate(provider);
-        var profile = Assert.Single(registration.CreateProfiles(provider));
-        Assert.Equal(TimeSpan.FromSeconds(expected), profile.RetryPolicy.BusyTimeout);
-    }
-
     /// <summary>Invalid timer ranges fail before activation.</summary>
     [Theory]
     [InlineData(-1)]

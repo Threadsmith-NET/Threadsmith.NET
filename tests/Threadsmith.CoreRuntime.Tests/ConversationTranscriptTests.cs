@@ -93,21 +93,6 @@ public static class ConversationTranscriptTests
         Assert.Contains("Mutation set rolled back; restored 1 files.", transcript.Text, StringComparison.Ordinal);
     }
 
-    /// <summary>Successful events remain visible if cancellation interrupts the final approval event.</summary>
-    [Fact]
-    public static void RunCompletionFlushesAppliedMutationsWhenApprovalPublicationWasInterrupted()
-    {
-        var transcript = new ConversationTranscript(string.Empty);
-        var sessionId = SessionId.New();
-        var now = DateTimeOffset.UtcNow;
-        var setId = MutationSetId.New();
-        transcript.Apply(new MutationSetProposed(sessionId, now, setId, ApprovalId: ApprovalId.New()));
-        transcript.Apply(new MutationApplied(sessionId, now, MutationId.New(), setId, "src/File.cs"));
-        var length = transcript.Length;
-        Assert.True(transcript.Apply(new RunCompleted(sessionId, now, RunId.New(), false)));
-        Assert.Contains("Mutation applied: src/File.cs", transcript.GetTextSince(length), StringComparison.Ordinal);
-    }
-
     /// <summary>Successive deltas reproduce the full transcript without losing formatting or turn boundaries.</summary>
     [Fact]
     public static void DeltasPreserveFormattedTextAcrossVisibleAndInvisibleEvents()

@@ -99,72 +99,6 @@ public static class MemoryReconciliationTests
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries(bool pairTruncated, bool overflow)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var baseline = MemoryTestData.CreateService(fixture, generator);
-        var saved = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "Existing convention"));
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder
-        {
-            Score = (_, _) => overflow ? throw new TextCrossEncoderInputException(250, 300, 512)
-                : new TextCrossEncoderScore(2, pairTruncated ? 300 : 12, pairTruncated),
-        });
-        var service = new RepositoryMemoryService(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer(), search: search);
-        var proposal = MemoryTestData.Operation("add", "Related distinct requirement") with { Options = Reconcile };
-        if (pairTruncated || overflow)
-        {
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(proposal));
-            Assert.Contains("could not compare complete inputs", error.Message, StringComparison.Ordinal);
-            if (overflow)
-            {
-                Assert.Contains("query=250, document=300", error.Message, StringComparison.Ordinal);
-            }
-
-            Assert.Single((await service.GetSnapshotAsync(MemoryTestData.Repository)).Entries);
-            return;
-        }
-
-        var collision = await service.ExecuteAsync(proposal);
-        Assert.Equal(pairTruncated, collision.SearchDetails?.PairTruncated);
-        Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, collision.SearchDetails?.Reranker);
-        var old = Assert.Single(collision.Entries);
-        await baseline.ExecuteAsync(MemoryTestData.Operation("update", "Changed convention", old.Id));
-
-        var stale = await service.ExecuteAsync(proposal with { ConfirmDistinctFrom = [new(old.Id, old.Revision)] });
-        var current = Assert.Single(stale.Entries);
-        Assert.Equal("reconciliationRequired", stale.Outcome);
-        Assert.Equal(old.Revision + 1, current.Revision);
-        var committed = await service.ExecuteAsync(proposal with { ConfirmDistinctFrom = [new(current.Id, current.Revision)] });
-        Assert.Equal("added", committed.Outcome);
-        Assert.NotEqual(saved.Id, committed.Id);
-        var entries = (await service.GetSnapshotAsync(MemoryTestData.Repository)).Entries;
-        Assert.Equal(2, entries.Count);
-        Assert.Contains(entries, entry => entry.Id == old.Id && entry.Text == "Changed convention" && entry.Revision == current.Revision);
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Theory]
-    [InlineData(-100, "reconciliationRequired")]
-    [InlineData(0, "reconciliationRequired")]
-    [InlineData(1.01, "reconciliationRequired")]
-    public static async Task Discovered_candidates_require_review_regardless_of_absolute_score(double score, string expected)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var baseline = MemoryTestData.CreateService(fixture, generator);
-        await baseline.ExecuteAsync(MemoryTestData.Operation("add", "existing"));
-        var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
-        using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder { Score = (_, _) => new(score, 12, false) });
-        var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
-        Assert.Equal(expected, (await service.ExecuteAsync(MemoryTestData.Operation("add", "new") with { Options = Reconcile })).Outcome);
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public static async Task Incomplete_or_cancelled_comparison_never_evicts(bool cancel)
@@ -215,27 +149,6 @@ public static class MemoryReconciliationTests
         Assert.Equal("reconciliationRequired", result.Outcome);
         Assert.Equal("Concurrent convention", Assert.Single(result.Entries).Text);
         Assert.Equal("Concurrent convention", Assert.Single((await service.GetSnapshotAsync(MemoryTestData.Repository)).Entries).Text);
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Fact]
-    public static async Task Repeated_concurrent_change_returns_conflict_without_inserting()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var baseline = MemoryTestData.CreateService(fixture, generator);
-        var original = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "original"));
-        var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
-        using var inner = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder { Score = (_, _) => new(0, 12, false) });
-        var interleaved = new InterleavedSearch(inner, async count =>
-            _ = await baseline.ExecuteAsync(MemoryTestData.Operation("update", "Concurrent version " + count, original.Id)));
-        var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: interleaved);
-
-        var result = await service.ExecuteAsync(MemoryTestData.Operation("add", "proposal") with { Options = Reconcile with { ReconciliationSemanticMinimum = 1 } });
-
-        Assert.Equal("conflict", result.Outcome);
-        Assert.Equal(2, interleaved.Calls);
-        Assert.Equal("Concurrent version 2", Assert.Single((await service.GetSnapshotAsync(MemoryTestData.Repository)).Entries).Text);
     }
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>

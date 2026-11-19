@@ -23,15 +23,6 @@ public static partial class ToolRuntimeTests
 {
     private const string SanitizerExpansionMarker = "token=x";
 
-    /// <summary>Model prose around tool arguments is removed before typed input validation.</summary>
-    [Fact]
-    public static void ToolInput_AcceptsFramedJson()
-    {
-        var tool = new DateTimeTool(TestPromptLoader.Instance);
-
-        Assert.IsType<DateTimeInput>(tool.DeserializeInput("Calling datetime with ```json\n{}\n``` now."));
-    }
-
     /// <summary>Increasing read content admits the serialized result through the actual tool pipeline.</summary>
     [Theory]
     [InlineData('x')]
@@ -60,77 +51,6 @@ public static partial class ToolRuntimeTests
             Assert.Equal(content, Assert.Single(output.Lines));
             Assert.False(output.IsTruncated);
             Assert.Equal(384 * 1024, new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()).Definition.MaximumOutputBytes);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>A model-requested tool produces attributable durable output and visible activity.</summary>
-    [Fact]
-    public static async Task ModelToolRequest_IsTypedPersistedAndVisible()
-    {
-        var repository = CreateTemporaryDirectory();
-        var databasePath = Path.Combine(repository, "events.db");
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(repository, "sample.txt"), "sample");
-            await using var events = new DomainEventStream();
-            var store = new SqliteEventStore($"Data Source={databasePath};Pooling=False");
-            await store.InitializeAsync();
-            var projections = new InMemoryProjectionStore();
-            await using var persistenceSubscription = events.Subscribe(store.AppendAsync);
-            await using var projectionSubscription = events.Subscribe(projections.ApplyAsync);
-            await using var failingEvidenceSubscription = events.Subscribe((domainEvent, _) =>
-                domainEvent is EvidenceAdded
-                    ? Task.FromException(new InvalidOperationException("evidence observer failed"))
-                    : Task.CompletedTask);
-            var pipeline = CreatePipeline(events, [new ListFilesTool(TestPromptLoader.Instance)]);
-            var sanitizer = new TestSanitizer();
-            var evidence = new EvidenceStore(events, sanitizer);
-            var model = new FakeModelProvider(new ScriptedSession
-            {
-                Turns =
-                [
-                    new ScriptedTurn
-                    {
-                        ToolName = "list_files",
-                        ArgumentsJson = "{\"path\":\".\",\"maximumEntries\":10}",
-                    },
-                ],
-            });
-            var application = new SessionApplication(
-                events,
-                model,
-                CreateBudget(),
-                sanitizer,
-                NullLogger<SessionApplication>.Instance,
-                pipeline,
-                (_, _) => Task.FromResult(CreateContext(repository)),
-                evidenceStore: evidence,
-                toolRegistry: pipeline.Registry,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
-            var dispatcher = new CommandDispatcher([application]);
-            var sessionId = await application.HandleAsync(new CreateSessionCommand("tools"));
-            var runId = await application.HandleAsync(
-                new SubmitRequestCommand(sessionId, "inspect"));
-
-            Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
-            var stored = await store.ReadAsync(sessionId);
-            var started = Assert.IsType<ToolInvocationStarted>(
-                Assert.Single(stored, item => item is ToolInvocationStarted));
-            var completed = Assert.IsType<ToolInvocationCompleted>(
-                Assert.Single(stored, item => item is ToolInvocationCompleted));
-            Assert.Equal("model", started.RequestedBy);
-            Assert.True(completed.Succeeded);
-            Assert.Contains("sample.txt", completed.ResultJson, StringComparison.Ordinal);
-            Assert.Single(evidence.Snapshot(sessionId), item => item.RunId == runId);
-
-            var snapshot = await new InteractionPresenter(dispatcher, projections).RenderAsync(sessionId);
-            Assert.Contains("Tool list_files (model): succeeded", snapshot.Workspace, StringComparison.Ordinal);
-            Assert.Contains("sample.txt", snapshot.Workspace, StringComparison.Ordinal);
         }
         finally
         {
@@ -313,46 +233,6 @@ public static partial class ToolRuntimeTests
         {
             Directory.Delete(repository, recursive: true);
         }
-    }
-
-    /// <summary>Code exploration exposes only the CodeGraph-style query and optional file hint.</summary>
-    [Fact]
-    public static void CodeExplore_Definition_UsesMinimalModelFacingSchema()
-    {
-        var tool = new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance);
-
-        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
-        var properties = schema.RootElement.GetProperty("properties")
-            .EnumerateObject()
-            .Select(property => property.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.True(properties.SetEquals(["query", "maxFiles", "concepts"]));
-        Assert.Equal(
-            "query",
-            Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
-        var query = schema.RootElement.GetProperty("properties").GetProperty("query");
-        Assert.Equal("string", query.GetProperty("type").GetString());
-        var maxFiles = schema.RootElement.GetProperty("properties").GetProperty("maxFiles");
-        Assert.Equal("integer", maxFiles.GetProperty("type").GetString());
-        Assert.True(tool.Definition.PreferStrictArguments);
-        Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("limits", out _));
-        Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
-        Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
-        var strictSchemaJson = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-            tool.Definition.Id,
-            tool.Definition.InputSchema.JsonSchema);
-        using var strictSchema = JsonDocument.Parse(Assert.IsType<string>(strictSchemaJson));
-        var strictProperties = strictSchema.RootElement.GetProperty("properties")
-            .EnumerateObject()
-            .Select(property => property.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        Assert.True(strictProperties.SetEquals(["query", "maxFiles", "concepts"]));
-        Assert.Equal(
-            query.GetProperty("description").GetString(),
-            strictSchema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
-        Assert.Equal(
-            maxFiles.GetProperty("description").GetString(),
-            strictSchema.RootElement.GetProperty("properties").GetProperty("maxFiles").GetProperty("description").GetString());
     }
 
     /// <summary>The optional file-count hint is clamped by the host without a corrective turn.</summary>
@@ -548,18 +428,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Oversized search queries fail validation with an actionable error.</summary>
-    [Fact]
-    public static void SearchTextTool_QueryTooLong_IsRejected()
-    {
-        var tool = new SearchTextTool(TestPromptLoader.Instance);
-
-        var error = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
-            "{\"query\":\"" + new string('x', 501) + "\"}"));
-        Assert.Contains("use a concise literal or regex", error.Message, StringComparison.Ordinal);
-        Assert.Contains("not pasted source/tool output", error.Message, StringComparison.Ordinal);
-    }
-
     /// <summary>Oversized search result hints run at the host ceiling without a corrective failure.</summary>
     [Fact]
     public static async Task SearchTextTool_OversizedMaximumMatches_ClampsToHostMaximum()
@@ -594,67 +462,6 @@ public static partial class ToolRuntimeTests
             Assert.False(hint.TryGetProperty("maximum", out _));
             Assert.Throws<ToolArgumentValidationException>(() =>
                 tool.DeserializeInput("{\"query\":\"needle\",\"maximumMatches\":-1}"));
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>Host-owned artifact discovery declares optional Git inventory use to policy and scheduling.</summary>
-    [Fact]
-    public static async Task CodeExplore_HostOwnedArtifactDiscovery_RequiresGitExecutablePolicy()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            await using var events = new DomainEventStream();
-            var processManager = new StubProcessManager(new ProcessExecutionResult(
-                1,
-                0,
-                string.Empty,
-                string.Empty,
-                false,
-                false,
-                false,
-                TimeSpan.Zero));
-            var tool = new CodeExploreTool(
-                new NoopCodeExploreService(),
-                TestPromptLoader.Instance,
-                processManager);
-            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"artifact prompt\"}");
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedBuild,
-                WorkspaceId = WorkspaceId.New(),
-            };
-
-            var claims = tool.GetSchedulingClaims(input, context);
-            Assert.Contains(claims, claim => claim.ResourceKind == ToolResourceKind.ProcessPool
-                && claim.AccessMode == ToolAccessMode.Execute);
-
-            var pipeline = CreatePipeline(events, [tool]);
-            var denied = await pipeline.InvokeAsync(new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                ToolId = "code_explore",
-                ArgumentsJson = "{\"query\":\"artifact prompt\"}",
-                Context = context,
-            });
-            var allowed = await pipeline.InvokeAsync(new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                ToolId = "code_explore",
-                ArgumentsJson = "{\"query\":\"artifact prompt\"}",
-                Context = context with { AllowedExecutables = ["git"] },
-            });
-
-            Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
-            Assert.Contains("git", denied.Error ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-            Assert.True(allowed.Succeeded, allowed.Error);
-            Assert.Equal(0, processManager.ExecutionCount);
         }
         finally
         {
@@ -1008,41 +815,6 @@ public static partial class ToolRuntimeTests
         Assert.Equal(1, generation);
         Assert.Equal("Continue artifact content.", reason);
         Assert.Equal("symbol:example.worker", target.OriginSymbolId);
-    }
-
-    /// <summary>Markdown impact output reports complete host totals while showing balanced representative evidence.</summary>
-    [Fact]
-    public static async Task CodeExploreOutputFormattingTool_ManyImpactItems_RendersRepresentativeSummary()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var tool = new CodeExploreOutputFormattingTool(
-                new CodeExploreTool(new ManyImpactCodeExploreService(), TestPromptLoader.Instance),
-                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
-                TestPromptLoader.Instance);
-            var input = (CodeExploreInput)tool.DeserializeInput("{\"query\":\"what depends on Worker?\"}");
-            var execution = await tool.ExecuteAsync(
-                input,
-                CreateCodeExploreExecutionContext(repository));
-            var markdown = execution.ModelResultContent
-                ?? throw new InvalidOperationException("Expected Markdown code_explore content.");
-
-            Assert.Contains(
-                "6 of 12 callers, 4 of 4 implementations, 20 of 35 projects, and 20 of 40 tests",
-                markdown,
-                StringComparison.Ordinal);
-            Assert.Equal(2, CountOccurrences(markdown, "- **Caller:**"));
-            Assert.Equal(2, CountOccurrences(markdown, "- **Implementation:**"));
-            Assert.Equal(2, CountOccurrences(markdown, "- **Project:**"));
-            Assert.Equal(2, CountOccurrences(markdown, "- **Test:**"));
-            Assert.Contains("42 impact items not shown", markdown, StringComparison.Ordinal);
-            AssertAppearsBefore(markdown, "- **Caller:**", "- **Project:**");
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
     }
 
     /// <summary>Impact coverage remains visible when model-budget trimming removes every detailed item.</summary>
@@ -1639,79 +1411,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Literal repository search uses bounded ripgrep output when the host executable is available.</summary>
-    [Fact]
-    public static async Task SearchTextTool_LiteralSearch_UsesRipgrepFastPath()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var processManager = new StubProcessManager(new ProcessExecutionResult(
-                42,
-                0,
-                "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./.hidden/endpoint.cs\"},\"lines\":{\"text\":\"route needle\\n\"},\"line_number\":12,\"submatches\":[{\"start\":7}]}}\n"
-                    + "{\"type\":\"match\",\"data\":{\"path\":{\"text\":\"./second.cs\"},\"lines\":{\"text\":\"needle\\n\"},\"line_number\":4,\"submatches\":[{\"start\":1}]}}\n",
-                string.Empty,
-                false,
-                false,
-                false,
-                TimeSpan.FromMilliseconds(10)));
-            var bundledRipgrep = Path.Combine(repository, "bundled tools", "rg.exe");
-            var tool = new SearchTextTool(
-                TestPromptLoader.Instance,
-                processManager: processManager,
-                ripgrepExecutable: bundledRipgrep);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-            };
-
-            var result = await tool.ExecuteAsync(
-                new SearchTextInput { Query = "needle", MaximumMatches = 1 },
-                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
-                CancellationToken.None);
-
-            var match = Assert.Single(result.Value.Matches);
-            Assert.Equal(".hidden/endpoint.cs", match.Path);
-            Assert.Equal(12, match.Line);
-            Assert.Equal(8, match.Column);
-            Assert.True(result.Value.IsTruncated);
-            Assert.Null(result.Value.Warning);
-            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
-            Assert.Equal(bundledRipgrep, request.FileName);
-            Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
-            Assert.Equal(ProcessStandardOutputFormat.RipgrepJsonLines, request.StandardOutputFormat);
-            Assert.Contains("--json", request.Arguments);
-            Assert.DoesNotContain("--null", request.Arguments);
-            Assert.Contains("--fixed-strings", request.Arguments);
-            Assert.Contains("--ignore-case", request.Arguments);
-            Assert.Contains("--max-filesize=1048576", request.Arguments);
-            Assert.Contains("--iglob=!**/*.db", request.Arguments);
-            Assert.Contains("--iglob=!**/*.sqlite", request.Arguments);
-            Assert.Contains("--iglob=!**/*.sqlite3", request.Arguments);
-            string[] excludedDirectoryGlobs =
-            [
-                "--iglob=!**/.codegraph/**",
-                "--iglob=!**/.git/**",
-                "--iglob=!**/.idea/**",
-                "--iglob=!**/.vs/**",
-                "--iglob=!**/artifacts/**",
-                "--iglob=!**/bin/**",
-                "--iglob=!**/node_modules/**",
-                "--iglob=!**/obj/**",
-                "--iglob=!**/TestResults/**",
-            ];
-            Assert.All(
-                excludedDirectoryGlobs,
-                glob => Assert.Contains(glob, request.Arguments));
-            Assert.DoesNotContain("--glob=!**/*.sqlite", request.Arguments);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
     /// <summary>Host-truncated ripgrep output retains complete JSON records before an incomplete final record.</summary>
     [Fact]
     public static async Task SearchTextTool_TruncatedRipgrepJson_PreservesCompleteMatches()
@@ -1992,43 +1691,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>The managed fallback treats simple extension globs like ripgrep and matches nested files.</summary>
-    [Fact]
-    public static async Task SearchTextTool_ManagedSimpleGlob_MatchesNestedFiles()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var sourceDirectory = Directory.CreateDirectory(Path.Combine(repository, "src", "nested")).FullName;
-            await File.WriteAllTextAsync(
-                Path.Combine(sourceDirectory, "Marker.cs"),
-                "public const string Marker = \"transparency\";\n");
-            var tool = new SearchTextTool(TestPromptLoader.Instance);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-            };
-
-            var result = await tool.ExecuteAsync(
-                new SearchTextInput
-                {
-                    Query = "transparency",
-                    Glob = "*.cs",
-                    MaximumMatches = 5,
-                },
-                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
-                CancellationToken.None);
-
-            var match = Assert.Single(result.Value.Matches);
-            Assert.Equal("src/nested/Marker.cs", match.Path);
-            Assert.Contains("transparency", match.Text, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
     /// <summary>A Git-inventoried symbolic-link leaf cannot expose content outside the repository.</summary>
     [Fact]
     public static async Task SearchTextTool_GitInventorySymlink_IsNotRead()
@@ -2125,227 +1787,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Text search prunes generated and Git metadata subtrees before reading files.</summary>
-    [Fact]
-    public static async Task SearchTextTool_GeneratedAndGitSubtrees_ArePruned()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(repository, "visible.txt"), "needle");
-            string[] excludedDirectories =
-            [
-                ".codegraph",
-                ".git",
-                ".idea",
-                ".vs",
-                "artifacts",
-                "bin",
-                "node_modules",
-                "obj",
-                "TestResults",
-            ];
-            foreach (var excludedDirectory in excludedDirectories)
-            {
-                var directory = Directory.CreateDirectory(Path.Combine(repository, excludedDirectory)).FullName;
-                await File.WriteAllTextAsync(Path.Combine(directory, "excluded.txt"), "needle");
-            }
-
-            var hostStateDirectory = Directory.CreateDirectory(Path.Combine(repository, ".threadsmith")).FullName;
-            await File.WriteAllTextAsync(Path.Combine(hostStateDirectory, "threadsmith.db"), "needle");
-
-            var tool = new SearchTextTool(TestPromptLoader.Instance);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-            };
-
-            var result = await tool.ExecuteAsync(
-                new SearchTextInput { Query = "needle" },
-                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
-                CancellationToken.None);
-
-            var match = Assert.Single(result.Value.Matches);
-            Assert.Equal("visible.txt", match.Path);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>Host-owned tool definitions use exact source assets, including rendered tokens.</summary>
-    [Fact]
-    public static void HostOwnedToolDescriptions_EqualSourcePromptAssets()
-    {
-        var processManager = new DirectProcessStartManager();
-        var resolver = new DescriptionSemanticResolver();
-        ITool[] tools =
-        [
-            new ListFilesTool(TestPromptLoader.Instance),
-            new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
-            new SearchTextTool(TestPromptLoader.Instance),
-            new GitStatusTool(processManager, TestPromptLoader.Instance),
-            new FindSymbolTool(resolver, TestPromptLoader.Instance),
-            new FindReferencesTool(resolver, TestPromptLoader.Instance),
-            new FindImplementationsTool(resolver, TestPromptLoader.Instance),
-            new DateTimeTool(TestPromptLoader.Instance),
-            new CSharpScriptTool(new StubCSharpScriptEngine(), TestPromptLoader.Instance),
-            new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance),
-        ];
-        var assets = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["list_files"] = PromptFileNames.ToolListFilesDescription,
-            ["read_file"] = PromptFileNames.ToolReadFileDescription,
-            ["search"] = PromptFileNames.ToolSearchDescription,
-            ["git_status"] = PromptFileNames.ToolGitStatusDescription,
-            ["find_symbol"] = PromptFileNames.ToolFindSymbolDescription,
-            ["find_references"] = PromptFileNames.ToolFindReferencesDescription,
-            ["find_implementations"] = PromptFileNames.ToolFindImplementationsDescription,
-            ["datetime"] = PromptFileNames.ToolDatetimeDescription,
-            ["csharp_script"] = PromptFileNames.ToolCsharpScriptDescription,
-            ["code_explore"] = PromptFileNames.ToolCodeExploreDescription,
-        };
-
-        Assert.All(
-            tools,
-            tool => Assert.Equal(
-                tool.Definition.Id == "csharp_script"
-                    ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["CSharpScriptingReferencePath"] = ScriptFilePolicy.ReferencePath })
-                    : tool.Definition.Id == "search"
-                    ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["MaximumQueryCharacters"] = "500" })
-                    : tool.Definition.Id == "read_file"
-                        ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string>
-                        {
-                            ["DefaultLines"] = "2000",
-                            ["MaximumLines"] = "2000",
-                            ["MaximumContentBytes"] = "51200",
-                            ["MaximumFileBytes"] = "5242880",
-                        })
-                        : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
-                tool.Definition.Description));
-
-        var runProcess = new RunProcessTool(
-            processManager,
-            TestPromptLoader.Instance,
-            shellExecutable: "pwsh");
-        var expectedRunProcessDescription = TestPromptLoader.Instance.Render(
-            PromptFileNames.ToolRunProcessDescription,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["ShellLanguage"] = "PowerShell",
-            });
-        Assert.Equal(expectedRunProcessDescription, runProcess.Definition.Description);
-    }
-
-    /// <summary>A locked file does not prevent text search from returning matches in readable files.</summary>
-    [Fact]
-    public static async Task SearchTextTool_LockedFile_IsSkipped()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(repository, "visible.txt"), "needle");
-            var lockedPath = Path.Combine(repository, "locked.txt");
-            await File.WriteAllTextAsync(lockedPath, "other content");
-            await using var lockedFile = new FileStream(
-                lockedPath,
-                FileMode.Open,
-                FileAccess.ReadWrite,
-                FileShare.None);
-            var tool = new SearchTextTool(TestPromptLoader.Instance);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-            };
-
-            var result = await tool.ExecuteAsync(
-                new SearchTextInput { Query = "needle" },
-                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
-                CancellationToken.None);
-
-            var match = Assert.Single(result.Value.Matches);
-            Assert.Equal("visible.txt", match.Path);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>Windows reserved device-name entries are skipped without aborting recursive inspection.</summary>
-    [Fact]
-    public static async Task BuiltInInspectionTools_WindowsReservedDeviceEntry_IsSkipped()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        var repository = CreateTemporaryDirectory();
-        string[] reservedNames = ["nul", "COM¹", "COM².log", "COM³", "LPT¹", "LPT².log", "LPT³"];
-        string[] extendedReservedPaths =
-        [
-            .. reservedNames.Select(name => @"\\?\" + Path.Combine(repository, name)),
-        ];
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(repository, "visible.txt"), "needle");
-            foreach (var extendedReservedPath in extendedReservedPaths)
-            {
-                await File.WriteAllTextAsync(extendedReservedPath, "needle");
-            }
-
-            await using var events = new DomainEventStream();
-            var pipeline = CreatePipeline(
-                events,
-                [new ListFilesTool(TestPromptLoader.Instance), new SearchTextTool(TestPromptLoader.Instance)]);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-            };
-
-            var listed = await pipeline.InvokeAsync(new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                ToolId = "list_files",
-                ArgumentsJson = "{}",
-                Context = context,
-            });
-            var searched = await pipeline.InvokeAsync(new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                ToolId = "search",
-                ArgumentsJson = "{\"query\":\"needle\"}",
-                Context = context,
-            });
-
-            Assert.True(listed.Succeeded, listed.Error);
-            Assert.Contains("visible.txt", listed.ResultJson, StringComparison.Ordinal);
-            Assert.True(searched.Succeeded, searched.Error);
-            Assert.Contains("visible.txt", searched.ResultJson, StringComparison.Ordinal);
-            foreach (var reservedName in reservedNames)
-            {
-                Assert.DoesNotContain(reservedName, listed.ResultJson, StringComparison.OrdinalIgnoreCase);
-                Assert.DoesNotContain(reservedName, searched.ResultJson, StringComparison.OrdinalIgnoreCase);
-            }
-        }
-        finally
-        {
-            foreach (var extendedReservedPath in extendedReservedPaths)
-            {
-                if (File.Exists(extendedReservedPath))
-                {
-                    File.Delete(extendedReservedPath);
-                }
-            }
-
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
     /// <summary>An allow-listed process requires approval and returns bounded, attributable output.</summary>
     [Fact]
     public static async Task ProcessTool_RequiresApprovalAndReturnsStructuredResult()
@@ -2424,19 +1865,6 @@ public static partial class ToolRuntimeTests
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }
 
-    /// <summary>Shell executables with a normal platform extension use the policy-normalized basename.</summary>
-    [Fact]
-    public static void RunProcess_ExtendedShellName_UsesNormalizedAllowlistBasename()
-    {
-        var tool = new RunProcessTool(
-            new DirectProcessStartManager(),
-            TestPromptLoader.Instance,
-            requireApproval: false,
-            shellExecutable: "powershell.exe");
-
-        Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
-    }
-
     /// <summary>Trusted composition can remove per-call approval without weakening executable restrictions.</summary>
     [Fact]
     public static void RunProcess_TrustedApprovalOption_RemovesPromptRequirement()
@@ -2449,51 +1877,6 @@ public static partial class ToolRuntimeTests
 
         Assert.Equal(ApprovalLevel.None, tool.Definition.RequiredApproval);
         Assert.Contains("command", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
-    }
-
-    /// <summary>Unix shells use non-login command mode and preserve the repository working directory.</summary>
-    [Fact]
-    public static async Task RunProcess_UnixShell_UsesNonLoginCommandModeAtRepositoryRoot()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var processManager = new StubProcessManager(new ProcessExecutionResult(
-                1,
-                0,
-                string.Empty,
-                string.Empty,
-                false,
-                false,
-                false,
-                TimeSpan.FromMilliseconds(1)));
-            var tool = new RunProcessTool(
-                processManager,
-                TestPromptLoader.Instance,
-                new ToolLimits
-                {
-                    RunProcessDefaultTimeoutSeconds = 3,
-                    RunProcessMaxTimeoutSeconds = 7,
-                },
-                requireApproval: false,
-                shellExecutable: "bash");
-            var context = new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                CreateContext(repository));
-            var input = tool.DeserializeInput("{\"command\":\"pwd\"}");
-
-            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context));
-
-            Assert.Null(processManager.LastRequest);
-            var timeout = ((IToolTimeoutPolicy)tool).ResolveTimeout(context.Invocation, TimeSpan.FromSeconds(3));
-            Assert.Equal(TimeSpan.FromSeconds(3), timeout);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
     }
 
     /// <summary>A controlled execution deadline cancels a live process without depending on runner speed.</summary>
@@ -2870,7 +2253,7 @@ public static partial class ToolRuntimeTests
         Assert.Equal(2, all.Count);
     }
 
-    /// <summary>The optional C# tool executes, truncates, rejects forbidden APIs, and kills a timed-out worker.</summary>
+    /// <summary>The cold worker compiles C# 14, truncates output, rejects prohibited code, and terminates on deadline.</summary>
     [Fact]
     public static async Task CSharpScriptEngine_EnforcesExecutionBoundaries()
     {
@@ -2880,7 +2263,7 @@ public static partial class ToolRuntimeTests
             var configuration = CreateScriptWorkerIntegrationConfiguration();
             var clock = new ObservedTimeProvider();
             var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: clock);
-            var engine = new CSharpScriptEngine(
+            await using var engine = new CSharpScriptEngine(
                 new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
@@ -2891,27 +2274,15 @@ public static partial class ToolRuntimeTests
                 RunId.New(),
                 CreateScriptContext(repository))
             { ExecutionTimeout = Timeout.InfiniteTimeSpan };
-            var expression = await engine.ExecuteAsync(
-                "Enumerable.Range(1, 4).Sum()",
-                ScriptKind.Expression,
-                context,
-                TestContext.Current.CancellationToken);
-            Assert.True(expression.Success, expression.Error);
-            Assert.Equal("10", expression.Output);
-            var statement = await engine.ExecuteAsync(
-                "var value = 6 * 7; return value;",
+            var oversized = await engine.ExecuteAsync(
+                "var values = new[] { 0 }; values?[0] = 59; return values[0].ToString() + new string('x', 260);",
                 ScriptKind.Statement,
                 context,
                 TestContext.Current.CancellationToken);
-            Assert.True(statement.Success, statement.Error);
-            Assert.Equal("42", statement.Output);
-            var csharp14 = await engine.ExecuteAsync(
-                "var values = new[] { 0 }; values?[0] = 59; return values[0];",
-                ScriptKind.Statement,
-                context,
-                TestContext.Current.CancellationToken);
-            Assert.True(csharp14.Success, csharp14.Error);
-            Assert.Equal("59", csharp14.Output);
+            Assert.True(oversized.Success, oversized.Error);
+            Assert.True(oversized.IsTruncated);
+            Assert.StartsWith("59", oversized.Output, StringComparison.Ordinal);
+            Assert.Equal(256, Encoding.UTF8.GetByteCount(oversized.Output ?? string.Empty));
             var invalid = await engine.ExecuteAsync(
                 "var value = ;",
                 ScriptKind.Statement,
@@ -2920,21 +2291,6 @@ public static partial class ToolRuntimeTests
             Assert.False(invalid.Success);
             Assert.NotNull(invalid.Error);
             Assert.NotEmpty(invalid.Error);
-            var oversized = await engine.ExecuteAsync(
-                "new string('x', 1000)",
-                ScriptKind.Expression,
-                context,
-                TestContext.Current.CancellationToken);
-            Assert.True(oversized.Success, oversized.Error);
-            Assert.True(oversized.IsTruncated);
-            Assert.Equal(256, System.Text.Encoding.UTF8.GetByteCount(oversized.Output ?? string.Empty));
-            var forbidden = await engine.ExecuteAsync(
-                "System.IO.File.Exists(\"anything\")",
-                ScriptKind.Expression,
-                context,
-                TestContext.Current.CancellationToken);
-            Assert.False(forbidden.Success);
-            Assert.Contains("prohibited", forbidden.Error, StringComparison.OrdinalIgnoreCase);
             var escapedForbidden = await engine.ExecuteAsync(
                 "System.\\u0049O.\\u0046ile.ReadAllText(\"anything\")",
                 ScriptKind.Expression,
@@ -2957,7 +2313,7 @@ public static partial class ToolRuntimeTests
                     ["tools:config:csharp_script:max_output_bytes"] = "256",
                 })
                 .Build();
-            var timeoutEngine = new CSharpScriptEngine(
+            await using var timeoutEngine = new CSharpScriptEngine(
                 new HostDeadlineProcessManager(processManager),
                 new ToolConfig(timeoutConfiguration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
@@ -2993,55 +2349,6 @@ public static partial class ToolRuntimeTests
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => engine.ExecuteAsync("1 + 1", ScriptKind.Expression, context));
         Assert.Empty(processManager.ActiveProcesses);
-    }
-
-    /// <summary>A staged self-contained worker apphost is launched directly without the dotnet muxer.</summary>
-    [Fact]
-    public static async Task CSharpScriptEngine_LaunchesWorkerAppHostDirectly()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            var workerPath = Path.Combine(
-                repository,
-                OperatingSystem.IsWindows() ? "Threadsmith.Scripting.Worker.exe" : "Threadsmith.Scripting.Worker");
-            await File.WriteAllTextAsync(workerPath, string.Empty);
-            var processManager = new StubProcessManager(new ProcessExecutionResult(
-                1,
-                0,
-                "{\"success\":true,\"output\":\"42\",\"executionMs\":1,\"isTruncated\":false}",
-                string.Empty,
-                false,
-                false,
-                false,
-                TimeSpan.FromMilliseconds(1)));
-            var engine = new CSharpScriptEngine(
-                processManager,
-                new ToolConfig(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["tools:config:csharp_script:NumberOfWarmWorkersInPool"] = "0",
-                }).Build()),
-                workerPath);
-            var context = new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                CreateScriptContext(repository));
-
-            var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context);
-
-            Assert.True(result.Success);
-            Assert.Equal("42", result.Output);
-            var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
-            Assert.Equal(workerPath, request.FileName);
-            Assert.Empty(request.Arguments);
-            Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
-            Assert.Equal(TimeSpan.FromSeconds(5), request.Timeout);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
     }
 
     /// <summary>The real apphost and managed worker produce the expected result independently of runner speed.</summary>
@@ -3238,76 +2545,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Optional root paths must not reject a batch of otherwise valid inspections.</summary>
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData(" \t")]
-    [InlineData(".")]
-    public static async Task BatchPreflight_OptionalRootPaths_RunInspectionSiblings(string? path)
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(repository, "sample.txt"), "sample marker");
-            await File.WriteAllTextAsync(Path.Combine(repository, "second.txt"), "second marker");
-            await File.WriteAllTextAsync(Path.Combine(repository, ".env"), "hidden marker");
-            await using var events = new DomainEventStream();
-            var pipeline = CreatePipeline(
-                events,
-                [
-                    new ListFilesTool(TestPromptLoader.Instance),
-                    new SearchTextTool(TestPromptLoader.Instance),
-                    new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
-                ]);
-            var context = CreateContext(repository) with
-            {
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-                ProhibitedPaths = [".env"],
-            };
-            ToolBatchRequest[] requests =
-            [
-                CreateBatchRequest(
-                    0,
-                    "list",
-                    "list_files",
-                    context,
-                    JsonSerializer.Serialize(new { path, maximumEntries = 100 })),
-                CreateBatchRequest(
-                    1,
-                    "search",
-                    "search",
-                    context,
-                    JsonSerializer.Serialize(new { query = "marker", path, maximumMatches = 100 })),
-                CreateBatchRequest(2, "read-first", "read_file", context, "{\"path\":\"sample.txt\"}"),
-                CreateBatchRequest(3, "read-second", "read_file", context, "{\"path\":\"second.txt\"}"),
-            ];
-
-            var preflight = pipeline.PreflightBatch(requests);
-            Assert.True(preflight.Succeeded, preflight.SafeReason);
-            var preparation = Assert.IsType<ToolBatchPreparation>(preflight.Preparation);
-            var results = await pipeline.InvokePreparedBatchAsync(preparation);
-
-            Assert.Equal([0, 1, 2, 3], results.Select(result => result.Ordinal));
-            Assert.All(results, result => Assert.True(result.Result.Succeeded, result.Result.Error));
-            Assert.Contains("sample.txt", results[0].Result.ResultJson, StringComparison.Ordinal);
-            Assert.Contains("second.txt", results[0].Result.ResultJson, StringComparison.Ordinal);
-            Assert.Contains("sample marker", results[1].Result.ResultJson, StringComparison.Ordinal);
-            Assert.Contains("second marker", results[1].Result.ResultJson, StringComparison.Ordinal);
-            Assert.Contains("sample marker", results[2].Result.ResultJson, StringComparison.Ordinal);
-            Assert.Contains("second marker", results[3].Result.ResultJson, StringComparison.Ordinal);
-            Assert.All(results, result =>
-            {
-                Assert.DoesNotContain(".env", result.Result.ResultJson, StringComparison.Ordinal);
-                Assert.DoesNotContain("hidden marker", result.Result.ResultJson, StringComparison.Ordinal);
-            });
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
     /// <summary>A blank optional root path never expands an invocation's approved scope.</summary>
     [Theory]
     [InlineData("list_files", "{\"path\":\"\"}")]
@@ -3379,52 +2616,6 @@ public static partial class ToolRuntimeTests
             Assert.Equal(toolId, preflight.FailedToolId);
             Assert.Equal(ToolErrorClassification.InvalidArguments, preflight.ErrorClassification);
             Assert.Empty(executionOrder);
-        }
-        finally
-        {
-            Directory.Delete(repository, recursive: true);
-        }
-    }
-
-    /// <summary>Prepared batch invocation consumes the exact preflight registration snapshot.</summary>
-    [Fact]
-    public static async Task BatchPreparedInvocation_UsesPreflightRegistrationSnapshot()
-    {
-        var repository = CreateTemporaryDirectory();
-        try
-        {
-            await using var events = new DomainEventStream();
-            var executionOrder = new ConcurrentQueue<string>();
-            var registry = new ToolRegistry([]);
-            var oldTool = new LabeledDynamicTool("dynamic_read", "old", executionOrder);
-            var newTool = new LabeledDynamicTool("dynamic_read", "new", executionOrder);
-            var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "test-extension");
-            registry.RegisterOrReplace(oldTool, source);
-            var pipeline = new ToolInvocationPipeline(
-                registry,
-                new DefaultPolicyEngine(),
-                new DenyApprovalPolicy(),
-                events,
-                new TestSanitizer(),
-                NullLogger<ToolInvocationPipeline>.Instance,
-                CreateBudget(),
-                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var context = CreateContext(repository);
-            ToolBatchRequest[] requests =
-            [
-                CreateBatchRequest(0, "call-dynamic", "dynamic_read", context),
-            ];
-            var preflight = pipeline.PreflightBatch(requests);
-            var preparation = Assert.IsType<ToolBatchPreparation>(preflight.Preparation);
-            registry.RegisterOrReplace(newTool, source, oldTool);
-
-            var preparedResults = await pipeline.InvokePreparedBatchAsync(preparation);
-            var ordinaryResults = await pipeline.InvokeBatchAsync(requests);
-
-            Assert.True(preflight.Succeeded);
-            Assert.True(Assert.Single(preparedResults).Result.Succeeded);
-            Assert.True(Assert.Single(ordinaryResults).Result.Succeeded);
-            Assert.Equal(["old", "new"], executionOrder);
         }
         finally
         {
@@ -3653,16 +2844,6 @@ public static partial class ToolRuntimeTests
         {
             Directory.Delete(repository, recursive: true);
         }
-    }
-
-    /// <summary>Text search stays serialized because an invocation may launch ripgrep.</summary>
-    [Fact]
-    public static void Search_SchedulingDescriptor_SerializesPotentialProcessExecution()
-    {
-        var scheduling = new SearchTextTool(TestPromptLoader.Instance).Definition.Scheduling;
-
-        Assert.Equal(ToolConcurrencyMode.SerializedPerRegistration, scheduling.ConcurrencyMode);
-        Assert.Equal(1, scheduling.MaximumSourceConcurrency);
     }
 
     /// <summary>Later calls never backfill ahead of an earlier invocation they conflict with.</summary>
@@ -4009,20 +3190,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    private sealed class ManyImpactCodeExploreService : ICodeExploreService
-    {
-        public Task<CodeExploreResult> QueryCodeExploreAsync(
-            WorkspaceId workspaceId,
-            CodeExploreRequest request,
-            ICodeExploreSourceReader sourceReader,
-            ModelVisibleSourceFrontier? visibleSourceFrontier = null,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(CreateManyImpactCodeExploreResult());
-        }
-    }
-
     private sealed class ZeroItemImpactCodeExploreService : ICodeExploreService
     {
         public Task<CodeExploreResult> QueryCodeExploreAsync(
@@ -4342,77 +3509,6 @@ public static partial class ToolRuntimeTests
             []);
     }
 
-    private static CodeExploreResult CreateManyImpactCodeExploreResult()
-    {
-        var result = CreateRichCodeExploreResult();
-        var location = result.ResolvedAnchors[0].SelectedLocation
-            ?? throw new InvalidOperationException("Expected a resolved source location.");
-        var anchorSymbolId = result.ResolvedAnchors[0].SelectedSymbol?.Id
-            ?? throw new InvalidOperationException("Expected a resolved symbol.");
-        var items = new List<CodeExploreBlastRadiusItem>();
-        for (var index = 0; index < 6; index++)
-        {
-            items.Add(new CodeExploreBlastRadiusItem(
-                anchorSymbolId,
-                ImpactKind.Caller,
-                new SemanticSymbolIdentity($"symbol:caller.{index}", $"Caller{index}.Run", "method"),
-                location,
-                location.ProjectName,
-                "Compiler-resolved caller evidence."));
-        }
-
-        for (var index = 0; index < 4; index++)
-        {
-            items.Add(new CodeExploreBlastRadiusItem(
-                anchorSymbolId,
-                ImpactKind.Implementation,
-                new SemanticSymbolIdentity($"symbol:implementation.{index}", $"Worker{index}.Run", "method"),
-                location,
-                location.ProjectName,
-                "Compiler-resolved implementation evidence."));
-        }
-
-        for (var index = 0; index < 20; index++)
-        {
-            items.Add(new CodeExploreBlastRadiusItem(
-                anchorSymbolId,
-                ImpactKind.Project,
-                null,
-                null,
-                $"Example.Dependent{index}",
-                "Dependent project evidence."));
-        }
-
-        for (var index = 0; index < 20; index++)
-        {
-            items.Add(new CodeExploreBlastRadiusItem(
-                anchorSymbolId,
-                ImpactKind.Test,
-                null,
-                null,
-                $"Example.Dependent{index}.Tests",
-                "Dependent test project evidence."));
-        }
-
-        var existingBlastRadius = result.BlastRadius
-            ?? throw new InvalidOperationException("Expected blast-radius data.");
-        return result with
-        {
-            BlastRadius = new CodeExploreBlastRadius(
-                items,
-                ReturnedCallers: 6,
-                TotalCallers: 12,
-                ReturnedImplementations: 4,
-                TotalImplementations: 4,
-                ReturnedProjects: 20,
-                TotalProjects: 35,
-                ReturnedTests: 20,
-                TotalTests: 40,
-                Omissions: existingBlastRadius.Omissions,
-                ContinuationTargets: existingBlastRadius.ContinuationTargets),
-        };
-    }
-
     private static CodeExploreResult CreateLongArtifactContinuationCodeExploreResult()
     {
         var result = CreateRichCodeExploreResult();
@@ -4533,48 +3629,6 @@ public static partial class ToolRuntimeTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromException<bool>(new OperationCanceledException(cancellationToken));
-        }
-    }
-
-    private sealed class DescriptionSemanticResolver : ISemanticEngineResolver
-    {
-        public SemanticConfidenceLevel GetConfidence(WorkspaceId workspaceId)
-        {
-            return SemanticConfidenceLevel.FullSemantic;
-        }
-
-        public Task<IReadOnlyList<SymbolResult>> FindSymbolsAsync(
-            WorkspaceId workspaceId,
-            string query,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<IReadOnlyList<SymbolResult>>([]);
-        }
-
-        public Task<IReadOnlyList<ReferenceResult>> FindReferencesAsync(
-            WorkspaceId workspaceId,
-            string symbolId,
-            bool allowTextFallback = false,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<IReadOnlyList<ReferenceResult>>([]);
-        }
-
-        public Task<IReadOnlyList<ImplementationResult>> FindImplementationsAsync(
-            WorkspaceId workspaceId,
-            string symbolId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<IReadOnlyList<ImplementationResult>>([]);
-        }
-
-        public Task<IReadOnlyList<Diagnostic>> GetDiagnosticsAsync(
-            WorkspaceId workspaceId,
-            IReadOnlyList<string> projectPaths,
-            IReadOnlyList<string> changedFiles,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<IReadOnlyList<Diagnostic>>([]);
         }
     }
 

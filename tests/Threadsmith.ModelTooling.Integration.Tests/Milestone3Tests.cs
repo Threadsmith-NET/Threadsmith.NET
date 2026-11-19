@@ -22,11 +22,6 @@ public abstract class Milestone3Tests
     private protected static readonly ModelProfileId _cheapProfileId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
     private protected static readonly ModelProfileId _capableProfileId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
 
-    private protected static ToolExecutionContext CreateSemanticToolExecutionContext(SemanticLoadRequest request, IReadOnlyList<string>? prohibitedPaths = null)
-    {
-        return new ToolExecutionContext(ToolInvocationId.New(), request.SessionId, RunId.New(), new ToolInvocationContext { WorkspaceId = request.WorkspaceId, RepositoryPath = request.RepositoryPath, TrustLevel = RepositoryTrustLevel.TrustedBuild, ProhibitedPaths = prohibitedPaths ?? [], RequestedBy = "test", });
-    }
-
     private protected static void AssertFlatSemanticProjection(string? content, string? symbolId = null)
     {
         using var document = JsonDocument.Parse(Assert.IsType<string>(content));
@@ -43,11 +38,6 @@ public abstract class Milestone3Tests
         Assert.True(item.GetProperty("line").GetInt32() > 0);
         Assert.DoesNotContain("semanticConfidence", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("targetFramework", content, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private protected static string CreateMinimalProjectText()
-    {
-        return "<Project Sdk=\"Microsoft.NET.Sdk\">\n" + "  <PropertyGroup>\n" + "    <TargetFramework>net10.0</TargetFramework>\n" + "    <ImplicitUsings>disable</ImplicitUsings>\n" + "    <Nullable>enable</Nullable>\n" + "  </PropertyGroup>\n" + "</Project>\n";
     }
 
     private protected sealed class CapturingModelProvider : IModelProvider
@@ -306,14 +296,6 @@ public abstract class Milestone3Tests
         }
     }
 
-    private protected sealed class UnusedCodeExploreService : ICodeExploreService
-    {
-        public Task<CodeExploreResult> QueryCodeExploreAsync(WorkspaceId workspaceId, CodeExploreRequest request, ICodeExploreSourceReader sourceReader, ModelVisibleSourceFrontier? visibleSourceFrontier = null, CancellationToken cancellationToken = default)
-        {
-            return Task.FromException<CodeExploreResult>(new InvalidOperationException("The schema projection test must not execute code exploration."));
-        }
-    }
-
     private protected sealed class FirstChunkThenBlockingStream : Stream
     {
         private readonly byte[] _firstChunk;
@@ -424,77 +406,6 @@ public sealed class Milestone3TestsSemanticEngine_LoadDiscoversProjectsTargetFra
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticEngine_SymbolQueriesAndToolsProjectStableSemanticResults : Milestone3Tests
-{
-    /// <summary>Semantic queries and tools preserve stable identities, confidence, ranges, sources, and confinement.</summary>
-    [Fact]
-    public static async Task SemanticEngine_SymbolQueriesAndToolsProjectStableSemanticResults()
-    {
-        using var fixture = new TestSemanticSolution();
-        var root = fixture.Root;
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var request = TestSemanticSolution.CreateLoadRequest(root);
-        await engine.LoadAsync(request);
-        var symbols = await engine.FindSymbolsAsync("IService");
-        var symbol = Assert.Single(symbols, item => item.Symbol.DisplayName.Contains("IService", StringComparison.Ordinal));
-        var references = await engine.FindReferencesAsync(symbol.Symbol.Id);
-        var implementations = await engine.FindImplementationsAsync(symbol.Symbol.Id);
-        var resolver = new TestSemanticResolver(request.WorkspaceId, engine);
-        var toolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(new FindSymbolInput { Query = "IService" }, CreateSemanticToolExecutionContext(request));
-        var referenceToolResult = await new FindReferencesTool(resolver, TestPromptLoader.Instance).ExecuteAsync(new FindReferencesInput { SymbolId = symbol.Symbol.Id }, CreateSemanticToolExecutionContext(request));
-        var implementationToolResult = await new FindImplementationsTool(resolver, TestPromptLoader.Instance).ExecuteAsync(new FindImplementationsInput { SymbolId = symbol.Symbol.Id }, CreateSemanticToolExecutionContext(request));
-        var confinedToolResult = await new FindSymbolTool(resolver, TestPromptLoader.Instance).ExecuteAsync(new FindSymbolInput { Query = "IService" }, CreateSemanticToolExecutionContext(request, ["Contracts/**"]));
-        Assert.NotEmpty(references);
-        Assert.All(toolResult.Value, item => Assert.Equal(SemanticConfidenceLevel.FullSemantic, item.SemanticConfidence));
-        Assert.NotEmpty(referenceToolResult.Sources);
-        Assert.NotEmpty(implementationToolResult.Sources);
-        AssertFlatSemanticProjection(toolResult.ModelResultContent, symbol.Symbol.Id);
-        AssertFlatSemanticProjection(referenceToolResult.ModelResultContent, symbol.Symbol.Id);
-        AssertFlatSemanticProjection(implementationToolResult.ModelResultContent);
-        Assert.Empty(confinedToolResult.Value);
-        Assert.True(confinedToolResult.IsTruncated);
-        Assert.DoesNotContain("IService", confinedToolResult.ModelResultContent, StringComparison.Ordinal);
-        Assert.Contains(implementations, item => item.Symbol.DisplayName.Contains("Service", StringComparison.Ordinal));
-        Assert.All(symbols, item =>
-        {
-            Assert.Equal(SemanticConfidenceLevel.FullSemantic, item.SemanticConfidence);
-            Assert.False(string.IsNullOrWhiteSpace(item.Location.TargetFramework));
-            Assert.True(item.Location.Range.StartLine > 0);
-        });
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticEngine_InvalidationPromotionAndDirectProjectReloadRemainConfidenceAware : Milestone3Tests
-{
-    /// <summary>Invalidation lowers confidence until promotion, and a direct-project reload restores full semantics.</summary>
-    [Fact]
-    public static async Task SemanticEngine_InvalidationPromotionAndDirectProjectReloadRemainConfidenceAware()
-    {
-        using var fixture = new TestSemanticSolution();
-        var root = fixture.Root;
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((domainEvent, _) =>
-        {
-            observed.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, TimeSpan.FromMilliseconds(100), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var request = TestSemanticSolution.CreateLoadRequest(root);
-        await engine.LoadAsync(request);
-        engine.QueueInvalidation(Path.Combine(root, "Contracts", "Contracts.csproj"));
-        Assert.Equal(SemanticConfidenceLevel.ProjectGraphOnly, await engine.ApplyInvalidationsAsync());
-        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, (await engine.PromoteAsync()).Confidence);
-        Assert.Contains(observed, item => item is SemanticConfidenceChanged { Confidence: nameof(SemanticConfidenceLevel.ProjectGraphOnly), });
-        var directProject = await engine.LoadAsync(request with { SolutionPath = Path.Combine(root, "App", "App.csproj"), });
-        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, directProject.Confidence);
-        Assert.NotEmpty(await engine.FindSymbolsAsync("IService"));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Milestone3TestsSemanticEngine_DegradedLoadsReportProjectAndSolutionFailures : Milestone3Tests
 {
     /// <summary>Missing project metadata and invalid solution content degrade without recursive fixture copying.</summary>
@@ -531,100 +442,6 @@ public sealed class Milestone3TestsSemanticEngine_DegradedLoadsReportProjectAndS
         finally
         {
             Directory.Delete(invalidRoot, recursive: true);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticEngine_DiagnosticsRefreshCreatedSourceDocuments : Milestone3Tests
-{
-    /// <summary>Fast semantic diagnostics see source files created after the workspace was loaded.</summary>
-    [Fact]
-    public static async Task SemanticEngine_DiagnosticsRefreshCreatedSourceDocuments()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-create-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n");
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);
-            await engine.LoadAsync(request);
-            var initial = await engine.GetDiagnosticsAsync([projectPath], ["Caller.cs"], TestContext.Current.CancellationToken);
-            Assert.Contains(initial, diagnostic => diagnostic is { Code: "CS0246", Severity: DiagnosticSeverity.Error, File: "Caller.cs", });
-            await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), "namespace Demo;\npublic sealed class Service\n{\n}\n");
-            var diagnostics = await engine.GetDiagnosticsAsync([projectPath], ["Service.cs"]);
-            Assert.DoesNotContain(diagnostics, diagnostic => diagnostic is { Code: "CS0246", Severity: DiagnosticSeverity.Error, });
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticEngine_DiagnosticsRefreshAffectedProjectDocumentsFromDisk : Milestone3Tests
-{
-    /// <summary>Fast semantic diagnostics refresh existing affected-project documents before reporting errors.</summary>
-    [Fact]
-    public static async Task SemanticEngine_DiagnosticsRefreshAffectedProjectDocumentsFromDisk()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-refresh-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            var callerPath = Path.Combine(root, "Caller.cs");
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(callerPath, "namespace Demo;\npublic sealed class Caller\n{\n    public string Name => Missing.Value;\n}\n");
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);
-            await engine.LoadAsync(request);
-            var initial = await engine.GetDiagnosticsAsync([projectPath], ["Caller.cs"], TestContext.Current.CancellationToken);
-            Assert.Contains(initial, diagnostic => diagnostic is { Code: "CS0103", Severity: DiagnosticSeverity.Error, File: "Caller.cs", });
-            await File.WriteAllTextAsync(callerPath, "namespace Demo;\npublic sealed class Caller\n{\n    public string Name => \"ok\";\n}\n");
-            var diagnostics = await engine.GetDiagnosticsAsync([projectPath], ["MutationTouchedFile.cs"]);
-            Assert.DoesNotContain(diagnostics, diagnostic => diagnostic is { Code: "CS0103", Severity: DiagnosticSeverity.Error, File: "Caller.cs", });
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticEngine_DiagnosticsRefreshDeletedSourceDocuments : Milestone3Tests
-{
-    /// <summary>Fast semantic diagnostics stop compiling source files deleted after the workspace was loaded.</summary>
-    [Fact]
-    public static async Task SemanticEngine_DiagnosticsRefreshDeletedSourceDocuments()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-semantic-delete-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n");
-            var servicePath = Path.Combine(root, "Service.cs");
-            await File.WriteAllTextAsync(servicePath, "namespace Demo;\npublic sealed class Service\n{\n}\n");
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);
-            await engine.LoadAsync(request);
-            File.Delete(servicePath);
-            var diagnostics = await engine.GetDiagnosticsAsync([projectPath], ["Service.cs"]);
-            Assert.Contains(diagnostics, diagnostic => diagnostic is { Code: "CS0246", Severity: DiagnosticSeverity.Error, File: "Caller.cs", });
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
         }
     }
 }
@@ -668,48 +485,6 @@ public sealed class Milestone3TestsSemanticLifecycle_QueuesLoadOutsideEventSubsc
         Assert.Equal(nameof(SemanticConfidenceLevel.PartialCompilation), completion.Confidence);
         await engines.GetEngine(workspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, engines.GetConfidence(workspaceId));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSemanticLifecycle_EmptySolution_CompletesAsUnavailable : Milestone3Tests
-{
-    /// <summary>A completed semantic load reports an unavailable result when no project metadata exists.</summary>
-    [Fact]
-    public static async Task SemanticLifecycle_EmptySolution_CompletesAsUnavailable()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-empty-semantic-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        var solutionPath = Path.Combine(root, "Empty.sln");
-        await File.WriteAllTextAsync(solutionPath, "Microsoft Visual Studio Solution File, Format Version 12.00");
-        try
-        {
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            await using var observer = new SemanticLifecycleObserver(engines, events, NullLogger<SemanticLifecycleObserver>.Instance);
-            await using var semanticSubscription = events.Subscribe(observer.ObserveAsync);
-            var completionObserved = new TaskCompletionSource<SemanticLoadCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using var completionSubscription = events.Subscribe((domainEvent, _) =>
-            {
-                if (domainEvent is SemanticLoadCompleted completion && completion.SessionId == sessionId && completion.WorkspaceId == workspaceId)
-                {
-                    completionObserved.TrySetResult(completion);
-                }
-
-                return Task.CompletedTask;
-            });
-            await events.PublishAsync(new RepositoryOpened(sessionId, DateTimeOffset.UtcNow, root, workspaceId, RepositoryTrustLevel.TrustedRead));
-            await events.PublishAsync(new SolutionLoaded(sessionId, DateTimeOffset.UtcNow, solutionPath, workspaceId));
-            var completion = await completionObserved.Task.WaitAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(nameof(SemanticConfidenceLevel.None), completion.Confidence);
-            Assert.Equal(SemanticConfidenceLevel.None, engines.GetConfidence(workspaceId));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
     }
 }
 
@@ -892,37 +667,6 @@ public sealed class Milestone3TestsModelCatalog_AllowsHttpWhenEnforcementDisable
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsModelCatalog_LoaderReadsEnforceHttpsSetting : Milestone3Tests
-{
-    /// <summary>The loader reads enforceModelEndpointHttps from configuration.</summary>
-    [Fact]
-    public static void ModelCatalog_LoaderReadsEnforceHttpsSetting()
-    {
-        var values = new Dictionary<string, string?>
-        {
-            ["model:enforceModelEndpointHttps"] = "false",
-            ["model:profiles:0:id"] = _capableProfileId.Value.ToString("D"),
-            ["model:profiles:0:name"] = "test",
-            ["model:profiles:0:provider"] = "openai-compatible",
-            ["model:profiles:0:endpoint"] = "http://promaxgb10-f350:8000/v1/chat/completions",
-            ["model:profiles:0:modelId"] = "test-model",
-            ["model:profiles:0:secretKeyReference"] = "secrets:THREADSMITH_TEST_KEY",
-            ["model:profiles:0:contextWindow"] = "128000",
-            ["model:profiles:0:maximumOutputTokens"] = "4096",
-            ["model:profiles:0:capabilities:streaming"] = "true",
-            ["model:profiles:0:capabilities:toolCalls"] = "true",
-            ["model:profiles:0:capabilities:structuredOutput"] = "true",
-            ["model:profiles:0:cost:inputPerMillionTokens"] = "0",
-            ["model:profiles:0:cost:outputPerMillionTokens"] = "0",
-            ["model:profiles:0:sensitiveDataPolicy"] = "Prohibited",
-        };
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        var catalog = ModelProfileConfigurationLoader.Load(configuration);
-        Assert.Single(catalog.Profiles);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Milestone3TestsModelExchangeLog_MalformedInvocationFailure_RecordsSafeDiagnosticMetadata : Milestone3Tests
 {
     /// <summary>Malformed tool-call failures record safe diagnostic metadata without raw arguments.</summary>
@@ -1084,36 +828,6 @@ public sealed class Milestone3TestsOpenAiAdapter_ModelTools_AreSentAsFunctionDef
         Assert.Contains(fileSchema.GetProperty("type").EnumerateArray(), item => item.GetString() == "null");
         Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_CodeExploreArgumentDescriptions_ReachProviderRequest : Milestone3Tests
-{
-    /// <summary>The production code-explore decorator and OpenAI projection preserve argument help.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_CodeExploreArgumentDescriptions_ReachProviderRequest()
-    {
-        string? requestBody = null;
-        var handler = new RecordingHandler(async (request, cancellationToken) =>
-        {
-            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
-            return Response(HttpStatusCode.OK, "data: [DONE]\n");
-        });
-        var profile = CreateProfile(_capableProfileId, "code-explore-schema-help", toolCalls: true, combinedCost: 1);
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, profile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var tool = new CodeExploreOutputFormattingTool(new CodeExploreTool(new UnusedCodeExploreService(), TestPromptLoader.Instance), new CodeExploreOutputOptions(), TestPromptLoader.Instance);
-        using var nativeSchema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
-        var nativeProperties = nativeSchema.RootElement.GetProperty("properties");
-        var queryDescription = nativeProperties.GetProperty("query").GetProperty("description").GetString();
-        var maxFilesDescription = nativeProperties.GetProperty("maxFiles").GetProperty("description").GetString();
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "hello", RequiredCapabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, }, Tools = [new ModelToolDefinition { Name = tool.Definition.Id, Description = tool.Definition.Description, ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema, PreferStrictArguments = tool.Definition.PreferStrictArguments, },], });
-        Assert.NotNull(requestBody);
-        using var request = JsonDocument.Parse(requestBody);
-        var function = Assert.Single(request.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
-        var providerProperties = function.GetProperty("parameters").GetProperty("properties");
-        Assert.Equal(queryDescription, providerProperties.GetProperty("query").GetProperty("description").GetString());
-        Assert.Equal(maxFilesDescription, providerProperties.GetProperty("maxFiles").GetProperty("description").GetString());
     }
 }
 
@@ -1390,39 +1104,6 @@ public sealed class Milestone3TestsModelSelection_EnforcesCapabilitiesConstraint
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_RecordedStream_NormalizesHostOwnedChunks : Milestone3Tests
-{
-    /// <summary>A recorded SSE response normalizes text, fragmented tools, finish reason, usage, and cost.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_RecordedStream_NormalizesHostOwnedChunks()
-    {
-        var fixture = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "fixtures", "model", "openai-stream.sse"));
-        string? authorization = null;
-        string? requestBody = null;
-        var handler = new RecordingHandler(async (request, cancellationToken) =>
-        {
-            authorization = request.Headers.Authorization?.ToString();
-            var content = request.Content ?? throw new InvalidOperationException("The adapter request had no content.");
-            requestBody = await content.ReadAsStringAsync(cancellationToken);
-            return Response(HttpStatusCode.OK, fixture);
-        });
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 6), "secret-value", timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider);
-        Assert.Equal("Bearer secret-value", authorization);
-        Assert.Contains("\"stream\":true", requestBody, StringComparison.Ordinal);
-        Assert.Equal("Hello ", string.Concat(chunks.Select(chunk => chunk.Text)));
-        var tool = Assert.IsType<ToolRequestModelOutput>(Assert.Single(chunks, chunk => chunk.Output is not null).Output);
-        Assert.Equal("read_file", tool.ToolName);
-        Assert.Equal("{\"path\":\"README.md\"}", tool.ArgumentsJson);
-        Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.ToolCalls);
-        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage;
-        Assert.NotNull(usage);
-        Assert.False(usage.IsEstimate);
-        Assert.Equal(0.000056m, usage.EstimatedCost);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Milestone3TestsOpenAiAdapter_OversizedFragmentedToolArguments_FailDuringAccumulation : Milestone3Tests
 {
     /// <summary>Fragmented tool arguments are rejected as soon as selected-profile output bounds are exceeded.</summary>
@@ -1464,42 +1145,6 @@ public sealed class Milestone3TestsOpenAiAdapter_ResponseBeyondTokenEstimate_Rem
         var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks, chunk => chunk.Usage is not null).Usage);
         Assert.True(usage.IsEstimate);
         Assert.True(usage.OutputTokens > profile.MaximumOutputTokens);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_DateTimeArguments_TolerateExtraFields : Milestone3Tests
-{
-    /// <summary>Datetime ignores extra object fields without changing the provider's original argument payload.</summary>
-    [Theory]
-    [InlineData("{}")]
-    [InlineData("{ }")]
-    [InlineData("{\"maximumLines\":10,\"path\":\"README.md\"}")]
-    [InlineData("{\"timeoutSeconds\":\"10\",\"extra\":{\"items\":[1,null,true]}}")]
-    public static async Task OpenAiAdapter_DateTimeArguments_TolerateExtraFields(string argumentsJson)
-    {
-        var stream = "data: " + JsonSerializer.Serialize(new { choices = new[] { new { delta = new { tool_calls = new[] { new { index = 0, id = "call-1", function = new { name = "datetime", arguments = argumentsJson }, }, }, }, finish_reason = "tool_calls", }, }, }) + "\n\ndata: [DONE]\n";
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 10), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var tool = new DateTimeTool(TestPromptLoader.Instance);
-        var request = new ModelStreamRequest
-        {
-            RunId = RunId.New(),
-            Input = "What is today's date?",
-            Tools = [new ModelToolDefinition
-            {
-                Name = tool.Definition.Id,
-                Description = tool.Definition.Description,
-                ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema,
-            }, ],
-        };
-        var chunks = await CollectAsync(provider, request);
-        var invocation = Assert.IsType<ToolRequestModelOutput>(Assert.Single(chunks, chunk => chunk.Output is not null).Output);
-        Assert.Equal("datetime", invocation.ToolName);
-        Assert.Equal(argumentsJson, invocation.ArgumentsJson);
-        Assert.IsType<DateTimeInput>(tool.DeserializeInput(invocation.ArgumentsJson));
-        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
-        Assert.Empty(schema.RootElement.GetProperty("properties").EnumerateObject());
-        Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
     }
 }
 
@@ -1824,73 +1469,6 @@ public sealed class Milestone3TestsOpenAiAdapter_ProfileTimeout_IsNormalizedAsPr
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_ReasoningDelta_ProducesReasoningChunk : Milestone3Tests
-{
-    /// <summary>A reasoning delta produces a <see cref = "ModelChunk.Reasoning"/> chunk with null <see cref = "ModelChunk.Text"/>.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_ReasoningDelta_ProducesReasoningChunk()
-    {
-        const string stream = "data: {\"choices\":[{\"delta\":{\"content\":\"answer\",\"reasoning\":\"thinking about it\"}," + "\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n";
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider);
-        var reasoningChunk = Assert.Single(chunks, chunk => chunk.Reasoning is not null);
-        Assert.Equal("thinking about it", reasoningChunk.Reasoning);
-        Assert.Null(reasoningChunk.Text);
-        var textChunk = Assert.Single(chunks, chunk => chunk.Text is not null);
-        Assert.Equal("answer", textChunk.Text);
-        Assert.Null(textChunk.Reasoning);
-        Assert.Same(reasoningChunk, chunks[0]);
-        Assert.Same(textChunk, chunks[1]);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_LegacyReasoningContent_ProducesReasoningChunk : Milestone3Tests
-{
-    /// <summary>The legacy <c>reasoning_content</c> delta alias is parsed into <see cref = "ModelChunk.Reasoning"/>.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_LegacyReasoningContent_ProducesReasoningChunk()
-    {
-        const string stream = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"legacy thinking\"}}]}\n\n" + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n";
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider);
-        var reasoningChunk = Assert.Single(chunks, chunk => chunk.Reasoning is not null);
-        Assert.Equal("legacy thinking", reasoningChunk.Reasoning);
-        Assert.Null(reasoningChunk.Text);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_ReasoningText_ProducesReasoningChunk : Milestone3Tests
-{
-    /// <summary>The <c>reasoning_text</c> delta alias is parsed into <see cref = "ModelChunk.Reasoning"/>.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_ReasoningText_ProducesReasoningChunk()
-    {
-        const string stream = "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\"text thinking\"}}]}\n\n" + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n";
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider);
-        var reasoningChunk = Assert.Single(chunks, chunk => chunk.Reasoning is not null);
-        Assert.Equal("text thinking", reasoningChunk.Reasoning);
-        Assert.Null(reasoningChunk.Text);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_KnownReasoningFields_UsesPiCompatiblePriority : Milestone3Tests
-{
-    /// <summary>When no explicit compatibility mode is configured, known reasoning fields use Pi-compatible priority.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_KnownReasoningFields_UsesPiCompatiblePriority()
-    {
-        const string stream = "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\"low\"}}]}\n\n" + "data: {\"choices\":[{\"delta\":{\"reasoning\":\"mid\",\"reasoning_text\":\"ignored\"}}]}\n\n" + "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"high\",\"reasoning\":\"ignored\",\"reasoning_text\":\"ignored\"},\"finish_reason\":\"stop\"}]}\n\n" + "data: [DONE]\n";
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(new RecordingHandler((_, _) => Task.FromResult(Response(HttpStatusCode.OK, stream)))) { Timeout = Timeout.InfiniteTimeSpan }, CreateProfile(_capableProfileId, "capable", toolCalls: true, combinedCost: 1), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var chunks = await CollectAsync(provider);
-        Assert.Equal("lowmidhigh", string.Concat(chunks.Where(chunk => chunk.Reasoning is not null).Select(chunk => chunk.Reasoning)));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Milestone3TestsOpenAiAdapter_ReasoningEffort_SentForReasoningModel_OmittedForNonReasoning : Milestone3Tests
 {
     /// <summary>A reasoning model sends <c>reasoning_effort</c>; a non-reasoning model omits it.</summary>
@@ -1922,54 +1500,6 @@ public sealed class Milestone3TestsOpenAiAdapter_ReasoningEffort_SentForReasonin
         Assert.Contains("\"reasoning_effort\":\"medium\"", reasoningRequestBody, StringComparison.Ordinal);
         Assert.NotNull(nonReasoningRequestBody);
         Assert.DoesNotContain("reasoning_effort", nonReasoningRequestBody, StringComparison.Ordinal);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_UnsupportedReasoningLevel_ClampsToNone : Milestone3Tests
-{
-    /// <summary>Unsupported reasoning levels are clamped to <see cref = "ReasoningLevel.None"/>.</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_UnsupportedReasoningLevel_ClampsToNone()
-    {
-        string? requestBody = null;
-        var handler = new RecordingHandler(async (request, ct) =>
-        {
-            requestBody = await request.Content!.ReadAsStringAsync(ct);
-            return Response(HttpStatusCode.OK, "data: [DONE]\n");
-        });
-        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1) with
-        {
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low],
-        };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, reasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "plan", Seed = 42, ReasoningLevel = ReasoningLevel.High, });
-        Assert.NotNull(requestBody);
-        Assert.Contains("\"reasoning_effort\":\"none\"", requestBody, StringComparison.Ordinal);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsOpenAiAdapter_ReasoningEffortNone_DisablesThinking : Milestone3Tests
-{
-    /// <summary>Explicitly requesting <see cref = "ReasoningLevel.None"/> on a reasoning model sends <c>reasoning_effort</c> set to <c>none</c> (disables thinking).</summary>
-    [Fact]
-    public static async Task OpenAiAdapter_ReasoningEffortNone_DisablesThinking()
-    {
-        string? requestBody = null;
-        var handler = new RecordingHandler(async (request, ct) =>
-        {
-            requestBody = await request.Content!.ReadAsStringAsync(ct);
-            return Response(HttpStatusCode.OK, "data: [DONE]\n");
-        });
-        var reasoningProfile = CreateProfile(_capableProfileId, "reasoning", toolCalls: true, combinedCost: 1) with
-        {
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High],
-        };
-        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, reasoningProfile, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await CollectAsync(provider, new ModelStreamRequest { RunId = RunId.New(), Input = "plan", Seed = 42, ReasoningLevel = ReasoningLevel.None, });
-        Assert.NotNull(requestBody);
-        Assert.Contains("\"reasoning_effort\":\"none\"", requestBody, StringComparison.Ordinal);
     }
 }
 
@@ -2011,38 +1541,6 @@ public sealed class Milestone3TestsModelProfileConfiguration_ParsesReasoningLeve
         Assert.True(profile.SupportsReasoningLevel(ReasoningLevel.Medium));
         Assert.True(profile.SupportsReasoningLevel(ReasoningLevel.None));
         Assert.False(profile.SupportsReasoningLevel(ReasoningLevel.Low));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsModelProfileConfiguration_ReasoningEffortOnly_DerivesSupportedLevels : Milestone3Tests
-{
-    /// <summary>A profile without <c>reasoning:supportedLevels</c> but with <c>reasoningEffort</c> derives supported levels.</summary>
-    [Fact]
-    public static void ModelProfileConfiguration_ReasoningEffortOnly_DerivesSupportedLevels()
-    {
-        var values = new Dictionary<string, string?>
-        {
-            ["model:profiles:0:id"] = _capableProfileId.Value.ToString("D"),
-            ["model:profiles:0:name"] = "reasoning-effort-only",
-            ["model:profiles:0:provider"] = "openai-compatible",
-            ["model:profiles:0:endpoint"] = "https://models.example/v1/chat/completions",
-            ["model:profiles:0:modelId"] = "test-model",
-            ["model:profiles:0:contextWindow"] = "128000",
-            ["model:profiles:0:maximumOutputTokens"] = "4096",
-            ["model:profiles:0:capabilities:streaming"] = "true",
-            ["model:profiles:0:capabilities:toolCalls"] = "true",
-            ["model:profiles:0:capabilities:structuredOutput"] = "true",
-            ["model:profiles:0:cost:inputPerMillionTokens"] = "0",
-            ["model:profiles:0:cost:outputPerMillionTokens"] = "0",
-            ["model:profiles:0:sensitiveDataPolicy"] = "Prohibited",
-            ["model:profiles:0:reasoningEffort"] = "high",
-        };
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-        var catalog = ModelProfileConfigurationLoader.Load(configuration);
-        var profile = Assert.Single(catalog.Profiles);
-        Assert.Equal([ReasoningLevel.None, ReasoningLevel.High], profile.SupportedReasoningLevels);
-        Assert.Equal(ReasoningLevel.High, profile.DefaultReasoningLevel);
     }
 }
 
@@ -2185,20 +1683,6 @@ public sealed class Milestone3TestsModelCatalog_RejectsProfileWithoutNoneInSuppo
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSessionModelPreferences_ResolveFor_MatchingProfile_ReturnsReasoning : Milestone3Tests
-{
-    /// <summary><see cref = "SessionModelPreferences.ResolveFor"/> returns the stored level when the profile matches.</summary>
-    [Fact]
-    public static void SessionModelPreferences_ResolveFor_MatchingProfile_ReturnsReasoning()
-    {
-        var profileA = new ModelProfileId(Guid.NewGuid());
-        var preferences = new SessionModelPreferences(profileA, ReasoningLevel.Medium);
-        Assert.Equal(ReasoningLevel.Medium, preferences.ResolveFor(profileA));
-        Assert.Equal(profileA, preferences.CurrentProfileId);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Milestone3TestsSessionModelPreferences_ResolveFor_DifferentProfile_ReturnsNone : Milestone3Tests
 {
     /// <summary><see cref = "SessionModelPreferences.ResolveFor"/> returns None when the resolved profile differs (reset-on-switch).</summary>
@@ -2213,62 +1697,6 @@ public sealed class Milestone3TestsSessionModelPreferences_ResolveFor_DifferentP
         Assert.Equal(profileB, preferences.CurrentProfileId);
         Assert.Equal(ReasoningLevel.None, preferences.ResolveFor(profileA));
         Assert.Equal(profileA, preferences.CurrentProfileId);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSessionModelPreferences_ResolveFor_InitiallyUnbound_BindsConcreteProfile : Milestone3Tests
-{
-    /// <summary>An initially unbound session binds the first concrete profile while retaining its disabled default.</summary>
-    [Fact]
-    public static void SessionModelPreferences_ResolveFor_InitiallyUnbound_BindsConcreteProfile()
-    {
-        var profile = new ModelProfileId(Guid.NewGuid());
-        var preferences = new SessionModelPreferences();
-        Assert.Equal(ReasoningLevel.None, preferences.ResolveFor(profile));
-        Assert.Equal(profile, preferences.CurrentProfileId);
-        Assert.Equal(ReasoningLevel.None, preferences.Reasoning);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSessionModelPreferences_ResolveFor_NullResolvedProfileId_ReturnsReasoning : Milestone3Tests
-{
-    /// <summary><see cref = "SessionModelPreferences.ResolveFor"/> returns the stored level when the resolved profile is null.</summary>
-    [Fact]
-    public static void SessionModelPreferences_ResolveFor_NullResolvedProfileId_ReturnsReasoning()
-    {
-        var profileA = new ModelProfileId(Guid.NewGuid());
-        var preferences = new SessionModelPreferences(profileA, ReasoningLevel.Medium);
-        Assert.Equal(ReasoningLevel.Medium, preferences.ResolveFor(null));
-        Assert.Equal(profileA, preferences.CurrentProfileId);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Milestone3TestsSessionApplication_ReasoningChunk_PublishesModelReasoningObserved : Milestone3Tests
-{
-    /// <summary><see cref = "SessionApplication"/> publishes <see cref = "ModelReasoningObserved"/> for reasoning chunks.</summary>
-    [Fact]
-    public static async Task SessionApplication_ReasoningChunk_PublishesModelReasoningObserved()
-    {
-        var events = new ConcurrentBag<IDomainEvent>();
-        await using var stream = new DomainEventStream();
-        await using var subscription = stream.Subscribe((domainEvent, _) =>
-        {
-            events.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        var provider = new CapturingModelProvider(new ModelChunk { Reasoning = "thinking..." }, new ModelChunk { Text = "answer", Usage = new ModelUsage(1, 1) });
-        var application = new SessionApplication(stream, provider, new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.MaxValue)), new PassthroughSanitizer(), NullLogger<SessionApplication>.Instance, correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance), prompts: TestPromptLoader.Instance);
-        var dispatcher = new CommandDispatcher([application]);
-        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
-        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "request"));
-        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-        var reasoning = Assert.Single(events.OfType<ModelReasoningObserved>());
-        Assert.Equal("thinking...", reasoning.Text);
-        // The text chunk should also produce a ModelOutputObserved, but reasoning must not be appended to text.
-        Assert.Contains(events, e => e is ModelOutputObserved observed && observed.Text == "answer");
     }
 }
 

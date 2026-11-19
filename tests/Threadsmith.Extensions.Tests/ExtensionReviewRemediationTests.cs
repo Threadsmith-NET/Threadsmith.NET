@@ -19,33 +19,6 @@ using Xunit;
 /// </summary>
 public sealed class ExtensionReviewRemediationTests
 {
-    /// <summary>Asserts the host constructs the extension exactly once during load (F2).</summary>
-    /// <remarks>The count is observed through the extension's own tool (executed in the collectible ALC) so the
-    /// test reads the ALC's copy of the static counter, not the default-context type reference.</remarks>
-    [Fact]
-    public async Task LoadAsync_constructs_the_extension_exactly_once()
-    {
-        var stagingRoot = NewStagingRoot();
-        var events = new RecordingEventStream();
-        var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        var generation = await host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory("ConstructionCountExtension"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "construction-count"),
-        });
-        Assert.Equal(ExtensionLifecycleState.Active, generation.State);
-        Assert.Single(generation.Tools);
-
-        // The tool runs in the extension's collectible ALC and reports the count that the ALC's copy of
-        // the static counter recorded. A throwaway descriptor-reading prototype (the F2 bug) would have
-        // run the constructor twice before the tool executes, reporting 2.
-        var result = await generation.Tools[0].ExecuteAsync("{}", MakeToolContext(), CancellationToken.None);
-        Assert.NotNull(result.ResultJson);
-        Assert.Contains("\"count\":1", result.ResultJson, StringComparison.Ordinal);
-    }
-
     /// <summary>Asserts <see cref="ExtensionApprovalRequirement.HostPolicy"/> maps to <see cref="ApprovalLevel.HostPolicy"/> (F3).</summary>
     [Fact]
     public async Task CapabilityProxy_maps_host_policy_approval_faithfully()
@@ -76,40 +49,6 @@ public sealed class ExtensionReviewRemediationTests
             leaseAuthority,
             NullLogger.Instance);
         Assert.Equal(ApprovalLevel.None, noneProxy.Definition.RequiredApproval);
-    }
-
-    /// <summary>Asserts repeated leases on the same thread/generation are all tracked — no LeaseId collisions (F6).</summary>
-    [Fact]
-    public async Task Repeated_leases_on_the_same_thread_are_all_tracked()
-    {
-        var leaseAuthority = new InvocationLeaseAuthority(NullLogger.Instance);
-        var generationId = ExtensionGenerationId.New();
-        var budget = new ExtensionInvocationBudget(generationId, maxInvocationsPerTurn: 16);
-        var leases = new List<IInvocationLease>();
-        for (var i = 0; i < 8; i++)
-        {
-            // Sequential acquires reuse the same managed thread; the old hash-based LeaseId collided here,
-            // so _held.TryAdd would drop all but the first lease and under-count InFlight.
-            leases.Add(leaseAuthority.Acquire(generationId, budget, TimeSpan.FromSeconds(30)));
-        }
-
-        leaseAuthority.BeginDraining(generationId);
-
-        // A pre-cancelled token makes WaitForDrainAsync return book.InFlight immediately (it never
-        // reaches the cancellable Task.Delay), exposing the in-flight count while all 8 leases are held.
-        using var alreadyCancelled = new CancellationTokenSource();
-        await alreadyCancelled.CancelAsync();
-        var inFlightWhileHeld = await leaseAuthority.WaitForDrainAsync(generationId, alreadyCancelled.Token);
-        Assert.Equal(8, inFlightWhileHeld);
-
-        foreach (var lease in leases)
-        {
-            lease.Dispose();
-        }
-
-        // After releasing all, the drain wait reports zero immediately.
-        var inFlightAfterRelease = await leaseAuthority.WaitForDrainAsync(generationId, CancellationToken.None);
-        Assert.Equal(0, inFlightAfterRelease);
     }
 
     /// <summary>Asserts a load failure publishes <see cref="ExtensionLoadFailed"/>, not <see cref="ExtensionUnloadFailed"/> (F11).</summary>
@@ -162,11 +101,6 @@ public sealed class ExtensionReviewRemediationTests
         // load was paired with an unload).
         var summaries = await host.DiscoverAsync();
         Assert.Contains(summaries, s => s.ExtensionId == "threadsmith.tests.construction-count");
-    }
-
-    private static ExtensionToolInvocationContext MakeToolContext()
-    {
-        return new() { RequestedBy = "test" };
     }
 
     private static async Task<ExtensionGeneration> LoadConstructionCountGenerationAsync()

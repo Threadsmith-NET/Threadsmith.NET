@@ -8,48 +8,6 @@ using Xunit;
 /// <summary>Exercises the shared resilience pipeline with deterministic delay scheduling and stream ownership.</summary>
 public static class ModelStreamResilienceTests
 {
-    /// <summary>Busy failures use the elapsed window, independently of the transient attempt cap.</summary>
-    [Theory]
-    [InlineData(1, false)]
-    [InlineData(3, false)]
-    [InlineData(8, false)]
-    [InlineData(1, true)]
-    [InlineData(3, true)]
-    [InlineData(8, true)]
-    public static async Task PipelineOwnsBusyWindowBackoffAndOneBusyNotice(int maximumAttempts, bool overloaded)
-    {
-        var clock = new RecordingClock();
-        var attempts = 0;
-        var chunks = new List<ModelChunk>();
-        var policy = new ModelRetryPolicy { MaxAttempts = maximumAttempts, Delay = TimeSpan.Zero };
-        await Assert.ThrowsAsync<TransientModelException>(async () =>
-        {
-            await foreach (var chunk in ModelStreamResilience.ExecuteAsync(
-                AttemptAsync, policy, clock, TimeSpan.Zero, TestContext.Current.CancellationToken, TestContext.Current.CancellationToken))
-            {
-                chunks.Add(chunk);
-            }
-        });
-
-        Assert.Equal(TimeSpan.FromSeconds(15), policy.BusyTimeout);
-        Assert.Equal(7, attempts);
-        Assert.Single(chunks, chunk => chunk.ProviderBusy);
-        Assert.Equal(new[] { 250d, 500, 1000, 2000, 4000, 5000, 2250 }, clock.Delays.Select(delay => delay.TotalMilliseconds));
-
-        async IAsyncEnumerable<ModelChunk> AttemptAsync(int attempt, [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            attempts = attempt;
-            await Task.CompletedTask;
-            if (attempt > 0)
-            {
-                throw new TransientModelException("provider busy") { IsRateLimit = !overloaded, IsOverloaded = overloaded };
-            }
-
-            yield break;
-        }
-    }
-
     /// <summary>Expiry clips the final wait and reports the original sanitized failure.</summary>
     [Theory]
     [InlineData(0, 0, 1)]

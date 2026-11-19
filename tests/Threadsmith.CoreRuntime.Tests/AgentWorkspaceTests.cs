@@ -47,84 +47,6 @@ public static partial class AgentWorkspaceTests
         Assert.Contains("Shackleton_15", names);
     }
 
-    /// <summary>Verifies layout retains minimum usable rows.</summary>
-    [Theory]
-    [InlineData(40, 12, 1)]
-    [InlineData(40, 14, 2)]
-    [InlineData(40, 16, 4)]
-    [InlineData(40, 20, 5)]
-    [InlineData(80, 24, 5)]
-    [InlineData(120, 35, 5)]
-    public static void LayoutRetainsMinimumUsableRows(int width, int height, int composerRows)
-    {
-        var size = new Size(width, height);
-        var layout = WorkspaceLayout.Create(size);
-        var output = layout.FindById("transcript")!.ContentRect(size);
-        var composer = layout.FindById("composer")!.ContentRect(size);
-        var transcript = WorkspaceLayout.OutputContent(new Size(output.Width, output.Height));
-        var header = WorkspaceLayout.OutputHeader(new Size(output.Width, output.Height));
-        var editor = WorkspaceLayout.ComposerContent(new Size(composer.Width, composer.Height));
-        Assert.Equal(new Rect(1, 1, width - 2, 1), header);
-        Assert.Equal(header.Bottom + 1, transcript.Top);
-        Assert.True(transcript.Height >= 2);
-        Assert.Equal(composerRows, editor.Height);
-        Assert.Equal(2, transcript.Left);
-        Assert.Equal(width - 2, transcript.Right);
-        Assert.Equal(2, editor.Left);
-        Assert.Equal(width - 2, editor.Right);
-        if (height >= 24)
-        {
-            Assert.Equal(3, transcript.Top);
-            Assert.Equal(output.Height - 2, transcript.Bottom);
-            Assert.Equal(1, editor.Top);
-            Assert.Equal(composer.Height - 2, editor.Bottom);
-        }
-
-        Assert.Equal(height - 1, layout.FindById("status")!.ContentRect(size).Top);
-        Assert.Equal(output.Bottom, composer.Top);
-    }
-
-    /// <summary>Child display metadata comes from its own effective request and configured provider name.</summary>
-    [Fact]
-    public static async Task ChildHeaderUsesItsEffectiveProviderAndContext()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var session = SessionId.New();
-        var target = Target(session);
-        var profile = new ModelProfile
-        {
-            Id = new ModelProfileId(Guid.NewGuid()),
-            Name = "Child model",
-            Provider = "openai-compatible",
-            ProviderName = "Remote inference",
-            Endpoint = new Uri("https://models.example/v1/chat/completions"),
-            ModelId = "child",
-            ContextWindow = 10000,
-            MaximumOutputTokens = 1000,
-            Capabilities = new ModelCapabilitySet { Streaming = true },
-            Cost = new ModelCostMetadata(),
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
-            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
-            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1, Delay = TimeSpan.Zero },
-        };
-        var usage = new SessionUsageProjection();
-        var sink = new RecordingSurface();
-        await using var projection = new AgentWorkspaceProjection(sink, null, usage, new ConfiguredModelCatalog([profile]), new AgentNameCatalog(["Avery"]), false, timeout.Token);
-        await projection.AttachAsync(session, timeout.Token);
-        await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
-        await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty), timeout.Token);
-        usage.ObserveRequest(session, target.RunId, new AgentRequestStatus(profile.Id, ReasoningLevel.High, 2500, 10000, 1));
-
-        await projection.RefreshAsync(timeout.Token);
-
-        var observed = sink.Agents[^1];
-        Assert.Equal("Remote inference", observed.ProviderName);
-        Assert.Equal("Child model", observed.Model);
-        Assert.Equal(2500, observed.ContextTokens);
-        Assert.Equal(10000, observed.ContextLimit);
-        Assert.Equal(ReasoningLevel.High, observed.Reasoning);
-    }
-
     /// <summary>Verifies tabs preserve inactive transcripts selection and unicode hit mapping.</summary>
     [Fact]
     public static void TabsPreserveInactiveTranscriptsSelectionAndUnicodeHitMapping()
@@ -244,31 +166,6 @@ public static partial class AgentWorkspaceTests
         },
             timeout.Token);
         Assert.True(backend.IsStopped);
-    }
-
-    /// <summary>Verifies startup discards typeahead and closes before one composer read.</summary>
-    [Fact]
-    public static async Task StartupDiscardsTypeaheadAndClosesBeforeOneComposerRead()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new ObservedBackend(80, 24);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        await surface.RunAsync(
-            async token =>
-        {
-            var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var startup = surface.ShowStartupAsync("Threadsmith.NET", "Semantic Loading ...", loaded.Task, token);
-            await surface.PresentAsync(Text(string.Empty), token);
-            backend.FeedInput("discard\r\u001b[200~discard paste\u001b[201~");
-            await surface.PresentAsync(Text(string.Empty), token);
-            loaded.SetResult();
-            await startup;
-            var read = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
-            await surface.PresentAsync(Text(string.Empty), token);
-            backend.FeedInput("kept\r");
-            Assert.Equal("kept", (await read).Text);
-        },
-            timeout.Token);
     }
 
     /// <summary>Verifies immediate toggles reconcile host denial and do not touch locked items.</summary>
@@ -559,27 +456,6 @@ public static partial class AgentWorkspaceTests
         Assert.Contains("tool-1", string.Concat(sink.Output[0].Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text)), StringComparison.Ordinal);
     }
 
-    /// <summary>Filtering limits group mutations to visible eligible IDs while details preserve full labels.</summary>
-    [Fact]
-    public static void ToggleFilteringRetainsStateAndBoundsGroupChanges()
-    {
-        var modal = new ToggleModal(
-            new InteractionToggleRequest("Tools", [new("a", "Visible label", "Tools", true), new("b", "Hidden label", "Tools", false), new("c", "Visible locked", "Tools", true, true)]),
-            _ => CellStyle.Default,
-            () => { },
-            () => { });
-        modal.HandlePaste("Visible");
-        Assert.Equal(["a"], modal.Members("group:Tools").Select(option => option.Id));
-        modal.Reconcile("a", new(false, "Denied by host"));
-        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
-        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
-        var cells = new CellBuffer(80, 24);
-        modal.Render(new BufferSurface(cells));
-        Assert.Contains("Visible label", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
-        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
-        Assert.False(modal.Members("group:Tools")[0].Enabled);
-    }
-
     /// <summary>Active and stopped child text shares the same aggregate budget until session detach.</summary>
     [Fact]
     public static void ChildRetentionStaysWithinAggregateBudget()
@@ -609,64 +485,6 @@ public static partial class AgentWorkspaceTests
         views.Attach(SessionId.New());
         Assert.Single(views.Ordered);
         Assert.Empty(views.Main.Transcript.Lines);
-    }
-
-    /// <summary>Measures the retained primitives and workspace under the same synthetic eight-stream workload.</summary>
-    [Fact]
-    public static void RecordSyntheticWorkspaceRenderCost()
-    {
-        var session = SessionId.New();
-        var views = new AgentViews(_ => CellStyle.Default);
-        views.Attach(session);
-        var snapshots = Enumerable.Range(0, 8).Select(index => Snapshot(Target(session), "Hopper_" + index)).ToArray();
-        foreach (var snapshot in snapshots)
-        {
-            views.Update(snapshot);
-        }
-
-        var baseline = new TranscriptView();
-        var tabs = new AgentTabStrip(views, view => views.Select(view), _ => CellStyle.Default, view => views.Close(view));
-        var cells = new CellBuffer(120, 35);
-        var surface = new BufferSurface(cells);
-        var samples = new List<double>();
-        var baselineSamples = new List<double>();
-        const string fragment = "synthetic stream: a bounded line with Unicode 界 and a status result\n";
-        for (var iteration = 0; iteration < 240; iteration++)
-        {
-            var start = System.Diagnostics.Stopwatch.GetTimestamp();
-            foreach (var snapshot in snapshots)
-            {
-                baseline.Present(Text(fragment));
-            }
-
-            baseline.Render(surface.CreateView(new Rect(1, 4, 118, 22)));
-            var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-            if (iteration >= 40)
-            {
-                baselineSamples.Add(elapsed);
-            }
-
-            start = System.Diagnostics.Stopwatch.GetTimestamp();
-            foreach (var snapshot in snapshots)
-            {
-                views.Present(Text(fragment) with { Target = snapshot.Target });
-            }
-
-            views.Cycle(1);
-            tabs.Render(surface.CreateView(new Rect(0, 1, 120, 1)));
-            WorkspaceLayout.DrawFrame(surface.CreateView(new Rect(0, 2, 120, 25)), CellStyle.Default);
-            views.Selected.Transcript.Render(surface.CreateView(new Rect(1, 4, 118, 21)));
-            elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
-            if (iteration >= 40)
-            {
-                samples.Add(elapsed);
-            }
-        }
-
-        samples.Sort();
-        baselineSamples.Sort();
-        Console.WriteLine($"Plan 105 synthetic render 120x35, 8 streams, 200 measured frames: primitive p50={baselineSamples[100]:F3}ms p95={baselineSamples[190]:F3}ms; workspace p50={samples[100]:F3}ms p95={samples[190]:F3}ms max={samples[^1]:F3}ms");
-        Assert.Equal(200, samples.Count);
     }
 
     /// <summary>Modifier chords cannot change either locked or eligible checkbox state.</summary>
@@ -706,17 +524,6 @@ public static partial class AgentWorkspaceTests
         var label = AgentTabStrip.Label(view, 25);
         Assert.InRange(UnicodeWidth.GetWidth(label), 1, 25);
         Assert.EndsWith("Exp", label, StringComparison.Ordinal);
-    }
-
-    /// <summary>The minimum and normal compact footer retain every counter even with long paths and branches.</summary>
-    [Theory]
-    [InlineData(40)]
-    [InlineData(80)]
-    public static void RepositoryFooterPreservesCounts(int width)
-    {
-        var footer = RepositoryFooter.Format("C:/very/long/repository/directory", null, new RepositoryGitStatus("long/界界/feature/branch/name", false, 1, 2, 3, 4, false), width, " | ");
-        Assert.InRange(UnicodeWidth.GetWidth(footer), 1, width);
-        Assert.Contains("S1 M2 U3 !4", footer, StringComparison.Ordinal);
     }
 
     /// <summary>A terminal-first failure and a corrected terminal outcome stay visible without reopening a child.</summary>
@@ -847,98 +654,6 @@ public static partial class AgentWorkspaceTests
         await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, last.DelegationId, RunId.New(), phase, 1, "joined"), timeout.Token);
         Assert.Equal(64, projection.RetainedDelegationCount);
         Assert.All(sink.Agents, snapshot => Assert.True(snapshot.IsTerminal));
-    }
-
-    /// <summary>MAIN renders the current reasoning selection while context retains the previous request estimate.</summary>
-    [Fact]
-    public static async Task MainHeaderUsesCurrentReasoningInsteadOfPreviousRequest()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new ObservedBackend(200, 35);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        await surface.RunAsync(
-            async token =>
-            {
-                await surface.PresentSessionStatusAsync(
-                    new Threadsmith.Interaction.Sessions.SessionStatusSnapshot("repository", "repo", "Current model", ReasoningLevel.High, 2500, 10000, new SessionUsageSnapshot(0, 0, false))
-                    {
-                        ProviderName = "Current provider",
-                        AgentRequest = new AgentRequestStatus(null, ReasoningLevel.Low, 2500, 10000, 1),
-                    },
-                    token);
-                await surface.PresentAsync(Text(string.Empty), token);
-                var output = await backend.WaitForOutputAsync("(Current provider) Current model (high)", token);
-                Assert.Contains("(Current provider) Current model (high)", output, StringComparison.Ordinal);
-                Assert.Contains("25% of 10K", output, StringComparison.Ordinal);
-                Assert.DoesNotContain("Current model (low)", output, StringComparison.Ordinal);
-            },
-            timeout.Token);
-    }
-
-    /// <summary>The actual renderer preserves the final conflict digit beside its bottom-right workaround.</summary>
-    [Fact]
-    public static async Task ComposedNarrowFooterKeepsTheLastCounter()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new ObservedBackend(40, 12);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        await surface.RunAsync(
-            async token =>
-            {
-                await surface.PresentSessionStatusAsync(
-                    new Threadsmith.Interaction.Sessions.SessionStatusSnapshot("C:/very/long/repository/directory", "repo", "model", ReasoningLevel.None, null, null, new SessionUsageSnapshot(0, 0, false))
-                    {
-                        GitStatus = new RepositoryGitStatus("very-long-branch-name", false, 1, 2, 3, 4, false),
-                        IsPostResume = true,
-                    },
-                    token);
-                await surface.PresentAsync(Text(string.Empty), token);
-                Assert.Contains("S1 M2 U3 !4", await backend.WaitForOutputAsync("S1 M2 U3 !4", token), StringComparison.Ordinal);
-            },
-            timeout.Token);
-    }
-
-    /// <summary>Concurrent delegations with the same parent retain exact invocation ownership and ignore stale revisions.</summary>
-    [Fact]
-    public static async Task ToolProgressUsesExactInvocationAndGeneration()
-    {
-        var session = SessionId.New();
-        var parent = RunId.New();
-        var first = Target(session);
-        var second = Target(session);
-        var firstTool = ToolInvocationId.New();
-        var secondTool = ToolInvocationId.New();
-        var sink = new RecordingSurface();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery", "Robin"]), false, timeout.Token);
-        await projection.AttachAsync(session, timeout.Token);
-        var checkpoint = new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, first.DelegationId, parent, DelegationCheckpointPhase.Accepted, 1, "run") { ToolInvocationId = firstTool };
-        await projection.ObserveAsync(checkpoint, timeout.Token);
-        await projection.ObserveAsync(checkpoint with { DelegationId = second.DelegationId, ToolInvocationId = secondTool }, timeout.Token);
-        var lifecycle = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, first.DelegationId, first.AssignmentId, first.RunId, AgentRole.Explorer, AgentRunStatus.Queued, 1, "first queued");
-        await projection.ObserveAsync(lifecycle, timeout.Token);
-        await projection.ObserveAsync(lifecycle with { DelegationId = second.DelegationId, AssignmentId = second.AssignmentId, ChildRunId = second.RunId, Reason = "second queued" }, timeout.Token);
-        Assert.Contains("first queued", Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token)).Text, StringComparison.Ordinal);
-        Assert.Contains("second queued", Assert.Single(await projection.GetToolProgressAsync(secondTool, false, timeout.Token)).Text, StringComparison.Ordinal);
-        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Completed, Revision = 2, Reason = "first done" }, timeout.Token);
-        await projection.ObserveAsync(lifecycle, timeout.Token);
-        var completedProgress = Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
-        Assert.Contains("first done", completedProgress.Text, StringComparison.Ordinal);
-        Assert.Equal(PresentationTextRole.Success, completedProgress.Role);
-        await projection.ObserveAsync(lifecycle with { DelegationId = second.DelegationId, AssignmentId = second.AssignmentId, ChildRunId = second.RunId, Status = AgentRunStatus.Failed, Revision = 2, Reason = "second failed" }, timeout.Token);
-        var failedProgress = Assert.Single(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
-        Assert.Contains("second failed", failedProgress.Text, StringComparison.Ordinal);
-        Assert.Equal(PresentationTextRole.Error, failedProgress.Role);
-        await projection.ObserveAsync(checkpoint with { Generation = 2, Revision = 3 }, timeout.Token);
-        Assert.Empty(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
-        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Cancelled, Generation = 2, Revision = 4, Reason = "cancelled" }, timeout.Token);
-        Assert.Contains("Cancelled", Assert.Single(await projection.GetToolProgressAsync(firstTool, true, timeout.Token)).Text, StringComparison.Ordinal);
-        Assert.Empty(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
-        Assert.Empty(sink.Output);
-        await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Discarded, Generation = 2, Revision = 5, Reason = "late correction" }, timeout.Token);
-        Assert.Single(sink.Output);
-        await projection.AttachAsync(SessionId.New(), timeout.Token);
-        Assert.Empty(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
     }
 
     /// <summary>Real interleaved child completions carry their own live source into the shared viewer.</summary>

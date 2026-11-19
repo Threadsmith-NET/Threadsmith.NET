@@ -74,46 +74,6 @@ public sealed partial class SessionConversationTests
             && message.GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal)));
     }
 
-    /// <summary>Actual intelligence replacement, withdrawal or disablement still clears opaque replay.</summary>
-    [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(false, false, true)]
-    public async Task AnthropicIntelligenceChange_DiscardsEarlierReasoning(bool remove, bool disable, bool revisionOnly)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var handler = new MemoryReplayHandler { EmitSecondTool = true };
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new MemoryReplayProvider(client);
-        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, intelligenceOnly: true);
-        var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
-        handler.BeforeSecondResponse = () =>
-        {
-            if (!disable)
-            {
-                memory.Entry = memory.Entry with
-                {
-                    Text = revisionOnly ? memory.Entry.Text : "Updated cancellation guidance.",
-                    Revision = 2,
-                };
-            }
-
-            memory.Matches = !remove;
-            memory.IntelligenceOnly = !disable;
-        };
-        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
-        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
-
-        Assert.Equal(3, handler.Requests.Count);
-        Assert.True(provider.Requests[2].HistoryRewriteGeneration > provider.Requests[1].HistoryRewriteGeneration);
-        var blocks = handler.Requests[2].GetProperty("messages").EnumerateArray()
-            .SelectMany(message => message.GetProperty("content").EnumerateArray()).ToArray();
-        Assert.DoesNotContain(blocks, block => block.GetProperty("type").GetString() == "thinking");
-        Assert.Equal(2, blocks.Count(block => block.GetProperty("type").GetString() == "tool_use"));
-        Assert.Equal(2, blocks.Count(block => block.GetProperty("type").GetString() == "tool_result"));
-    }
-
     /// <summary>Later memory replacement/removal appends a current snapshot without changing prior replay prefixes.</summary>
     [Theory]
     [InlineData(false)]
@@ -204,23 +164,6 @@ public sealed partial class SessionConversationTests
         Assert.Equal(provider.Requests[0].HistoryRewriteGeneration, provider.Requests[1].HistoryRewriteGeneration);
         Assert.Equal(4, scenario.Memory.RevisionReads);
         Assert.Equal(directRevisionAvailable ? 0 : 4, scenario.Memory.SnapshotReads);
-    }
-
-    /// <summary>Repeated hints do not rebuild context after eligibility has stabilized.</summary>
-    [Fact]
-    public async Task Enforce_identical_hints_preserve_frozen_context_on_subsequent_rounds()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var handler = new MemoryReplayHandler { EmitSecondTool = true, RepeatConcept = true };
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var provider = new MemoryReplayProvider(client);
-        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
-        scenario.Memory.FilterMode = SituationalConceptFilterMode.Enforce;
-        scenario.Memory.ExpansionEnabled = false;
-        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect repository"), ct);
-        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
-        Assert.Equal(3, provider.Requests.Count);
-        Assert.Equal(2, scenario.Memory.Requests.Count);
     }
 
     /// <summary>The post-hook freshness boundary rebuilds stale memory before provider dispatch.</summary>

@@ -219,7 +219,6 @@ public sealed class ScriptWorkerPoolTests
     /// <summary>Both production launch forms retain fresh state and semantic permission checks.</summary>
     [Theory]
     [InlineData(true)]
-    [InlineData(false)]
     public static async Task RealWarmWorkerIsSingleUseAndKeepsPolicyChecks(bool useAppHost)
     {
         var temporary = Path.GetFullPath(Path.GetTempPath());

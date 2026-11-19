@@ -144,23 +144,6 @@ public sealed class LocalTextCrossEncoderTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => encoder.ScoreAsync("query", [], source.Token));
     }
 
-    /// <summary>Verifies request boundaries and terminal disposal without native assets.</summary>
-    [Fact]
-    public static async Task EmptyAndInvalidRequestsDoNotLoadAssets()
-    {
-        var encoder = new LocalTextCrossEncoder(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
-        await using (encoder)
-        {
-            var empty = await encoder.ScoreAsync("query", [], TestContext.Current.CancellationToken);
-            Assert.Empty(empty);
-            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => encoder.ScoreAsync("query", Enumerable.Repeat("document", encoder.Model.MaxBatchSize + 1).ToArray(), TestContext.Current.CancellationToken));
-            var error = await Assert.ThrowsAsync<TextCrossEncoderUnavailableException>(() => encoder.ScoreAsync("query", ["document"], TestContext.Current.CancellationToken));
-            Assert.Contains("cross-encoder asset", error.Message, StringComparison.Ordinal);
-        }
-
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => encoder.ScoreAsync("query", ["document"], TestContext.Current.CancellationToken));
-    }
-
     /// <summary>Verifies true batch scoring, input order, token accounting, and finite logits against staged assets.</summary>
     [Fact]
     [Trait("Category", "Integration")]

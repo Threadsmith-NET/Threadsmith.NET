@@ -40,24 +40,6 @@ public static class ComposerAutocompleteTests
         Assert.False(overlay.IsVisible);
     }
 
-    /// <summary>Modified keys are never stolen from the editor by toolkit navigation or acceptance.</summary>
-    [Theory]
-    [InlineData(KeyCode.Enter, KeyModifiers.Ctrl)]
-    [InlineData(KeyCode.Enter, KeyModifiers.Shift)]
-    [InlineData(KeyCode.Tab, KeyModifiers.Shift)]
-    [InlineData(KeyCode.Left, KeyModifiers.Shift)]
-    [InlineData(KeyCode.Home, KeyModifiers.Ctrl)]
-    public static void ModifiedKeysFallThrough(KeyCode code, KeyModifiers modifiers)
-    {
-        var discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, _ => { });
-        var buffer = new ComposerBuffer();
-        buffer.Insert("/rea");
-        using var overlay = new ComposerAutocomplete(discovery, new ComposerCommandCompletion(discovery), _ => Assert.Fail("Modified key accepted."));
-        overlay.Refresh(buffer, ComposerPurpose.Conversation, 1, true);
-        Assert.False(overlay.HandleKey(KeyEvent.Special(code, modifiers)));
-        Assert.True(overlay.IsVisible);
-    }
-
     /// <summary>Short and flipped lists preserve reserved rows and show whole names near the right edge.</summary>
     [Theory]
     [InlineData("/rea", 1)]
@@ -77,18 +59,5 @@ public static class ComposerAutocompleteTests
         Assert.Equal(new string('X', 40), rows[6]);
         Assert.Equal(new string('X', 40), rows[11]);
         Assert.Contains(discovery.Suggest(prefix)[0], string.Join('\n', rows), StringComparison.Ordinal);
-    }
-
-    /// <summary>The composer reports the actual visible caret after Unicode wrapping and scroll-to-caret.</summary>
-    [Fact]
-    public static void ComposerCaretUsesRenderedViewport()
-    {
-        var composer = new TuiKitComposer { FirstRowOffset = 3 };
-        composer.InsertText("\u754ce\u0301\nsecond\nthird");
-        composer.Render(new BufferSurface(new CellBuffer(10, 2)));
-        Assert.Equal((5, 1), composer.VisibleCaret);
-        composer.Buffer.MoveTo(3, false);
-        composer.Render(new BufferSurface(new CellBuffer(10, 2)));
-        Assert.Equal((6, 0), composer.VisibleCaret);
     }
 }

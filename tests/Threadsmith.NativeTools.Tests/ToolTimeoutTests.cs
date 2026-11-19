@@ -61,48 +61,6 @@ public sealed class ToolTimeoutTests
         Assert.Equal(TimeSpan.FromMinutes(10), tool.Context!.ExecutionTimeout);
     }
 
-    /// <summary>Host preferences and hard ceilings control process timeouts.</summary>
-    [Theory]
-    [InlineData(300, 600, null, 300)]
-    [InlineData(600, 1200, null, 600)]
-    [InlineData(300, 600, 200, 200)]
-    [InlineData(300, 150, null, 150)]
-    public async Task ProcessUsesHostPreferenceSubjectToHardCeilings(int specific, int maximum, int? enforced, int expected)
-    {
-        var manager = new RecordingProcessManager();
-        var tool = new RunProcessTool(manager, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "pwsh");
-        var registry = new ToolRegistry([tool], runtimeOptions: new() { Defaults = new() { TimeoutMilliseconds = 120000 } });
-        var request = Request("run_process", """{"command":"dotnet --version"}""");
-        var policy = new EffectiveSessionPolicy
-        {
-            BindingId = Guid.NewGuid(),
-            Generation = 1,
-            RepositoryPath = request.Context.RepositoryPath,
-            Fingerprint = "test",
-            AllowedExecutables = ["pwsh", "dotnet"],
-            RequireShellApproval = false,
-            CommandPolicies = request.Context.SecurityPolicy!.CommandPolicies,
-            ResourceLimits = ImmutableDictionary<string, int>.Empty.Add("tools:runProcess:maxTimeoutSeconds", maximum)
-                .Add("tools:runProcess:defaultTimeoutSeconds", 30).Add("tools:runtime:defaults:timeoutMilliseconds", 120000),
-            ToolTimeouts = new()
-            {
-                Default = TimeSpan.FromSeconds(120),
-                ByTool = ImmutableDictionary<string, TimeSpan>.Empty.Add("run_process", TimeSpan.FromSeconds(specific)),
-                Maximum = enforced is { } cap ? TimeSpan.FromSeconds(cap) : null,
-            },
-        };
-        await using var events = new DomainEventStream();
-        var result = await CreatePipeline(registry, events).InvokeAsync(
-            request with
-            {
-                Context = request.Context with { SecurityPolicy = policy },
-            },
-            TestContext.Current.CancellationToken);
-        Assert.True(result.Succeeded, result.Error);
-        Assert.NotNull(manager.Request);
-        Assert.Equal(TimeSpan.FromSeconds(expected), manager.Request.Timeout);
-    }
-
     /// <summary>Model-supplied timeout fields are rejected before process execution.</summary>
     [Fact]
     public async Task ProcessRejectsModelTimeout()

@@ -7,42 +7,6 @@ using Xunit;
 
 public sealed partial class Plan41InventoryToolTests
 {
-    /// <summary>History includes merge parents, empty commits, and a stable starting revision.</summary>
-    [Fact]
-    public async Task ChronologicalHistoryIncludesMergedAndEmptyCommitsAndPinsHead()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var repository = await TestRepository.CreateAsync();
-        await repository.RunGitAsync("checkout", "-b", "feature");
-        await File.WriteAllTextAsync(Path.Combine(repository.Path, "feature.txt"), "feature", ct);
-        await repository.RunGitAsync("add", ".");
-        await repository.RunGitAsync("commit", "-m", "feature\n\nWhy this pattern exists.");
-        await repository.RunGitAsync("checkout", "main");
-        await repository.RunGitAsync("commit", "--allow-empty", "-m", "empty change");
-        await repository.RunGitAsync("merge", "--no-ff", "feature", "-m", "integrate feature");
-        var pinned = (await repository.RunGitAsync("rev-parse", "HEAD")).Trim();
-        await using var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct);
-        await repository.RunGitAsync("commit", "--allow-empty", "-m", "after pin");
-        var commits = new List<GitCommitSummary>();
-        GitLogResult page;
-        do
-        {
-            page = await reader.ReadPageAsync(1, 4096, ct);
-            Assert.Equal(pinned, page.HistoryRevision);
-            commits.AddRange(page.Commits);
-        }
-        while (page.NextCollectionPage is not null);
-
-        Assert.Equal(4, commits.Count);
-        Assert.Equal("initial commit\n", commits[0].Message);
-        Assert.Equal(pinned, commits[^1].Commit);
-        Assert.Contains("feature.txt", commits[^1].ChangedPaths);
-        Assert.Contains(commits, commit => commit.Message == "feature\n\nWhy this pattern exists.\n");
-        Assert.Empty(Assert.Single(commits, commit => commit.Message == "empty change\n").ChangedPaths);
-        var positions = commits.Select((commit, index) => (commit.Commit, index)).ToDictionary(item => item.Commit, item => item.index);
-        Assert.All(commits, commit => Assert.All(commit.Parents, parent => Assert.True(positions[parent] < positions[commit.Commit])));
-    }
-
     /// <summary>Depth selects newest commits before reversing; shallow boundaries cannot masquerade as roots.</summary>
     [Fact]
     public async Task ChronologicalDepthSelectsNewestCommitsAndValidatesShallowBoundary()
@@ -69,28 +33,6 @@ public sealed partial class Plan41InventoryToolTests
         await using var incomplete = await service.OpenHistoryAsync(repository.Path, 5, ct);
         await Assert.ThrowsAsync<InvalidOperationException>(() => incomplete.ReadPageAsync(16, 4096, ct));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => service.OpenHistoryAsync(repository.Path, 0, ct));
-    }
-
-    /// <summary>Early disposal finishes the Git process before its repository can be removed.</summary>
-    [Fact]
-    public async Task ChronologicalHistoryEarlyDisposalReleasesRepository()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var repository = await TestRepository.CreateAsync();
-        var messagePath = Path.Combine(repository.Path, "message.txt");
-        await File.WriteAllTextAsync(messagePath, new string('m', 128 * 1024), ct);
-        await repository.RunGitAsync("commit", "--allow-empty", "-F", messagePath);
-        await using (var reader = await new GitQueryService(timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).OpenHistoryAsync(repository.Path, ct))
-        {
-            var page = await reader.ReadPageAsync(1, 4096, ct);
-            Assert.NotNull(page.NextCollectionPage);
-        }
-
-        // No retry or delay: successful disposal is the synchronization boundary.
-        // Move detects Windows working-directory handles without Git readonly-file cleanup.
-        var moved = repository.Path + "-released";
-        Directory.Move(repository.Path, moved);
-        Directory.Move(moved, repository.Path);
     }
 
     /// <summary>Paging preserves messages and paths, including serialized supplementary Unicode.</summary>

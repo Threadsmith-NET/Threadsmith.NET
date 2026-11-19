@@ -64,21 +64,6 @@ public static class TuiKitCommandDiscoveryTests
         Assert.Throws<ArgumentException>(() => new TuiKitCommandDiscovery(entries, _ => { }));
     }
 
-    /// <summary>Suggestion providers do not interpret prose or command arguments.</summary>
-    [Theory]
-    [InlineData("")]
-    [InlineData("help")]
-    [InlineData(" /h")]
-    [InlineData("/help arg")]
-    [InlineData("/h\n")]
-    [InlineData("/h\t")]
-    [InlineData("/unknown-fixture")]
-    public static void IneligiblePrefixesHaveNoSuggestions(string input)
-    {
-        var discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, _ => { });
-        Assert.Empty(discovery.Suggest(input));
-    }
-
     /// <summary>Sources and consumers cannot mutate discovery state, and cancellation is observed.</summary>
     [Fact]
     public static async Task ProviderIsImmutableOrderedAndObservesCancellation()

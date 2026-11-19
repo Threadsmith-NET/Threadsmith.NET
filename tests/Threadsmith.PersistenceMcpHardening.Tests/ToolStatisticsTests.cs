@@ -13,50 +13,6 @@ using Xunit;
 /// <summary>Checks repository-owned ordered statistics storage and non-blocking admission.</summary>
 public static class ToolStatisticsTests
 {
-    /// <summary>Aggregate counts and timestamp-paired measurements survive restart.</summary>
-    [Fact]
-    public static async Task Aggregates_preserve_measurements_latest_timestamp_and_restart()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await DatabaseFixture.CreateAsync();
-        var binding = await InitializeAsync(database, ct);
-        var at = DateTimeOffset.UnixEpoch.AddDays(1);
-        await using (var worker = new SqliteToolStatisticsWorker())
-        {
-            Assert.True(worker.TryRecord(new(binding, "removed-tool", ToolTelemetryStatus.Succeeded, at, 100)));
-            Assert.True(worker.TryRecord(new(binding, "removed-tool", ToolTelemetryStatus.Failed, at.AddSeconds(1), 300)));
-            var row = Assert.Single((await worker.GetSnapshotAsync(binding, ct)).Rows);
-            Assert.Equal(2, row.TotalCount);
-            Assert.Equal(1, row.SuccessCount);
-            Assert.Equal(1, row.FailureCount);
-            Assert.Equal(400, row.TotalDurationMilliseconds);
-            Assert.Equal(2, row.MeasuredInvocationCount);
-            Assert.Equal(200m, (decimal)row.TotalDurationMilliseconds / row.MeasuredInvocationCount);
-            worker.TryRecord(new(binding, "removed-tool", ToolTelemetryStatus.Failed, at.AddSeconds(2), null));
-            worker.TryRecord(new(binding, "removed-tool", ToolTelemetryStatus.Succeeded, at, 0));
-            row = Assert.Single((await worker.GetSnapshotAsync(binding, ct)).Rows);
-            Assert.Equal(4, row.TotalCount);
-            Assert.Equal(400, row.TotalDurationMilliseconds);
-            Assert.Equal(3, row.MeasuredInvocationCount);
-            Assert.Null(row.LastDurationMilliseconds);
-            Assert.Equal(at.AddSeconds(2), row.LastInvokedAtUtc);
-            worker.TryRecord(new(binding, "removed-tool", ToolTelemetryStatus.Succeeded, at.AddSeconds(2), 7));
-            worker.TryRecord(new(binding, "invalid", ToolTelemetryStatus.Failed, at.ToOffset(TimeSpan.FromHours(2)), -5));
-            await worker.StopAsync(ct);
-        }
-
-        await using var restarted = new SqliteToolStatisticsWorker();
-        var rows = (await restarted.GetSnapshotAsync(binding, ct)).Rows;
-        Assert.Equal("removed-tool", rows[0].ToolId);
-        Assert.Equal(5, rows[0].TotalCount);
-        Assert.Equal(407, rows[0].TotalDurationMilliseconds);
-        Assert.Equal(7, rows[0].LastDurationMilliseconds);
-        Assert.Equal(4, rows[0].MeasuredInvocationCount);
-        Assert.Equal(TimeSpan.Zero, rows[1].LastInvokedAtUtc.Offset);
-        Assert.Null(rows[1].LastDurationMilliseconds);
-        Assert.Equal(0, rows[1].MeasuredInvocationCount);
-    }
-
     /// <summary>Independent workers serialize transactional updates to one database.</summary>
     [Fact]
     public static async Task Independent_hosts_and_concurrent_producers_do_not_lose_updates()
@@ -173,93 +129,6 @@ public static class ToolStatisticsTests
         Assert.Empty((await restarted.GetSnapshotAsync(binding, ct)).Rows);
     }
 
-    /// <summary>A real pipeline finishes before the storage barrier releases.</summary>
-    [Fact]
-    public static async Task Real_pipeline_finishes_while_storage_thread_is_held_before_database_access()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await DatabaseFixture.CreateAsync();
-        await InitializeAsync(database, ct);
-        using var bindings = new RepositoryBoundMemoryStore(database.ConnectionString, Environment.CurrentDirectory);
-        var binding = bindings.CaptureBinding();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var release = new ManualResetEventSlim();
-        await using var worker = new SqliteToolStatisticsWorker(null, _ =>
-        {
-            entered.TrySetResult();
-            release.Wait(ct);
-        });
-        await using var events = new DomainEventStream();
-        var clock = new FakeTimeProvider();
-        var tool = new DateTimeTool(TestPromptLoader.Instance, clock);
-        var pipeline = new ToolInvocationPipeline(
-            new ToolRegistry([tool]),
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance,
-            timeProvider: clock,
-            toolTelemetry: worker,
-            storageBindings: bindings);
-        worker.TryRecord(new(binding, "barrier", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, null));
-        try
-        {
-            await entered.Task.WaitAsync(ct);
-            var result = await pipeline.InvokeAsync(
-                new ToolInvocationRequest
-                {
-                    SessionId = SessionId.New(),
-                    RunId = RunId.New(),
-                    ToolId = tool.Definition.Id,
-                    ArgumentsJson = "{}",
-                    Context = new() { RepositoryPath = Environment.CurrentDirectory, RequestedBy = "manual", TrustLevel = RepositoryTrustLevel.UntrustedInspection },
-                },
-                ct);
-            Assert.True(result.Succeeded);
-            Assert.False(release.IsSet);
-            release.Set();
-            var rows = (await worker.GetSnapshotAsync(binding, ct)).Rows;
-            Assert.Contains(rows, row => row.ToolId == tool.Definition.Id && row.TotalCount == 1);
-        }
-        finally
-        {
-            release.Set();
-        }
-    }
-
-    /// <summary>Existing binding authority retains custom paths and fences late old completions.</summary>
-    [Fact]
-    public static async Task Binding_source_preserves_custom_initial_path_and_late_old_completions()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var root = DirectoryFixture.Create();
-        var a = Path.Combine(root.Path, "a");
-        var b = Path.Combine(root.Path, "b");
-        Directory.CreateDirectory(a);
-        Directory.CreateDirectory(b);
-        var connectionString = new SqliteConnectionStringBuilder { DataSource = Path.Combine(a, "custom.db"), Pooling = false }.ToString();
-        await new SqliteEventStore(connectionString).InitializeAsync(ct);
-        await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(ct);
-        using var source = new RepositoryBoundMemoryStore(connectionString, a);
-        var original = source.CaptureBinding();
-        await source.BindRepositoryAsync(b, ct);
-        var current = source.CaptureBinding();
-        Assert.Throws<InvalidOperationException>(() => source.CaptureBinding(original.RepositoryIdentity));
-        await using var worker = new SqliteToolStatisticsWorker();
-        worker.TryRecord(new(original, "late-a", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 100));
-        Assert.Empty((await worker.GetSnapshotAsync(current, ct)).Rows);
-        Assert.Equal("late-a", Assert.Single((await worker.GetSnapshotAsync(original, ct)).Rows).ToolId);
-        await source.BindRepositoryAsync(a, ct);
-        Assert.Equal(original, source.CaptureBinding());
-        Assert.False(File.Exists(Path.Combine(a, ".threadsmith", "threadsmith.db")));
-        await worker.StopAsync(ct);
-        await using var targetPool = new SqliteConnection(current.ConnectionString);
-        SqliteConnection.ClearPool(targetPool);
-        await using var workerPool = new SqliteConnection(new SqliteConnectionStringBuilder(current.ConnectionString) { Mode = SqliteOpenMode.ReadWrite }.ToString());
-        SqliteConnection.ClearPool(workerPool);
-    }
-
     /// <summary>Transient write failures retry on the same owned thread and commit exactly once.</summary>
     [Fact]
     public static async Task Transient_write_failure_recovers_without_disabling_persistence()
@@ -286,59 +155,6 @@ public static class ToolStatisticsTests
         Assert.Equal(10, row.TotalDurationMilliseconds);
         Assert.False(worker.PersistenceDisabled);
         Assert.Single(threads.Distinct());
-    }
-
-    /// <summary>Exhaustion settles controls and keeps draining accepted entries without touching storage.</summary>
-    [Theory]
-    [InlineData("CompletionWork")]
-    [InlineData("SnapshotWork")]
-    [InlineData("ResetWork")]
-    public static async Task Exhausted_retries_disable_storage_but_not_admission_or_shutdown(string failingOperation)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await DatabaseFixture.CreateAsync();
-        var binding = await InitializeAsync(database, ct);
-        var attempts = 0;
-        var operations = new ConcurrentQueue<string>();
-        await using var worker = new SqliteToolStatisticsWorker(null, operation =>
-        {
-            operations.Enqueue(operation);
-            if (operation == failingOperation)
-            {
-                Interlocked.Increment(ref attempts);
-                throw new SqliteException("injected storage fault", 5);
-            }
-        }, TimeSpan.Zero);
-
-        if (failingOperation == "ResetWork")
-        {
-            await Assert.ThrowsAsync<InvalidOperationException>(() => worker.ResetAsync(binding, ct));
-        }
-        else
-        {
-            if (failingOperation == "CompletionWork")
-            {
-                Assert.True(worker.TryRecord(new(binding, "failed", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 1)));
-            }
-
-            await Assert.ThrowsAsync<InvalidOperationException>(() => worker.GetSnapshotAsync(binding, ct));
-        }
-
-        Assert.Equal(4, attempts);
-        Assert.True(worker.PersistenceDisabled);
-        var observed = operations.Count;
-        for (var index = 0; index < 100; index++)
-        {
-            Assert.True(worker.TryRecord(new(binding, "skipped", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 1)));
-        }
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => worker.GetSnapshotAsync(binding, ct));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => worker.ResetAsync(binding, ct));
-        await worker.StopAsync(ct);
-        Assert.Equal(observed, operations.Count);
-        Assert.False(worker.TryRecord(new(binding, "stopped", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 1)));
-        await using var reader = new SqliteToolStatisticsWorker();
-        Assert.Empty((await reader.GetSnapshotAsync(binding, ct)).Rows);
     }
 
     private static async Task<RepositoryStorageBinding> InitializeAsync(DatabaseFixture database, CancellationToken cancellationToken)

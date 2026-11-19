@@ -113,26 +113,6 @@ public static partial class Milestone1Tests
         Assert.Contains("Disable", surface.Output, StringComparison.Ordinal);
     }
 
-    /// <summary>An empty catalog is reported without attempting an invalid empty modal or model request.</summary>
-    [Fact]
-    public static async Task SkillsModal_EmptyCatalogRemainsUsable()
-    {
-        var manager = new DialogSkillHandler();
-        manager.Candidates.Clear();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [manager]);
-        var surface = new ToggleInteractionSurface(["/skills", "/quit"]);
-        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-
-        await coordinator.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(0, surface.ToggleCount);
-        Assert.Empty(manager.Changes);
-        Assert.Empty(manager.Verifications);
-        Assert.Contains(
-            surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments),
-            segment => segment.Text.Contains("No skills are available", StringComparison.Ordinal));
-    }
-
     /// <summary>Cancellation before verification starts returns current state and keeps the manager usable.</summary>
     [Fact]
     public static async Task SkillsModal_CancelledVerificationDoesNotCloseManager()

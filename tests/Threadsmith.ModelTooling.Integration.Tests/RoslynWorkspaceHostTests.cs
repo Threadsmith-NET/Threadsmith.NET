@@ -3,6 +3,7 @@ namespace Threadsmith.ModelTooling.Integration.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Host;
+using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.Text;
 using Threadsmith.DotNet;
 using Xunit;
@@ -10,21 +11,23 @@ using Xunit;
 /// <summary>Verifies the pinned Roslyn storage composition and workspace isolation.</summary>
 public static class RoslynWorkspaceHostTests
 {
-    /// <summary>The nonpersistent host selects Roslyn's fallback on every operating system.</summary>
+    /// <summary>Production selects the platform host and the nonpersistent composition excludes the pinned export.</summary>
     [Fact]
-    public static void NonPersistentHost_OmitsSqliteService()
+    public static void ProductionStorageSelectionKeepsNonpersistentHostFreeOfSqlite()
     {
-        using var workspace = new AdhocWorkspace(RoslynWorkspaceHost.WithoutPersistentStorage);
-        // Check the actual workspace service, not just the composition filter. Roslyn's
-        // storage service is internal, so reflection is confined to this upgrade contract test.
-        var storageType = typeof(Workspace).Assembly.GetType(
-            "Microsoft.CodeAnalysis.SQLite.v2.SQLitePersistentStorageService", throwOnError: true)!;
-        var getService = typeof(HostWorkspaceServices).GetMethod(nameof(HostWorkspaceServices.GetService))!
-            .MakeGenericMethod(storageType);
-        Assert.Null(getService.Invoke(workspace.Services, null));
-        Assert.Same(
-            OperatingSystem.IsWindows() ? Microsoft.CodeAnalysis.Host.Mef.MefHostServices.DefaultHost : RoslynWorkspaceHost.WithoutPersistentStorage,
-            RoslynWorkspaceHost.Services);
+        var nonPersistent = RoslynWorkspaceHost.WithoutPersistentStorage;
+        Assert.Same(OperatingSystem.IsWindows() ? MefHostServices.DefaultHost : nonPersistent, RoslynWorkspaceHost.Services);
+
+        // Resolve the registered service contract from the pinned factory rather than asking MEF for a concrete implementation type.
+        var factory = typeof(Workspace).Assembly.GetType("Microsoft.CodeAnalysis.SQLite.v2.SQLitePersistentStorageService+ServiceFactory", throwOnError: true)!;
+        var export = Assert.Single(factory.GetCustomAttributesData(), attribute => attribute.AttributeType == typeof(ExportWorkspaceServiceFactoryAttribute));
+        var contract = Assert.IsAssignableFrom<Type>(export.ConstructorArguments[0].Value);
+        var getService = typeof(HostWorkspaceServices).GetMethod(nameof(HostWorkspaceServices.GetService))!.MakeGenericMethod(contract);
+
+        using var defaultWorkspace = new AdhocWorkspace(MefHostServices.DefaultHost);
+        using var nonPersistentWorkspace = new AdhocWorkspace(nonPersistent);
+        Assert.NotNull(getService.Invoke(defaultWorkspace.Services, null));
+        Assert.Null(getService.Invoke(nonPersistentWorkspace.Services, null));
     }
 
     /// <summary>Concurrent workspaces retain source and metadata lookup without sharing mutable storage.</summary>

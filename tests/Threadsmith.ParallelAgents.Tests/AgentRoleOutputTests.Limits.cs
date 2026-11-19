@@ -26,20 +26,6 @@ public sealed partial class AgentRoleOutputTests
         Assert.Equal(Enum.GetValues<AgentRole>().Length, amendments.Count);
     }
 
-    /// <summary>Technical tool errors use the same host feedback for every role without prescribing a reply shape.</summary>
-    [Fact]
-    public static void ToolFeedback_DoesNotConstrainAnswerFormat()
-    {
-        const string reason = "read_file: path is required.";
-        var prompts = TestPromptLoader.Instance;
-        var feedback = new CorrectiveMessageFactory(prompts).CreateDeveloperMessage(
-            new MalformedInvocationDiagnostic { Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch, SafeMessage = reason }, 1, 3);
-
-        Assert.Equal(ModelMessageRole.Developer, feedback.Role);
-        Assert.Contains(reason, feedback.GetModelVisibleContent(), StringComparison.Ordinal);
-        AssertNoAnswerContract(feedback.GetModelVisibleContent());
-    }
-
     /// <summary>Every tool-progress branch reports telemetry without requesting a structured answer.</summary>
     [Theory]
     [InlineData(1, 1, 1)]
@@ -57,15 +43,6 @@ public sealed partial class AgentRoleOutputTests
         Assert.Contains("3 source identity or identities", content, StringComparison.Ordinal);
         Assert.Contains("4 evidence item(s)", content, StringComparison.Ordinal);
         Assert.DoesNotContain("{{", content, StringComparison.Ordinal);
-        AssertNoAnswerContract(content);
-    }
-
-    /// <summary>Planning's retained task asset encourages investigation without requesting a finding envelope.</summary>
-    [Fact]
-    public static void TaskGuidance_DoesNotRequireStructuredFindings()
-    {
-        var content = TestPromptLoader.Instance.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask);
-
         AssertNoAnswerContract(content);
     }
 

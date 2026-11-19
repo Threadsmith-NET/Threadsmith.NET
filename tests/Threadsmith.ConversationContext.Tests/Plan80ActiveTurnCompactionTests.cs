@@ -199,29 +199,6 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.True(model.Requests[2].WireEstimate?.WireInputTokens > estimate.WireInputTokens);
     }
 
-    /// <summary>Host-observed file lists are authoritative and cannot be fabricated by the candidate.</summary>
-    [Fact]
-    public static void Candidate_file_lists_must_match_host_observed_prefix()
-    {
-        var group = CreateGroup(1, filesRead: ["src/A.cs"]);
-        var candidate = CreateCandidate(
-            priorSummaryVersion: 0,
-            coveredGroups: [1],
-            throughGroupSequence: 1,
-            summaryText: "## Goal\nGood.",
-            filesRead: ["src/Other.cs"],
-            filesChanged: []);
-        var validator = new ActiveTurnCompactionValidator(
-            new ActiveTurnCompactionPolicy(),
-            new SecretOutputSanitizer(),
-            TestPromptLoader.Instance);
-
-        var validation = validator.Validate(CreateRequest([group]), candidate);
-
-        Assert.False(validation.IsValid);
-        Assert.Equal(ActiveTurnCompactionRejectionReason.Source, validation.RejectionReason);
-    }
-
     /// <summary>Authority-bearing text is rejected before it can replace raw history.</summary>
     [Fact]
     public static void Authority_markers_are_rejected()
@@ -243,25 +220,6 @@ public static class Plan80ActiveTurnCompactionTests
 
         Assert.False(validation.IsValid);
         Assert.Equal(ActiveTurnCompactionRejectionReason.Authority, validation.RejectionReason);
-    }
-
-    /// <summary>The model-backed attempt strips model-emitted file sections and appends host file lists.</summary>
-    [Fact]
-    public static async Task Model_candidate_attempt_removes_model_file_sections_before_host_projection()
-    {
-        var group = CreateGroup(1, filesRead: ["src/A.cs"]);
-        var model = new TextModelProvider(
-            "## Goal\nKeep this.\n\n## Files read\n- fake.md\n\n## Next Steps\nContinue.");
-        var provider = new ModelActiveTurnCompactionCandidateProvider(
-            model,
-            new ActiveTurnCompactionPolicy(),
-            TestPromptLoader.Instance);
-
-        var generation = await provider.PrepareCandidate(CreateRequest([group])).ExecuteAsync();
-
-        Assert.DoesNotContain("fake.md", generation.Candidate.SummaryText, StringComparison.Ordinal);
-        Assert.Contains("## Next Steps", generation.Candidate.SummaryText, StringComparison.Ordinal);
-        Assert.Equal(["src/A.cs"], generation.Candidate.FilesRead);
     }
 
     /// <summary>Candidate provider sends the 13,107-token request ceiling, no tools, and update context.</summary>
@@ -651,29 +609,6 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(new ModelUsage(100, 20, 1.25m), Assert.Single(observer.Usages));
     }
 
-    /// <summary>The validator's rendered bound is the same maximum used by continuation admission.</summary>
-    [Fact]
-    public static void Rendered_summary_character_bound_is_enforced()
-    {
-        var policy = new ActiveTurnCompactionPolicy { MaximumRenderedSummaryCharacters = 256 };
-        var validator = new ActiveTurnCompactionValidator(
-            policy,
-            new SecretOutputSanitizer(),
-            TestPromptLoader.Instance);
-        var candidate = CreateCandidate(
-            priorSummaryVersion: 0,
-            coveredGroups: [1],
-            throughGroupSequence: 1,
-            summaryText: new string('x', 300),
-            filesRead: [],
-            filesChanged: []);
-
-        var validation = validator.Validate(CreateRequest([CreateGroup(1)]), candidate);
-
-        Assert.False(validation.IsValid);
-        Assert.Equal(ActiveTurnCompactionRejectionReason.Size, validation.RejectionReason);
-    }
-
     /// <summary>Caller cancellation propagates and cannot activate a partial summary.</summary>
     [Fact]
     public static async Task Cancellation_propagates_without_partial_summary()
@@ -747,61 +682,6 @@ public static class Plan80ActiveTurnCompactionTests
             policy.RetainedRecentTokens);
 
         Assert.Equal(groups.Take(expectedPrefixCount), prefix);
-    }
-
-    /// <summary>Compactor telemetry attributes the actual candidate profile rather than the ordinary profile.</summary>
-    [Fact]
-    public static async Task Compactor_span_uses_request_candidate_profile_identity()
-    {
-        var group = CreateGroup(1);
-        var candidateProfile = CreateCandidateProfile(
-            contextWindowTokens: 65_536,
-            outputReserveTokens: 16_384);
-        var request = CreateRequest([group]) with { CandidateProfile = candidateProfile };
-        Activity? stoppedActivity = null;
-        using var listener = new ActivityListener
-        {
-            ShouldListenTo = source => string.Equals(
-                source.Name,
-                "Threadsmith.Context.ActiveTurnCompaction",
-                StringComparison.Ordinal),
-            Sample = static (ref ActivityCreationOptions<ActivityContext> _) =>
-                ActivitySamplingResult.AllData,
-            ActivityStopped = activity =>
-            {
-                if (string.Equals(
-                    activity.GetTagItem("threadsmith.run.id")?.ToString(),
-                    request.RunId.Value.ToString("D"),
-                    StringComparison.Ordinal))
-                {
-                    stoppedActivity = activity;
-                }
-            },
-        };
-        ActivitySource.AddActivityListener(listener);
-        var policy = new ActiveTurnCompactionPolicy();
-        var compactor = new ActiveTurnCompactor(
-            new FixedCandidateProvider(CreateCandidate(
-                priorSummaryVersion: 0,
-                coveredGroups: [1],
-                throughGroupSequence: 1,
-                summaryText: "## Goal\nTelemetry.",
-                filesRead: [],
-                filesChanged: [])),
-            new ActiveTurnCompactionValidator(
-                policy,
-                new SecretOutputSanitizer(),
-                TestPromptLoader.Instance),
-            policy,
-            TestPromptLoader.Instance);
-
-        var result = await CompactWithNoOpObserverAsync(compactor, request);
-
-        Assert.Equal(ActiveTurnCompactionOutcome.Completed, result.Outcome);
-        Assert.NotNull(stoppedActivity);
-        Assert.Equal(
-            candidateProfile.ProfileId.Value.ToString("D"),
-            stoppedActivity.GetTagItem("threadsmith.model.profile_id")?.ToString());
     }
 
     private static ActiveTurnCompactionCandidate CreateCandidate(

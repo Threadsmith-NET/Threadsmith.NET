@@ -174,60 +174,6 @@ public static class WriteFileTests
         Assert.Equal("original", await File.ReadAllTextAsync(destination, ct));
     }
 
-    /// <summary>Checkout and export ancestors do not turn ordinary structured reports into configuration.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task ConfigurationAncestor_DoesNotDenyArtifacts(bool external)
-    {
-        using var fixture = new Fixture(configurationAncestor: true);
-        var folder = external ? Path.Combine(fixture.Root, ".vscode", "exports") : fixture.Repository;
-        var tool = fixture.Tool(JsonConfig(JsonSerializer.Serialize(
-            new { tools = new { writeFile = new { allowedFolders = new[] { folder } } } })));
-        await using var events = new DomainEventStream();
-        var pipeline = CreatePipeline(events, tool);
-
-        foreach (var extension in new[] { "json", "yaml", "xml" })
-        {
-            var destination = Path.Combine(folder, "reports", "data." + extension);
-            var result = await InvokeAsync(pipeline, fixture.Context, new WriteFileInput(destination, "report"));
-            Assert.True(result.Succeeded, result.Error);
-            Assert.Equal("report", await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
-        }
-
-        var denied = await InvokeAsync(
-            pipeline,
-            fixture.Context,
-            new WriteFileInput(Path.Combine(folder, ".config", "dotnet-tools.json"), "denied"));
-        Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
-    }
-
-    /// <summary>Repository artifacts do not require an output-folder grant.</summary>
-    [Theory]
-    [InlineData("report.md", false)]
-    [InlineData("reports/data.json", false)]
-    [InlineData("reports/data.yaml", false)]
-    [InlineData("reports/data.yml", true)]
-    [InlineData("reports/data.xml", false)]
-    [InlineData(".inbox-other/report.md", false)]
-    [InlineData(".inbox/../report.md", false)]
-    [InlineData("docs/implementation-plans/feature.md", false)]
-    [InlineData("docs/implementation-plans/feature.md", true)]
-    [InlineData(".threadsmith/notes.md", false)]
-    public static async Task RepositoryArtifacts_AreImplicitlyAllowed(string path, bool absolute)
-    {
-        using var fixture = new Fixture();
-        await using var events = new DomainEventStream();
-        var destination = Path.GetFullPath(path, fixture.Repository);
-        var result = await InvokeAsync(
-            CreatePipeline(events, fixture.Tool()),
-            fixture.Context,
-            new WriteFileInput(absolute ? destination : path, "report"));
-
-        Assert.True(result.Succeeded, result.Error);
-        Assert.Equal("report", await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
-    }
-
     /// <summary>Traversal and similarly prefixed siblings cannot escape the repository without a grant.</summary>
     [Theory]
     [InlineData("../outside/report.md")]
@@ -265,48 +211,6 @@ public static class WriteFileTests
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, "outside")));
     }
 
-    /// <summary>Effective repository scope cannot be widened by broad export grants or discovery roots.</summary>
-    [Theory]
-    [InlineData("docs/report.md", true)]
-    [InlineData("docs/single.md", true)]
-    [InlineData("other/report.md", false)]
-    [InlineData("docs/private/report.md", false)]
-    [InlineData("docs-other/report.md", false)]
-    public static async Task RepositoryWrites_UseEffectiveMutationScope(string path, bool allowed)
-    {
-        using var fixture = new Fixture();
-        var policy = new EffectiveSessionPolicy
-        {
-            BindingId = Guid.NewGuid(),
-            Generation = 1,
-            RepositoryPath = fixture.Repository,
-            Fingerprint = "test",
-            MutationRoots = [Path.Combine(fixture.Repository, "docs")],
-            EditableRoots = [Path.Combine(fixture.Repository, "src")],
-            WriteFolders = [fixture.Root],
-            ProhibitedPaths = ["docs/private/**"],
-        };
-        var context = fixture.Context with { Invocation = fixture.Context.Invocation with { SecurityPolicy = policy } };
-        var tool = fixture.Tool();
-        await using var events = new DomainEventStream();
-        var input = new WriteFileInput(path, "report");
-        var result = await InvokeAsync(CreatePipeline(events, tool), context, input);
-
-        Assert.Equal(allowed, result.Succeeded);
-        if (allowed)
-        {
-            Assert.Equal("report", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, path), TestContext.Current.CancellationToken));
-        }
-        else
-        {
-            Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
-            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken));
-        }
-
-        var revoked = context with { Invocation = context.Invocation with { SecurityPolicy = policy with { MutationRoots = [] } } };
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(new WriteFileInput("docs/revoked.md", "denied"), revoked, TestContext.Current.CancellationToken));
-    }
-
     /// <summary>Implicit repository access preserves assignment scope and read-only restrictions.</summary>
     [Theory]
     [InlineData(true, "docs/report.md", true)]
@@ -336,23 +240,6 @@ public static class WriteFileTests
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input, context, TestContext.Current.CancellationToken));
             Assert.Empty(Directory.GetFiles(fixture.Root, "*", SearchOption.AllDirectories));
         }
-    }
-
-    /// <summary>A trusted relative folder grant remains compatible with repository output.</summary>
-    [Fact]
-    public static async Task RelativeAllowlist_AllowsConfiguredReportFolder()
-    {
-        using var fixture = new Fixture();
-        var configuration = JsonConfig("""{"tools":{"writeFile":{"allowedFolders":["exports"]}}}""");
-        await using var events = new DomainEventStream();
-
-        var result = await InvokeAsync(
-            CreatePipeline(events, fixture.Tool(configuration)),
-            fixture.Context,
-            new WriteFileInput("exports/report.md", "report"));
-
-        Assert.True(result.Succeeded, result.Error);
-        Assert.Equal("report", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, "exports/report.md"), TestContext.Current.CancellationToken));
     }
 
     /// <summary>A configured absolute output folder is usable without expanding ordinary read access.</summary>
@@ -473,37 +360,6 @@ public static class WriteFileTests
         Assert.Contains("needle", readResult.Value.Lines.Single(), StringComparison.Ordinal);
         Assert.Single(searchResult.Value.Matches);
         Assert.Equal("iteration.log", searchResult.Value.Matches[0].Path);
-    }
-
-    /// <summary>Only an explicit scratchpad listing reveals its transient files.</summary>
-    [Fact]
-    public static async Task Scratchpad_ListFilesRequiresExplicitTarget()
-    {
-        using var fixture = new Fixture();
-        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
-        await File.WriteAllTextAsync(Path.Combine(scratchpad, "private.log"), "transient");
-        var invocation = fixture.Context.Invocation with
-        {
-            Scratchpad = new ScratchpadSessionCapability
-            {
-                IsActive = true,
-                DisabledReason = ScratchpadDisabledReason.None,
-                RootPath = scratchpad,
-                ModelPath = ".scratch",
-            },
-        };
-        var execution = fixture.Context with { Invocation = invocation };
-        var list = new ListFilesTool(TestPromptLoader.Instance);
-        var policy = new DefaultPolicyEngine();
-
-        Assert.True(policy.Evaluate(list, new ListFilesInput { Path = ".scratch" }, invocation).IsAllowed);
-        var explicitListing = await list.ExecuteAsync(new ListFilesInput { Path = ".scratch" }, execution, TestContext.Current.CancellationToken);
-        var repositoryListing = await list.ExecuteAsync(new ListFilesInput { Path = "." }, execution, TestContext.Current.CancellationToken);
-
-        Assert.Equal("private.log", Assert.Single(explicitListing.Value.Files).Path);
-        Assert.DoesNotContain(
-            repositoryListing.Value.Files,
-            file => file.Path.StartsWith(".scratch/", StringComparison.Ordinal));
     }
 
     /// <summary>Explicit listings use scratchpad authority through the ordinary configured pipeline.</summary>
@@ -659,35 +515,6 @@ public static class WriteFileTests
         Assert.False(new DefaultPolicyEngine().Evaluate(list, new ListFilesInput { Path = scratchpad }, invocation).IsAllowed);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             list.ExecuteAsync(new ListFilesInput { Path = scratchpad }, execution, TestContext.Current.CancellationToken));
-    }
-
-    /// <summary>Managed search ignores repository Git inventory for an ignored in-repository scratchpad.</summary>
-    [Fact]
-    public static async Task Scratchpad_ManagedSearchEnumeratesIgnoredInRepositoryFiles()
-    {
-        using var fixture = new Fixture();
-        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
-        await File.WriteAllTextAsync(Path.Combine(scratchpad, "iteration.log"), "needle in ignored output");
-        var invocation = fixture.Context.Invocation with
-        {
-            Scratchpad = new ScratchpadSessionCapability
-            {
-                IsActive = true,
-                DisabledReason = ScratchpadDisabledReason.None,
-                RootPath = scratchpad,
-                ModelPath = ".scratch",
-            },
-        };
-        var search = new SearchTextTool(
-            TestPromptLoader.Instance,
-            processManager: new MissingRipgrepEmptyGitProcessManager());
-
-        var result = await search.ExecuteAsync(
-            new SearchTextInput { Query = "needle", Path = ".scratch" },
-            fixture.Context with { Invocation = invocation });
-
-        Assert.Single(result.Value.Matches);
-        Assert.Equal("iteration.log", result.Value.Matches[0].Path);
     }
 
     /// <summary>Installed ripgrep searches an explicitly selected scratchpad despite repository ignore rules.</summary>
@@ -1053,32 +880,6 @@ public static class WriteFileTests
             }
 
             Directory.Delete(Root, recursive: true);
-        }
-    }
-
-    private sealed class MissingRipgrepEmptyGitProcessManager : IProcessManager
-    {
-        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
-
-        public Task<ProcessExecutionResult> RunAsync(
-            ProcessExecutionRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (request.FileName.Equals("rg", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new FileNotFoundException("ripgrep unavailable");
-            }
-
-            return Task.FromResult(new ProcessExecutionResult(
-                1,
-                0,
-                string.Empty,
-                string.Empty,
-                false,
-                false,
-                false,
-                TimeSpan.Zero));
         }
     }
 

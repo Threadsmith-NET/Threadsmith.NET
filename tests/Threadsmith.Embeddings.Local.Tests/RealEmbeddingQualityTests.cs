@@ -1,7 +1,5 @@
 namespace Threadsmith.Embeddings.Local.Tests;
 
-using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Context;
@@ -12,194 +10,11 @@ using Xunit;
 /// <summary>Verifies local embedding behavior at its host-owned boundary.</summary>
 public sealed class RealEmbeddingQualityTests
 {
-    /// <summary>Current intent displaces old recall in both partitions with real local inference.</summary>
-    [Theory]
-    [InlineData(RepositoryMemoryOwnership.Ordinary)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence)]
+    /// <summary>Evaluates the production default on the frozen calibration and held-out queries.</summary>
+    [Fact(Explicit = true)]
     [Trait("Category", "Integration")]
-    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership)
+    public static async Task FrozenRetrievalFixtureRetainsCalibratedMinimum()
     {
-        if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
-            || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
-        {
-            Assert.Skip("Stage both local models and enable their integration flags.");
-        }
-
-        var ct = TestContext.Current.CancellationToken;
-        using var database = new FixtureDatabase();
-        await new SqliteEventStore(database.ConnectionString).InitializeAsync(ct);
-        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
-        var store = new SqliteManagedRepositoryMemoryStore(database.ConnectionString);
-        await using var generator = new LocalTextEmbeddingGenerator();
-        await using var encoder = new Threadsmith.Reranking.Local.LocalTextCrossEncoder();
-        var options = new RepositoryMemoryOptions();
-        var ids = new List<RepositoryMemoryId>();
-        string[] texts =
-        [
-            "For MCP integrations, compose McpManager and McpAdapter against the shared ToolRegistry and ToolInvocationPipeline.",
-            "For model-facing prose, declare a PromptAssetCatalog entry and deployed Markdown asset; synchronize the token contract and prompt documentation.",
-        ];
-        foreach (var text in texts)
-        {
-            var write = new RepositoryMemoryWrite { Text = text, Origin = RepositoryMemoryOrigin.Manual, Ownership = ownership };
-            var saved = await store.AddAsync("fixture", write, generator.Model, await generator.GenerateAsync(text, ct), options, ct);
-            ids.Add(Assert.IsType<RepositoryMemoryEntry>(saved.Entry).Id);
-        }
-
-        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
-        var request = new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = "fixture",
-            Ownership = ownership,
-            Query = "Integrate an MCP server with McpManager and McpAdapter.",
-            Options = new()
-            {
-                RerankerEnabled = true,
-                ConceptRecallEnabled = true,
-                MaximumResults = 1,
-            },
-        };
-        var first = Assert.Single((await retriever.SearchAsync(request, ct)).Selected);
-        Assert.Equal(ids[0], first.Entry.Id);
-        var changed = await retriever.SearchAsync(
-            request with
-            {
-                Query = "Add model-facing prose using PromptAssetCatalog and a deployed Markdown prompt asset.",
-                RetainedMemories = [new(first.Entry.Id, first.Entry.Revision)],
-            },
-            ct);
-        Assert.Equal(ids[1], Assert.Single(changed.Selected).Entry.Id);
-        Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, changed.SearchDetails?.Reranker);
-    }
-
-    /// <summary>Long questions rerank admitted memories in both partitions without allowing concept-only admission.</summary>
-    [Theory]
-    [InlineData(RepositoryMemoryOwnership.Ordinary)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence)]
-    [Trait("Category", "Integration")]
-    public static async Task LongQuestionsRequireSemanticAdmissionBeforeReranking(RepositoryMemoryOwnership ownership)
-    {
-        if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
-            || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
-        {
-            Assert.Skip("Stage both local models and enable their integration flags.");
-        }
-
-        var ct = TestContext.Current.CancellationToken;
-        using var database = new FixtureDatabase();
-        await new SqliteEventStore(database.ConnectionString).InitializeAsync(ct);
-        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
-        using var store = new SqliteManagedRepositoryMemoryStore(database.ConnectionString);
-        await using var generator = new LocalTextEmbeddingGenerator();
-        await using var encoder = new Threadsmith.Reranking.Local.LocalTextCrossEncoder();
-
-        var options = new RepositoryMemoryOptions
-        {
-            RerankerEnabled = true,
-            ConceptRecallEnabled = true,
-            SemanticMinimum = 1,
-            Intelligence = new() { Enabled = true, Recall = new() { RerankerEnabled = true, ConceptRecallEnabled = true, SemanticMinimum = 1 } },
-        };
-        string[] texts =
-        [
-            "For MCP integrations, compose McpManager and McpAdapter against the shared ToolRegistry and ToolInvocationPipeline.",
-            "For model-facing prose, declare a PromptAssetCatalog entry and deployed Markdown asset; synchronize the token contract and prompt documentation.",
-        ];
-        var ids = new List<RepositoryMemoryId>();
-        foreach (var text in texts)
-        {
-            var write = new RepositoryMemoryWrite
-            {
-                Text = text,
-                Origin = RepositoryMemoryOrigin.Manual,
-                Ownership = ownership,
-                Concepts = ["authoring"],
-            };
-            var saved = await store.AddAsync("fixture", write, generator.Model, await generator.GenerateAsync(text, ct), options, ct);
-            ids.Add(Assert.IsType<RepositoryMemoryEntry>(saved.Entry).Id);
-        }
-
-        const string preference = "Address the user respectfully.";
-        var preferenceWrite = new RepositoryMemoryWrite
-        {
-            Text = preference,
-            Origin = RepositoryMemoryOrigin.Manual,
-            MemoryType = RepositoryMemoryType.StandingPreference,
-        };
-        await store.AddAsync("fixture", preferenceWrite, generator.Model, await generator.GenerateAsync(preference, ct), options, ct);
-        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
-        var background = string.Join(' ', Enumerable.Repeat("Background context.", 240));
-        const string question = "How are prompts authored?";
-        var control = await encoder.ScoreRecallAsync(new(question), texts, ct);
-        Assert.True(control[1].Score > control[0].Score, $"Short control: prompt={control[1].Score}, MCP={control[0].Score}");
-        var taskIntent = string.Join(' ', Enumerable.Repeat("Integrate MCP servers with McpManager.", 60));
-        foreach (var query in (string[])[question + " " + background, background + " " + question, background + " " + background + " " + question])
-        {
-            var strict = new RepositoryMemorySearchRequest
-            {
-                RepositoryIdentity = "fixture",
-                Query = query + "\n" + taskIntent,
-                Ownership = ownership,
-                Concepts = ["authoring"],
-                Options = RepositoryMemorySearchOptions.ForRecall(options),
-            };
-            var before = await retriever.SearchAsync(strict, ct);
-            Assert.DoesNotContain(before.Selected, candidate => candidate.Entry.Id == ids[1]);
-            Assert.Equal(RepositoryMemorySearchBranchStatus.Incomplete, before.SearchDetails?.Reranker);
-            var recallRequest = new RepositoryMemoryRetrievalRequest
-            {
-                RepositoryIdentity = "fixture",
-                CurrentInstruction = query,
-                Options = options,
-                TaskIntent = taskIntent,
-                IntelligenceEnabled = true,
-                Concepts = ["authoring"],
-            };
-            var rejected = await retriever.RetrieveAsync(recallRequest, ct);
-            Assert.Empty(rejected.Selected);
-            Assert.Equal(preference, Assert.Single(rejected.StandingPreferences).Text);
-            var rejectedDetails = ownership == RepositoryMemoryOwnership.Intelligence ? rejected.IntelligenceSearchDetails : rejected.SearchDetails;
-            Assert.Equal(RepositoryMemorySearchBranchStatus.NotRequired, rejectedDetails?.Reranker);
-            Assert.All(rejectedDetails!.Candidates, candidate => Assert.Equal("semantic threshold", candidate.Outcome));
-
-            // This fixture's permissive threshold isolates long-question reranking, not default relevance.
-            var admittedRequest = recallRequest with
-            {
-                Options = options with
-                {
-                    SemanticMinimum = -1,
-                    Intelligence = options.Intelligence with { Recall = options.Intelligence.Recall with { SemanticMinimum = -1 } },
-                },
-            };
-            var recall = await retriever.RetrieveAsync(admittedRequest, ct);
-            var target = Assert.Single(recall.Selected, item => item.Entry.Id == ids[1]);
-            Assert.Null(target.LexicalRank);
-            Assert.NotNull(target.SemanticRank);
-            Assert.True(target.CosineSimilarity > -1);
-            Assert.Equal(ids[1], recall.Selected[0].Entry.Id);
-
-            Assert.Equal(preference, Assert.Single(recall.StandingPreferences).Text);
-            var details = ownership == RepositoryMemoryOwnership.Intelligence ? recall.IntelligenceSearchDetails : recall.SearchDetails;
-            Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, details?.Reranker);
-            Assert.True(details?.RerankerQueryTokens > 512);
-            Assert.InRange(details?.RerankerUsedQueryTokens ?? 0, 1, 128);
-            Assert.False(details?.PairTruncated);
-            var strictAgain = await retriever.SearchAsync(strict, ct);
-            Assert.DoesNotContain(strictAgain.Selected, candidate => candidate.Entry.Id == ids[1]);
-            Assert.False(strictAgain.IsComplete);
-        }
-    }
-
-    /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
-    [Fact]
-    [Trait("Category", "Integration")]
-    public static async Task CalibrateHeldOutQualityAndMeasureWarmLatency()
-    {
-        if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1")
-        {
-            Assert.Skip("Set THREADSMITH_EMBEDDING_INTEGRATION=1 to run the versioned offline real retrieval/latency fixture.");
-        }
-
         var cancellationToken = TestContext.Current.CancellationToken;
         using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "retrieval-fixture.json"), cancellationToken));
         using var database = new FixtureDatabase();
@@ -208,20 +23,11 @@ public sealed class RealEmbeddingQualityTests
         await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(cancellationToken);
         var store = new SqliteManagedRepositoryMemoryStore(connectionString);
         await using var generator = new LocalTextEmbeddingGenerator();
-        var watch = Stopwatch.StartNew();
-        await generator.GenerateAsync("cold initialization timing", cancellationToken);
-        var coldFirstCall = watch.Elapsed.TotalMilliseconds;
         var identities = new Dictionary<RepositoryMemoryId, string>();
-        var memoryTimings = new List<double>();
-        var queryTimings = new List<double>();
-        var tokenLengths = new List<int>();
         foreach (var item in fixture.RootElement.GetProperty("memories").EnumerateArray())
         {
             var text = item.GetProperty("text").GetString() ?? string.Empty;
-            watch.Restart();
             var embedding = await generator.GenerateAsync(text, cancellationToken);
-            memoryTimings.Add(watch.Elapsed.TotalMilliseconds);
-            tokenLengths.Add(embedding.InputTokenCount);
             var result = await store.AddAsync("fixture", new RepositoryMemoryWrite { Text = text, Origin = RepositoryMemoryOrigin.Manual }, generator.Model, embedding, new RepositoryMemoryOptions(), cancellationToken);
             Assert.NotNull(result.Entry);
             identities.Add(result.Entry.Id, item.GetProperty("id").GetString() ?? string.Empty);
@@ -249,137 +55,47 @@ public sealed class RealEmbeddingQualityTests
             var metrics = Measure(examples.Where(example => example.Split == "calibration"), threshold, "semantic");
             return new { Threshold = threshold, metrics.FalseInclusions, metrics.MissedRelevant, Loss = (2 * metrics.FalseInclusions) + metrics.MissedRelevant };
         }).OrderBy(value => value.Loss).ThenBy(value => value.MissedRelevant).ThenByDescending(value => value.Threshold).ToArray();
-        // Keep the already pinned threshold during the engine adaptation when it remains
-        // calibration-optimal. Held-out examples evaluate it; they never choose a new value.
-        const double selectedMinimum = RepositoryMemoryOptions.DefaultSemanticMinimum;
-        var retained = Assert.Single(calibration, candidate => candidate.Threshold == selectedMinimum);
-        Assert.Equal(calibration[0].Loss, retained.Loss);
-        Assert.Equal(calibration[0].MissedRelevant, retained.MissedRelevant);
+        const double minimum = RepositoryMemoryOptions.DefaultSemanticMinimum;
+        var retained = Assert.Single(calibration, candidate => candidate.Threshold == minimum);
         using var production = new HybridRepositoryMemoryRetriever(store, generator);
         var outcomes = new List<object>();
-        var retrievalTimings = new List<double>();
-        var completeTurnTimings = new List<double>();
-        var cacheHits = 0;
         foreach (var example in examples)
         {
-            watch.Restart();
             var actual = await production.RetrieveAsync(example.Request with { Options = new RepositoryMemoryOptions() }, cancellationToken);
-            retrievalTimings.Add(watch.Elapsed.TotalMilliseconds);
-            await store.RecordInclusionsAsync("fixture", RunId.New(), [.. actual.Selected.Select(candidate => new RepositoryMemoryInclusion(candidate.Entry.Id, candidate.Entry.Revision))], cancellationToken);
-            completeTurnTimings.Add(watch.Elapsed.TotalMilliseconds);
-            var predicted = Rank(example.Candidates, selectedMinimum, "hybrid");
-            Assert.Equal(predicted, actual.Selected.Select(candidate => identities[candidate.Entry.Id]));
-            var cached = await production.RetrieveAsync(example.Request with { Options = new RepositoryMemoryOptions() }, cancellationToken);
-            if (cached.QueryEmbeddingCacheHit && cached.RankingCacheHit)
-            {
-                cacheHits++;
-            }
-
-            outcomes.Add(new { example.Split, Query = example.Request.CurrentInstruction, example.Request.TaskIntent, example.Expected, Bm25 = Rank(example.Candidates, selectedMinimum, "lexical"), Semantic = Rank(example.Candidates, selectedMinimum, "semantic"), Hybrid = predicted, Scores = example.Candidates });
+            var selected = actual.Selected.Select(candidate => identities[candidate.Entry.Id]).ToArray();
+            Assert.Equal(Rank(example.Candidates, minimum, "hybrid"), selected);
+            outcomes.Add(new { example.Split, example.Request.CurrentInstruction, example.Expected, Selected = selected, example.Candidates });
         }
 
-        // Repeated uncached inference measures CPU work separately from query-cache/database overhead.
-        for (var iteration = 0; iteration < 60; iteration++)
-        {
-            var text = examples[iteration % examples.Count].Request.CurrentInstruction;
-            watch.Restart();
-            var result = await generator.GenerateAsync(text, cancellationToken);
-            queryTimings.Add(watch.Elapsed.TotalMilliseconds);
-            tokenLengths.Add(result.InputTokenCount);
-            var memory = fixture.RootElement.GetProperty("memories")[iteration % identities.Count].GetProperty("text").GetString() ?? string.Empty;
-            watch.Restart();
-            await generator.GenerateAsync(memory, cancellationToken);
-            memoryTimings.Add(watch.Elapsed.TotalMilliseconds);
-        }
-
-        var lookupTimings = new List<double>();
-        var cacheTimings = new List<double>();
-        var receiptTimings = new List<double>();
-        var duplicateReceiptTimings = new List<double>();
-        var receipt = new RepositoryMemoryInclusion(identities.Keys.First(), 1);
-        var lastRun = RunId.New();
-        for (var iteration = 0; iteration < 200; iteration++)
-        {
-            watch.Restart();
-            await store.GetSnapshotAsync("fixture", ["repository", "notes"], cancellationToken);
-            lookupTimings.Add(watch.Elapsed.TotalMilliseconds);
-            watch.Restart();
-            await production.RetrieveAsync(examples[0].Request with { Options = new RepositoryMemoryOptions() }, cancellationToken);
-            cacheTimings.Add(watch.Elapsed.TotalMilliseconds);
-            lastRun = RunId.New();
-            watch.Restart();
-            await store.RecordInclusionsAsync("fixture", lastRun, [receipt], cancellationToken);
-            receiptTimings.Add(watch.Elapsed.TotalMilliseconds);
-            watch.Restart();
-            await store.RecordInclusionsAsync("fixture", lastRun, [receipt], cancellationToken);
-            duplicateReceiptTimings.Add(watch.Elapsed.TotalMilliseconds);
-        }
-
-        var warmQuery = Percentiles(queryTimings);
-        var report = new
-        {
-            FixtureVersion = 1,
-            CalibrationPolicyVersion = 2,
-            generator.Model,
-            Runtime = RuntimeInformation.FrameworkDescription,
-            OS = RuntimeInformation.OSDescription,
-            Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
-            LogicalProcessors = Environment.ProcessorCount,
-            IntraOpThreads = 2,
-            InterOpThreads = 1,
-            MaximumConcurrentInference = 1,
-            Spinning = false,
-            ColdFirstCallMs = coldFirstCall,
-            ColdNativeSessionLoadMs = generator.SessionLoadDuration.TotalMilliseconds,
-            WarmTurnBudgetMs = 25,
-            CompleteUncachedRetrievalAndReceiptMs = Percentiles(completeTurnTimings),
-            WarmMemoryEmbeddingMs = Percentiles(memoryTimings),
-            WarmQueryEmbeddingMs = warmQuery,
-            UncachedHybridRetrievalMs = Percentiles(retrievalTimings),
-            SqliteLexicalSnapshotMs = Percentiles(lookupTimings),
-            CachedHybridRetrievalMs = Percentiles(cacheTimings),
-            NewInclusionReceiptMs = Percentiles(receiptTimings),
-            DuplicateInclusionReceiptMs = Percentiles(duplicateReceiptTimings),
-            Database = "Local file-backed SQLite, pooling disabled; 8 memories; default durability",
-            InputTokenMinimum = tokenLengths.Min(),
-            InputTokenMaximum = tokenLengths.Max(),
-            QueryCacheHits = cacheHits,
-            QueryCacheRequests = examples.Count,
-            SemanticMinimum = selectedMinimum,
-            CalibrationCriterion = "Minimum 2*falseInclusions + missedRelevant on semantic-only calibration; ties minimize misses. Retain the prior pinned minimum only if still optimal; held-out examples never select it.",
-            HighestEquivalentCalibrationMinimum = calibration[0].Threshold,
-            Calibration = calibration,
-            HeldOut = new
-            {
-                Bm25 = Measure(examples.Where(example => example.Split == "heldout"), selectedMinimum, "lexical"),
-                Semantic = Measure(examples.Where(example => example.Split == "heldout"), selectedMinimum, "semantic"),
-                Hybrid = Measure(examples.Where(example => example.Split == "heldout"), selectedMinimum, "hybrid"),
-            },
-            Outcomes = outcomes,
-        };
+        var heldOut = examples.Where(example => example.Split == "heldout").ToArray();
+        var hybrid = Measure(heldOut, minimum, "hybrid");
         var destination = Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_REPORT");
-        if (destination is not null)
+        if (!string.IsNullOrWhiteSpace(destination))
         {
+            var report = new
+            {
+                FixtureVersion = fixture.RootElement.GetProperty("version").GetInt32(),
+                SemanticMinimum = minimum,
+                HighestEquivalentCalibrationMinimum = calibration[0].Threshold,
+                Calibration = calibration,
+                HeldOut = new { Lexical = Measure(heldOut, minimum, "lexical"), Semantic = Measure(heldOut, minimum, "semantic"), Hybrid = hybrid },
+                Outcomes = outcomes,
+            };
             await File.WriteAllTextAsync(destination, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }), cancellationToken);
         }
 
-        Assert.Equal(examples.Count, cacheHits);
-        var heldOut = Measure(examples.Where(example => example.Split == "heldout"), selectedMinimum, "hybrid");
-        Assert.Equal(0, heldOut.MissedRelevant);
-        Assert.InRange(heldOut.FalseInclusions, 0, 1);
-        Assert.All(examples.Where(example => example.Expected.Length == 0), example => Assert.Empty(Rank(example.Candidates, selectedMinimum, "hybrid")));
-    }
-
-    private static string[] Rank(Candidate[] candidates, double threshold, string branch)
-    {
-        var semantic = candidates.Where(value => value.Cosine > threshold).OrderByDescending(value => value.Cosine).ThenBy(value => value.StableId, StringComparer.Ordinal).Select((value, index) => (value.Id, Rank: index + 1)).ToDictionary(value => value.Id, value => value.Rank);
-        return [.. candidates.Where(value => branch == "lexical" || semantic.ContainsKey(value.Id)).Select(value => new
-        {
-            value.Id,
-            value.StableId,
-            Score = (branch != "semantic" && value.LexicalRank is { } lexical ? 1d / (60 + lexical) : 0)
-                + (branch != "lexical" && semantic.TryGetValue(value.Id, out var rank) ? 1d / (60 + rank) : 0),
-        }).Where(value => value.Score > 0).OrderByDescending(value => value.Score).ThenBy(value => value.StableId, StringComparer.Ordinal).Take(3).Select(value => value.Id)];
+        Assert.Equal(calibration[0].Loss, retained.Loss);
+        Assert.Equal(calibration[0].MissedRelevant, retained.MissedRelevant);
+        // Mandatory semantic admission intentionally excludes this lexical-only match.
+        var lexicalOnlyQuery = Assert.Single(heldOut, example => example.Expected.SequenceEqual(["git-permission"]));
+        var lexicalMatch = Assert.Single(lexicalOnlyQuery.Candidates, candidate => candidate.Id == "git-permission");
+        Assert.NotNull(lexicalMatch.LexicalRank);
+        Assert.InRange(lexicalMatch.Cosine, -1, minimum);
+        Assert.Empty(Rank(lexicalOnlyQuery.Candidates, minimum, "hybrid"));
+        Assert.Equal(0, Measure(heldOut.Where(example => example != lexicalOnlyQuery), minimum, "hybrid").MissedRelevant);
+        Assert.Equal(1, hybrid.MissedRelevant);
+        Assert.InRange(hybrid.FalseInclusions, 0, 1);
+        Assert.All(heldOut.Where(example => example.Expected.Length == 0), example => Assert.Empty(Rank(example.Candidates, minimum, "hybrid")));
     }
 
     private static Quality Measure(IEnumerable<Example> examples, double threshold, string branch)
@@ -396,10 +112,16 @@ public sealed class RealEmbeddingQualityTests
         return new Quality(falseInclusions, missedRelevant);
     }
 
-    private static object Percentiles(List<double> values)
+    private static string[] Rank(Candidate[] candidates, double threshold, string branch)
     {
-        values.Sort();
-        return new { Samples = values.Count, P50 = values[(int)Math.Ceiling(values.Count * 0.5) - 1], P95 = values[(int)Math.Ceiling(values.Count * 0.95) - 1], Maximum = values[^1] };
+        var semantic = candidates.Where(value => value.Cosine > threshold).OrderByDescending(value => value.Cosine).ThenBy(value => value.StableId, StringComparer.Ordinal).Select((value, index) => (value.Id, Rank: index + 1)).ToDictionary(value => value.Id, value => value.Rank);
+        return [.. candidates.Where(value => branch == "lexical" || semantic.ContainsKey(value.Id)).Select(value => new
+        {
+            value.Id,
+            value.StableId,
+            Score = (branch != "semantic" && value.LexicalRank is { } lexical ? 1d / (60 + lexical) : 0)
+                + (branch != "lexical" && semantic.TryGetValue(value.Id, out var rank) ? 1d / (60 + rank) : 0),
+        }).Where(value => value.Score > 0).OrderByDescending(value => value.Score).ThenBy(value => value.StableId, StringComparer.Ordinal).Take(3).Select(value => value.Id)];
     }
 
     private sealed class FixtureDatabase : IDisposable

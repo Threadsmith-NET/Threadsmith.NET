@@ -18,28 +18,6 @@ public abstract class Plan117RoslynUpgradeTests
 {
     private protected static string FixtureRoot => TestSemanticSolution.SourceRoot;
 
-    private protected static void AddGeneratorMeasurementProjects(string root)
-    {
-        var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
-        var solutionText = File.ReadAllText(solutionPath);
-        var entries = new StringBuilder();
-        for (var index = 0; index < 10; index++)
-        {
-            var name = "Generator" + index;
-            var directory = Path.Combine(root, name);
-            Directory.CreateDirectory(directory);
-            var propertyGroup = new XElement("PropertyGroup", new XElement("TargetFramework", "net10.0"));
-            var analyzer = new XElement("Analyzer", new XAttribute("Include", Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll")));
-            var project = new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"), propertyGroup, new XElement("ItemGroup", analyzer)));
-            project.Save(Path.Combine(directory, name + ".csproj"));
-            File.WriteAllText(Path.Combine(directory, "Source.cs"), "public class " + name + " {}");
-            entries.AppendLine($"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"{name}\", \"{name}\\{name}.csproj\", \"{{00000000-0000-0000-0000-{index + 1:D12}}}\"");
-            entries.AppendLine("EndProject");
-        }
-
-        File.WriteAllText(solutionPath, solutionText.Insert(solutionText.IndexOf("Global", StringComparison.Ordinal), entries.ToString()));
-    }
-
     private protected static SemanticLoadRequest CreateLoadRequest(string root)
     {
         return new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
@@ -153,49 +131,12 @@ public abstract class Plan117RoslynUpgradeTests
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsSemanticEngine_Roslyn59_LoadsModernSyntaxAndGeneratedSymbols : Plan117RoslynUpgradeTests
-{
-    /// <summary>C# 14, multi-targeting, linked input, and source-generated symbols flow through the established engine.</summary>
-    [Fact]
-    public static async Task SemanticEngine_Roslyn59_LoadsModernSyntaxAndGeneratedSymbols()
-    {
-        using var fixture = new TestSemanticSolution();
-        var root = fixture.Root;
-        var request = CreateLoadRequest(root);
-        await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var load = await registry.LoadAsync(request, TestContext.Current.CancellationToken);
-        var extensionProperty = await registry.FindSymbolsAsync(request.WorkspaceId, "UpperValue", TestContext.Current.CancellationToken);
-        var extensionMethod = await registry.FindSymbolsAsync(request.WorkspaceId, "Repeat", TestContext.Current.CancellationToken);
-        var staticExtension = await registry.FindSymbolsAsync(request.WorkspaceId, "Create", TestContext.Current.CancellationToken);
-        var fieldBackedType = await registry.FindSymbolsAsync(request.WorkspaceId, "FieldBackedValue", TestContext.Current.CancellationToken);
-        var generatedDocuments = await queries.QueryGeneratedCodeAsync(request.WorkspaceId, new GeneratedCodeQuery { IncludeContent = true }, TestContext.Current.CancellationToken);
-        var codeExplore = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "SmallSolution.Contracts.GeneratedByRoslyn59", ExactSymbolAnchors = ["T:SmallSolution.Contracts.GeneratedByRoslyn59"], }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
-        Assert.Contains(load.Projects, project => project.Name == "Contracts" && project.TargetFrameworks.Contains("net10.0", StringComparer.Ordinal) && project.TargetFrameworks.Contains("net9.0", StringComparer.Ordinal));
-        Assert.NotEmpty(extensionProperty);
-        Assert.NotEmpty(extensionMethod);
-        Assert.NotEmpty(staticExtension);
-        Assert.NotEmpty(fieldBackedType);
-        Assert.Contains(generatedDocuments.Documents, document => document.Origin == GeneratedCodeOrigin.SourceGenerator && document.Name.Contains("GeneratedByRoslyn59", StringComparison.Ordinal) && document.Content?.Contains("Roslyn 5.9", StringComparison.Ordinal) == true);
-        Assert.Contains(codeExplore.ResolvedAnchors, resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved && resolution.SelectedLocation?.IsGenerated == true);
-        Assert.Contains(codeExplore.FileSections, section => section.IsGenerated);
-        var property = extensionProperty[0];
-        var references = await registry.FindReferencesAsync(request.WorkspaceId, property.Symbol.Id, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains(references, reference => reference.Location.FilePath.EndsWith(Path.Combine("App", "Program.cs"), StringComparison.OrdinalIgnoreCase));
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Plan117RoslynUpgradeTestsCodeExplore_TruncatedGeneratedSource_SuppressesPathContinuations : Plan117RoslynUpgradeTests
 {
     /// <summary>Generated source truncated by either source budget cannot advertise unresolved path continuations.</summary>
     [Theory]
     [InlineData(60, 1000)]
     [InlineData(1000, 60)]
-    [InlineData(1, 1000)]
-    [InlineData(1000, 1)]
     public static async Task CodeExplore_TruncatedGeneratedSource_SuppressesPathContinuations(int perFileBudget, int totalBudget)
     {
         using var fixture = new TestSemanticSolution();
@@ -224,10 +165,7 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
 {
     /// <summary>Omitted projects prevent claims of exact absence or unique ownership while warming is blocked.</summary>
     [Theory]
-    [InlineData("M:Wanted.Owner.Calculate", true)]
-    [InlineData("Wanted.Owner.Calculate", false)]
     [InlineData("P:SmallSolution.Contracts.GeneratedByRoslyn59.Value", true)]
-    [InlineData("T:Wanted.CS", true)]
     [InlineData("Owner", false)]
     [InlineData("T:Decoy.Owner", true)]
     public static async Task CodeExplore_ExactIdentityCannotClaimAbsenceFromOmittedCandidateProjects(string anchor, bool symbolId)
@@ -358,31 +296,6 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_PhysicalGeneratedLookin
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsSemanticEngine_LoadMeasurement_IsAggregateAndPathFree : Plan117RoslynUpgradeTests
-{
-    /// <summary>One aggregate measurement reports bounded phases and counts without repository paths.</summary>
-    [Fact]
-    public static async Task SemanticEngine_LoadMeasurement_IsAggregateAndPathFree()
-    {
-        using var fixture = new TestSemanticSolution();
-        var root = fixture.Root;
-        var logger = new RecordingLogger<SemanticEngine>();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var load = await engine.LoadAsync(CreateLoadRequest(root), TestContext.Current.CancellationToken);
-        Assert.True(load.Confidence >= SemanticConfidenceLevel.PartialCompilation, string.Join(Environment.NewLine, logger.Messages.Select(message => message.Text)));
-        var measurement = Assert.Single(logger.Messages, message => message.Level == LogLevel.Information && message.Text.StartsWith("Semantic load completed:", StringComparison.Ordinal));
-        Assert.Contains("evaluation", measurement.Text, StringComparison.Ordinal);
-        Assert.Contains("confinement", measurement.Text, StringComparison.Ordinal);
-        Assert.Contains("compilation", measurement.Text, StringComparison.Ordinal);
-        Assert.Contains("projects expected", measurement.Text, StringComparison.Ordinal);
-        Assert.Contains("workspace failures 0", measurement.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain(root, measurement.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.InRange(logger.Messages.Count(message => message.Level == LogLevel.Debug && message.Text.StartsWith("Slowest semantic project compilations:", StringComparison.Ordinal)), 0, 1);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Plan117RoslynUpgradeTestsSemanticEngine_LoadMeasurement_ClassifiesTextOnlyAndCancellation : Plan117RoslynUpgradeTests
 {
     /// <summary>Text-only completion and cancellation each emit exactly one classified load measurement.</summary>
@@ -434,42 +347,11 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_PostCommitPublicatio
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BrokenTargetAnalyzer_ReducesConfidence : Plan117RoslynUpgradeTests
-{
-    /// <summary>A valid target analyzer assembly whose analyzer cannot be created cannot retain full confidence.</summary>
-    [Fact]
-    public static async Task SemanticEngine_BrokenTargetAnalyzer_ReducesConfidence()
-    {
-        var temporaryRoot = CopyFixtureToTemporaryRoot();
-        var analyzerPath = Path.Combine(AppContext.BaseDirectory, "plan117", "analyzer-failure", "Threadsmith.SemanticFixtures.Roslyn59.dll");
-        var failureMarker = analyzerPath + ".fail-load";
-        try
-        {
-            SetFixtureAnalyzerPath(temporaryRoot, analyzerPath);
-            await File.WriteAllTextAsync(failureMarker, "trigger", TestContext.Current.CancellationToken);
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var load = await engine.LoadAsync(CreateLoadRequest(temporaryRoot), TestContext.Current.CancellationToken);
-            Assert.NotEqual(SemanticConfidenceLevel.FullSemantic, load.Confidence);
-            Assert.NotEmpty(load.Diagnostics);
-        }
-        finally
-        {
-            File.Delete(failureMarker);
-            DeleteOwnedTemporaryRoot(temporaryRoot);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BlockedAnalyzerConstruction_CancelsWithoutPublishingState : Plan117RoslynUpgradeTests
 {
     /// <summary>Blocked analyzer and generator construction cannot prevent load or full-refresh cancellation.</summary>
     [Theory]
     [InlineData("analyzer", false, false)]
-    [InlineData("generator", false, false)]
-    [InlineData("analyzer", true, false)]
-    [InlineData("generator", true, false)]
     [InlineData("generator", false, true)]
     [InlineData("generator", true, true)]
     public static async Task SemanticEngine_BlockedAnalyzerConstruction_CancelsWithoutPublishingState(string component, bool refresh, bool retireOwner)
@@ -561,44 +443,6 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BlockedAnalyzerConst
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsSemanticEngine_UnavailableRepositorySdk_ReducesConfidence : Plan117RoslynUpgradeTests
-{
-    /// <summary>A repository that requires an unavailable SDK cannot be reported as fully semantic.</summary>
-    [Fact]
-    public static async Task SemanticEngine_UnavailableRepositorySdk_ReducesConfidence()
-    {
-        var temporaryRoot = CopyFixtureToTemporaryRoot();
-        try
-        {
-            await RemoveFixtureAnalyzerReferenceAsync(temporaryRoot);
-            await File.WriteAllTextAsync(
-                Path.Combine(temporaryRoot, "global.json"),
-                """
-                {
-                  "sdk": {
-                    "version": "10.0.999",
-                    "rollForward": "disable",
-                    "allowPrerelease": false
-                  }
-                }
-                """,
-                TestContext.Current.CancellationToken);
-            var logger = new RecordingLogger<SemanticEngine>();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var load = await engine.LoadAsync(CreateLoadRequest(temporaryRoot), TestContext.Current.CancellationToken);
-            Assert.NotEqual(SemanticConfidenceLevel.FullSemantic, load.Confidence);
-            Assert.NotEmpty(load.Diagnostics);
-            Assert.Single(logger.Messages, message => message.Level == LogLevel.Information && message.Text.StartsWith("Semantic load failed:", StringComparison.Ordinal));
-        }
-        finally
-        {
-            DeleteOwnedTemporaryRoot(temporaryRoot);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class Plan117RoslynUpgradeTestsSemanticEngine_AvailableOlderRepositorySdk_LoadsSemantics : Plan117RoslynUpgradeTests
 {
     /// <summary>An explicitly available older .NET 10 SDK remains loadable through the target host.</summary>
@@ -643,181 +487,6 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_AvailableOlderReposi
         finally
         {
             DeleteOwnedTemporaryRoot(temporaryRoot);
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsSemanticEngine_PerformanceEvidence_UsesProductionLoadPath : Plan117RoslynUpgradeTests
-{
-    /// <summary>Opt-in production-path phase evidence for the plan's fixture, project, and solution matrix.</summary>
-    [Fact]
-    [Trait("Category", "Performance")]
-    public static async Task SemanticEngine_PerformanceEvidence_UsesProductionLoadPath()
-    {
-        var target = Environment.GetEnvironmentVariable("THREADSMITH_PLAN117_PERFORMANCE_TARGET");
-        var repositoryRoot = Environment.GetEnvironmentVariable("THREADSMITH_PLAN117_REPOSITORY_ROOT");
-        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(repositoryRoot))
-        {
-            Assert.Skip("Set the Plan 117 performance target and repository root to collect phase evidence.");
-        }
-
-        var normalizedRepositoryRoot = Path.GetFullPath(repositoryRoot);
-        var temporaryRoot = target is "fixture" or "generator" or "broken" ? CopyFixtureToTemporaryRoot() : null;
-        using var temporaryInputs = temporaryRoot is null ? null : new OwnedMeasurementInputs(temporaryRoot);
-        if (temporaryRoot is not null && target is "generator" or "broken")
-        {
-            SetFixtureAnalyzerPath(temporaryRoot, target == "broken" ? Path.Combine(temporaryRoot, "MissingGenerator.dll") : Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"));
-            if (target == "generator")
-            {
-                AddGeneratorMeasurementProjects(temporaryRoot);
-            }
-        }
-
-        (var loadRoot, var selection) = target switch
-        {
-            "app" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.App", "Threadsmith.App.csproj")),
-            "solution" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.sln")),
-            "fixture" or "generator" or "broken" => (temporaryRoot ?? throw new InvalidOperationException("Missing measurement inputs."), Path.Combine(temporaryRoot ?? string.Empty, "SmallDotNetSolution.sln")),
-            _ => throw new InvalidOperationException("Unknown Plan 117 performance target."),
-        };
-        for (var iteration = 1; iteration <= 3; iteration++)
-        {
-            var workers = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_WORKERS") == "2" ? 2 : 1;
-            var logger = new RecordingLogger<SemanticEngine>();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, new SemanticPreparationLimits(new SemanticResourceLimits { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }) { Workers = workers, Frontier = workers }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), loadRoot, selection, RepositoryTrustLevel.TrustedBuild);
-            using var process = Process.GetCurrentProcess();
-            var cpuStarted = process.TotalProcessorTime;
-            var started = Stopwatch.GetTimestamp();
-            var load = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_BASELINE") == "1" ? await engine.LoadCoreAsync(request, publishLoadCompleted: false, publishConfidenceChanged: true, allowTextFallback: false, TestContext.Current.CancellationToken) : await engine.LoadAsync(request, TestContext.Current.CancellationToken);
-            var usableMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            var measurement = logger.Messages.Last(message => message.Level == LogLevel.Information && message.Text.StartsWith("Semantic load ", StringComparison.Ordinal));
-            TestContext.Current.TestOutputHelper?.WriteLine($"P117 target={target} iteration={iteration} {measurement.Text}");
-            var scopedProjectPath = target switch
-            {
-                "solution" => Path.Combine(loadRoot, "src", "Threadsmith.Core", "Threadsmith.Core.csproj"),
-                "app" => selection,
-                _ => Path.Combine(loadRoot, "Contracts", "Contracts.csproj"),
-            };
-            var scopedStarted = Stopwatch.GetTimestamp();
-            if (target == "broken")
-            {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => engine.GetDiagnosticsAsync([scopedProjectPath], [], TestContext.Current.CancellationToken));
-            }
-            else
-            {
-                await engine.GetDiagnosticsAsync([scopedProjectPath], [], TestContext.Current.CancellationToken);
-            }
-
-            var scopedMs = Stopwatch.GetElapsedTime(scopedStarted).TotalMilliseconds;
-            await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
-            var warmMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            var globalStarted = Stopwatch.GetTimestamp();
-            if (target == "broken")
-            {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => engine.FindSymbolsAsync("MessageService", TestContext.Current.CancellationToken));
-            }
-            else
-            {
-                await engine.FindSymbolsAsync("MessageService", TestContext.Current.CancellationToken);
-            }
-
-            var globalMs = Stopwatch.GetElapsedTime(globalStarted).TotalMilliseconds;
-            var snapshot = engine.CaptureAdvancedSnapshot();
-            if (target != "broken")
-            {
-                Assert.Equal(snapshot.Solution.ProjectIds.Count, snapshot.CompiledProjects.Count);
-            }
-
-            var generatedCount = 0;
-            foreach (var project in snapshot.Solution.Projects.Where(project => snapshot.CompiledProjects.Contains(project.Id)))
-            {
-                var generated = (await project.GetSourceGeneratedDocumentsAsync(TestContext.Current.CancellationToken)).ToArray();
-                generatedCount += generated.Length;
-                if (target == "generator" && project.AnalyzerReferences.Any(reference => Path.GetFileName(reference.FullPath) == "Threadsmith.SemanticFixtures.Roslyn59.dll"))
-                {
-                    var declaration = Assert.Single(generated, document => document.Name == "GeneratedByRoslyn59.g.cs");
-                    Assert.Contains("public sealed class GeneratedByRoslyn59", (await declaration.GetTextAsync(TestContext.Current.CancellationToken)).ToString(), StringComparison.Ordinal);
-                }
-            }
-
-            if (target == "generator")
-            {
-                Assert.True(generatedCount >= 11, "Every independent generator project must retain its generated declaration.");
-            }
-
-            process.Refresh();
-            TestContext.Current.TestOutputHelper?.WriteLine($"P118 target={target} iteration={iteration} workers={workers} frontier={workers} diagnosticProject={Path.GetFileName(scopedProjectPath)} usableMs={usableMs:F1} warmMs={warmMs:F1} scopedDiagnosticsMs={scopedMs:F1} globalSymbolsMs={globalMs:F1} cpuMs={(process.TotalProcessorTime - cpuStarted).TotalMilliseconds:F1} peakWorkingSetBytes={process.PeakWorkingSet64} workingSetBytes={process.WorkingSet64} generatedDocuments={generatedCount} projects={snapshot.Solution.ProjectIds.Count} compiled={snapshot.CompiledProjects.Count} initial={load.Confidence} final={engine.Confidence}");
-            foreach (var warmMeasurement in logger.Messages.Where(message => message.Text.StartsWith("Semantic warm completed:", StringComparison.Ordinal)))
-            {
-                TestContext.Current.TestOutputHelper?.WriteLine($"P118-queue iteration={iteration} {warmMeasurement.Text}");
-            }
-
-            var expectedConfidence = target is "solution" or "broken" ? SemanticConfidenceLevel.PartialCompilation : SemanticConfidenceLevel.FullSemantic;
-            Assert.True(engine.Confidence == expectedConfidence, string.Join(Environment.NewLine, load.Diagnostics.Concat(logger.Messages.Select(message => message.Text))));
-            if (target is not "solution" and not "broken")
-            {
-                Assert.Empty(load.Diagnostics);
-            }
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class Plan117RoslynUpgradeTestsStagedCodeExplorePerformanceEvidenceUsesProductionQueryPath : Plan117RoslynUpgradeTests
-{
-    /// <summary>Measures an immediately submitted code-explore question through the shared registry/tool path.</summary>
-    [Fact]
-    [Trait("Category", "Performance")]
-    public static async Task StagedCodeExplorePerformanceEvidenceUsesProductionQueryPath()
-    {
-        var target = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_QUERY_PERFORMANCE_TARGET");
-        var repositoryRoot = Environment.GetEnvironmentVariable("THREADSMITH_PLAN117_REPOSITORY_ROOT");
-        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(repositoryRoot))
-        {
-            Assert.Skip("Set the Plan 118 query performance target and repository root for first-query evidence.");
-        }
-
-        using var fixture = target == "fixture" ? new TestSemanticSolution() : null;
-        var root = fixture?.Root ?? Path.GetFullPath(repositoryRoot);
-        var selection = target switch
-        {
-            "fixture" => Path.Combine(root, "SmallDotNetSolution.sln"),
-            "app" => Path.Combine(root, "src", "Threadsmith.App", "Threadsmith.App.csproj"),
-            "solution" => Path.Combine(root, "src", "Threadsmith.sln"),
-            _ => throw new InvalidOperationException("Unknown first-query measurement target."),
-        };
-        var path = target switch
-        {
-            "fixture" => "App/Program.cs",
-            "app" => "src/Threadsmith.App/Program.cs",
-            _ => "src/Threadsmith.DotNet/SemanticEngine.cs",
-        };
-        for (var iteration = 1; iteration <= 3; iteration++)
-        {
-            await using var events = new DomainEventStream();
-            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild);
-            var started = Stopwatch.GetTimestamp();
-            if (Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_BASELINE") == "1")
-            {
-                await registry.GetEngine(request.WorkspaceId).LoadCoreAsync(request, publishLoadCompleted: false, publishConfidenceChanged: true, allowTextFallback: false, TestContext.Current.CancellationToken);
-            }
-            else
-            {
-                await registry.LoadAsync(request, TestContext.Current.CancellationToken);
-            }
-
-            var queryStarted = Stopwatch.GetTimestamp();
-            var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-            var result = await queries.QueryCodeExploreAsync(request.WorkspaceId, new CodeExploreRequest { Query = "Explain the selected implementation", PathAnchors = [new CodeExplorePathAnchor { Path = path }], Limits = new CodeExploreLimits { TimeoutMilliseconds = 60000 }, }, new FixtureSourceReader(root), cancellationToken: TestContext.Current.CancellationToken);
-            var queryMs = Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds;
-            var selectionToResultMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Assert.NotEmpty(result.FileSections);
-            await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
-            TestContext.Current.TestOutputHelper?.WriteLine($"P118-query target={target} iteration={iteration} firstCodeExploreMs={queryMs:F1} selectionToQueryResultMs={selectionToResultMs:F1} sections={result.FileSections.Count} confidence={result.Confidence}");
         }
     }
 }

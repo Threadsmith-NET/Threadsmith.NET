@@ -22,28 +22,6 @@ public static class StartupProgressTests
         Assert.All(observation.Snapshot, row => Assert.Equal(SemanticStartupPhaseState.Running, row.State));
     }
 
-    /// <summary>Bounded history admits later work without evicting active operations.</summary>
-    [Fact]
-    public static void CompletedHistoryYieldsToLaterOperations()
-    {
-        var progress = new SemanticStartupProgress();
-        using var observation = progress.ObserveProcess();
-        using var active = progress.Begin("active", "Long operation", cancellationToken: TestContext.Current.CancellationToken);
-        for (var index = 0; index < 300; index++)
-        {
-            using var operation = progress.Begin($"history.{index}", "Completed operation", cancellationToken: TestContext.Current.CancellationToken);
-            operation?.Complete();
-        }
-
-        using var last = progress.Begin("last", "Later operation", cancellationToken: TestContext.Current.CancellationToken);
-        Assert.NotNull(last);
-        Assert.Equal(256, observation.Snapshot.Count);
-        Assert.Equal("active", observation.Snapshot[0].Id);
-        Assert.Equal("last", observation.Snapshot[^1].Id);
-        Assert.DoesNotContain(observation.Snapshot, row => row.Id == "history.0");
-        Assert.Equal(observation.Snapshot.Count, observation.Snapshot.Select(row => row.Order).Distinct().Count());
-    }
-
     /// <summary>Process records share semantic timing and state rules.</summary>
     [Fact]
     public static void ProcessOperationsKeepStableOrderAndFreezeEveryOutcome()

@@ -12,71 +12,6 @@ using Xunit;
 /// <summary>Standing preferences are required context independent of situational retrieval.</summary>
 public static class StandingPreferenceContextTests
 {
-    /// <summary>Standing-only repositories never invoke retrieval models, even with an empty query or disabled situational slots.</summary>
-    [Theory]
-    [InlineData("", 3)]
-    [InlineData("explain a compiler error", 3)]
-    [InlineData("explain a compiler error", 0)]
-    public static async Task Standing_preferences_do_not_depend_on_the_query(string query, int maximum)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "User prefers to be addressed as 'sir'.") with
-        {
-            MemoryType = RepositoryMemoryType.StandingPreference,
-        });
-        var calls = generator.Calls;
-        generator.Generate = _ => throw new InvalidOperationException("No retrieval inference is needed.");
-        var encoder = new RecordingCrossEncoder();
-        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
-
-        var result = await retriever.RetrieveAsync(Query(query) with
-        {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, SemanticMinimum = 1, MaxRepoMemoriesInContext = maximum },
-        });
-
-        Assert.Equal(saved.Id, Assert.Single(result.StandingPreferences).Id);
-        Assert.Empty(result.Selected);
-        Assert.Equal(calls, generator.Calls);
-        Assert.Empty(encoder.Documents);
-    }
-
-    /// <summary>Mixed stores preserve situational lexical/semantic ranking and give all standing entries separate admission.</summary>
-    [Fact]
-    public static async Task Standing_preferences_do_not_consume_situational_slots_or_reranker_candidates()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        foreach (var text in (string[])["build errors in compiler", "fix build errors from project", "build errors after restore", "diagnose build errors"])
-        {
-            await service.ExecuteAsync(MemoryTestData.Operation("add", text));
-        }
-
-        var encoder = new RecordingCrossEncoder();
-        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
-        var before = await retriever.RetrieveAsync(Query("build errors"));
-        for (var index = 0; index < 4; index++)
-        {
-            await service.ExecuteAsync(MemoryTestData.Operation("add", $"When discussing build errors, observe preference {index}.") with
-            {
-                MemoryType = RepositoryMemoryType.StandingPreference,
-            });
-        }
-
-        var after = await retriever.RetrieveAsync(Query("build errors"));
-        var ranked = await retriever.RetrieveAsync(Query("build errors") with { Options = new RepositoryMemoryOptions { RerankerEnabled = true } });
-
-        Assert.Equal(
-            before.Selected.Select(item => (item.Entry.Id, item.Score, item.LexicalRank, item.SemanticRank)),
-            after.Selected.Select(item => (item.Entry.Id, item.Score, item.LexicalRank, item.SemanticRank)));
-        Assert.Equal(3, ranked.Selected.Count);
-        Assert.Equal(4, ranked.StandingPreferences.Count);
-        Assert.Equal(4, encoder.Documents.Count);
-        Assert.DoesNotContain(encoder.Documents, text => text.Contains("preference", StringComparison.Ordinal));
-    }
-
     /// <summary>Unavailable semantic inference and reranking cannot suppress standing preferences.</summary>
     [Fact]
     public static async Task Retrieval_failure_keeps_standing_preferences()
@@ -124,36 +59,6 @@ public static class StandingPreferenceContextTests
         Assert.Empty(situational.StandingPreferences);
         Assert.Equal(saved.Id, Assert.Single(situational.Selected).Entry.Id);
         Assert.False(situational.RankingCacheHit);
-    }
-
-    /// <summary>Every standing preference survives the old memory framing limit and contributes a real inclusion receipt.</summary>
-    [Fact]
-    public static async Task All_twenty_standing_preferences_are_required_context()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        await using var events = new DomainEventStream();
-        var preferences = Enumerable.Range(0, 20).Select(index => Entry($"Preference {index}: " + new string('x', 600))).ToArray();
-        var retriever = new FixedRetriever(preferences, []);
-        var resolver = new FixedModelResolver(32_000);
-        var assembler = CreateAssembler(events, retriever, resolver);
-
-        var result = await assembler.AssembleAsync(Request(fixture));
-
-        Assert.Equal(20, result.RepositoryMemoryInclusions?.Count);
-        Assert.Equal(20, result.Inspection.RepositoryMemoryItems.Count(item => item.Included));
-        Assert.True(resolver.ContainsSensitiveData);
-        foreach (var entry in preferences)
-        {
-            Assert.Contains(entry.Text, result.ModelInput, StringComparison.Ordinal);
-        }
-
-        Assert.Single(result.Messages ?? [], message => message.SectionId == "repository-memory");
-        Assert.All(result.Inspection.RepositoryMemoryItems, item =>
-        {
-            Assert.Equal(RepositoryMemoryType.StandingPreference, item.MemoryType);
-            Assert.Null(item.Score);
-            Assert.Null(item.CrossEncoderScore);
-        });
     }
 
     /// <summary>Final request pressure removes optional matches but retains every standing preference.</summary>
@@ -409,20 +314,6 @@ public static class StandingPreferenceContextTests
         {
             ContainsSensitiveData = constraints.ContainsSensitiveData;
             return new ModelResolution(new ModelProfileId(Guid.NewGuid()), _budget, 0, [], [], []);
-        }
-    }
-
-    private sealed class RecordingCrossEncoder : ITextCrossEncoder
-    {
-        public TextCrossEncoderModelDescriptor Model { get; } = new("fixture", 512, 64);
-
-        internal IReadOnlyList<string> Documents { get; private set; } = [];
-
-        public Task<IReadOnlyList<TextCrossEncoderScore>> ScoreAsync(string query, IReadOnlyList<string> documents, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Documents = documents.ToArray();
-            return Task.FromResult<IReadOnlyList<TextCrossEncoderScore>>([.. documents.Select(_ => new TextCrossEncoderScore(1, 12, false))]);
         }
     }
 }

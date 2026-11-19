@@ -43,11 +43,6 @@ public abstract partial class EditAnalyzerTests
         public class RepairedProbe {}
         """;
 
-    private protected static readonly JsonSerializerOptions ExperimentJsonOptions = new()
-    {
-        WriteIndented = true,
-    };
-
     private protected static readonly string[] FixtureDiagnosticIds = ["CA2016", "CA2012", "VSTHRD002", "VSTHRD100", "TS1170", "TS1171"];
 
     private protected static async Task ConfigureFixtureAsync(string root)
@@ -75,8 +70,6 @@ public abstract partial class EditAnalyzerTests
         projectXml.Save(projectPath);
         return analyzer;
     }
-
-    private protected sealed record AnalyzerExperiment(string Target, string RepositoryRoot, string Selection, string File, string Find, string Replace, int Repetitions, int Workers, bool ConcurrentExploration, int LatencyTargetMilliseconds, EditAnalyzerOptions Options, string OutputPath, int RapidEdits = 0, bool ReuseBaseline = true);
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
@@ -210,110 +203,5 @@ public sealed class EditAnalyzerTestsCancelledAnalyzerExecutionIsAbandonedAndNev
 
         var recovered = await engine.AnalyzeAnalyzerCandidateAsync(source, source.WithDocumentText(document.Id, SourceText.From(Repairs)), [document.Id], new() { DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue }, false, true, TestContext.Current.CancellationToken);
         Assert.False(Assert.Single(recovered.Before).Reused);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class EditAnalyzerTestsMeasureSelectedAnalyzersThroughProductionQueue : EditAnalyzerTests
-{
-    /// <summary>Opt-in elapsed measurements take workload, budget and output location from explicit input.</summary>
-    [Fact]
-    [Trait("Category", "Performance")]
-    public static async Task MeasureSelectedAnalyzersThroughProductionQueue()
-    {
-        var input = Environment.GetEnvironmentVariable("THREADSMITH_ANALYZER_EXPERIMENT");
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            Assert.Skip("Set THREADSMITH_ANALYZER_EXPERIMENT to an experiment JSON input path.");
-        }
-
-        var experiment = JsonSerializer.Deserialize<AnalyzerExperiment>(await File.ReadAllTextAsync(input, TestContext.Current.CancellationToken))!;
-        Assert.True(experiment.Repetitions > 0 && experiment.LatencyTargetMilliseconds > 0);
-        using var fixture = experiment.Target == "fixture" ? new TestSemanticSolution() : null;
-        if (fixture is not null)
-        {
-            await ConfigureFixtureAsync(fixture.Root);
-        }
-
-        var root = fixture?.Root ?? Path.GetFullPath(experiment.RepositoryRoot);
-        var selection = fixture is null ? Path.GetFullPath(experiment.Selection, root) : Path.Combine(root, "SmallDotNetSolution.sln");
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { CompilationWorkers = experiment.Workers, InitialPreparationFrontier = experiment.Workers, EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var loadStarted = Stopwatch.GetTimestamp();
-        var load = await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
-        await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
-        Assert.True(engine.Confidence >= SemanticConfidenceLevel.PartialCompilation, string.Join(Environment.NewLine, load.Diagnostics));
-        var loadMilliseconds = Stopwatch.GetElapsedTime(loadStarted).TotalMilliseconds;
-        var source = engine.CaptureAdvancedSnapshot().Solution;
-        var file = fixture is null ? Path.GetFullPath(experiment.File, root) : Path.Combine(root, "Contracts", "AnalyzerCases.cs");
-        var documents = source.GetDocumentIdsWithFilePath(file);
-        Assert.NotEmpty(documents);
-        var records = new List<object>();
-        using var process = Process.GetCurrentProcess();
-        for (var iteration = 0; iteration <= experiment.Repetitions; iteration++)
-        {
-            var started = Stopwatch.GetTimestamp();
-            var cpu = process.TotalProcessorTime;
-            var candidate = source;
-            foreach (var id in documents)
-            {
-                var text = (await source.GetDocument(id)!.GetTextAsync(TestContext.Current.CancellationToken)).ToString();
-                candidate = candidate.WithDocumentText(id, SourceText.From(fixture is not null ? Repairs + $"\n// edit {iteration}" : text.Replace(experiment.Find, experiment.Replace, StringComparison.Ordinal) + $"\n// analyzer experiment {iteration}"));
-            }
-
-            var preparation = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            var exploration = experiment.ConcurrentExploration ? engine.FindSymbolsAsync("SemanticEngine", TestContext.Current.CancellationToken) : null;
-            EditAnalyzerComparison? result = null;
-            var outcome = "completed";
-            try
-            {
-                result = await engine.AnalyzeAnalyzerCandidateAsync(source, candidate, documents, experiment.Options, false, experiment.ReuseBaseline, TestContext.Current.CancellationToken);
-            }
-            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
-            {
-                outcome = "budget-cancelled";
-            }
-
-            var available = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            if (exploration is not null)
-            {
-#pragma warning disable VSTHRD003 // The measurement owns its overlapping production query.
-
-                await exploration;
-#pragma warning restore VSTHRD003
-            }
-
-            process.Refresh();
-            records.Add(new { iteration, temperature = iteration == 0 ? "first-use" : "warm", outcome, preparation, available, cpuMilliseconds = (process.TotalProcessorTime - cpu).TotalMilliseconds, process.WorkingSet64, process.PeakWorkingSet64, result, });
-        }
-
-        var rapid = new List<object>();
-        for (var edit = 0; edit < experiment.RapidEdits; edit++)
-        {
-            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-            var candidate = source.WithDocumentText(documents[0], SourceText.From(fixture is not null ? Repairs + $"\n// rapid {edit}" : await source.GetDocument(documents[0])!.GetTextAsync(cancellation.Token) + $"\n// rapid {edit}"));
-            var started = Stopwatch.GetTimestamp();
-            var pending = engine.AnalyzeAnalyzerCandidateAsync(source, candidate, documents, experiment.Options, false, experiment.ReuseBaseline, cancellation.Token);
-            await Task.Yield();
-            await cancellation.CancelAsync();
-            var outcome = "completed-before-cancellation";
-            try
-            {
-#pragma warning disable VSTHRD003 // The harness owns and explicitly cancels each rapid edit observation.
-
-                await pending;
-#pragma warning restore VSTHRD003
-            }
-            catch (OperationCanceledException) when (!TestContext.Current.CancellationToken.IsCancellationRequested)
-            {
-                outcome = "cancelled";
-            }
-
-            rapid.Add(new { edit, outcome, elapsedMilliseconds = Stopwatch.GetElapsedTime(started).TotalMilliseconds });
-        }
-
-        // Reference coverage is outside every edit latency sample and only runs on the small fixture.
-        var reference = fixture is not null ? await engine.AnalyzeAnalyzerCandidateAsync(source, source.WithDocumentText(documents[0], SourceText.From(Repairs)), documents, experiment.Options, true, true, TestContext.Current.CancellationToken) : null;
-        await File.WriteAllTextAsync(experiment.OutputPath, JsonSerializer.Serialize(new { experiment, loadMilliseconds, records, rapid, reference }, ExperimentJsonOptions), TestContext.Current.CancellationToken);
     }
 }

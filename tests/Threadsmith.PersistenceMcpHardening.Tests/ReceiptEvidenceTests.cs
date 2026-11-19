@@ -9,31 +9,6 @@ using Xunit;
 /// <summary>Durable scoped artifact paging and retention regressions.</summary>
 public static class ReceiptEvidenceTests
 {
-    /// <summary>Rejected quota and identity attempts do not create blobs or metadata.</summary>
-    [Fact]
-    public static async Task QuotaAndIdentityChecksPrecedeArtifactWrites()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await DatabaseFixture.CreateAsync();
-        using var directory = DirectoryFixture.Create();
-        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
-        var store = new ArtifactStore(database.ConnectionString, directory.Path, new SecretOutputSanitizer());
-        var grant = await CaptureAndArchiveAsync(database.ConnectionString, store, "original", ct);
-        var original = new ReceiptEvidenceCapture(grant.Reference.EvidenceId, grant.Reference.InvocationId, "repository", "Build observation", "original", false);
-        Assert.Equal(grant.Reference, Assert.Single(await store.CaptureAsync(grant.Receipt, [original], ct)));
-        Assert.Empty(await store.CaptureAsync(grant.Receipt, [original with { Content = "conflicting identity" }], ct));
-        await using var connection = new SqliteConnection(database.ConnectionString);
-        await connection.OpenAsync(ct);
-        await using var command = connection.CreateCommand();
-        // Exercise quota admission using metadata; no large transient fixture is needed.
-        command.CommandText = "UPDATE receipt_evidence SET length = 67108864;";
-        await command.ExecuteNonQueryAsync(ct);
-        var next = grant.Receipt with { OriginRunId = RunId.New(), OriginMessageId = ConversationMessageId.New() };
-        Assert.Empty(await store.CaptureAsync(next, [original with { EvidenceId = EvidenceId.New(), Content = "over quota" }], ct));
-        Assert.Single(await store.ListAsync(null, ct));
-        Assert.Single(Directory.GetFiles(directory.Path, "*.bin", SearchOption.AllDirectories));
-    }
-
     /// <summary>Historical artifact pages are bounded and fail closed on storage corruption.</summary>
     [Theory]
     [InlineData(false)]

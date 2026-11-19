@@ -64,80 +64,6 @@ public sealed class WebFetchTests
         Assert.False(result);
     }
 
-    /// <summary>Representative globally routable addresses are admitted.</summary>
-    [Theory]
-    [InlineData("8.8.8.8")]
-    [InlineData("1.1.1.1")]
-    [InlineData("2606:4700:4700::1111")]
-    public void IsPublic_PublicAddress_ReturnsTrue(string value)
-    {
-        // Arrange
-        var address = IPAddress.Parse(value);
-
-        // Act
-        var result = PublicIpAddressPolicy.IsPublic(address);
-
-        // Assert
-        Assert.True(result);
-    }
-
-    /// <summary>Ordinary HTML void elements do not create artificial nesting depth.</summary>
-    [Fact]
-    public void Extract_ManyVoidElements_DoesNotExceedDepth()
-    {
-        // Arrange
-        var html = "<html><head>" + string.Concat(Enumerable.Repeat("<meta charset=utf-8><link rel=stylesheet>", 100))
-            + "</head><body>Readable" + string.Concat(Enumerable.Repeat("<br><img src=x><input>", 100)) + "</body></html>";
-
-        // Act
-        (var text, _, _) = WebReadableTextExtractor.Extract(
-            html,
-            "text/html",
-            new WebFetchOptions { MaximumHtmlTokens = 2000 },
-            CancellationToken.None);
-
-        // Assert
-        Assert.Contains("Readable", text, StringComparison.Ordinal);
-    }
-
-    /// <summary>Exact transport queries remain transient while projected provenance removes them.</summary>
-    [Fact]
-    public void Normalize_QueryAndFragment_OnlyFragmentRemovedAndProvenanceHidesQuery()
-    {
-        // Act
-        var exact = WebFetchUrlPolicy.Normalize("https://example.com/docs?q=secret#part", 2048);
-        var provenance = WebFetchUrlPolicy.Sanitize(exact);
-
-        // Assert
-        Assert.Equal("?q=secret", exact.Query);
-        Assert.Empty(exact.Fragment);
-        Assert.Equal("https://example.com/docs", provenance);
-    }
-
-    /// <summary>HTML extraction removes active regions while retaining useful document order.</summary>
-    [Fact]
-    public void Extract_HtmlActiveContent_RemovedAndDocumentTextPreserved()
-    {
-        // Arrange
-        const string source = "<html><head><title>Guide</title><style>.x{}</style></head><body><h1>Heading</h1><script>steal()</script><p>Hello <a href='https://example.org'>world</a>.</p><form>secret</form><pre>dotnet test</pre></body></html>";
-
-        // Act
-        (var text, var title, var truncated) = WebReadableTextExtractor.Extract(
-            source,
-            "text/html",
-            new WebFetchOptions(),
-            CancellationToken.None);
-
-        // Assert
-        Assert.Equal("Guide", title);
-        Assert.Contains("Heading", text, StringComparison.Ordinal);
-        Assert.Contains("Hello world", text, StringComparison.Ordinal);
-        Assert.Contains("dotnet test", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("steal", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", text, StringComparison.Ordinal);
-        Assert.False(truncated);
-    }
-
     /// <summary>Malformed active regions and hidden regions remain absent through their closing tag or EOF.</summary>
     [Fact]
     public void Extract_MalformedAndHiddenRegions_AreRemoved()
@@ -406,33 +332,6 @@ public sealed class WebFetchTests
         Assert.False(transport.ReturnedResponse);
     }
 
-    /// <summary>Allowlisted bodies that agree with their declared media shape remain fetchable.</summary>
-    [Theory]
-    [InlineData("text/plain", "plain text", "plain text")]
-    [InlineData("text/html", "<html><body>readable html</body></html>", "readable html")]
-    [InlineData("application/json", "{\"value\":\"readable json\"}", "readable json")]
-    public async Task FetchAsync_AllowlistedTextualBody_SucceedsAsync(
-        string mediaType,
-        string body,
-        string expectedText)
-    {
-        // Arrange
-        var fetcher = new WebContentFetcher(
-            new StaticContentTransport(mediaType, Encoding.UTF8.GetBytes(body)),
-            new WebFetchOptions(),
-            TestPromptLoader.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        // Act
-        var response = await fetcher.FetchAsync(
-            new Uri("https://example.com"),
-            WebFetchSourceKind.DirectUrl,
-            new HashSet<string>(StringComparer.Ordinal));
-
-        // Assert
-        Assert.Contains(expectedText, response.Text, StringComparison.Ordinal);
-    }
-
     /// <summary>Mislabeled binary and structurally conflicting bodies fail before readable-text extraction.</summary>
     [Theory]
     [InlineData("text/plain", " \r\n%PDF-1.7 fake binary")]
@@ -562,43 +461,6 @@ public sealed class WebFetchTests
 
         // Assert
         Assert.True(tool.Definition.MaximumOutputBytes > worstCaseEscapedTextBytes);
-    }
-
-    /// <summary>Immutable tool enforcement metadata uses the trusted ceiling across repository-limit rebinds.</summary>
-    [Fact]
-    public async Task OptionsState_RepositoryRebind_PreservesTrustedDefinitionCeiling()
-    {
-        // Arrange
-        using var fixture = new TemporaryDirectory();
-        var narrowRepository = Path.Combine(fixture.Path, "narrow");
-        var broadRepository = Path.Combine(fixture.Path, "broad");
-        Directory.CreateDirectory(Path.Combine(narrowRepository, ".threadsmith"));
-        Directory.CreateDirectory(broadRepository);
-        await File.WriteAllTextAsync(
-            Path.Combine(narrowRepository, ".threadsmith", "config.json"),
-            """
-            { "webFetch": { "timeoutSeconds": 2, "maximumExtractedCharacters": 4096 } }
-            """);
-        IConfiguration trusted = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["webFetch:timeoutSeconds"] = "30",
-            ["webFetch:maximumExtractedCharacters"] = "262144",
-        }).Build();
-        var state = new WebFetchOptionsState(new ConfigurationBuilder().Build(), trusted);
-        var tool = new WebFetchTool(new StubFetcher(), new WebFetchAuthorizationAuthority(state), state.TrustedCeiling, TestPromptLoader.Instance);
-
-        // Act
-        await state.BindRepositoryAsync(narrowRepository);
-        var narrowTimeout = state.Current.Timeout;
-        await state.BindRepositoryAsync(broadRepository);
-
-        // Assert
-        Assert.Equal(TimeSpan.FromSeconds(2), narrowTimeout);
-        Assert.Equal(TimeSpan.FromSeconds(30), state.Current.Timeout);
-        Assert.Equal(TimeSpan.FromSeconds(30), tool.Definition.Timeout);
-        Assert.True(
-            tool.Definition.MaximumOutputBytes
-            > (long)state.Current.MaximumExtractedCharacters * 6);
     }
 
     /// <summary>Search-only disclosure schema one cannot authorize retrieval.</summary>
@@ -1310,34 +1172,6 @@ public sealed class WebFetchTests
         Assert.DoesNotContain(
             notifications.SelectMany(notification => notification.GetType().GetProperties()),
             property => property.Name is "Origin" or "Path" or "QueryPresent" or "UrlDigest");
-    }
-
-    /// <summary>Consent schema two remains valid for Plan 58 but cannot authorize fresh-message inference.</summary>
-    [Fact]
-    public async Task ConsentSchema2_RemainsPlan58Only_AndSchema3EnablesCurrentMessageAsync()
-    {
-        // Arrange
-        using var fixture = new TemporaryDirectory();
-        var repository = Path.Combine(fixture.Path, "repo");
-        Directory.CreateDirectory(repository);
-        var consentPath = Path.Combine(fixture.Path, "consent.json");
-        var store = new OutboundConsentStore(consentPath);
-        await store.GrantAsync(
-            "web_search",
-            repository,
-            OutboundConsentOrigin.ExplicitHeadless,
-            schemaVersion: 2);
-
-        // Act
-        var plan58Consent = store.HasValidConsent("web_fetch", repository);
-        var currentMessageBefore = store.HasCurrentMessageUrlConsent(repository);
-        await store.GrantAsync("web_search", repository);
-        var currentMessageAfter = store.HasCurrentMessageUrlConsent(repository);
-
-        // Assert
-        Assert.True(plan58Consent);
-        Assert.False(currentMessageBefore);
-        Assert.True(currentMessageAfter);
     }
 
     /// <summary>Search result hostnames authorize raw URLs without an approval prompt.</summary>

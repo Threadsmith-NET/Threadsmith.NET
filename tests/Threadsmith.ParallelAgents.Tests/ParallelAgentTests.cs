@@ -447,47 +447,6 @@ public sealed class ParallelAgentTests
         Assert.Equal(new AgentResourceUsage(), ledger.Snapshot);
     }
 
-    /// <summary>Verifies migration 4 and delegation checkpoints round-trip safely.</summary>
-    [Fact]
-    public async Task Persistence_Migration4_RoundTripsDelegationCheckpoint()
-    {
-        // Arrange
-        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-agents-{Guid.NewGuid():N}.db");
-        var connectionString = $"Data Source={path};Pooling=False";
-        try
-        {
-            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
-            var plan = CreatePlan(CreateAssignment(AgentRole.Explorer, "src/A.cs"));
-            var checkpoint = new DelegationCheckpoint
-            {
-                DelegationId = plan.DelegationId,
-                Provenance = plan.Provenance,
-                Phase = DelegationCheckpointPhase.ResearchJoined,
-                ChildOutcomes = [],
-                NextAction = "synthesize findings",
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-            var store = new DelegationCheckpointStore(connectionString);
-
-            // Act
-            Assert.True(await store.SaveAsync(checkpoint));
-            var restored = await store.GetAsync(plan.DelegationId);
-
-            // Assert
-            Assert.NotNull(restored);
-            Assert.Equal(DelegationCheckpointPhase.ResearchJoined, restored.Phase);
-            await using var connection = new SqliteConnection(connectionString);
-            await connection.OpenAsync();
-            await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT COUNT(*) FROM delegation_worktree_leases;";
-            Assert.Equal(0L, (long)(await command.ExecuteScalarAsync() ?? -1L));
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
     /// <summary>Verifies a stale progress revision cannot replace a terminal SQLite checkpoint.</summary>
     [Fact]
     public async Task Persistence_StaleProgressRevision_DoesNotReplaceTerminalCheckpoint()

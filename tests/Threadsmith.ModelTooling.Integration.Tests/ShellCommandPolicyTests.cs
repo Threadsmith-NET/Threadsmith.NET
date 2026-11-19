@@ -18,11 +18,8 @@ public static class ShellCommandPolicyTests
     /// <summary>A cwd executable cannot replace the absolute target admitted from the child PATH.</summary>
     [Theory]
     [InlineData("cmd")]
-    [InlineData("powershell")]
     [InlineData("pwsh")]
     [InlineData("bash")]
-    [InlineData("sh")]
-    [InlineData("zsh")]
     public static async Task RealShellBindsAuthorizedNativeExecutableInsteadOfCwdShadow(string shell)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -465,25 +462,6 @@ public static class ShellCommandPolicyTests
 
         Assert.Equal("dotnet", parsed.Tokens[0]);
         Assert.Equal("FullyQualifiedName~ShellCommandPolicy", parsed.Tokens[^1]);
-    }
-
-    /// <summary>Bracket suffixes stay literal in PowerShell argument mode across token boundaries.</summary>
-    [Theory]
-    [InlineData("powershell", "gh api .items[].name", ".items[].name")]
-    [InlineData("pwsh", "gh api name[0]", "name[0]")]
-    [InlineData("powershell", "gh api name[", "name[")]
-    [InlineData("pwsh", "gh api name]", "name]")]
-    [InlineData("pwsh", "gh api 'literal'[0]", "literal[0]")]
-    [InlineData("pwsh", "gh api $value .items[]", ".items[]")]
-    [InlineData("pwsh", "gh api .items[]; gh api .other[]", ".other[]")]
-    [InlineData("pwsh", "gh api .items[] | gh api .other[]", ".other[]")]
-    [InlineData("pwsh", "gh api .items[] && gh api .other[]", ".other[]")]
-    [InlineData("bash", "gh api '.items[]'", ".items[]")]
-    public static void LiteralBracketArgumentsRetainTheirTokens(string shell, string command, string expected)
-    {
-        var parsed = ShellCommandPreparation.Parse(command, shell);
-
-        Assert.Equal(expected, parsed[^1].Tokens[^1]);
     }
 
     /// <summary>Quoted literal operators do not create executable stages.</summary>

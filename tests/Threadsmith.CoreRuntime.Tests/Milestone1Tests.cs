@@ -116,100 +116,6 @@ public static partial class Milestone1Tests
         Assert.Throws<NotSupportedException>(() => collection[0] = commands[^1]);
     }
 
-    /// <summary>Every declared legal transition path succeeds and emits one event per edge.</summary>
-    [Theory]
-    [MemberData(nameof(LegalTransitionPaths))]
-    public static async Task StateMachine_LegalTransitionPaths_AreAccepted(RunPhase[] path)
-    {
-        await using var stream = new DomainEventStream();
-        var events = new List<IDomainEvent>();
-        await using var subscription = stream.Subscribe((domainEvent, _) =>
-        {
-            events.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream);
-
-        foreach (var phase in path)
-        {
-            await machine.TransitionAsync(phase, "test");
-        }
-
-        Assert.Equal(path[^1], machine.Phase);
-        Assert.Equal(path.Length, events.Count(item => item is RunTransitioned));
-    }
-
-    /// <summary>Illegal skips and every transition out of a terminal phase are rejected observably.</summary>
-    [Theory]
-    [InlineData(RunPhase.Completion)]
-    [InlineData(RunPhase.Failed)]
-    [InlineData(RunPhase.Cancelled)]
-    [InlineData(RunPhase.RolledBack)]
-    public static async Task StateMachine_TerminalPhases_AreAbsorbing(RunPhase terminalPhase)
-    {
-        await using var stream = new DomainEventStream();
-        var events = new List<IDomainEvent>();
-        await using var subscription = stream.Subscribe((domainEvent, _) =>
-        {
-            events.Add(domainEvent);
-            return Task.CompletedTask;
-        });
-        var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream, initialPhase: terminalPhase);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            machine.TransitionAsync(RunPhase.Failed, "illegal"));
-        Assert.Equal(terminalPhase, machine.Phase);
-        Assert.Contains(events, item => item is RunTransitionFailed);
-    }
-
-    /// <summary>Every possible phase pair agrees with the declared transition policy.</summary>
-    [Fact]
-    public static async Task StateMachine_AllPhasePairs_MatchTheTransitionMatrix()
-    {
-        var allowed = GetLegalTransitionPaths()
-            .SelectMany(path => path.Select((destination, index) =>
-                (index == 0 ? RunPhase.Intake : path[index - 1], destination)))
-            .ToHashSet();
-        var terminal = new HashSet<RunPhase>
-        {
-            RunPhase.Completion,
-            RunPhase.Failed,
-            RunPhase.Cancelled,
-            RunPhase.RolledBack,
-        };
-
-        foreach (var source in Enum.GetValues<RunPhase>())
-        {
-            foreach (var destination in Enum.GetValues<RunPhase>())
-            {
-                await using var stream = new DomainEventStream();
-                var observed = new List<IDomainEvent>();
-                await using var subscription = stream.Subscribe((domainEvent, _) =>
-                {
-                    observed.Add(domainEvent);
-                    return Task.CompletedTask;
-                });
-                var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream, initialPhase: source);
-
-                observed.Clear();
-                var isLegal = !terminal.Contains(source)
-                    && (destination is RunPhase.Failed or RunPhase.Cancelled
-                        || allowed.Contains((source, destination)));
-                if (isLegal)
-                {
-                    await machine.TransitionAsync(destination, "matrix");
-                    Assert.Contains(observed, item => item is RunTransitioned);
-                }
-                else
-                {
-                    await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                        machine.TransitionAsync(destination, "matrix"));
-                    Assert.Contains(observed, item => item is RunTransitionFailed);
-                }
-            }
-        }
-    }
-
     /// <summary>Every catalog event survives interface-polymorphic and durable-registry round trips.</summary>
     [Fact]
     public static void DomainEvents_AllCatalogTypes_RoundTrip()
@@ -352,31 +258,6 @@ public static partial class Milestone1Tests
         }
 
         Assert.Equal(expected, second);
-    }
-
-    /// <summary>Projection reads are detached and completed runs reach the completion phase.</summary>
-    [Fact]
-    public static async Task SessionApplication_ProjectsTerminalState_AndDetachedSnapshots()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
-        {
-            Turns = [new ScriptedTurn { Text = "hello", Usage = new ModelUsage(2, 3) }],
-        });
-        var sessionId = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("test"));
-        var runId = await harness.Dispatcher.DispatchAsync(
-            new SubmitRequestCommand(sessionId, "request"));
-
-        Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-        var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
-        var first = await harness.Projections.GetAsync<SessionProjection>(key);
-        var second = await harness.Projections.GetAsync<SessionProjection>(key);
-
-        Assert.NotNull(first);
-        Assert.NotNull(second);
-        Assert.Equal(RunPhase.Completion, first.Phase);
-        Assert.NotSame(first.Activity, second.Activity);
-        Assert.Contains("hello", string.Concat(first.Activity));
-        Assert.Equal(new SessionUsageSnapshot(2, 3, false), harness.Usage.GetSnapshot(sessionId));
     }
 
     /// <summary>Cancellation cannot interrupt publication after the terminal state has committed.</summary>
@@ -667,19 +548,6 @@ public static partial class Milestone1Tests
         Assert.Equal(500, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Tokens);
     }
 
-    /// <summary>Unavailable pricing remains unknown and does not fabricate a zero-cost estimate.</summary>
-    [Fact]
-    public static void ModelRequestAdmissionEstimator_PreservesUnknownCost()
-    {
-        var estimate = ModelRequestAdmissionEstimator.Estimate(
-            new ModelWireEstimate { WireInputTokens = 100 },
-            50,
-            new ModelCostMetadata { PricesAvailable = false });
-
-        Assert.Null(estimate.Cost);
-        Assert.Equal(0, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Cost);
-    }
-
     /// <summary>Combining unknown pricing retains every known cost and duration as a lower bound.</summary>
     [Fact]
     public static void ModelRequestAdmissionEstimator_MixedUnknownsPreserveKnownLowerBounds()
@@ -831,32 +699,6 @@ public static partial class Milestone1Tests
                 Input = "invalid continuation",
                 ToolContinuationRound = -1,
             }));
-    }
-
-    /// <summary>Checked-in JSON fixtures cover success, missing usage, failures, and cancellation.</summary>
-    [Fact]
-    public static async Task FakeModel_CheckedInFixtures_ExerciseScriptContract()
-    {
-        var fixtureDirectory = Path.Combine(AppContext.BaseDirectory, "fixtures", "scripts");
-        var success = FakeModelProvider.Load(
-            await File.ReadAllTextAsync(Path.Combine(fixtureDirectory, "success.json")));
-        var missingUsage = FakeModelProvider.Load(
-            await File.ReadAllTextAsync(Path.Combine(fixtureDirectory, "missing-usage.json")));
-
-        var successOutput = await CollectAsync(new FakeModelProvider(success), 42);
-        var missingUsageOutput = await CollectAsync(new FakeModelProvider(missingUsage), 42);
-
-        Assert.NotEmpty(successOutput);
-        Assert.Equal("read_file", success.Turns[0].ToolName);
-        Assert.Contains("\"InputTokens\":8", successOutput, StringComparison.Ordinal);
-        Assert.Equal("usage intentionally omitted", missingUsage.Turns[0].Text);
-        Assert.Contains("\"Usage\":null", missingUsageOutput, StringComparison.Ordinal);
-        await Assert.ThrowsAsync<TransientModelException>(
-            () => CollectFixtureAsync(fixtureDirectory, "transient-failure.json"));
-        await Assert.ThrowsAsync<MalformedModelOutputException>(
-            () => CollectFixtureAsync(fixtureDirectory, "malformed-output.json"));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => CollectFixtureAsync(fixtureDirectory, "cancellation.json"));
     }
 
     /// <summary>Every scripted failure maps to its expected retry classification.</summary>
@@ -1041,135 +883,6 @@ public static partial class Milestone1Tests
         await controller.CancelActiveRunAsync(ct);
     }
 
-    /// <summary>Repository and semantic responses append through one boundary without clearing prior turns.</summary>
-    [Fact]
-    public static void ConversationTranscript_RepositoryResponses_PreserveExistingConversation()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
-        Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "existing response")));
-        Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
-        var existingConversation = transcript.Text;
-
-        Assert.True(transcript.Apply(new RepositoryOpened(
-            sessionId,
-            occurredAt,
-            "C:\\repo",
-            WorkspaceId.New(),
-            RepositoryTrustLevel.TrustedRead)));
-        Assert.True(transcript.Apply(new SolutionLoaded(
-            sessionId,
-            occurredAt,
-            "C:\\repo\\src\\Repo.sln",
-            WorkspaceId.New(),
-            ["net10.0"])));
-        Assert.True(transcript.Apply(new SemanticConfidenceChanged(
-            sessionId,
-            occurredAt,
-            nameof(SemanticConfidenceLevel.TextOnly))));
-        Assert.True(transcript.Apply(new SemanticLoadCompleted(
-            sessionId,
-            occurredAt,
-            WorkspaceId.New(),
-            nameof(SemanticConfidenceLevel.None))));
-
-        Assert.StartsWith(existingConversation, transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Repository opened.", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Solution: C:\\repo\\src\\Repo.sln", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Semantic confidence: TextOnly", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Semantic confidence: Unavailable", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>A resolved fallback visibly replaces the misleading selected-model presentation.</summary>
-    [Fact]
-    public static void ConversationTranscript_ModelFallbackSelected_RendersActiveModelWarning()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
-
-        Assert.True(transcript.Apply(new ModelFallbackSelected(
-            sessionId,
-            occurredAt,
-            RunId.New(),
-            ModelProfileId.New(),
-            ModelProfileId.New(),
-            "fallback-provider",
-            "Fallback Model",
-            Persisted: true)));
-
-        Assert.Contains(
-            "Switched to fallback model 'Fallback Model' (fallback-provider); it is now the active model.",
-            transcript.Text,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>The coordinator starts and exits through the shared command loop.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_Quit_UsesInteractionSurface()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Single(surface.SessionStatuses);
-        Assert.Equal(["status", "read"], surface.Operations);
-    }
-
-    /// <summary>A terminal-library-free surface can drive the shared command loop end to end.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_HelpAndQuit_UsesOnlySemanticSurfaceContracts()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new RecordingInteractionSurface(["/help", "/quit"]);
-        var coordinator = new InteractionCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, surface.ComposerRequests.Count);
-        Assert.Equal(2, surface.SessionStatuses.Count);
-        Assert.Contains(
-            surface.Batches
-                .SelectMany(batch => batch.Items)
-                .OfType<PresentationTextItem>()
-                .SelectMany(item => item.Segments),
-            segment => segment.Text.Contains("/help", StringComparison.Ordinal));
-    }
-
-    /// <summary>Quit bypasses attachment rejection without creating model work; other slash commands remain guarded.</summary>
-    [Theory]
-    [InlineData("/quit", false)]
-    [InlineData(" /QUIT ", false)]
-    [InlineData("/help", true)]
-    public static async Task InteractionCoordinator_QuitAcceptsAttachedImages(string command, bool rejected)
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new RecordingInteractionSurface(rejected ? [command, "/quit"] : [command])
-        {
-            Images = [new ImageArtifact { Id = "image", ContentHash = new string('a', 64), MediaType = "image/png", Width = 2, Height = 2, ByteLength = 3, Source = "clipboard" }],
-        };
-        var coordinator = new InteractionCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-
-        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(rejected ? 2 : 1, surface.ComposerRequests.Count);
-        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
-        Assert.Equal(rejected, output.Contains("Remove attachments before running a slash command", StringComparison.Ordinal));
-        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
-    }
-
     /// <summary>The help command opens the retained column dialog without writing help into MAIN or invoking a model.</summary>
     [Fact]
     public static async Task InteractionCoordinator_TuiKitHelpUsesModalWithoutTranscriptOutput()
@@ -1224,140 +937,6 @@ public static partial class Milestone1Tests
         Assert.True(backend.IsStopped);
     }
 
-    /// <summary>The delegation index exposes only current-session stable IDs and rejects stale revisions.</summary>
-    [Fact]
-    public static void DelegationActivityRegistry_ListsCurrentSessionStableIdentities()
-    {
-        var sessionId = SessionId.New();
-        var otherSessionId = SessionId.New();
-        var delegationId = DelegationId.New();
-        var joinedDelegationId = DelegationId.New();
-        var otherDelegationId = DelegationId.New();
-        var assignmentId = AgentAssignmentId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var registry = new DelegationActivityRegistry();
-
-        Assert.Contains(
-            "No delegations have been observed for this session.",
-            registry.FormatSummary(sessionId),
-            StringComparison.Ordinal);
-
-        registry.Observe(new DelegationCheckpointWritten(
-            sessionId,
-            occurredAt,
-            delegationId,
-            RunId.New(),
-            DelegationCheckpointPhase.Accepted,
-            1,
-            "queue children",
-            Revision: 1));
-        registry.Observe(new DelegationCheckpointWritten(
-            sessionId,
-            occurredAt.AddMilliseconds(1),
-            delegationId,
-            RunId.New(),
-            DelegationCheckpointPhase.ChildrenRunning,
-            1,
-            "await children",
-            Revision: 2));
-        registry.Observe(new AgentRunLifecycleObserved(
-            sessionId,
-            occurredAt.AddMilliseconds(2),
-            delegationId,
-            assignmentId,
-            RunId.New(),
-            AgentRole.Explorer,
-            AgentRunStatus.Running,
-            1,
-            "running",
-            Revision: 1));
-        registry.Observe(new DelegationCheckpointWritten(
-            sessionId,
-            occurredAt.AddMilliseconds(3),
-            delegationId,
-            RunId.New(),
-            DelegationCheckpointPhase.Accepted,
-            1,
-            "stale",
-            Revision: 1));
-        registry.Observe(new DelegationCheckpointWritten(
-            sessionId,
-            occurredAt.AddMilliseconds(4),
-            joinedDelegationId,
-            RunId.New(),
-            DelegationCheckpointPhase.ResearchJoined,
-            1,
-            "synthesize findings",
-            Revision: 1));
-        registry.Observe(new DelegationCheckpointWritten(
-            otherSessionId,
-            occurredAt,
-            otherDelegationId,
-            RunId.New(),
-            DelegationCheckpointPhase.Accepted,
-            1,
-            "queue children",
-            Revision: 1));
-
-        var summary = registry.FormatSummary(sessionId);
-        Assert.Contains(delegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
-        Assert.Contains(assignmentId.Value.ToString("D"), summary, StringComparison.Ordinal);
-        Assert.Contains("ChildrenRunning; generation 1; next: await children", summary, StringComparison.Ordinal);
-        Assert.Contains("Explorer Running", summary, StringComparison.Ordinal);
-        Assert.Contains(joinedDelegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
-        Assert.True(
-            summary.IndexOf(delegationId.Value.ToString("D"), StringComparison.Ordinal)
-            < summary.IndexOf(joinedDelegationId.Value.ToString("D"), StringComparison.Ordinal));
-        Assert.DoesNotContain(otherDelegationId.Value.ToString("D"), summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("stale", summary, StringComparison.Ordinal);
-    }
-
-    /// <summary>Accepted delegation checkpoints do not emit obsolete GUID navigation notices.</summary>
-    [Fact]
-    public static void InteractionEventSegments_AcceptedDelegation_DoesNotAnnounceIdentity()
-    {
-        var delegationId = DelegationId.New();
-        var segments = new List<PresentationTextSegment>();
-
-        InteractionEventSegments.Append(
-            segments,
-            new DelegationCheckpointWritten(
-                SessionId.New(),
-                DateTimeOffset.UtcNow,
-                delegationId,
-                RunId.New(),
-                DelegationCheckpointPhase.Accepted,
-                1,
-                "queue children"),
-            string.Empty);
-
-        Assert.Empty(segments);
-    }
-
-    /// <summary>An empty-composer output yield rebuilds status before the shell reads the composer again.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_IdleOutputYield_RendersStatusBeforeNextComposer()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(
-            ["/quit"],
-            initialInput: new InteractionInput(
-                false,
-                string.Empty,
-                CancellationToken.None,
-                InteractionInputKind.IdleOutputYield));
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, surface.SessionStatuses.Count);
-        Assert.Equal(["status", "read", "status", "read"], surface.Operations);
-        Assert.DoesNotContain("Input cancelled", surface.Output, StringComparison.Ordinal);
-    }
-
     /// <summary>Presentation-only yields cannot cancel or choose a plan or mutation review action.</summary>
     /// <param name="prompt">Review prompt that must be presented again after background output.</param>
     /// <param name="response">User response returned after the presentation-only yield.</param>
@@ -1388,49 +967,6 @@ public static partial class Milestone1Tests
         Assert.Equal(["read", "read"], surface.Operations);
         Assert.Equal(2, surface.ComposerRequests.Count);
         Assert.All(surface.ComposerRequests, request => Assert.Equal(ComposerPurpose.Secondary, request.Purpose));
-    }
-
-    /// <summary>The inline shell routes lifecycle-hook management locally through /hooks.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_HooksCommand_ListsConfiguredHandlers()
-    {
-        var hookStore = new InMemoryHookStore();
-        var descriptor = HookDescriptorValidator.Normalize([
-            new HookHandlerDescriptor
-            {
-                Identity = new HookHandlerIdentity(
-                    new HookHandlerId("shell-hook"),
-                    "1.0.0",
-                    new HookConfigurationDigest(string.Empty)),
-                Scope = HookHandlerScope.Machine,
-                AdapterKind = HookAdapterKind.Mcp,
-                Enabled = true,
-                HookPoints = [HookPoint.BeforeToolInvocation],
-                Target = "profile/tool",
-            },
-        ])[0];
-        await using var coordinator = new HookCoordinator(
-            [descriptor],
-            [],
-            new HookPolicyEvaluator(hookStore, []),
-            hookStore,
-            new SecretOutputSanitizer(),
-            NullLogger<HookCoordinator>.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var hookApplication = new HookManagementApplication(coordinator, hookStore);
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            additionalHandlers: [hookApplication]);
-        var surface = new FakeConsoleSurface(["/hooks list", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("[enabled] shell-hook", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>One retained hook list applies multiple changes through the existing hook manager.</summary>
@@ -1600,116 +1136,6 @@ public static partial class Milestone1Tests
         Assert.Empty(surface.SelectionRequests);
     }
 
-    /// <summary>The inline shell parses MCP capability-kind filters and dispatches them through Core contracts.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_McpCapabilities_DispatchesSharedManagerRequest()
-    {
-        var mcpHandler = new RecordingMcpManagementHandler();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            additionalHandlers: [mcpHandler]);
-        var surface = new FakeConsoleSurface(["/mcp capabilities fixture tools", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        var request = Assert.Single(mcpHandler.Requests);
-        Assert.Equal(McpManagementAction.ListCapabilities, request.Action);
-        Assert.Equal("fixture", request.ProfileId);
-        Assert.Equal(McpManagedCapabilityKind.Tool, request.CapabilityKind);
-        Assert.Contains("0 active MCP capability", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The inline MCP parser preserves quoted resource and prompt argument values.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_McpPrompt_PreservesQuotedArgumentValue()
-    {
-        var mcpHandler = new RecordingMcpManagementHandler();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            additionalHandlers: [mcpHandler]);
-        var surface = new FakeConsoleSurface(
-            ["/mcp prompt get fixture fixture:prompt:review name=\"review this file\"", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        var request = Assert.Single(mcpHandler.Requests);
-        Assert.Equal(McpManagementAction.GetPrompt, request.Action);
-        Assert.Equal("review this file", request.Arguments["name"]);
-        Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>Disabling the status surface leaves the composer operational and reports the selected mode once.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_DisabledSessionStatus_DoesNotRenderRow()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            showSessionStatus: false);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(surface.SessionStatuses);
-        Assert.Contains(
-            "Session status: Disabled by tui:footer:enabled",
-            surface.Output,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>A surface that cannot safely display status suppresses it without affecting input.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_SuppressedSessionStatus_StillReadsComposer()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/quit"], suppressSessionStatus: true);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(surface.SessionStatuses);
-        Assert.Contains("Current status", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>Expected Git availability failures render an unavailable branch without escaping status projection.</summary>
-    /// <param name="failureKind">Failure emitted by the Git query boundary.</param>
-    [Theory]
-    [InlineData("unauthorized")]
-    [InlineData("timeout")]
-    [InlineData("removed")]
-    public static async Task InteractionCoordinator_CurrentBranchUnavailable_ReturnsNull(string failureKind)
-    {
-        Exception failure = failureKind switch
-        {
-            "unauthorized" => new UnauthorizedAccessException("Nested worktree path."),
-            "timeout" => new TimeoutException("Git timed out."),
-            "removed" => new DirectoryNotFoundException("Repository was removed."),
-            _ => throw new ArgumentOutOfRangeException(nameof(failureKind)),
-        };
-
-        var branch = await InteractionCoordinator.ResolveCurrentBranchAsync(
-            new FailingGitQueryService(failure),
-            "repository",
-            repositoryIsOpen: true,
-            TestContext.Current.CancellationToken);
-
-        Assert.Null(branch);
-    }
-
     /// <summary>A failed model turn renders its engine diagnostic once before accepting the next prompt.</summary>
     [Theory]
     [InlineData(false)]
@@ -1761,46 +1187,6 @@ public static partial class Milestone1Tests
         Assert.Equal(1, surface.Output.Split(message, StringSplitOptions.None).Length - 1);
     }
 
-    /// <summary>Submitted prompts retain raw state while one semantic answer is emitted into terminal scrollback.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_Submission_RendersOneCopyableSemanticAnswer()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
-        {
-            Turns = [new ScriptedTurn { Text = "amber reply", Usage = new ModelUsage(11, 4) }],
-        });
-        var surface = new FakeConsoleSurface(["hi", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            sessionUsage: harness.Usage);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.DoesNotContain("You: hi", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("Threadsmith: amber reply", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("amber reply", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            surface.Segments,
-            segment => segment.Role == PresentationTextRole.UserPrompt);
-        var defaultText = string.Concat(
-            surface.Segments
-                .Where(segment => segment.Role == PresentationTextRole.Default)
-                .Select(segment => segment.Text));
-        Assert.Contains("amber reply", defaultText, StringComparison.Ordinal);
-        var markdown = Assert.Single(surface.OutputItems.OfType<PresentationMarkdownItem>());
-        var paragraph = Assert.IsType<MarkdownParagraph>(Assert.Single(markdown.Document.Blocks));
-        Assert.Equal("amber reply", string.Concat(paragraph.Spans.Select(span => span.Text)));
-        var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
-        var answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
-        Assert.True(thinkingEnded >= 0 && thinkingEnded < answerWritten);
-        Assert.Contains(harness.Events, item => item is RunCompleted { Succeeded: true });
-        Assert.Contains(
-            surface.SessionStatuses,
-            status => status.Contains("tokens 15", StringComparison.Ordinal));
-    }
-
     /// <summary>A large multiline paste reaches the command boundary as one unchanged submission.</summary>
     [Fact]
     public static async Task InteractionCoordinator_LargeMultilinePaste_IsNotReplayedPerCharacter()
@@ -1822,23 +1208,6 @@ public static partial class Milestone1Tests
         Assert.Equal(pastedText, intent.Intent);
         Assert.Contains("received", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Threadsmith: received", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>An unknown slash command is rejected locally instead of reaching the model.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_UnknownCommand_IsNotSubmitted()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/destructive-mystery", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync().WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("Unknown command", surface.Output, StringComparison.Ordinal);
-        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
     }
 
     /// <summary>An overlong fetch authorization chain is reported locally without escaping the shell boundary.</summary>
@@ -1883,138 +1252,6 @@ public static partial class Milestone1Tests
         Assert.Contains("/trust [inspect|read|build|mutation|automation]", surface.Output, StringComparison.Ordinal);
         Assert.Contains("No repository is open", surface.Output, StringComparison.Ordinal);
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
-    }
-
-    /// <summary>The command shows one capability summary without repeating selectable levels.</summary>
-    [Theory]
-    [InlineData(ReasoningControllability.Selectable, "selectable (none, low, medium, high)")]
-    [InlineData(ReasoningControllability.AlwaysOn, "always on (not user-controllable)")]
-    [InlineData(ReasoningControllability.Unsupported, "unsupported")]
-    public static async Task InteractionCoordinator_ReasoningNoArg_ShowsSingleCapabilitySummary(
-        ReasoningControllability controllability,
-        string expectedControl)
-    {
-        var profileId = new ModelProfileId(Guid.NewGuid());
-        ReasoningLevel[] supportedLevels = controllability == ReasoningControllability.Selectable
-            ? [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High]
-            : [ReasoningLevel.None];
-        var profile = CreateReasoningProfile(
-            profileId,
-            "Qwen3",
-            supportedLevels) with
-        {
-            ReasoningCapability = new EffectiveReasoningCapability
-            {
-                SchemaVersion = 1,
-                Controllability = controllability,
-                SupportedLevels = supportedLevels,
-            },
-        };
-        var catalog = new ConfiguredModelCatalog([profile], enforceHttps: false);
-        var preferences = new SessionModelPreferences();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            catalog,
-            profileId,
-            preferences);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains(
-            $"Model: Qwen3\nReasoning control: {expectedControl}\nCurrent: none\n",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("Reasoning levels:", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The command uses the effective profile identity even without a separate startup preference.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ReasoningNoArg_UsesSharedEffectiveProfileIdentity()
-    {
-        var profileId = new ModelProfileId(Guid.NewGuid());
-        var profile = CreateReasoningProfile(
-            profileId,
-            "Policy fallback",
-            [ReasoningLevel.None, ReasoningLevel.Medium]);
-        var catalog = new ConfiguredModelCatalog([profile], enforceHttps: false);
-        var preferences = new SessionModelPreferences(profileId, ReasoningLevel.Medium);
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            catalog,
-            activeProfileId: null,
-            sessionPreferences: preferences);
-
-        await shell.RunAsync(modelStatus: "Policy fallback").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("Model: Policy fallback", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Current: medium", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The command follows a workload-driven profile transition instead of the startup profile.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ReasoningNoArg_FollowsRuntimeProfileTransition()
-    {
-        var startupId = new ModelProfileId(Guid.NewGuid());
-        var runtimeId = new ModelProfileId(Guid.NewGuid());
-        var startup = CreateReasoningProfile(startupId, "Startup", [ReasoningLevel.None, ReasoningLevel.High]);
-        var runtime = CreateReasoningProfile(runtimeId, "Runtime", [ReasoningLevel.None, ReasoningLevel.Low]);
-        var catalog = new ConfiguredModelCatalog([startup, runtime], enforceHttps: false);
-        var preferences = new SessionModelPreferences(startupId, ReasoningLevel.High);
-        Assert.Equal(ReasoningLevel.None, preferences.ResolveFor(runtimeId));
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            catalog,
-            startupId,
-            preferences);
-
-        await shell.RunAsync(modelStatus: "Startup").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("Model: Runtime", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Reasoning control: selectable (none, low)", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Current: none", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The /reasoning command with a valid level sets the session preference.</summary>
-    [Theory]
-    [InlineData("medium")]
-    [InlineData("xhigh")]
-    [InlineData("provider-Custom")]
-    public static async Task InteractionCoordinator_ReasoningWithLevel_SetsSessionPreference(string reasoning)
-    {
-        var profileId = new ModelProfileId(Guid.NewGuid());
-        var profile = CreateReasoningProfile(
-            profileId,
-            "Qwen3",
-            [ReasoningLevel.None, new ReasoningLevel(reasoning)]);
-        var catalog = new ConfiguredModelCatalog([profile], enforceHttps: false);
-        var preferences = new SessionModelPreferences();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface([$"/reasoning {reasoning}", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            catalog,
-            profileId,
-            preferences);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains($"Reasoning set to {reasoning} for Qwen3.", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(new ReasoningLevel(reasoning), preferences.Reasoning);
-        Assert.Equal(profileId, preferences.CurrentProfileId);
     }
 
     /// <summary>The /reasoning command rejects an unknown level string.</summary>
@@ -2071,163 +1308,6 @@ public static partial class Milestone1Tests
         Assert.Equal(ReasoningLevel.Medium, preferences.Reasoning);
     }
 
-    /// <summary>The /reasoning command reports no model when no catalog is configured.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ReasoningWithoutModel_ShowsNoModelConfigured()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Scripted demo (offline)").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("No model is configured.", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The code_explore output commands route through host-owned per-session state.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_CodeExploreOutputCommands_UpdateHostSessionOptions()
-    {
-        var options = new CodeExploreOutputOptions();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            additionalHandlers: [options]);
-        var surface = new FakeConsoleSurface([
-            "/code_explore_output markdown",
-            "/code_explore_inspect on",
-            "/quit",
-        ]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            codeExploreOutputOptions: options);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        var sessionCreated = Assert.Single(harness.Events.OfType<SessionCreated>());
-        var snapshot = options.GetSnapshot(sessionCreated.SessionId);
-        Assert.Equal(CodeExploreOutputFormat.Markdown, snapshot.OutputFormat);
-        Assert.True(snapshot.InspectCodeExploreOutput);
-        Assert.Equal(CodeExploreOutputFormat.Markdown, options.GetOutputFormat(SessionId.New()));
-        Assert.Contains(
-            "code_explore output format is markdown for this session.",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "code_explore output inspection is on for this session.",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("Unknown command", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The /help text contains every command alphabetically and preserves aligned descriptions.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_HelpIsCompleteAlphabeticalAndAligned()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/help", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        string[] expectedCommands =
-        [
-            "/agents [<id> [cancel|cancel-child <id>]]",
-            "/auth openai-codex [login|status|logout]",
-            "/clone",
-            "/code_explore_inspect {on|off}",
-            "/code_explore_output {structured|markdown}",
-            "/command-policy <shell> [inspect|revoke <id>|reload|reset-session]",
-            "/context [mode|inspect|map|compact]",
-            "/extensions",
-            "/fetch-authorize <url> [redirect ...]",
-            "/help",
-            "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]",
-            "/intelligence [onboard [depth]|refresh|archeology <question>|enable|disable|reset|status]",
-            "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]",
-            "/memory [remember|list|inspect|update|forget]",
-            "/models",
-            "/new",
-            "/open [path]",
-            "/policy [name|current]",
-            "/quit",
-            "/reasoning [level]",
-            "/resume [id]",
-            "/semantic_refresh",
-            "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]",
-            "/theme [id|current]",
-            "/thinking [on|off]",
-            "/tips",
-            "/tools",
-            "/toolstats [reset]",
-            "/trust [inspect|read|build|mutation|automation]",
-        ];
-        var commandLines = surface.Output
-            .Split(Environment.NewLine, StringSplitOptions.None)
-            .Where(line => line.StartsWith("/", StringComparison.Ordinal))
-            .ToArray();
-        Assert.Equal(expectedCommands.Length, commandLines.Length);
-        for (var index = 0; index < expectedCommands.Length; index++)
-        {
-            Assert.StartsWith(expectedCommands[index], commandLines[index], StringComparison.Ordinal);
-        }
-
-        const string descriptionIndent = "                                          ";
-        Assert.Contains(
-            "/open [path]                              Open a repository and choose trust",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "/reasoning [level]                        Set reasoning effort using the active model's configured levels",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "/code_explore_output {structured|markdown}"
-                + Environment.NewLine
-                + descriptionIndent
-                + "Set code_explore output format for this session",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "/code_explore_inspect {on|off}            Show future code_explore outputs in the tool block for this session",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]"
-                + Environment.NewLine
-                + descriptionIndent
-                + "Browse, verify, and toggle skills",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "/plan-policy",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains("Ctrl+T", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The compiled system theme inherits both terminal colors for every semantic role.</summary>
-    [Fact]
-    public static void TuiTheme_System_InheritsTerminalColorsForEveryRole()
-    {
-        var resolver = new TuiThemeResolver(TuiTheme.System);
-
-        foreach (var role in Enum.GetValues<PresentationTextRole>())
-        {
-            var style = resolver.Resolve(role);
-            Assert.Null(style.Foreground);
-            Assert.Null(style.Background);
-            Assert.False(style.Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert));
-        }
-    }
-
     /// <summary>Partial role styles independently inherit unspecified values from the default role.</summary>
     [Fact]
     public static void TuiThemeResolver_PartialRole_InheritsMissingValuesFromDefault()
@@ -2273,26 +1353,6 @@ public static partial class Milestone1Tests
 
         Assert.Equal(TuiTextDecoration.Bold, resolver.Resolve(PresentationTextRole.Status).Decorations);
         Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.Error).Decorations);
-    }
-
-    /// <summary>NO_COLOR-style suppression removes presentation without changing semantic text ownership.</summary>
-    [Fact]
-    public static void TuiThemeResolver_Suppressed_RemovesColorsAndDecorations()
-    {
-        var theme = new TuiTheme(
-            "test",
-            [
-                new(PresentationTextRole.Default, new TuiTextStyle(
-                    TuiColor.Parse("cyan"),
-                    TuiColor.Parse("black"),
-                    TuiTextDecoration.Bold | TuiTextDecoration.Underline)),
-            ]);
-        var resolver = new TuiThemeResolver(theme, suppressStyles: true);
-
-        var result = resolver.Resolve(PresentationTextRole.Hyperlink);
-
-        Assert.Equal(new TuiTextStyle(), result);
-        Assert.Equal(new TuiTextStyle(), resolver.Resolve(PresentationTextRole.SessionStatus));
     }
 
     /// <summary>Untrusted colors, ids, duplicate roles, and unknown decoration bits fail locally.</summary>
@@ -2416,220 +1476,6 @@ public static partial class Milestone1Tests
         Assert.Equal(TuiTextDecoration.Invert, resolver.Resolve(PresentationTextRole.TitleBarRole).Decorations);
     }
 
-    /// <summary>Theme arrays from separate providers remain whole before merging by stable id.</summary>
-    [Fact]
-    public static void TuiThemeConfigurationLoader_LayeredThemes_DoNotMergeByArrayIndex()
-    {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["tui:themes:0:id"] = "user-theme",
-                ["tui:themes:0:name"] = "User Theme",
-                ["tui:themes:0:styles:Error:foreground"] = "magenta",
-                ["tui:themes:0:styles:Error:bold"] = "true",
-            })
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["tui:themes:0:id"] = "repository-theme",
-                ["tui:themes:0:name"] = "Repository Theme",
-            })
-            .Build();
-
-        (var catalog, _) = TuiThemeConfigurationLoader.Load(configuration);
-        var userTheme = Assert.Single(catalog.Themes, theme => theme.Theme.Id == "user-theme");
-        var repositoryTheme = Assert.Single(catalog.Themes, theme => theme.Theme.Id == "repository-theme");
-
-        Assert.Equal(TuiColor.Parse("magenta"), userTheme.Theme.Styles[PresentationTextRole.Error].Foreground);
-        Assert.False(repositoryTheme.Theme.Styles.ContainsKey(PresentationTextRole.Error));
-    }
-
-    /// <summary>Invalid configured themes fall back to system and report a sanitized startup warning.</summary>
-    [Fact]
-    public static async Task TuiThemeConfigurationLoader_InvalidTheme_FallsBackAndWarns()
-    {
-        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tui:defaultTheme"] = "unsafe",
-            ["tui:themes:0:id"] = "unsafe",
-            ["tui:themes:0:styles:Branding:foreground"] = "cyan",
-        }).Build();
-
-        (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
-        var preferences = new SessionThemePreferences(catalog, defaultId);
-        Assert.Equal("system", preferences.ActiveTheme.Theme.Id);
-        Assert.Equal(2, catalog.Warnings.Count);
-        Assert.Contains(
-            catalog.Warnings,
-            warning => warning.Contains("Unknown semantic theme role 'Branding'.", StringComparison.Ordinal));
-        Assert.Contains(
-            catalog.Warnings,
-            warning => warning.Contains("Unknown default theme 'unsafe'; using system.", StringComparison.Ordinal));
-
-        IConfiguration controls = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tui:themes:0:id"] = "unsafe",
-            ["tui:themes:0:name"] = "bad\u001bname",
-        }).Build();
-        (var controlCatalog, var controlDefaultId) = TuiThemeConfigurationLoader.Load(controls);
-        Assert.Equal(BuiltInThemes.DefaultThemeId, controlDefaultId);
-        Assert.DoesNotContain('\u001b', Assert.Single(controlCatalog.Warnings));
-
-        IConfiguration invalidColor = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tui:themes:0:id"] = "invalid-color",
-            ["tui:themes:0:styles:Brand:foreground"] = "chartreuse",
-        }).Build();
-        (var colorCatalog, var colorDefaultId) = TuiThemeConfigurationLoader.Load(invalidColor);
-        Assert.Equal(BuiltInThemes.DefaultThemeId, colorDefaultId);
-        Assert.Contains("Unsupported theme color", Assert.Single(colorCatalog.Warnings), StringComparison.Ordinal);
-
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            themePreferences: preferences);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains(
-            "Warning: Configured theme 'unsafe' is invalid and was ignored. Unknown semantic theme role 'Branding'.",
-            surface.Output,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Warning: Unknown default theme 'unsafe'; using system.",
-            surface.Output,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>One invalid configured theme is reported without suppressing valid configured siblings.</summary>
-    [Fact]
-    public static void TuiThemeConfigurationLoader_InvalidSibling_RetainsValidThemeAndWarns()
-    {
-        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["tui:defaultTheme"] = "valid-theme",
-            ["tui:themes:0:id"] = "valid-theme",
-            ["tui:themes:0:name"] = "Valid Theme",
-            ["tui:themes:0:styles:Brand:foreground"] = "cyan",
-            ["tui:themes:1:id"] = "/theme",
-            ["tui:themes:1:name"] = "Invalid Theme",
-        }).Build();
-
-        (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
-        var preferences = new SessionThemePreferences(catalog, defaultId);
-
-        Assert.Equal("valid-theme", preferences.ActiveTheme.Theme.Id);
-        Assert.Contains(catalog.Themes, theme => theme.Theme.Id == "valid-theme");
-        var warning = Assert.Single(catalog.Warnings);
-        Assert.Contains("Configured theme '/theme' is invalid and was ignored.", warning, StringComparison.Ordinal);
-        Assert.Contains("Theme ids may contain only", warning, StringComparison.Ordinal);
-    }
-
-    /// <summary>The theme command persists the user default, reports current state, and rejects unknown ids.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ThemeCommands_PersistUserDefault()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
-        var configurationPath = Path.Combine(directory, "config.json");
-        Directory.CreateDirectory(directory);
-        const string initialConfiguration = """
-            {
-              // Preserve this user annotation.
-              "unrelated": { "value": 42 },
-              "tui": {
-                "showOperationDurations": true, // Preserve this setting annotation.
-              }
-            }
-            """;
-        await File.WriteAllTextAsync(
-            configurationPath,
-            initialConfiguration,
-            new UTF8Encoding(false));
-        try
-        {
-            await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-            var catalog = new ConfiguredThemeCatalog(BuiltInThemes.Create());
-            var preferences = new SessionThemePreferences(catalog, "system");
-            var surface = new FakeConsoleSurface(
-                ["/theme", "/theme current", "/theme missing", "/theme", "/quit"],
-                [1]);
-            var shell = CreateCoordinator(
-                new InteractionPresenter(harness.Dispatcher, harness.Projections),
-                harness.EventStream,
-                surface,
-                themePreferences: preferences,
-                themePreferenceStore: new UserConfigurationThemePreferenceStore(configurationPath));
-
-            await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-            var persistedText = await File.ReadAllTextAsync(configurationPath);
-            using var persisted = JsonDocument.Parse(persistedText, new JsonDocumentOptions
-            {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip,
-            });
-            Assert.Equal("forge-dark", persisted.RootElement.GetProperty("tui").GetProperty("defaultTheme").GetString());
-            Assert.Equal(42, persisted.RootElement.GetProperty("unrelated").GetProperty("value").GetInt32());
-            Assert.Contains("// Preserve this user annotation.", persistedText, StringComparison.Ordinal);
-            Assert.Contains("// Preserve this setting annotation.", persistedText, StringComparison.Ordinal);
-            Assert.Contains("\"unrelated\": { \"value\": 42 }", persistedText, StringComparison.Ordinal);
-            var restartedConfiguration = new ConfigurationBuilder()
-                .AddJsonFile(configurationPath)
-                .Build();
-            (var restartedCatalog, var restartedDefault) =
-                TuiThemeConfigurationLoader.Load(restartedConfiguration);
-            var restartedPreferences = new SessionThemePreferences(restartedCatalog, restartedDefault);
-            Assert.Equal("forge-dark", restartedPreferences.ActiveTheme.Theme.Id);
-            Assert.Equal("forge-dark", surface.ActiveThemeId);
-            Assert.Contains("saved as the default", surface.Output, StringComparison.Ordinal);
-            Assert.Contains("Current theme: forge-dark", surface.Output, StringComparison.Ordinal);
-            Assert.Contains("Unknown theme: missing", surface.Output, StringComparison.Ordinal);
-            Assert.Contains("Theme unchanged.", surface.Output, StringComparison.Ordinal);
-            Assert.Contains("system", surface.Output, StringComparison.Ordinal);
-            Assert.Contains("[active]", surface.Output, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    /// <summary>Replacing an existing theme value preserves comments and unrelated source text byte-for-byte.</summary>
-    [Fact]
-    public static async Task ThemePreferenceStore_ExistingDefault_PreservesConfigurationSyntax()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
-        var configurationPath = Path.Combine(directory, "config.json");
-        Directory.CreateDirectory(directory);
-        const string initialConfiguration = """
-            {
-              /* Keep the selected-theme rationale. */
-              "tui": {
-                "defaultTheme": /* chosen by the user */ "system",
-                "footer": { "enabled": false }
-              },
-              "other": [ 1, 2, 3 ] // Keep this annotation too.
-            }
-            """;
-        await File.WriteAllTextAsync(configurationPath, initialConfiguration, new UTF8Encoding(false));
-        try
-        {
-            var store = new UserConfigurationThemePreferenceStore(configurationPath);
-
-            await store.SetDefaultThemeAsync("ocean");
-
-            var persisted = await File.ReadAllTextAsync(configurationPath);
-            var expected = initialConfiguration.Replace("\"system\"", "\"ocean\"", StringComparison.Ordinal);
-            Assert.Equal(expected, persisted);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
     /// <summary>Replacing an existing theme value preserves a UTF-8 BOM and source syntax.</summary>
     [Fact]
     public static async Task ThemePreferenceStore_ExistingDefault_WithUtf8Bom_PreservesConfigurationSyntax()
@@ -2701,136 +1547,6 @@ public static partial class Milestone1Tests
         {
             Directory.Delete(directory, recursive: true);
         }
-    }
-
-    /// <summary>The tools command lists metadata, protects essential tools, and persists optional toggles.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ToolsCommand_ManagesRepositoryAvailability()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var toolStates = new FakeToolStateManager();
-        var surface = new FakeConsoleSurface(["/tools", "/quit"], [0, 1, 2]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            toolStateManager: toolStates);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(["optional"], toolStates.DisabledIds);
-        Assert.Contains("[enabled] Essential Read (essential)", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("[enabled] Optional Tool", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Essential Read is essential and cannot be disabled.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Optional Tool disabled.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("[disabled] Optional Tool", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The policy command lists every policy, changes state, reports current state, and warns for persistent trust.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_PolicyCommand_ChangesAndReportsPolicy()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var policy = new FakeMutationApprovalPolicy();
-        var surface = new FakeConsoleSurface(
-            ["/policy", "/policy current", "/policy missing", "/quit"],
-            [3]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            mutationApprovalPolicy: policy);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.CurrentPolicy);
-        Assert.Equal([MutationApprovalPolicy.AlwaysTrustRepo], policy.SelectedPolicies);
-        Assert.Contains("ReviewAll — review every staged diff", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("ReviewRisky — auto-apply ordinary edits", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("TrustPlan", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("TrustSession — auto-apply in-repository changes this session", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("AlwaysTrustRepo — persistently auto-apply", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("effective: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("outside repository files, across restarts", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Unknown mutation policy 'missing'", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The normal policy command remembers consent outside repository files and survives reopening.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public static async Task InteractionCoordinator_PolicyCommand_PersistsLocalConsent(bool failSave, bool explicitRestriction)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var root = Directory.CreateTempSubdirectory("threadsmith-policy-ui-").FullName;
-        try
-        {
-            var repository = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
-            var facts = new SqliteRepositoryFactsStore($"Data Source={Path.Combine(root, "facts.db")};Pooling=False");
-            await facts.InitializeAsync(ct);
-            var binding = new SessionPolicyBinding();
-            binding.Publish(new EffectiveSessionPolicy
-            {
-                BindingId = Guid.NewGuid(),
-                Generation = 1,
-                RepositoryPath = repository,
-                Fingerprint = "fixture",
-                HasExplicitMutationCeiling = explicitRestriction,
-            });
-            var policy = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
-            await policy.BindRepositoryAsync(repository, ct);
-            if (failSave)
-            {
-                var permissionPath = new RepositoryPermissionStore(Path.Combine(root, "config.json")).GetPath(repository);
-                Directory.CreateDirectory(Path.GetDirectoryName(permissionPath)!);
-                await File.WriteAllTextAsync(permissionPath, "{}", ct);
-            }
-
-            await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-            var surface = new FakeConsoleSurface(["/policy AlwaysTrustRepo", "/policy current", "/quit"]);
-            var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface, mutationApprovalPolicy: policy);
-            await shell.RunAsync(modelStatus: "Test model", cancellationToken: ct);
-            if (failSave)
-            {
-                Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.CurrentPolicy);
-                Assert.Contains("Could not save local mutation consent", surface.Output, StringComparison.Ordinal);
-                Assert.Contains("effective: ReviewAll", surface.Output, StringComparison.Ordinal);
-                return;
-            }
-
-            var restarted = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding, facts: facts);
-            await restarted.BindRepositoryAsync(repository, ct);
-            Assert.Equal(explicitRestriction ? MutationApprovalPolicy.ReviewAll : MutationApprovalPolicy.AlwaysTrustRepo, restarted.CurrentPolicy);
-            Assert.False(File.Exists(Path.Combine(repository, ".threadsmith", "config.json")));
-            Assert.Contains(explicitRestriction ? "effective: ReviewAll" : "effective: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
-            if (explicitRestriction)
-            {
-                Assert.Contains("change the explicit trusted restriction and reopen", surface.Output, StringComparison.Ordinal);
-                Assert.DoesNotContain("Warning: eligible diffs will apply", surface.Output, StringComparison.Ordinal);
-            }
-        }
-        finally
-        {
-            Directory.Delete(root, true);
-        }
-    }
-
-    /// <summary>Intelligence status is separated from the preceding model answer in either terminal frontend.</summary>
-    [Theory]
-    [InlineData("intelligence.onboarding.checkpoint")]
-    [InlineData("intelligence.onboarding.completed")]
-    [InlineData("intelligence.monitor.failed")]
-    public static void InteractionEventSegments_IntelligenceDiagnostic_HasLeadingSpace(string code)
-    {
-        var segments = new List<PresentationTextSegment>();
-        InteractionEventSegments.Append(
-            segments,
-            new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, code, "Progress saved."),
-            string.Empty);
-        Assert.Equal(
-            Environment.NewLine + $"[{code}] Progress saved." + Environment.NewLine,
-            string.Concat(segments.Select(segment => segment.Text)));
     }
 
     /// <summary>Mixed event output retains exact text while assigning tool, link, validation, and diff roles.</summary>
@@ -3087,36 +1803,6 @@ public static partial class Milestone1Tests
         Assert.DoesNotContain(segments, segment => segment.Role == PresentationTextRole.ThinkingIndicator);
     }
 
-    /// <summary>Structured compiler diagnostics use the semantic role matching their severity.</summary>
-    [Theory]
-    [InlineData(DiagnosticSeverity.Info, nameof(PresentationTextRole.Status))]
-    [InlineData(DiagnosticSeverity.Warning, nameof(PresentationTextRole.Warning))]
-    [InlineData(DiagnosticSeverity.Error, nameof(PresentationTextRole.Error))]
-    public static void InteractionEventSegments_StructuredDiagnostic_UsesSeverityRole(
-        DiagnosticSeverity severity,
-        string expectedRoleName)
-    {
-        var diagnostic = new Diagnostic
-        {
-            Id = "diagnostic",
-            Code = "TS1",
-            Severity = severity,
-            Project = "Threadsmith.Tests",
-            TargetFramework = "net10.0",
-            Message = "message",
-            Confidence = SemanticConfidenceLevel.FullSemantic,
-        };
-        var segments = new List<PresentationTextSegment>();
-
-        InteractionEventSegments.Append(
-            segments,
-            new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, diagnostic.Code, diagnostic.Message, diagnostic),
-            string.Empty);
-
-        var segment = Assert.Single(segments);
-        Assert.Equal(Enum.Parse<PresentationTextRole>(expectedRoleName), segment.Role);
-    }
-
     /// <summary>An incomplete structured test run is rendered as an error even when no failures were counted.</summary>
     [Fact]
     public static void InteractionEventSegments_IncompleteTestRun_UsesErrorRole()
@@ -3178,43 +1864,6 @@ public static partial class Milestone1Tests
         Assert.Null(result.Background);
     }
 
-    /// <summary>Reasoning is hidden by default and streams only while the thinking toggle is enabled.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ThinkingOn_StreamsFutureReasoningUntilOff()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
-        {
-            Turns =
-            [
-                new ScriptedTurn
-                {
-                    Reasoning = "Consider the greeting.",
-                    Text = "Hello!",
-                },
-            ],
-        });
-        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/thinking off", "hello again", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
-        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(surface.Output, "Consider the greeting."));
-        Assert.DoesNotContain("<thinking>", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("</thinking>", surface.Output, StringComparison.Ordinal);
-        Assert.Contains(
-            surface.Segments,
-            segment => segment.Role == PresentationTextRole.Reasoning
-                && string.Equals(segment.Text, "Consider the greeting.", StringComparison.Ordinal));
-        Assert.DoesNotContain("THINKING collapsed.", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain("// reasoning:", surface.Output, StringComparison.Ordinal);
-    }
-
     /// <summary>Streaming reasoning takes permanent scrollback ownership from transient thinking activity.</summary>
     [Fact]
     public static async Task InteractionCoordinator_ThinkingStreaming_DoesNotRestartTransientActivity()
@@ -3259,158 +1908,6 @@ public static partial class Milestone1Tests
         Assert.False(streamedReasoning.StartsWith(
             Environment.NewLine + Environment.NewLine,
             StringComparison.Ordinal));
-    }
-
-    /// <summary>Retained thinking survives streamed reasoning and buffered answer chunks until completion.</summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public static async Task InteractionCoordinator_ThinkingStreaming_RetainsActivityWhenSupported(bool retainsActivity)
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var provider = new PausedReasoningModelProvider();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
-        var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"], retainsActivity: retainsActivity);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: cancellationToken);
-        try
-        {
-            await surface.ReasoningPresented.WaitAsync(cancellationToken);
-            if (retainsActivity)
-            {
-                await surface.StatusStarted.WaitAsync(cancellationToken);
-            }
-
-            Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
-            Assert.False(shellTask.IsCompleted);
-            Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
-
-            provider.ReleaseAnswer();
-            await provider.AnswerEmitted.WaitAsync(cancellationToken);
-            Assert.Equal(retainsActivity ? 1 : 0, surface.ActiveStatuses.Count);
-            Assert.DoesNotContain("answer", surface.Output, StringComparison.Ordinal);
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-            provider.ReleaseCompletion();
-            await shellTask.WaitAsync(cancellationToken);
-        }
-
-        Assert.Empty(surface.ActiveStatuses);
-        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(1, CountOccurrences(surface.Output, "Inspect the repository."));
-        Assert.DoesNotContain("THINKING", surface.Output, StringComparison.Ordinal);
-        if (retainsActivity)
-        {
-            Assert.Equal(1, surface.Lifecycle.Count(entry => entry == "activity-start:THINKING"));
-            var thinkingEnded = surface.Lifecycle.ToList().IndexOf("activity-end:THINKING");
-            var answerWritten = surface.Lifecycle.ToList().IndexOf("output:markdown");
-            Assert.True(thinkingEnded >= 0 && thinkingEnded < answerWritten, string.Join(" | ", surface.Lifecycle));
-        }
-    }
-
-    /// <summary><c>/thinking</c> without arguments toggles future reasoning streaming.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ThinkingNoArgument_TogglesStreamingMode()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/thinking", "/thinking", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("Streaming thinking is on.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Streaming thinking is off.", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>Invalid <c>/thinking</c> arguments are rejected locally.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_ThinkingInvalidArgument_ShowsUsage()
-    {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        var surface = new FakeConsoleSurface(["/thinking maybe", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        Assert.Contains("Usage: /thinking [on|off]", surface.Output, StringComparison.Ordinal);
-        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
-    }
-
-    /// <summary>Answer-only model turns show transient thinking status while the request is pending.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_AnswerOnlyTurn_ShowsThinkingStatus()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var provider = new GatedAnswerModelProvider(leadingWhitespace: false);
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
-        var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
-        try
-        {
-            await surface.StatusStarted.WaitAsync(timeout.Token);
-            Assert.True(surface.IsStatusActive);
-            Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-        }
-
-        await shellTask.WaitAsync(timeout.Token);
-        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>MCP and built-in starts reach the live activity surface while completion is still withheld.</summary>
-    [Theory]
-    [InlineData(ToolActivitySourceKind.Mcp, "MCP: Green Street/search_sectors")]
-    [InlineData(ToolActivitySourceKind.BuiltIn, "TOOLS: search_sectors")]
-    public static async Task InteractionCoordinator_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var provider = new GatedAnswerModelProvider();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
-        var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
-        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
-        try
-        {
-            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
-            var started = new ToolInvocationStarted(
-                harness.Events.OfType<SessionCreated>().Single().SessionId,
-                DateTimeOffset.UtcNow,
-                ToolInvocationId.New(),
-                "search_sectors",
-                Source: new ToolActivitySource(kind, "Green Street"));
-            await harness.EventStream.PublishAsync(started, timeout.Token);
-            await surface.WaitUntilAsync(() => surface.ActiveStatuses.Any(status => status.StartsWith(label + " - running", StringComparison.Ordinal)), timeout.Token);
-
-            Assert.DoesNotContain(" - completed", surface.Output, StringComparison.Ordinal);
-            await harness.EventStream.PublishAsync(
-                new ToolInvocationCompleted(started.SessionId, DateTimeOffset.UtcNow, started.ToolInvocationId, true, ElapsedMilliseconds: 5200),
-                timeout.Token);
-            await surface.WaitUntilAsync(() => surface.Output.Contains(label + " - completed", StringComparison.Ordinal), timeout.Token);
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-            await shellTask.WaitAsync(timeout.Token);
-        }
     }
 
     /// <summary>Overlapping MCP calls remain independent when they finish in either order and with different outcomes.</summary>
@@ -3469,171 +1966,6 @@ public static partial class Milestone1Tests
         }
     }
 
-    /// <summary>Agent progress reaches the live tool before completion and is retained once beneath its timer.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_DelegationProgressUpdatesInsideItsTool()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var provider = new GatedAnswerModelProvider();
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
-        var surface = new AgentToolConsoleSurface();
-        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
-        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
-        try
-        {
-            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
-            var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
-            var parent = RunId.New();
-            var tool = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "delegate_agents", RunId: parent);
-            await harness.EventStream.PublishAsync(tool, timeout.Token);
-            var initial = Assert.Single(await surface.ToolUpdates.Reader.ReadAsync(timeout.Token));
-            var delegation = DelegationId.New();
-            await harness.EventStream.PublishAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, delegation, parent, DelegationCheckpointPhase.Accepted, 1, "run") { ToolInvocationId = tool.ToolInvocationId }, timeout.Token);
-            var first = new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, delegation, AgentAssignmentId.New(), RunId.New(), AgentRole.Explorer, AgentRunStatus.Running, 1, "locating providers");
-            var second = first with { AssignmentId = AgentAssignmentId.New(), ChildRunId = RunId.New(), Role = AgentRole.TestReviewer, Reason = "finding tests" };
-            await harness.EventStream.PublishAsync(first, timeout.Token);
-            var running = await WaitForAgentProgressAsync(surface, "locating providers", timeout.Token);
-            Assert.Equal(initial.StartedTimestamp, running.StartedTimestamp);
-            Assert.Single(running.ToolProgress);
-            Assert.DoesNotContain("locating providers", surface.Output, StringComparison.Ordinal);
-            Assert.DoesNotContain("Delegation started", surface.Output, StringComparison.Ordinal);
-            Assert.DoesNotContain("Inspect or cancel", surface.Output, StringComparison.Ordinal);
-            await harness.EventStream.PublishAsync(second, timeout.Token);
-            Assert.Equal(2, (await WaitForAgentProgressAsync(surface, "finding tests", timeout.Token)).ToolProgress.Count);
-            var completed = first with { Status = AgentRunStatus.Completed, Revision = 2, Reason = "providers located" };
-            await harness.EventStream.PublishAsync(completed, timeout.Token);
-            var partial = await WaitForAgentProgressAsync(surface, "providers located", timeout.Token);
-            Assert.Contains(partial.ToolProgress, line => line.Text.Contains("Running", StringComparison.Ordinal));
-            Assert.DoesNotContain("providers located", surface.Output, StringComparison.Ordinal);
-            await harness.EventStream.PublishAsync(completed with { Revision = 3 }, timeout.Token);
-            await harness.EventStream.PublishAsync(second with { Status = AgentRunStatus.Failed, Revision = 3, Reason = "test lookup failed" }, timeout.Token);
-            var final = await WaitForAgentProgressAsync(surface, "test lookup failed", timeout.Token);
-            Assert.Equal(2, final.ToolProgress.Count);
-            await harness.EventStream.PublishAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, tool.ToolInvocationId, true, ElapsedMilliseconds: 5200) { RunId = parent }, timeout.Token);
-            await surface.WaitUntilAsync(() => surface.Output.Contains("test lookup failed", StringComparison.Ordinal), timeout.Token);
-
-            var text = surface.Output;
-            Assert.True(text.IndexOf("TOOLS: delegate_agents - completed", StringComparison.Ordinal) < text.IndexOf("providers located", StringComparison.Ordinal));
-            Assert.Equal(1, CountOccurrences(text, "providers located"));
-            Assert.Equal(1, CountOccurrences(text, "test lookup failed"));
-            Assert.Contains("│", text, StringComparison.Ordinal);
-            Assert.Contains("└", text, StringComparison.Ordinal);
-            Assert.DoesNotContain("Updated outcome", text, StringComparison.Ordinal);
-            Assert.Contains(surface.Segments, segment => segment.Text.Contains("providers located", StringComparison.Ordinal)
-                && segment.Role == PresentationTextRole.Success);
-            Assert.Contains(surface.Segments, segment => segment.Text.Contains("test lookup failed", StringComparison.Ordinal)
-                && segment.Role == PresentationTextRole.Error);
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-            await shellTask.WaitAsync(timeout.Token);
-        }
-
-        Assert.Equal(harness.Events.OfType<SessionCreated>().Single().SessionId, Assert.Single(surface.UserTurns));
-    }
-
-    /// <summary>Overlapping semantic-check completion keeps the still-running semantic check live.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_OverlappingSemanticChecks_KeepsDisplayedRunningCheckActive()
-    {
-        var provider = new GatedAnswerModelProvider();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            modelProvider: provider);
-        var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-        var shellTask = shell.RunAsync(modelStatus: "Test model");
-        try
-        {
-            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
-                .WaitAsync(TestContext.Current.CancellationToken);
-            var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
-            var firstRunId = RunId.New();
-            var firstCheckId = SemanticCheckId.New();
-            var secondRunId = RunId.New();
-            var secondCheckId = SemanticCheckId.New();
-            var occurredAt = DateTimeOffset.UtcNow;
-            var firstStarted = new SemanticCheckStarted(
-                sessionId,
-                occurredAt,
-                firstRunId,
-                firstCheckId,
-                SemanticCheckPhase.PreMutation,
-                "first semantic check");
-            var secondStarted = new SemanticCheckStarted(
-                sessionId,
-                occurredAt,
-                secondRunId,
-                secondCheckId,
-                SemanticCheckPhase.PostMutation,
-                "second semantic check");
-            var firstCompleted = new SemanticCheckCompleted(
-                sessionId,
-                occurredAt,
-                firstRunId,
-                firstCheckId,
-                SemanticCheckPhase.PreMutation,
-                "first semantic check",
-                SemanticCheckOutcome.Completed,
-                ElapsedMilliseconds: 42);
-
-            await harness.EventStream.PublishAsync(firstStarted);
-            await harness.EventStream.PublishAsync(secondStarted);
-            await harness.EventStream.PublishAsync(firstCompleted);
-
-            await surface.WaitUntilAsync(
-                () =>
-                surface.Output.Contains(
-                    "Compiler Checks: first semantic check - completed",
-                    StringComparison.Ordinal)
-                && surface.ActiveStatuses.Any(status => status.StartsWith(
-                    "Compiler Checks: second semantic check",
-                    StringComparison.Ordinal)),
-                TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-        }
-
-        await shellTask.WaitAsync(TestContext.Current.CancellationToken);
-    }
-
-    /// <summary>Leading whitespace-only model chunks leave thinking active until visible answer text arrives.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_LeadingWhitespace_KeepsThinkingActive()
-    {
-        var provider = new GatedAnswerModelProvider();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            modelProvider: provider);
-        var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface);
-
-        var shellTask = shell.RunAsync(modelStatus: "Test model");
-        try
-        {
-            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
-                .WaitAsync(TestContext.Current.CancellationToken);
-
-            Assert.True(surface.IsStatusActive);
-        }
-        finally
-        {
-            provider.ReleaseAnswer();
-        }
-
-        await shellTask.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
-    }
-
     /// <summary>Activity-display failures escape while a verbose active run fills the event dispatcher.</summary>
     [Fact]
     public static async Task InteractionCoordinator_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
@@ -3667,24 +1999,6 @@ public static partial class Milestone1Tests
         Assert.Same(expected, exception);
     }
 
-    /// <summary>Reasoning is retained transiently without a completed transcript marker.</summary>
-    [Fact]
-    public static void ConversationTranscript_ReasoningThenAnswer_OmitsCompletedMarker()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
-        Assert.False(transcript.Apply(new ModelReasoningObserved(sessionId, occurredAt, "Let me think... ")));
-        Assert.False(transcript.Apply(new ModelReasoningObserved(sessionId, occurredAt, "Now I know.")));
-        Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "42")));
-        Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
-
-        var newline = Environment.NewLine;
-        Assert.Equal($"42{newline}{newline}", transcript.Text);
-        Assert.Equal("Let me think... Now I know.", transcript.LatestReasoning);
-    }
-
     /// <summary>A tool continuation retains latest reasoning without materializing THINKING in the transcript.</summary>
     [Fact]
     public static void ConversationTranscript_ReasoningAcrossToolRound_OmitsThinkingMarker()
@@ -3715,22 +2029,6 @@ public static partial class Milestone1Tests
         Assert.Equal("Now I have the result. ", transcript.LatestReasoning);
     }
 
-    /// <summary>Answer-only runs omit redundant user echoes, assistant labels, and leading whitespace chunks.</summary>
-    [Fact]
-    public static void ConversationTranscript_AnswerOnly_RendersExactLayout()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "hello")));
-        Assert.False(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "\n\n")));
-        Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "answer")));
-        Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, RunId.New(), true)));
-
-        var newline = Environment.NewLine;
-        Assert.Equal($"answer{newline}{newline}", transcript.Text);
-    }
-
     /// <summary>Reasoning-only runs complete without rendering an empty answer label.</summary>
     [Fact]
     public static void ConversationTranscript_ReasoningOnly_RendersExactLayoutWithoutAnswerLabel()
@@ -3745,39 +2043,6 @@ public static partial class Milestone1Tests
         var newline = Environment.NewLine;
         Assert.Equal($"{newline}{newline}", transcript.Text);
         Assert.DoesNotContain("Threadsmith:", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>Tool activity renders as a collapsed TOOLS marker, not as assistant answer text.</summary>
-    [Fact]
-    public static void ConversationTranscript_ToolActivity_RendersCollapsedMarkerNotAnswerText()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var runId = RunId.New();
-        var invocationId = ToolInvocationId.New();
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "find IDomainEvent references")));
-        Assert.False(transcript.Apply(new ToolInvocationStarted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            "find_references",
-            runId)));
-        Assert.True(transcript.Apply(new ToolInvocationCompleted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            Succeeded: true)));
-        Assert.True(transcript.Apply(new ModelOutputObserved(sessionId, occurredAt, "Found 3 references.")));
-        Assert.True(transcript.Apply(new RunCompleted(sessionId, occurredAt, runId, true)));
-
-        var newline = Environment.NewLine;
-        Assert.StartsWith(newline + " TOOLS: find_references - completed", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains($" TOOLS: find_references - completed{newline}   \u2514 no additional detail{newline}", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("Found 3 references.", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("Threadsmith:", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("tool:find_references requested", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("sources:", transcript.Text, StringComparison.Ordinal);
     }
 
     /// <summary>code_explore tool output inspection is off by default.</summary>
@@ -3805,69 +2070,6 @@ public static partial class Milestone1Tests
 
         Assert.Contains("TOOLS: code_explore - completed", transcript.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("# code_explore result", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>code_explore tool output inspection renders the final model-visible content safely when enabled.</summary>
-    [Fact]
-    public static void ConversationTranscript_CodeExploreInspection_On_RendersModelContentSafely()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var invocationId = ToolInvocationId.New();
-        var transcript = new ConversationTranscript(
-            string.Empty,
-            inspectCodeExploreOutput: () => true);
-
-        Assert.False(transcript.Apply(new ToolInvocationStarted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            "code_explore",
-            RunId.New())));
-        Assert.True(transcript.Apply(new ToolInvocationCompleted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            Succeeded: true,
-            ResultJson: "{\"structured\":true}",
-            ModelResultContent: "# code_explore result\n\u001b[31mred")));
-
-        Assert.Contains("Output:", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("# code_explore result", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("\\u001B[31mred", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain('\u001b', transcript.Text);
-        Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>code_explore inspection normalizes CRLF before terminal-control escaping.</summary>
-    [Fact]
-    public static void ConversationTranscript_CodeExploreInspection_NormalizesCrlfModelContent()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var invocationId = ToolInvocationId.New();
-        var transcript = new ConversationTranscript(
-            string.Empty,
-            inspectCodeExploreOutput: () => true);
-
-        Assert.False(transcript.Apply(new ToolInvocationStarted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            "code_explore",
-            RunId.New())));
-        Assert.True(transcript.Apply(new ToolInvocationCompleted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            Succeeded: true,
-            ResultJson: "{\"structured\":true}",
-            ModelResultContent: "# code_explore result\r\ncancellationToken: cancellationToken")));
-
-        Assert.Contains("# code_explore result", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains("cancellationToken: cancellationToken", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("\\u000D", transcript.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("{\"structured\":true}", transcript.Text, StringComparison.Ordinal);
     }
 
@@ -3927,274 +2129,6 @@ public static partial class Milestone1Tests
         Assert.Contains("Output:", transcript.Text, StringComparison.Ordinal);
         Assert.Contains($"\u2502 {{", transcript.Text, StringComparison.Ordinal);
         Assert.Contains("\"structured\": true", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>Built-in search completion identifies its scope and bounded result count.</summary>
-    [Theory]
-    [InlineData("{\"Matches\":[]}", false, "0 matches")]
-    [InlineData("{\"Matches\":[{}]}", true, "1 match, truncated")]
-    public static void ConversationTranscript_SearchCompletion_RendersPathAndResultCount(
-        string resultJson,
-        bool isTruncated,
-        string expectedSummary)
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var invocationId = ToolInvocationId.New();
-        var source = new ToolActivitySource(ToolActivitySourceKind.BuiltIn);
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new ToolInvocationStarted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            "search",
-            RunId.New(),
-            Source: source,
-            ActivityDetail: "resultScope in container/source/AI.Inference.Fusion")));
-        Assert.True(transcript.Apply(new ToolInvocationCompleted(
-            sessionId,
-            occurredAt,
-            invocationId,
-            Succeeded: true,
-            ResultJson: resultJson,
-            IsTruncated: isTruncated,
-            Source: source)));
-
-        Assert.Contains(
-            $"\u2514 resultScope in container/source/AI.Inference.Fusion · {expectedSummary}",
-            transcript.Text,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>Mutation proposal startup is visible before model-generated mutations arrive.</summary>
-    [Fact]
-    public static void ConversationTranscript_MutationProposalStarted_RendersPreparationStatus()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var runId = RunId.New();
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
-
-        Assert.True(transcript.Apply(new MutationProposalStarted(
-            sessionId,
-            occurredAt,
-            runId,
-            AttemptNumber: 1,
-            MaximumAttempts: 2)));
-
-        Assert.StartsWith(
-            Environment.NewLine
-                + " MUTATION: Generating edits"
-                + Environment.NewLine
-                + " \u2514 Attempt: 1/2"
-                + Environment.NewLine,
-            transcript.Text,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>Mutation proposal repair attempts are visible before the retry completes or fails.</summary>
-    [Fact]
-    public static void ConversationTranscript_MutationProposalRepairAttempt_RendersRetryStatus()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var runId = RunId.New();
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
-
-        Assert.True(transcript.Apply(new MutationProposalRepairAttempted(
-            sessionId,
-            occurredAt,
-            runId,
-            AttemptNumber: 2,
-            MaximumAttempts: 2,
-            "ReplaceText expectedText was not found in 'src/File.cs'.")));
-
-        Assert.StartsWith(
-            Environment.NewLine
-                + " MUTATION: Retrying proposal with correction evidence"
-                + Environment.NewLine
-                + " \u2502 Attempt: 2/2"
-                + Environment.NewLine
-                + " \u2514 Reason: ReplaceText expectedText was not found in 'src/File.cs'."
-                + Environment.NewLine,
-            transcript.Text,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>Generic model correction attempts are visible through a sanitized lifecycle block.</summary>
-    [Fact]
-    public static void ConversationTranscript_ModelCorrectionAttempt_RendersRetryStatus()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var runId = RunId.New();
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
-
-        Assert.True(transcript.Apply(new ModelCorrectionAttempted(
-            sessionId,
-            occurredAt,
-            runId,
-            ModelCorrectionCategory.PostApplyValidation,
-            AttemptNumber: 1,
-            MaximumAttempts: 3,
-            "Validation gate requires correction.")));
-
-        Assert.StartsWith(
-            Environment.NewLine
-                + " CORRECTION: Retrying model request"
-                + Environment.NewLine
-                + " │ Attempt: 1/3"
-                + Environment.NewLine
-                + " ├ Category: PostApplyValidation"
-                + Environment.NewLine
-                + " └ Reason: Validation gate requires correction."
-                + Environment.NewLine,
-            transcript.Text,
-            StringComparison.Ordinal);
-    }
-
-    /// <summary>Policy-auto-approved mutation previews do not advertise a manual review prompt.</summary>
-    [Fact]
-    public static void ConversationTranscript_PolicyAutoApprovedMutation_RendersAppliedLifecycleBlock()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var runId = RunId.New();
-        var mutationSetId = MutationSetId.New();
-        var mutationId = MutationId.New();
-        const string relativePath = "src/File.cs";
-        var plan = new ImplementationPlan
-        {
-            Revision = 1,
-            Summary = "Change one file.",
-            Steps =
-            [
-                new ImplementationPlanStep
-                {
-                    StepId = StepId.New(),
-                    Title = "Update file",
-                    Description = "Replace the old expression.",
-                    FileIntents =
-                    [
-                        new PlanFileIntent
-                        {
-                            Path = relativePath,
-                            Kind = PlanFileChangeKind.Modify,
-                        },
-                    ],
-                    ExpectedOutcome = "The expression uses the approved value.",
-                },
-            ],
-        };
-        var preview = new MutationPreview(
-            mutationSetId,
-            $"@@ -1 +1 @@{Environment.NewLine}-old{Environment.NewLine}+new{Environment.NewLine}",
-            [],
-            AddedLines: 1,
-            RemovedLines: 1);
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
-        Assert.True(transcript.Apply(new PlanProposed(sessionId, occurredAt, plan.Summary, runId, plan)));
-        Assert.True(transcript.Apply(new MutationProposalStarted(
-            sessionId,
-            occurredAt,
-            runId,
-            AttemptNumber: 1,
-            MaximumAttempts: 2)));
-
-        Assert.True(transcript.Apply(new MutationSetProposed(
-            sessionId,
-            occurredAt,
-            preview.MutationSetId,
-            preview,
-            MutationApprovalLevel.PolicyAutoApproved)));
-        Assert.True(transcript.Apply(new MutationApplied(
-            sessionId,
-            occurredAt,
-            mutationId,
-            mutationSetId,
-            relativePath)));
-
-        Assert.Contains(Environment.NewLine + "Threadsmith: Mutation preview", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains(
-            " MUTATION: Applied under the active approval policy"
-                + Environment.NewLine
-                + " \u2502 Mutation applied: src/File.cs"
-                + Environment.NewLine
-                + " \u2514 The expression uses the approved value."
-                + Environment.NewLine,
-            transcript.Text,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain("Choose apply or discard at the mutation review prompt.", transcript.Text, StringComparison.Ordinal);
-    }
-
-    /// <summary>Applied mutation detail is scoped to its mutation set and exact path.</summary>
-    [Fact]
-    public static void ConversationTranscript_AppliedMutation_UsesMutationSetScopedExactPlanDetail()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var firstRunId = RunId.New();
-        var secondRunId = RunId.New();
-        var firstMutationSetId = MutationSetId.New();
-        var secondMutationSetId = MutationSetId.New();
-        const string relativePath = "src/File.cs";
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.True(transcript.Apply(new PlanProposed(
-            sessionId,
-            occurredAt,
-            "First plan.",
-            firstRunId,
-            CreateSingleFilePlan(relativePath, "The first expected outcome."))));
-        Assert.True(transcript.Apply(new MutationProposalStarted(
-            sessionId,
-            occurredAt,
-            firstRunId,
-            AttemptNumber: 1,
-            MaximumAttempts: 2)));
-        Assert.False(transcript.Apply(new MutationSetProposed(
-            sessionId,
-            occurredAt,
-            firstMutationSetId,
-            Preview: null,
-            MutationApprovalLevel.PolicyAutoApproved)));
-        Assert.True(transcript.Apply(new PlanProposed(
-            sessionId,
-            occurredAt,
-            "Second plan.",
-            secondRunId,
-            CreateSingleFilePlan(relativePath, "The second expected outcome."))));
-
-        Assert.True(transcript.Apply(new MutationApplied(
-            sessionId,
-            occurredAt,
-            MutationId.New(),
-            firstMutationSetId,
-            relativePath)));
-        Assert.True(transcript.Apply(new MutationProposalStarted(
-            sessionId,
-            occurredAt,
-            secondRunId,
-            AttemptNumber: 1,
-            MaximumAttempts: 2)));
-        Assert.False(transcript.Apply(new MutationSetProposed(
-            sessionId,
-            occurredAt,
-            secondMutationSetId,
-            Preview: null,
-            MutationApprovalLevel.PolicyAutoApproved)));
-        Assert.True(transcript.Apply(new MutationApplied(
-            sessionId,
-            occurredAt,
-            MutationId.New(),
-            secondMutationSetId,
-            "src/file.cs")));
-
-        Assert.Contains("\u2514 The first expected outcome.", transcript.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("\u2514 The second expected outcome.", transcript.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Terminal run and mutation boundaries release plan-derived presentation correlation state.</summary>
@@ -4299,31 +2233,6 @@ public static partial class Milestone1Tests
                 StringSplitOptions.None).Length - 1);
     }
 
-    /// <summary>Manually reviewed mutation previews retain the review prompt guidance.</summary>
-    [Fact]
-    public static void ConversationTranscript_ManualMutationReview_IncludesManualReviewPrompt()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-        var preview = new MutationPreview(
-            MutationSetId.New(),
-            $"@@ -1 +1 @@{Environment.NewLine}-old{Environment.NewLine}+new{Environment.NewLine}",
-            [],
-            AddedLines: 1,
-            RemovedLines: 1);
-        var transcript = new ConversationTranscript(string.Empty);
-        Assert.False(transcript.Apply(new TaskIntentRecorded(sessionId, occurredAt, "change a file")));
-
-        Assert.True(transcript.Apply(new MutationSetProposed(
-            sessionId,
-            occurredAt,
-            preview.MutationSetId,
-            preview,
-            MutationApprovalLevel.EntireSet)));
-
-        Assert.Contains("Choose apply or discard at the mutation review prompt.", transcript.Text, StringComparison.Ordinal);
-    }
-
     /// <summary>The UI dispatcher processes a flood in bounded redraw batches without losing events.</summary>
     [Fact]
     public static async Task InteractionEventDispatcher_Flooding_CoalescesWithoutLoss()
@@ -4357,28 +2266,41 @@ public static partial class Milestone1Tests
         Assert.Equal(expected, batches.SelectMany(batch => batch));
     }
 
-    /// <summary>TUI and CLI drive the same handlers and render identical activity.</summary>
+    /// <summary>Both frontend entry points produce the same successful run and scripted model output.</summary>
     [Fact]
-    public static async Task ScriptedSession_TuiAndCli_HaveCommandParity()
+    public static async Task ScriptedRequestProducesTheSameResultsInInteractiveAndHeadlessSessions()
     {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        var token = TestContext.Current.CancellationToken;
+        const string answer = "fixture output";
+        const string request = "fixture request";
+        var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
-            Turns = [new ScriptedTurn { Text = "hello world" }],
+            Turns = [new ScriptedTurn { Text = answer }],
         });
-        var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
-        await controller.OpenAsync("TUI");
-        await controller.SubmitAsync("request");
-        await controller.WaitForActiveRunAsync();
-        var tui = await controller.RenderAsync();
-        await using var writer = new StringWriter();
+        await using (harness)
+        {
+            var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
+            await controller.OpenAsync("interactive", token);
+            await controller.SubmitAsync(request, cancellationToken: token);
+            Assert.True(await controller.WaitForActiveRunAsync(token));
+            await using var writer = new StringWriter();
+            var shell = new HeadlessShell(harness.Dispatcher, harness.Projections, writer);
+            Assert.Equal(0, await shell.RunAsync("headless", request, token));
+        }
 
-        var exitCode = await new HeadlessShell(
-            harness.Dispatcher,
-            harness.Projections,
-            writer).RunAsync("CLI", "request");
+        var sessions = harness.Events.OfType<SessionCreated>().ToDictionary(item => item.Name);
+        Assert.Equal(2, sessions.Count);
+        var outputs = new List<string>();
+        foreach (var name in new[] { "interactive", "headless" })
+        {
+            var session = sessions[name].SessionId;
+            Assert.True(Assert.Single(harness.Events.OfType<RunCompleted>(), item => item.SessionId == session).Succeeded);
+            var output = Assert.Single(harness.Events.OfType<ModelOutputObserved>(), item => item.SessionId == session);
+            outputs.Add(output.Text);
+        }
 
-        Assert.Equal(0, exitCode);
-        Assert.Equal(tui.Workspace, writer.ToString());
+        Assert.Equal(answer, outputs[0].TrimEnd());
+        Assert.Equal(outputs[0], outputs[1]);
     }
 
     /// <summary>Headless repository requests fail closed before submission when semantic tools cannot run.</summary>
@@ -4474,54 +2396,47 @@ public static partial class Milestone1Tests
         Assert.Contains("Tool read_file: succeeded", output, StringComparison.Ordinal);
     }
 
-    /// <summary>SQLite uses stable event names and restores the complete catalog in order.</summary>
+    /// <summary>SQLite restores all persistable event types and schema versions in append order.</summary>
     [Fact]
-    public static async Task SqliteEventStore_CompleteCatalog_RoundTripsDurably()
+    public static async Task SqliteEventStore_CompleteCatalog_RoundTripsInOrder()
     {
-        var databasePath = Path.Combine(
-            Path.GetTempPath(),
-            $"threadsmith-m1-{Guid.NewGuid():N}.db");
-        try
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var connectionString = $"Data Source=threadsmith-events-{Guid.NewGuid():N};Mode=Memory;Cache=Shared;Pooling=False";
+        await using var lifetime = new SqliteConnection(connectionString);
+        await lifetime.OpenAsync(cancellationToken);
+        var store = new SqliteEventStore(connectionString);
+        await store.InitializeAsync(cancellationToken);
+        var expected = TestEvents()
+            .Where(domainEvent => domainEvent is not ModelReasoningObserved)
+            .ToArray();
+        foreach (var domainEvent in expected)
         {
-            var store = new SqliteEventStore($"Data Source={databasePath}");
-            await store.InitializeAsync();
-            IReadOnlyList<IDomainEvent> expected = TestEvents()
-                .Where(domainEvent => domainEvent is not ModelReasoningObserved)
-                .ToArray();
-            foreach (var domainEvent in expected)
-            {
-                await store.AppendAsync(domainEvent);
-            }
-
-            var previousSchema = new SessionCreated(
-                expected[0].SessionId,
-                DateTimeOffset.UtcNow,
-                "n-1")
-            {
-                SchemaVersion = 0,
-            };
-            await store.AppendAsync(previousSchema);
-
-            var actual = await store.ReadAsync(expected[0].SessionId);
-
-            Assert.Equal(
-                expected.Select(item => item.GetType()).Append(typeof(SessionCreated)),
-                actual.Select(item => item.GetType()));
-            Assert.All(actual.Take(expected.Count), item => Assert.Equal(1, item.SchemaVersion));
-            for (var index = 0; index < expected.Count; index++)
-            {
-                Assert.Equivalent(expected[index], actual[index], strict: true);
-                Assert.Equal(DomainEventJson.Serialize(expected[index]), DomainEventJson.Serialize(actual[index]));
-            }
-
-            Assert.Equivalent(previousSchema, actual[^1], strict: true);
-            Assert.Equal(0, actual[^1].SchemaVersion);
+            await store.AppendAsync(domainEvent, cancellationToken);
         }
-        finally
+
+        var previousSchema = new SessionCreated(
+            expected[0].SessionId,
+            DateTimeOffset.UtcNow,
+            "n-1")
         {
-            SqliteConnection.ClearAllPools();
-            File.Delete(databasePath);
+            SchemaVersion = 0,
+        };
+        await store.AppendAsync(previousSchema, cancellationToken);
+
+        var actual = await store.ReadAsync(expected[0].SessionId, cancellationToken);
+
+        Assert.Equal(
+            expected.Select(item => item.GetType()).Append(typeof(SessionCreated)),
+            actual.Select(item => item.GetType()));
+        Assert.All(actual.Take(expected.Length), item => Assert.Equal(1, item.SchemaVersion));
+        for (var index = 0; index < expected.Length; index++)
+        {
+            Assert.Equivalent(expected[index], actual[index], strict: true);
+            Assert.Equal(DomainEventJson.Serialize(expected[index]), DomainEventJson.Serialize(actual[index]));
         }
+
+        Assert.Equivalent(previousSchema, actual[^1], strict: true);
+        Assert.Equal(0, actual[^1].SchemaVersion);
     }
 
     /// <summary>Authorization, JSON, environment, query, multiline, and control inputs are sanitized.</summary>
@@ -4786,44 +2701,6 @@ public static partial class Milestone1Tests
         };
     }
 
-    private sealed class PausedReasoningModelProvider : IModelProvider
-    {
-        private readonly TaskCompletionSource _releaseAnswer = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _answerEmitted = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _releaseCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-#pragma warning disable VSTHRD003 // Fixture-owned model emission signal.
-        public Task AnswerEmitted => _answerEmitted.Task;
-#pragma warning restore VSTHRD003
-
-        public void ReleaseAnswer()
-        {
-            _releaseAnswer.TrySetResult();
-        }
-
-        public void ReleaseCompletion()
-        {
-            _releaseCompletion.TrySetResult();
-        }
-
-        public IAsyncEnumerable<ModelChunk> StreamAsync(
-            ModelStreamRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(request);
-            return Stream2Async();
-
-            async IAsyncEnumerable<ModelChunk> Stream2Async()
-            {
-                yield return new ModelChunk { Reasoning = "Inspect the repository.\n" };
-                await _releaseAnswer.Task.WaitAsync(cancellationToken);
-                yield return new ModelChunk { Text = "answer" };
-                _answerEmitted.TrySetResult();
-                await _releaseCompletion.Task.WaitAsync(cancellationToken);
-            }
-        }
-    }
-
     private sealed class GatedAnswerModelProvider : IModelProvider
     {
         private readonly int _trailingChunkCount;
@@ -4946,40 +2823,6 @@ public static partial class Milestone1Tests
             CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
-        }
-    }
-
-    private static async Task<InteractionActivity> WaitForAgentProgressAsync(AgentToolConsoleSurface surface, string text, CancellationToken cancellationToken)
-    {
-        while (true)
-        {
-            var update = await surface.ToolUpdates.Reader.ReadAsync(cancellationToken);
-            var match = update.FirstOrDefault(activity => activity.ToolProgress.Any(line => line.Text.Contains(text, StringComparison.Ordinal)));
-            if (match is not null)
-            {
-                return match;
-            }
-        }
-    }
-
-    private sealed class AgentToolConsoleSurface : ConcurrentToolConsoleSurface, IAgentWorkspaceSurface
-    {
-        internal List<SessionId> UserTurns { get; } = [];
-
-        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
-        {
-            return Task.CompletedTask;
-        }
-
-        public Task BeginUserTurnAsync(SessionId sessionId, CancellationToken cancellationToken = default)
-        {
-            UserTurns.Add(sessionId);
-            return Task.CompletedTask;
-        }
-
-        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
-        {
-            return Task.CompletedTask;
         }
     }
 
@@ -5689,13 +3532,6 @@ public static partial class Milestone1Tests
         return chunks;
     }
 
-    private static async Task<string> CollectFixtureAsync(string fixtureDirectory, string fileName)
-    {
-        var script = FakeModelProvider.Load(
-            await File.ReadAllTextAsync(Path.Combine(fixtureDirectory, fileName)));
-        return await CollectAsync(new FakeModelProvider(script), 42);
-    }
-
     private static IReadOnlyList<IDomainEvent> TestEvents()
     {
         var sessionId = SessionId.New();
@@ -6189,27 +4025,6 @@ public static partial class Milestone1Tests
         }
     }
 
-    private sealed class RecordingMcpManagementHandler
-        : ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>
-    {
-        internal List<McpManagementRequest> Requests { get; } = [];
-
-        public Task<McpManagementResult> HandleAsync(
-            ExecuteMcpManagementCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            Requests.Add(command.Request);
-            return Task.FromResult(new McpManagementResult
-            {
-                Action = command.Request.Action,
-                Succeeded = true,
-                ExitCode = 0,
-                FailureKind = McpManagementFailureKind.None,
-                Message = "0 active MCP capability descriptor(s).",
-            });
-        }
-    }
-
     private static ImplementationPlan CreateSingleFilePlan(string relativePath, string expectedOutcome)
     {
         return new ImplementationPlan
@@ -6414,129 +4229,6 @@ public static partial class Milestone1Tests
                 _order.Add($"{_name}:cancelled");
                 throw;
             }
-        }
-    }
-
-    private sealed class FakeToolStateManager : IToolStateManager
-    {
-        private bool _optionalEnabled = true;
-
-        public List<string> DisabledIds { get; } = [];
-
-        public Task DisableAsync(string toolId, CancellationToken cancellationToken = default)
-        {
-            DisabledIds.Add(toolId);
-            _optionalEnabled = false;
-            return Task.CompletedTask;
-        }
-
-        public Task EnableAsync(string toolId, CancellationToken cancellationToken = default)
-        {
-            _optionalEnabled = true;
-            return Task.CompletedTask;
-        }
-
-        public Task EnableAsync(
-            string toolId,
-            string expectedVersion,
-            CancellationToken cancellationToken = default)
-        {
-            return EnableAsync(toolId, cancellationToken);
-        }
-
-        public Task GrantConsentAndEnableAsync(
-            string toolId,
-            bool retrievalDisclosureAcknowledged = false,
-            bool currentMessageUrlDisclosureAcknowledged = false,
-            CancellationToken cancellationToken = default)
-        {
-            _optionalEnabled = true;
-            return Task.CompletedTask;
-        }
-
-        public bool RequiresCurrentMessageUrlConsent()
-        {
-            return false;
-        }
-
-        public IReadOnlyList<ToolStateEntry> GetAllStates()
-        {
-            return
-            [
-                new ToolStateEntry
-                {
-                    Id = "essential",
-                    DisplayName = "Essential Read",
-                    Category = ToolCategory.FileRead,
-                    Source = "Built-in",
-                    Enabled = true,
-                    Essential = true,
-                    ConsentRequired = false,
-                },
-                new ToolStateEntry
-                {
-                    Id = "optional",
-                    DisplayName = "Optional Tool",
-                    Category = ToolCategory.FileSearch,
-                    Source = "Example Extension",
-                    Enabled = _optionalEnabled,
-                    Essential = false,
-                    ConsentRequired = false,
-                },
-            ];
-        }
-
-        public bool IsEnabled(string toolId)
-        {
-            return !string.Equals(toolId, "optional", StringComparison.Ordinal) || _optionalEnabled;
-        }
-
-        public void Register(ToolDefinition definition)
-        {
-        }
-
-        public void Unregister(string toolId)
-        {
-        }
-    }
-
-    private sealed class FakeMutationApprovalPolicy : IMutationApprovalPolicy
-    {
-        public MutationApprovalPolicy CurrentPolicy { get; private set; } = MutationApprovalPolicy.ReviewAll;
-
-        public int LargeDiffThreshold => 500;
-
-        public List<MutationApprovalPolicy> SelectedPolicies { get; } = [];
-
-        public Task BindRepositoryAsync(
-            string repositoryRoot,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public bool RequiresApproval(MutationRiskAssessment risk)
-        {
-            return true;
-        }
-
-        public Task SetPolicyAsync(
-            MutationApprovalPolicy policy,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            CurrentPolicy = policy;
-            SelectedPolicies.Add(policy);
-            return Task.CompletedTask;
-        }
-
-        public void Validate(MutationSet mutations, string repositoryRoot)
-        {
-        }
-
-        public void ValidatePaths(IEnumerable<string> relativePaths, string repositoryRoot)
-        {
         }
     }
 

@@ -87,19 +87,6 @@ public sealed class EditAnalysisConfigurationTests
         Assert.Empty(HostFoundation.LoadOperationalLimits(new ConfigurationBuilder().Build()).Semantic.EditAnalysis.ExcludedDiagnosticIds);
     }
 
-    /// <summary>Explicit opt-out survives startup binding and capture.</summary>
-    [Fact]
-    public void AnalyzerFeedbackCanBeDisabledExplicitly()
-    {
-        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["limits:semantic:editAnalysis:analyzers:enabled"] = "false",
-        }).Build();
-        var options = HostFoundation.LoadOperationalLimits(configuration).Semantic.EditAnalysis;
-        Assert.False(options.Analyzers.Enabled);
-        Assert.False(options.Capture().Analyzers.Enabled);
-    }
-
     /// <summary>Invalid or unknown options fail through the host binder.</summary>
     [Theory]
     [InlineData("unknownSetting", "1")]

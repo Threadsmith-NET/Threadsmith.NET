@@ -1,5 +1,6 @@
 namespace Threadsmith.Architecture.Tests;
 
+using System.IO.Enumeration;
 using System.Text;
 using Xunit;
 
@@ -16,44 +17,50 @@ public static class SourceEncodingTests
         var repositoryRoot = Path.GetFullPath(
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-        var pending = new Stack<string>(SourceDirectories
-            .Select(directory => Path.Combine(repositoryRoot, directory)));
         var invalidFiles = new List<string>();
-        while (pending.TryPop(out var directory))
+        foreach (var directory in SourceDirectories)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            foreach (var file in EnumerateCSharpSources(Path.Combine(repositoryRoot, directory), cancellationToken))
             {
-                var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
+                try
                 {
-                    continue;
+                    _ = encoding.GetCharCount(bytes);
                 }
-
-                if ((attributes & FileAttributes.Directory) != 0)
+                catch (DecoderFallbackException)
                 {
-                    var name = Path.GetFileName(entry);
-                    if (!name.Equals("bin", StringComparison.OrdinalIgnoreCase)
-                        && !name.Equals("obj", StringComparison.OrdinalIgnoreCase))
-                    {
-                        pending.Push(entry);
-                    }
-                }
-                else if (entry.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                {
-                    var bytes = await File.ReadAllBytesAsync(entry, cancellationToken);
-                    try
-                    {
-                        _ = encoding.GetCharCount(bytes);
-                    }
-                    catch (DecoderFallbackException)
-                    {
-                        invalidFiles.Add(Path.GetRelativePath(repositoryRoot, entry));
-                    }
+                    invalidFiles.Add(Path.GetRelativePath(repositoryRoot, file));
                 }
             }
         }
 
         Assert.True(invalidFiles.Count == 0, "C# sources must be UTF-8: " + string.Join(", ", invalidFiles));
+    }
+
+    internal static IEnumerable<string> EnumerateCSharpSources(string directory, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var files = new FileSystemEnumerable<string>(
+            directory,
+            static (ref FileSystemEntry entry) => entry.ToFullPath(),
+            new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = false,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+            })
+        {
+            ShouldRecursePredicate = static (ref FileSystemEntry entry) =>
+                !entry.FileName.Equals("bin", StringComparison.OrdinalIgnoreCase)
+                && !entry.FileName.Equals("obj", StringComparison.OrdinalIgnoreCase),
+            ShouldIncludePredicate = static (ref FileSystemEntry entry) =>
+                !entry.IsDirectory && entry.FileName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase),
+        };
+
+        foreach (var file in files)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return file;
+        }
     }
 }

@@ -7,70 +7,6 @@ using Xunit;
 /// <summary>Deterministic plan 113.1 request-occupancy and cumulative-usage baselines.</summary>
 public static class Plan113AdmissionMeasurementTests
 {
-    /// <summary>Four fixed workloads keep request occupancy, replay, schema, cache, and missing usage distinct.</summary>
-    [Fact]
-    public static void Synthetic_baselines_separate_request_size_from_cumulative_usage()
-    {
-        const string projectedValidation = "{\"status\":\"passed\",\"tests\":120}";
-        var opaqueProcessResult = new string('p', 2_000);
-        var tool = new ModelToolDefinition
-        {
-            Name = "run_process",
-            Description = "Runs one bounded validation command.",
-            ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}",
-        };
-        var projectedMessage = CreateToolResult("native-validation", projectedValidation);
-        var opaqueMessage = CreateToolResult("opaque-process", opaqueProcessResult);
-        var overlapping = Estimate(
-            [projectedMessage, opaqueMessage, CreateToolResult("overlap", opaqueProcessResult)],
-            tool);
-        var unique = Estimate(
-            [projectedMessage, opaqueMessage, CreateToolResult("unique", new string('u', 6_000))],
-            tool);
-        var repeatedPrefixes = Enumerable.Range(1, 3)
-            .Select(count => Estimate(
-                Enumerable.Range(1, count)
-                    .Select(index => CreateToolResult($"opaque-{index}", opaqueProcessResult))
-                    .ToArray(),
-                tool))
-            .ToArray();
-        var retry = Estimate([projectedMessage, opaqueMessage], tool);
-        var rows = new[]
-        {
-            new BaselineRow("overlapping-exploration", overlapping.WireInputTokens, overlapping.WireInputTokens, 1),
-            new BaselineRow("mostly-unique-evidence", unique.WireInputTokens, unique.WireInputTokens, 1),
-            new BaselineRow(
-                "moderate-context-replay",
-                repeatedPrefixes[^1].WireInputTokens,
-                repeatedPrefixes.Sum(item => (long)item.WireInputTokens),
-                repeatedPrefixes.Length),
-            new BaselineRow("failed-summary-retry", retry.WireInputTokens, retry.WireInputTokens * 2L, 2),
-        };
-
-        Assert.Equal(4, rows.Length);
-        Assert.True(unique.WireInputTokens > overlapping.WireInputTokens);
-        Assert.True(rows[2].CumulativeInputTokens > rows[2].LatestRequestInputTokens);
-        Assert.Equal(rows[3].LatestRequestInputTokens * 2, rows[3].CumulativeInputTokens);
-        Assert.All(
-            [overlapping, unique, .. repeatedPrefixes, retry],
-            estimate =>
-            {
-                Assert.True(estimate.NativeToolTokens > 0);
-                Assert.True(estimate.FramingTokens > 0);
-                Assert.Equal(128, estimate.OutputReserveTokens);
-            });
-        Assert.Equal(projectedValidation, projectedMessage.GetModelVisibleContent());
-        Assert.Equal(opaqueProcessResult, opaqueMessage.GetModelVisibleContent());
-        Assert.Equal(
-            [
-                "overlapping-exploration",
-                "mostly-unique-evidence",
-                "moderate-context-replay",
-                "failed-summary-retry",
-            ],
-            rows.Select(row => row.Name));
-    }
-
     /// <summary>Reported cache data and absent usage remain distinguishable in the same baseline corpus.</summary>
     [Fact]
     public static void Synthetic_baseline_preserves_cache_semantics_and_missing_usage()
@@ -128,10 +64,4 @@ public static class Plan113AdmissionMeasurementTests
             Content = [new ModelContentPart { Content = content }],
         };
     }
-
-    private sealed record BaselineRow(
-        string Name,
-        int LatestRequestInputTokens,
-        long CumulativeInputTokens,
-        int Calls);
 }

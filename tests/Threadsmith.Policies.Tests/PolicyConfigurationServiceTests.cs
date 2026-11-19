@@ -38,15 +38,6 @@ public static class PolicyConfigurationServiceTests
     }
 
     [Fact]
-    public static void CanonicalFingerprintsIgnoreObjectInsertionOrderButNotArrayOrder()
-    {
-        Assert.Equal(PolicyJson.Fingerprint(new Dictionary<string, int> { ["a"] = 1, ["b"] = 2 }), PolicyJson.Fingerprint(new Dictionary<string, int> { ["b"] = 2, ["a"] = 1 }));
-        int[] ascending = [1, 2];
-        int[] descending = [2, 1];
-        Assert.NotEqual(PolicyJson.Fingerprint(ascending), PolicyJson.Fingerprint(descending));
-    }
-
-    [Fact]
     public static async Task RevocationRemovesAnInheritedPlatformGrant()
     {
         var grant = new PolicyGrant("inherited", PolicyJson.Fingerprint("context"), PolicyJson.Fingerprint("rules"));

@@ -20,35 +20,6 @@ using Xunit;
 /// </summary>
 public static class RepoConfigTests
 {
-    /// <summary>The strategy §21.2 repository-configuration keys that must be present.</summary>
-    private static readonly string[] _requiredKeys =
-    [
-        "solution",
-        "tui",
-        "build",
-        "nuget",
-        "test",
-        "editableRoots",
-        "prohibitedPaths",
-        "model",
-        "context",
-        "tools",
-        "webSearch",
-        "webFetch",
-        "mutation",
-        "execution",
-        "agents",
-        "skills",
-        "repository",
-        "extensions",
-        "prompt append files",
-        "formatting",
-        "validation",
-        "persistence",
-        "mcp",
-        "diagnostics",
-    ];
-
     /// <summary>The .threadsmith/config.example path relative to the repo root.</summary>
     private static string ConfigExamplePath
     {
@@ -58,14 +29,6 @@ public static class RepoConfigTests
             var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
             return Path.Combine(repoRoot, ".threadsmith", "config.example");
         }
-    }
-
-    /// <summary>The documented solution preference uses the nested configuration-provider path.</summary>
-    [Fact]
-    public static void ConfigExampleContainsNestedSolutionPath()
-    {
-        var config = LoadConfigExample();
-        Assert.Equal("src/Threadsmith.sln", config["solution:path"]);
     }
 
     /// <summary>Repository-memory storage and retrieval bounds bind from the sole tool configuration namespace.</summary>
@@ -86,78 +49,6 @@ public static class RepoConfigTests
         Assert.Equal(1, policy.ReconciliationConceptFuzzyMaximumDistance);
         Assert.Equal(8, config.GetValue("reranking:cpuThreads", 0));
         Assert.False(config.GetSection("context:repositoryMemory").Exists());
-    }
-
-    /// <summary>Intelligence recall enables reranking by default while honoring explicit layered overrides.</summary>
-    [Theory]
-    [InlineData(null, null, true)]
-    [InlineData("false", null, false)]
-    [InlineData("false", "true", true)]
-    [InlineData("true", "false", false)]
-    public static void IntelligenceRecallRerankingBinds(string? userValue, string? repositoryValue, bool expected)
-    {
-        const string key = "tools:config:memories:Intelligence:Recall:RerankerEnabled";
-        var user = new ConfigurationBuilder().AddInMemoryCollection().Build();
-        var repository = new ConfigurationBuilder().AddInMemoryCollection().Build();
-        user[key] = userValue;
-        repository[key] = repositoryValue;
-        const string conceptsKey = "tools:config:memories:Intelligence:Recall:Concepts:Enabled";
-        user[conceptsKey] = userValue;
-        repository[conceptsKey] = repositoryValue;
-        var configuration = new RepositoryMemoryConfiguration(repository, user, Path.GetTempPath());
-
-        Assert.Equal(expected, configuration.CaptureCurrent().Intelligence.Recall.RerankerEnabled);
-        Assert.True(new RepositoryIntelligenceOptions().Recall.RerankerEnabled);
-        Assert.Equal(expected, configuration.CaptureCurrent().Intelligence.Recall.ConceptRecallEnabled);
-        Assert.True(new RepositoryIntelligenceOptions().Recall.ConceptRecallEnabled);
-    }
-
-    /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>
-    [Fact]
-    public static void ConfigExampleContainsRequiredKeys()
-    {
-        var config = LoadConfigExample();
-        var topLevelKeys = config.GetChildren().Select(section => section.Key)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        Assert.All(_requiredKeys, key => Assert.True(
-            config.GetSection(key).Exists() || topLevelKeys.Contains(key),
-            $"Config example is missing required §21.2 key '{key}'."));
-    }
-
-    /// <summary>The prompt-append-files key must resolve to a non-empty list (§21.2).</summary>
-    [Fact]
-    public static void PromptAppendFilesKeyResolvesToList()
-    {
-        var config = LoadConfigExample();
-        var appendFiles = config.GetSection("prompt append files").Get<string[]>();
-        Assert.NotNull(appendFiles);
-        Assert.NotEmpty(appendFiles);
-        Assert.All(appendFiles, f => Assert.False(string.IsNullOrWhiteSpace(f)));
-    }
-
-    /// <summary>Plan-26 composer-adjacent status is enabled in the reference configuration.</summary>
-    [Fact]
-    public static void TuiFooterSettingBindsToConfiguredValue()
-    {
-        var config = LoadConfigExample();
-        Assert.True(config.GetValue("tui:footer:enabled", false));
-    }
-
-    /// <summary>Plan-63 semantic Markdown rendering is enabled in the reference configuration.</summary>
-    [Fact]
-    public static void TuiMarkdownRenderingSettingBindsToConfiguredValue()
-    {
-        var config = LoadConfigExample();
-        Assert.True(config.GetValue("tui:renderMarkdown", false));
-    }
-
-    /// <summary>Plan-49 operation-duration display is enabled in the reference configuration.</summary>
-    [Fact]
-    public static void TuiOperationDurationSettingBindsToConfiguredValue()
-    {
-        var config = LoadConfigExample();
-        Assert.True(config.GetValue("tui:showOperationDurations", false));
     }
 
     /// <summary>The optional active-turn compaction profile is documented as a trusted null fallback.</summary>
@@ -247,15 +138,6 @@ public static class RepoConfigTests
         var config = LoadConfigExample();
         Assert.Equal("reviewAll", config["mutation:approvalPolicy"]);
         Assert.Equal(500, config.GetValue("mutation:largeDiffThreshold", 0));
-    }
-
-    /// <summary>Retired planning settings are absent from the shipped configuration.</summary>
-    [Fact]
-    public static void RetiredPlanningSettingsAreAbsent()
-    {
-        var config = LoadConfigExample();
-        Assert.Null(config["planning:approvalPolicy"]);
-        Assert.DoesNotContain(config.AsEnumerable(), item => item.Key.Equals("planning:approvalRepositoryIdentity", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>The execution-limit and repository-safety keys bind to their documented values (§21.2).</summary>

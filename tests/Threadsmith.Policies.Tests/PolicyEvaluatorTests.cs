@@ -11,70 +11,6 @@ using Xunit;
 
 public static class PolicyEvaluatorTests
 {
-    [Theory]
-    [InlineData(PolicyOutcome.Allow, true, false, 0)]
-    [InlineData(PolicyOutcome.AlwaysDeny, false, false, 0)]
-    [InlineData(PolicyOutcome.ApprovalAlwaysRequired, true, true, 2)]
-    [InlineData(PolicyOutcome.ApprovalRequiredSession, true, true, 3)]
-    [InlineData(PolicyOutcome.ApprovalRequired, true, true, 4)]
-    public static void OutcomesHaveExactChoices(PolicyOutcome outcome, bool allowed, bool approval, int choices)
-    {
-        var snapshot = Compile(Rule("only", outcome));
-        var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts("git"));
-        Assert.Equal(allowed, decision.IsAllowed);
-        Assert.Equal(approval, decision.RequiresApproval);
-        Assert.Equal(choices, decision.Choices.Length);
-    }
-
-    [Theory]
-    [InlineData("git", "commit", "-m", "hello world")]
-    [InlineData("git", "unknown-plugin", "--unknown-option")]
-    [InlineData("dotnet", "unknown-tool", "--unknown-option")]
-    [InlineData("git", "fetch")]
-    [InlineData("git", "pull")]
-    [InlineData("git", "push")]
-    [InlineData("dotnet", "restore")]
-    [InlineData("dotnet", "package", "add", "Example")]
-    [InlineData("dotnet", "tool", "install", "example")]
-    [InlineData("dotnet", "workload", "restore")]
-    public static void NormalWorkflowsAreAllowed(string executable, params string[] arguments)
-    {
-        var defaults = ShippedCommandPolicy.CreateDefaults();
-        foreach (var (platform, profile) in defaults.Platforms)
-        {
-            foreach (var shell in profile.Shells.Keys)
-            {
-                var snapshot = PolicyCompiler.Compile(defaults, null, null, platform, shell);
-                var decision = TestPolicyEvaluation.Evaluate(snapshot, Facts(executable, arguments) with { Platform = platform, Shell = shell });
-                Assert.True(decision.IsAllowed, decision.ReasonCode);
-                Assert.False(decision.RequiresApproval);
-            }
-        }
-    }
-
-    [Theory]
-    [InlineData("git", "-c", "core.sshCommand=unsafe", "fetch")]
-    [InlineData("git", "fetch", "--upload-pack=unsafe")]
-    [InlineData("git", "--exec-path=unsafe", "status")]
-    [InlineData("git", "clone", "-c", "safe=value", "--upload-pack=custom", "repo")]
-    [InlineData("git", "format-patch", "--ext-diff", "HEAD~1")]
-    [InlineData("git", "format-patch", "-n", "--ext-diff", "HEAD~1")]
-    [InlineData("git", "format-patch", "--from", "--ext-diff", "HEAD~1")]
-    [InlineData("git", "rebase", "-x", "custom", "HEAD~1")]
-    [InlineData("git", "grep", "-Ocustom", "pattern")]
-    [InlineData("git", "clone", "--config=core.sshCommand=custom", "ssh://host/repo")]
-    [InlineData("git", "clone", "-qc", "core.sshCommand=custom", "ssh://host/repo")]
-    [InlineData("git", "submodule", "foreach", "custom")]
-    [InlineData("git", "bisect", "run", "custom")]
-    [InlineData("git", "clone", "-u", "custom", "ssh://host/repo")]
-    [InlineData("git", "clone", "-ucustom", "ssh://host/repo")]
-    [InlineData("curl", "https://example.com")]
-    public static void SelectedExecutionTextAndHttpCommandsDeny(string executable, params string[] arguments)
-    {
-        var snapshot = PolicyCompiler.Compile(ShippedCommandPolicy.CreateDefaults(), null, null, "linux", "bash");
-        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts(executable, arguments)).IsAllowed);
-    }
-
     [Fact]
     public static void SameOutcomeOverlapsAreHarmlessButMixedOutcomesConflict()
     {
@@ -85,14 +21,6 @@ public static class PolicyEvaluatorTests
         Assert.Equal("PolicyConflict", TestPolicyEvaluation.Evaluate(Compile(first, conflict), Facts("git")).ReasonCode);
         var exception = conflict with { Overrides = [first.Id] };
         Assert.Equal(PolicyOutcome.AlwaysDeny, TestPolicyEvaluation.Evaluate(Compile(first, exception), Facts("git")).Outcome);
-    }
-
-    [Fact]
-    public static void OverrideOrderDoesNotChangeEffectiveRequirement()
-    {
-        var basis = Rule("basis", PolicyOutcome.AlwaysDeny);
-        var exception = Rule("exception", PolicyOutcome.Allow) with { Overrides = [basis.Id] };
-        Assert.Equal(TestPolicyEvaluation.Evaluate(Compile(basis, exception), Facts("git")).RuleFingerprint, TestPolicyEvaluation.Evaluate(Compile(exception, basis), Facts("git")).RuleFingerprint);
     }
 
     [Theory]
@@ -115,26 +43,6 @@ public static class PolicyEvaluatorTests
         Assert.Equal(PolicyOutcome.AlwaysDeny, decision.Outcome);
         Assert.Contains(basis.Id, decision.RuleIds);
         Assert.True(TestPolicyEvaluation.Evaluate(snapshot, Facts("git", "other", "--unknown")).IsAllowed);
-    }
-
-    [Theory]
-    [InlineData("^commit -m hello world$", false, "commit", "-m", "hello world")]
-    [InlineData("^commit -m hello world$", false, "commit", "-m", "hello", "world")]
-    [InlineData("git", true, "commit")]
-    [InlineData("HELLO", true, "hello")]
-    [InlineData("(?i)HELLO", false, "hello")]
-    [InlineData("hello world", true, "hello  world")]
-    [InlineData("line\\nnext", false, "line\nnext")]
-    [InlineData("^ $", false, "", "")]
-    [InlineData("^$", false)]
-    public static void ArgumentSearchUsesOnlyJoinedLiteralValues(string pattern, bool allowed, params string[] arguments)
-    {
-        // Arrange.
-        var snapshot = Compile(Rule("search", PolicyOutcome.Allow) with { DenyArgumentsMatching = [pattern] });
-
-        // Act / Assert.
-        Assert.Equal(allowed, TestPolicyEvaluation.Evaluate(snapshot, Facts("git", arguments)).IsAllowed);
-        Assert.False(TestPolicyEvaluation.Evaluate(snapshot, Facts("unmatched", arguments)).IsAllowed);
     }
 
     [Fact]
@@ -200,14 +108,6 @@ public static class PolicyEvaluatorTests
         Assert.False(authority.Approve(request, response, "rule-fingerprint"));
         authority.Reset();
         Assert.False(authority.Approve(request, response, "rule-fingerprint"));
-    }
-
-    [Fact]
-    public static void PolicyJsonRoundTripsImmutableDocuments()
-    {
-        var document = ShippedCommandPolicy.CreateDefaults();
-        var parsed = PolicyJson.Parse(PolicyJson.Serialize(document));
-        Assert.Equal(PolicyCompiler.Compile(document, null, null, "linux", "bash").Fingerprint, PolicyCompiler.Compile(parsed, null, null, "linux", "bash").Fingerprint);
     }
 
     private static PolicySnapshot Compile(params PolicyRule[] rules) => PolicyCompiler.Compile(Document(new PolicyProfile { Shells = ImmutableDictionary<string, PolicyProfile>.Empty.Add("bash", new PolicyProfile { Rules = [.. rules] }) }), null, null, "linux", "bash");

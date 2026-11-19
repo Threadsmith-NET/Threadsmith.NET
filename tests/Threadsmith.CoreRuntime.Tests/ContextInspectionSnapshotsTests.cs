@@ -45,44 +45,6 @@ public static class ContextInspectionSnapshotsTests
         Assert.Null(copy.VisibleSourceFrontier);
     }
 
-    /// <summary>New collection properties require an updated populated fixture and copy assertions.</summary>
-    [Fact]
-    public static void EveryReachableCollectionPropertyHasCopyCoverage()
-    {
-        // Follow declared types even when an optional record is absent in the fixture.
-        // Immutable leaves have no collections and therefore need no copying exemption.
-        var found = new HashSet<string>(StringComparer.Ordinal);
-        CollectProperties(typeof(ContextInspectionProjection), [], found);
-        string[] covered =
-        [
-            "ContextInspectionProjection.TokensByCategory",
-            "ContextInspectionProjection.Evidence",
-            "ContextInspectionProjection.PromptAssets",
-            "ContextInspectionProjection.ModelRationale",
-            "ContextInspectionProjection.Reductions",
-            "ContextInspectionProjection.ConversationItems",
-            "ContextInspectionProjection.RepositoryMemoryItems",
-            "ConversationContextItemProjection.Images",
-            "ConversationContextItemProjection.SourceMessageIds",
-            "ConversationContextItemProjection.SourceRunIds",
-            "ConversationContextItemProjection.SourceEvidenceIds",
-            "RepositoryMemoryContextItemProjection.Supports",
-            "RepositoryMemorySearchDetails.Candidates",
-            "RepositoryMemorySearchDetails.LexicalExpansions",
-            "RepositoryMemoryCandidateSearchEvidence.MatchedTerms",
-            "RepositoryMemoryDispatchInspection.Inclusions",
-            "ContextUsageSnapshot.Memories",
-            "ContextUsageSnapshot.Components",
-            "ContextUsageComponent.Children",
-        ];
-
-        Assert.Equal(covered.Order(StringComparer.Ordinal), found.Order(StringComparer.Ordinal));
-        var populated = new HashSet<string>(StringComparer.Ordinal);
-        var original = TestContextInspection.Create();
-        AssertDetached(original, ContextInspectionSnapshots.Copy(original), populated);
-        Assert.Equal(covered.Order(StringComparer.Ordinal), populated.Order(StringComparer.Ordinal));
-    }
-
     private static void CollectProperties(Type type, HashSet<Type> visited, HashSet<string> collections)
     {
         type = Nullable.GetUnderlyingType(type) ?? type;

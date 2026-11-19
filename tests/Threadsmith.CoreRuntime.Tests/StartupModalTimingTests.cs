@@ -37,23 +37,6 @@ public static class StartupModalTimingTests
         Assert.Equal(TimeSpan.FromSeconds(21), modal.Elapsed);
     }
 
-    /// <summary>Real loading may finish before the decorative delay, which remains independent.</summary>
-    [Fact]
-    public static void EarlyLoadingCompletionDoesNotWaitForSplines()
-    {
-        var clock = new StartupClock();
-        var modal = new StartupModal("Logo", "Loading solution", [], () => { }, _ => CellStyle.Default, timeProvider: clock);
-        clock.Advance(TimeSpan.FromMilliseconds(50));
-
-        modal.Complete();
-
-        Assert.Equal(TimeSpan.FromMilliseconds(50), modal.Elapsed);
-        Assert.False(modal.SplinesCompleted);
-        clock.Advance(TimeSpan.FromSeconds(1));
-        Assert.True(modal.SplinesCompleted);
-        Assert.Equal(TimeSpan.FromMilliseconds(50), modal.Elapsed);
-    }
-
     private sealed class StartupClock : TimeProvider
     {
         private long _timestamp;

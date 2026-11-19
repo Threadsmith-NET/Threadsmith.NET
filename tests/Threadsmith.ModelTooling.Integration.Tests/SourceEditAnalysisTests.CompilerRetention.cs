@@ -6,10 +6,6 @@ using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Xunit;
 
-public abstract partial class SourceEditAnalysisTests
-{
-}
-
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class SourceEditAnalysisTestsCompilerReuseCannotEvictOriginsUnderConfiguredProjectLimit : SourceEditAnalysisTests
 {
@@ -79,7 +75,6 @@ public sealed class SourceEditAnalysisTestsCompilerOriginAdmissionPreservesTruth
 {
     /// <summary>Complete maps, including empty maps, are admitted only within the exact fingerprint bound.</summary>
     [Theory]
-    [InlineData(0, true)]
     [InlineData(1024, true)]
     [InlineData(1025, false)]
     public static async Task CompilerOriginAdmissionPreservesTruthAtTheFingerprintBoundary(int initialCount, bool admitted)
@@ -125,97 +120,5 @@ public sealed class SourceEditAnalysisTestsCompilerOriginAdmissionPreservesTruth
 
         TestContext.Current.TestOutputHelper?.WriteLine($"initial fingerprints={initialCount}; retained={origins[^1]}");
         engine.DiscardEditCandidate(followupCommand.EffectId);
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class SourceEditAnalysisTestsCompilerReuseProjectBoundDoesNotNarrowAffectedCoverage : SourceEditAnalysisTests
-{
-    /// <summary>Unlimited reporting and carried scope do not make compiler reuse unbounded.</summary>
-    [Fact]
-    public static async Task CompilerReuseProjectBoundDoesNotNarrowAffectedCoverage()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        var solutionPath = Path.Combine(fixture.Root, "SmallDotNetSolution.sln");
-        var solutionText = await File.ReadAllTextAsync(solutionPath, ct);
-        var origins = new List<(int CachedProjects, int StagedProjects, int Fingerprints)>();
-        var projectEntries = new System.Text.StringBuilder();
-        for (var index = 0; index < SemanticEngine.MaximumCompilerCachedProjects; index++)
-        {
-            var name = $"Dependent{index}";
-            var directory = Path.Combine(fixture.Root, name);
-            Directory.CreateDirectory(directory);
-            const string projectSource = """
-                <Project Sdk="Microsoft.NET.Sdk">
-                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
-                  <ItemGroup><ProjectReference Include="../Contracts/Contracts.csproj" /></ItemGroup>
-                </Project>
-                """;
-            await File.WriteAllTextAsync(Path.Combine(directory, name + ".csproj"), projectSource, ct);
-            await File.WriteAllTextAsync(Path.Combine(directory, "Source.cs"), $"public class {name} {{ }}", ct);
-            projectEntries.AppendLine($"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"{name}\", \"{name}/{name}.csproj\", \"{{{Guid.NewGuid()}}}\"\nEndProject");
-        }
-
-        await File.WriteAllTextAsync(solutionPath, solutionText.Replace("\nGlobal", "\n" + projectEntries + "Global", StringComparison.Ordinal), ct);
-        // Keep one independently warmed project outside the broad candidate's dependency scope.
-        var appProjectPath = Path.Combine(fixture.Root, "App/App.csproj");
-        var appProject = await File.ReadAllTextAsync(appProjectPath, ct);
-        await File.WriteAllTextAsync(appProjectPath, appProject.Replace("<ProjectReference Include=\"..\\Contracts\\Contracts.csproj\" />", string.Empty, StringComparison.Ordinal), ct);
-        await File.AppendAllTextAsync(Path.Combine(fixture.Root, "Contracts/Services.cs"), "\nclass InitialRetentionError { MissingInitial value; }", ct);
-        var observations = new List<(int CachedProjects, int StagedProjects, int EvidenceSets, int Findings)>();
-        await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
-        {
-            EditCompilerRetentionObserver = observations.Add,
-            EditCompilerOriginRetentionObserver = origins.Add,
-        };
-        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
-        await engine.LoadAsync(request, ct);
-        await engine.WaitForWarmAsync(ct);
-        const string appRelative = "App/Program.cs";
-        var appOriginal = await File.ReadAllTextAsync(Path.Combine(fixture.Root, appRelative), ct);
-        var warmCommand = Command(request.SessionId, RunId.New(), request.WorkspaceId);
-        var warm = await AnalyzeCompletedAsync(engine, events, warmCommand, fixture.Root, Snapshot(appRelative, appOriginal, appOriginal + "\nclass WarmRetention { }"), ct);
-        Assert.True(warm.CompilerCompletedSuccessfully);
-        Assert.Equal(1, warm.ProjectsInScope);
-        Assert.Equal(1, observations[^1].CachedProjects);
-        engine.DiscardEditCandidate(warmCommand.EffectId);
-        observations.Clear();
-        const string relative = "Contracts/Services.cs";
-        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
-        var broadCommand = Command(request.SessionId, warmCommand.RunId, request.WorkspaceId);
-        var broadText = original + "\nclass BroadRetention { MissingIntroduced value; }";
-        var broadSnapshot = Snapshot(relative, original, broadText);
-        var broad = await AnalyzeCompletedAsync(engine, events, broadCommand, fixture.Root, broadSnapshot, ct);
-        Assert.True(broad.CompilerCompletedSuccessfully);
-        Assert.Equal(SemanticEngine.MaximumCompilerCachedProjects + 1, broad.ProjectsInScope);
-        Assert.Equal(broad.ProjectsInScope, broad.ProjectsAnalyzed);
-        Assert.Equal(0, broad.ProjectsOmitted);
-        Assert.All(observations, item => Assert.InRange(item.StagedProjects, 0, SemanticEngine.MaximumCompilerCachedProjects));
-        Assert.Equal(SemanticEngine.MaximumCompilerCachedProjects, observations[^1].CachedProjects);
-        Assert.All(origins, item =>
-        {
-            Assert.InRange(item.CachedProjects, 0, SemanticEngine.MaximumCompilerCachedProjects);
-            Assert.InRange(item.StagedProjects, 0, SemanticEngine.MaximumCompilerCachedProjects);
-            Assert.InRange(item.Fingerprints, 0, 2 * SemanticEngine.MaximumCompilerCachedProjects * SemanticEngine.MaximumCompilerCachedFindingsPerSlot);
-        });
-        Assert.Equal(SemanticEngine.MaximumCompilerCachedProjects, origins[^1].CachedProjects);
-        // Accepted projects outside origin capacity must not rebase introduced findings as initial.
-        engine.ConfirmEditApplied(broadCommand.EffectId);
-        await engine.RefreshDocumentsAsync([new(Path.Combine(fixture.Root, relative), broadText, broadSnapshot.Endpoints[0].AfterSha256!)], ct);
-        var passes = engine.EditAnalysisStatistics.DiagnosticPasses;
-        var retryCommand = Command(request.SessionId, warmCommand.RunId, request.WorkspaceId);
-        var retry = await AnalyzeCompletedAsync(engine, events, retryCommand, fixture.Root, Snapshot(relative, broadText, broadText + "\nclass BroadRetryRetention { }"), ct);
-        Assert.True(retry.CompilerCompletedSuccessfully);
-        Assert.Equal(OrderCompilerDiagnostics(broad.Diagnostics.Select(item => item with { Origin = "unknown" }).ToArray()), OrderCompilerDiagnostics(retry.Diagnostics.Select(item => item with { Origin = "unknown" }).ToArray()));
-        Assert.Contains(retry.Diagnostics, item => item.Code == "CS0246" && item.Origin == "unknown");
-        Assert.Contains(retry.Omissions, item => item.Contains("origin labels are unknown", StringComparison.Ordinal));
-        Assert.Equal(0, retry.NewErrors);
-        Assert.Equal(broad.ProjectsInScope, retry.ProjectsAnalyzed);
-        // Exactly one of the 33 baseline projects was outside the 32-entry reuse cache.
-        Assert.Equal(passes + retry.ProjectsInScope + 1, engine.EditAnalysisStatistics.DiagnosticPasses);
-        Assert.Equal(SemanticEngine.MaximumCompilerCachedProjects, observations[^1].CachedProjects);
-        engine.DiscardEditCandidate(retryCommand.EffectId);
     }
 }

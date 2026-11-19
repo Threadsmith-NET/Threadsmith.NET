@@ -1,8 +1,11 @@
 namespace Threadsmith.Architecture.Tests;
 
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
@@ -13,93 +16,115 @@ using Xunit;
 
 public static partial class RepositoryMemoryBindingTests
 {
-    /// <summary>Disabling through the command boundary stops new intelligence injections while preserving ordinary recall.</summary>
+    /// <summary>Disabling intelligence removes its next-request context and inclusion events while ordinary recall continues.</summary>
     [Fact]
-    public static async Task Disable_excludes_intelligence_from_next_request_and_memory_output()
+    public static async Task DisableCommandExcludesIntelligenceFromNextRequestAndInclusionEvents()
     {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await BindingFixture.CreateAsync(false);
-        await using var intelligence = await IntelligenceFixture.CreateAsync(fixture, ct);
-        var generator = new RecallEmbeddingGenerator();
-        var sanitizer = new SecretOutputSanitizer();
-        var artifacts = new ArtifactStore(fixture.InitialConnection, Path.Combine(fixture.InitialRoot, "artifacts"), sanitizer);
-        await artifacts.InitializeAsync(ct);
-        var conversations = new SqliteConversationStore(fixture.InitialConnection, artifacts, sanitizer);
-        using var retriever = new HybridRepositoryMemoryRetriever(intelligence.Store, generator);
-        var memory = new RepositoryMemoryService(intelligence.Store, generator, sanitizer);
-        await intelligence.Store.AddAsync(
-            intelligence.Identity,
-            new RepositoryMemoryWrite { Text = "Ordinary architecture note.", Origin = RepositoryMemoryOrigin.Manual },
-            generator.Model,
-            await generator.GenerateAsync("ordinary", ct),
-            intelligence.Options.CaptureCurrent(),
-            ct);
-        var registry = new ToolRegistry([new MemoriesTool(memory, intelligence.Options, TestPromptLoader.Instance)]);
-        var model = new CallbackModel(() => { }, "Done.");
-        var assembler = new ContextAssembler(
-            new EvidenceStore(intelligence.Events, sanitizer),
-            new TokenEstimator(),
-            new ContextPolicy(),
-            new PromptAppendLoader(sanitizer),
-            sanitizer,
-            intelligence.Events,
-            TestPromptLoader.Instance,
-            conversationStore: conversations,
-            repositoryMemoryRetriever: retriever);
-        await using var operations = new RepositoryIntelligenceOperations(
-            intelligence.Store,
-            intelligence.Options,
-            intelligence.Monitor,
-            TestPromptLoader.Instance,
-            intelligence.Events,
-            intelligence.Options.SetIntelligenceEnabledAsync,
-            intelligence.Automation);
-        var application = new SessionApplication(
-            intelligence.Events,
-            model,
-            new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
-            sanitizer,
-            NullLogger<SessionApplication>.Instance,
-            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), intelligence.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
-            toolContextFactory: (_, _) => Task.FromResult(new ToolInvocationContext { RepositoryPath = fixture.InitialRoot, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "test" }),
-            contextAssembler: assembler,
-            toolRegistry: registry,
-            conversationStore: conversations,
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance,
-            repositoryMemories: memory,
-            repositoryMemoryOptions: intelligence.Options,
-            repositoryIntelligence: intelligence.Monitor);
-        var session = await application.HandleAsync(new CreateSessionCommand("disable recall"), ct);
-        await operations.BindAsync(session, fixture.InitialRoot, ct);
-        await intelligence.Monitor.WaitUntilReadyAsync(ct);
-        var displayed = new List<MemoriesIncluded>();
-        await using var subscription = intelligence.Events.Subscribe((item, _) =>
+        const string ordinary = "ordinary-memory-fixture";
+        const string intelligence = "intelligence-memory-fixture";
+        var token = TestContext.Current.CancellationToken;
+        var root = Directory.CreateTempSubdirectory("threadsmith-disable-recall-");
+        try
         {
-            if (item is MemoriesIncluded included)
+            var identity = RepositoryIdentity.Create(root.FullName);
+            var connectionString = $"Data Source=disable-recall-{Guid.NewGuid():N};Mode=Memory;Cache=Shared;Pooling=False";
+            await using var connection = new SqliteConnection(connectionString);
+            await connection.OpenAsync(token);
+            await new SqliteEventStore(connectionString).InitializeAsync(token);
+            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(token);
+            using var store = new SqliteManagedRepositoryMemoryStore(connectionString);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
-                displayed.Add(included);
+                ["tools:config:memories:Intelligence:Enabled"] = "true",
+            }).Build();
+            var options = new RepositoryMemoryConfiguration(configuration, configuration, root.FullName);
+            var settings = options.CaptureCurrent();
+            var embeddings = new RecallEmbeddingGenerator();
+            var vector = await embeddings.GenerateAsync(string.Empty, token);
+            await store.CommitCollectionAsync(new RepositoryMemoryCollection(await store.GetSnapshotAsync(identity, [], token), true, 0), settings, token);
+            var ordinarySeed = new RepositoryMemoryWrite { Text = ordinary, Origin = RepositoryMemoryOrigin.Manual };
+            var intelligenceSeed = new RepositoryMemoryWrite { Text = intelligence, Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence };
+            var ordinaryWrite = await store.AddAsync(identity, ordinarySeed, embeddings.Model, vector, settings, token);
+            var intelligenceWrite = await store.AddAsync(identity, intelligenceSeed, embeddings.Model, vector, settings, token);
+            Assert.NotNull(ordinaryWrite.Entry);
+            Assert.NotNull(intelligenceWrite.Entry);
+
+            var sanitizer = new SecretOutputSanitizer();
+            await using var events = new DomainEventStream();
+            using var observer = new RepositoryFileObserver();
+            await using var monitor = new RepositoryIntelligenceMonitor(store, observer, events, NullLogger<RepositoryIntelligenceMonitor>.Instance, sanitizer);
+            var automation = new RepositoryIntelligenceAutomation(new QueuedCommits(), monitor, options, events, NullLogger<RepositoryIntelligenceAutomation>.Instance);
+            await using var operations = new RepositoryIntelligenceOperations(
+                store, options, monitor, TestPromptLoader.Instance, events, options.SetIntelligenceEnabledAsync, automation);
+            using var retriever = new HybridRepositoryMemoryRetriever(store, embeddings);
+            var memory = new RepositoryMemoryService(store, embeddings, sanitizer);
+            var registry = new ToolRegistry([new MemoriesTool(memory, options, TestPromptLoader.Instance)]);
+            var assembler = new ContextAssembler(
+                new EvidenceStore(events, sanitizer),
+                new TokenEstimator(),
+                new ContextPolicy(),
+                new PromptAppendLoader(sanitizer),
+                sanitizer,
+                events,
+                TestPromptLoader.Instance,
+                repositoryMemoryRetriever: retriever);
+            var model = new CallbackModel(() => { }, "done");
+            var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider());
+            var invocationContext = new ToolInvocationContext { RepositoryPath = root.FullName, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "test" };
+            var application = new SessionApplication(
+                events,
+                model,
+                new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.MaxValue)),
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                toolPipeline: pipeline,
+                toolContextFactory: (_, _) => Task.FromResult(invocationContext),
+                contextAssembler: assembler,
+                toolRegistry: registry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance,
+                repositoryMemories: memory,
+                repositoryMemoryOptions: options,
+                repositoryIntelligence: monitor);
+            var session = await application.HandleAsync(new CreateSessionCommand("recall"), token);
+            await operations.BindAsync(session, root.FullName, token);
+            await monitor.WaitUntilReadyAsync(token);
+
+            var inclusions = new List<MemoriesIncluded>();
+            await using (events.Subscribe((item, _) =>
+            {
+                if (item is MemoriesIncluded included)
+                {
+                    inclusions.Add(included);
+                }
+
+                return Task.CompletedTask;
+            }))
+            {
+                var before = await application.HandleAsync(new SubmitRequestCommand(session, "Recall repository notes"), token);
+                Assert.True(await application.HandleAsync(new WaitForRunCommand(before), token));
+                var status = await operations.HandleAsync(new ManageRepositoryIntelligenceCommand(session, root.FullName, "disable"), token);
+                Assert.False(status.IsEffective);
+                var after = await application.HandleAsync(new SubmitRequestCommand(session, "Recall repository notes"), token);
+                Assert.True(await application.HandleAsync(new WaitForRunCommand(after), token));
+
+                Assert.Collection(
+                    model.CapturedRequests,
+                    request => Assert.Contains(request.Messages, message => message.GetModelVisibleContent().Contains(intelligence, StringComparison.Ordinal)),
+                    request =>
+                    {
+                        Assert.Contains(request.Messages, message => message.GetModelVisibleContent().Contains(ordinary, StringComparison.Ordinal));
+                        Assert.DoesNotContain(request.Messages, message => message.GetModelVisibleContent().Contains(intelligence, StringComparison.Ordinal));
+                    });
+                Assert.Contains(inclusions.Where(item => item.RunId == before).SelectMany(item => item.Items), item => item.Id == intelligenceWrite.Entry.Id);
+                var next = Assert.Single(inclusions.Where(item => item.RunId == after).SelectMany(item => item.Items));
+                Assert.Equal(ordinaryWrite.Entry.Id, next.Id);
             }
-
-            return Task.CompletedTask;
-        });
-
-        var first = await application.HandleAsync(new SubmitRequestCommand(session, "Explain the architecture"), ct);
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(first), ct));
-        Assert.Contains(model.CapturedRequests.SelectMany(request => request.Messages), message => message.GetModelVisibleContent().Contains("Preserve the existing architecture assertion.", StringComparison.Ordinal));
-        Assert.Contains(displayed.SelectMany(item => item.Items), item => item.Ownership == RepositoryMemoryOwnership.Intelligence);
-        var status = await operations.HandleAsync(new ManageRepositoryIntelligenceCommand(session, fixture.InitialRoot, "disable"), ct);
-        Assert.False(status.IsEffective);
-        Assert.False(intelligence.Options.CaptureCurrent().Intelligence.Enabled);
-        model.CapturedRequests.Clear();
-        displayed.Clear();
-
-        var second = await application.HandleAsync(new SubmitRequestCommand(session, "Explain the architecture"), ct);
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(second), ct));
-        Assert.DoesNotContain(model.CapturedRequests.SelectMany(request => request.Messages), message => message.GetModelVisibleContent().Contains("Preserve the existing architecture assertion.", StringComparison.Ordinal));
-        Assert.Contains(model.CapturedRequests.SelectMany(request => request.Messages), message => message.GetModelVisibleContent().Contains("Ordinary architecture note.", StringComparison.Ordinal));
-        Assert.NotEmpty(displayed);
-        Assert.All(displayed.SelectMany(item => item.Items), item => Assert.Equal(RepositoryMemoryOwnership.Ordinary, item.Ownership));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
     }
 
     private sealed class RecallEmbeddingGenerator : ITextEmbeddingGenerator
@@ -109,7 +134,7 @@ public static partial class RepositoryMemoryBindingTests
         public Task<TextEmbeddingResult> GenerateAsync(string text, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new TextEmbeddingResult(new float[] { 1 }, 5, false));
+            return Task.FromResult(new TextEmbeddingResult(new float[] { 1 }, 1, false));
         }
     }
 }

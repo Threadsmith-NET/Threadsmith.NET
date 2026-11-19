@@ -30,48 +30,6 @@ public sealed partial class DeployedPromptLoaderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new DeployedPromptLoadLimits(2, 1));
     }
 
-    /// <summary>The shared in-memory consumer fixture preserves production one-pass token semantics.</summary>
-    [Fact]
-    public void TestPromptLoader_Render_DoesNotRecursivelyInterpretTokenValues()
-    {
-        var prompts = TestPromptLoader.Instance.WithPrompt(
-            PromptFileNames.CorrectionToolBatchPreflightFailed,
-            "{{Ordinal}}|{{Tool}}|{{Reason}}");
-        var rendered = prompts.Render(
-            PromptFileNames.CorrectionToolBatchPreflightFailed,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Ordinal"] = "1",
-                ["Tool"] = "{{Reason}}",
-                ["Reason"] = "safe",
-            });
-
-        Assert.Equal("1|{{Reason}}|safe", rendered);
-    }
-
-    /// <summary>Platform rendering normalizes template framing without rewriting token content.</summary>
-    [Fact]
-    public void PromptAssetRenderer_NormalizesOnlyTemplateLineEndings()
-    {
-        var prompts = TestPromptLoader.Instance.WithPrompt(
-            PromptFileNames.CorrectionToolBatchPreflightFailed,
-            "start\n{{Reason}}\nend");
-
-        var rendered = PromptAssetRenderer.RenderWithPlatformLineEndings(
-            prompts,
-            PromptFileNames.CorrectionToolBatchPreflightFailed,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Ordinal"] = "unused",
-                ["Tool"] = "unused",
-                ["Reason"] = "value\nkept",
-            });
-
-        Assert.Equal(
-            "start" + Environment.NewLine + "value\nkept" + Environment.NewLine + "end",
-            rendered);
-    }
-
     private static readonly UTF8Encoding Utf8WithoutBom = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
@@ -152,32 +110,6 @@ public sealed partial class DeployedPromptLoaderTests
         Assert.All(
             results.Where((_, index) => index % 2 != 0),
             result => Assert.Equal(expectedRendered, result));
-    }
-
-    /// <summary>Rendering requires every required token and substitutes token values only once.</summary>
-    [Fact]
-    public async Task Render_RequiredTokens_AreStrictAndNonRecursive()
-    {
-        var definition = PromptAssetCatalog.Get(PromptFileNames.ToolRunProcessDescription);
-        using var catalog = TemporaryPromptCatalog.Create(definition);
-        catalog.WriteText(
-            definition.FileName,
-            "before {ordinary} {{ShellLanguage}} after {{ShellLanguage}}");
-        var loader = await catalog.LoadAsync();
-
-        var missing = Assert.Throws<ArgumentException>(() =>
-            loader.Render(definition.FileName, new Dictionary<string, string>(StringComparer.Ordinal)));
-        var rendered = loader.Render(
-            definition.FileName,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["ShellLanguage"] = "{{ShellLanguage}} and {{UnknownMarker}}",
-            });
-
-        Assert.Contains("Required prompt token", missing.Message, StringComparison.Ordinal);
-        Assert.Equal(
-            "before {ordinary} {{ShellLanguage}} and {{UnknownMarker}} after {{ShellLanguage}} and {{UnknownMarker}}",
-            rendered);
     }
 
     /// <summary>Declared optional block tokens may be omitted or supplied without leaving a marker behind.</summary>

@@ -29,24 +29,6 @@ public static class OpenAiCompatibleToolTextTests
         Assert.Empty(remainder);
     }
 
-    /// <summary>Opt-in allocation probe guards against repeatedly copying a long deferred prefix.</summary>
-    [Fact(Explicit = true)]
-    [Trait("Category", "Performance")]
-    public static void LeadingWhitespace_Stress_DoesNotRepeatedlyCopyAccumulatedContent()
-    {
-        var guard = new NativeToolTextGuard();
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        const int chunkCount = 100_000;
-        for (var index = 0; index < chunkCount; index++)
-        {
-            _ = guard.Append(" ");
-        }
-
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-        Assert.InRange(allocated, 0, 4_000_000);
-        Assert.Equal(new string(' ', chunkCount) + "hello", guard.Append("hello"));
-    }
-
     /// <summary>The captured chunk boundaries cannot leak text or release a valid sibling, and usage remains reported.</summary>
     [Theory]
     [InlineData(false)]
@@ -95,75 +77,6 @@ public static class OpenAiCompatibleToolTextTests
         await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
             await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
                 .ToListAsync(TestContext.Current.CancellationToken));
-    }
-
-    /// <summary>Equivalent XML whitespace, quoting, and multiple parameters are recognized.</summary>
-    [Theory]
-    [InlineData("<parameter name='path'>file.cs</parameter>\r\n</function>\r\n</tool_call>")]
-    [InlineData(" \n<parameter\n name='path'>file.cs</parameter>\n</function>\n</tool_call>\n")]
-    [InlineData("<parameter name='path'>file.cs</parameter><parameter name='query'>x</parameter></function></tool_call>")]
-    public static async Task OrphanDetectionUsesXmlStructure(string text)
-    {
-        using var client = new HttpClient(new StreamHandler(Stream(text.Select(character => character.ToString())))) { Timeout = Timeout.InfiniteTimeSpan };
-
-        await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
-            await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
-                .ToListAsync(TestContext.Current.CancellationToken));
-    }
-
-    /// <summary>XML examples and ambiguous fragments retain their exact original text.</summary>
-    [Theory]
-    [InlineData("<parameter name=\"path\">src/Threadsmith.sln</parameter>")]
-    [InlineData("<parameterization>normal XML</parameterization>")]
-    [InlineData("<parameter name='x'>value</parameter> extra prose </function></tool_call>")]
-    [InlineData("<parameter name='x'>value</parameter></function></tool_call><second/>")]
-    [InlineData("<parameter name='x'>value</parameter></function></tool_call> commentary </tool_call>")]
-    [InlineData("<parameter name='x'>value</parameter></function></tool_call><tool_call></tool_call>")]
-    [InlineData("<tool_call><function><parameter name='x'>value</parameter></function></tool_call>")]
-    [InlineData("<parameter")]
-    [InlineData("Example:\n" + Orphan)]
-    [InlineData("```xml\n" + Orphan + "\n```")]
-    [InlineData("~~~xml\n" + Orphan + "\n~~~")]
-    [InlineData("`" + Orphan + "`")]
-    public static async Task XmlExamplesAndUnconfirmedFragmentsRemainVerbatim(string content)
-    {
-        using var client = new HttpClient(new StreamHandler(Stream(content.Select(character => character.ToString())))) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(content, string.Concat(chunks.Select(chunk => chunk.Text)));
-        Assert.Single(chunks, chunk => chunk.Output is ToolRequestModelOutput);
-    }
-
-    /// <summary>Parameter text alone does not establish a malformed native invocation.</summary>
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public static async Task RequiresBothAdvertisedToolsAndANativeCall(bool advertiseTools, bool nativeCall)
-    {
-        using var client = new HttpClient(new StreamHandler(Stream([Orphan], nativeCall: nativeCall))) { Timeout = Timeout.InfiniteTimeSpan };
-        var request = Request();
-        if (!advertiseTools)
-        {
-            request = request with { Tools = [] };
-        }
-
-        var chunks = await Provider(client).StreamAsync(request, TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(Orphan, string.Concat(chunks.Select(chunk => chunk.Text)));
-    }
-
-    /// <summary>Normal prose is delivered without waiting for response completion.</summary>
-    [Fact]
-    public static async Task OrdinaryTextKeepsItsStreamingChunks()
-    {
-        string[] fragments = ["I will ", "inspect ", "the source."];
-        using var client = new HttpClient(new StreamHandler(Stream(fragments))) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = await Provider(client).StreamAsync(Request(), TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(fragments, chunks.Where(chunk => chunk.Text is not null).Select(chunk => chunk.Text));
     }
 
     private static string Stream(

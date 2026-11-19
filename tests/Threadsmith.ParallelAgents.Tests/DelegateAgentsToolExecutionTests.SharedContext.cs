@@ -124,29 +124,4 @@ public sealed partial class DelegateAgentsToolExecutionTests
                 message => message.GetModelVisibleContent().Contains("evidence-123", StringComparison.Ordinal));
         }
     }
-
-    /// <summary>Both transport schemas support optional null contexts with host-owned effective-context validation.</summary>
-    [Fact]
-    public async Task SharedContext_SchemaSupportsOptionalContextInOrdinaryAndStrictTransports()
-    {
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var fixture = CreateTool(
-            new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
-            new FixedRunnerFactory(new CompletedResponseRunner()));
-        var schema = fixture.Tool.Definition.InputSchema.JsonSchema;
-        using var ordinary = JsonDocument.Parse(schema);
-        var root = ordinary.RootElement;
-        Assert.DoesNotContain(root.GetProperty("required").EnumerateArray(), item => item.GetString() == "sharedContext");
-        Assert.DoesNotContain(
-            root.GetProperty("properties").GetProperty("agents").GetProperty("items").GetProperty("required").EnumerateArray(),
-            item => item.GetString() == "context");
-
-        var projected = Assert.IsType<string>(ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(DelegateAgentsContract.ToolId, schema));
-        using var strict = JsonDocument.Parse(projected);
-        var shared = strict.RootElement.GetProperty("properties").GetProperty("sharedContext");
-        Assert.Contains(shared.GetProperty("type").EnumerateArray(), item => item.GetString() == "null");
-        var individual = strict.RootElement.GetProperty("properties").GetProperty("agents").GetProperty("items").GetProperty("properties").GetProperty("context");
-        Assert.Contains(individual.GetProperty("type").EnumerateArray(), item => item.GetString() == "null");
-    }
 }

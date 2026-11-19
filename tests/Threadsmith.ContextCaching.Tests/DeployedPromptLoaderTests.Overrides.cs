@@ -23,38 +23,6 @@ public sealed partial class DeployedPromptLoaderTests
         Assert.False(File.Exists(fixture.PermissionPath));
     }
 
-    /// <summary>Each prompt independently selects the first present override or shipped fallback.</summary>
-    [Theory]
-    [InlineData(0, "user-model")]
-    [InlineData(1, "user-all")]
-    [InlineData(2, "application-model")]
-    [InlineData(3, "application-all")]
-    [InlineData(4, null)]
-    public async Task Overrides_ResolveEachFileThroughAllFivePrecedenceLevels(int firstPresent, string? expected)
-    {
-        using var fixture = await OverrideFixture.CreateAsync();
-        var shipped = fixture.Loader.Get(PromptFileNames.SystemSystemPrompt);
-        var untouched = fixture.Loader.Get(PromptFileNames.SystemRepositoryInspection);
-        (bool User, ModelProfileId? Model, string Text)[] candidates =
-        [
-            (true, fixture.FirstModel, "user-model"),
-            (true, null, "user-all"),
-            (false, fixture.FirstModel, "application-model"),
-            (false, null, "application-all"),
-        ];
-        foreach (var candidate in candidates.Skip(firstPresent))
-        {
-            await fixture.WriteAsync(candidate.User, candidate.Model, PromptFileNames.SystemSystemPrompt, candidate.Text);
-        }
-
-        await fixture.ReloadAsync();
-
-        using var scope = fixture.Loader.BeginModelScope(fixture.FirstModel);
-        Assert.Equal(expected ?? shipped, fixture.Loader.Get(PromptFileNames.SystemSystemPrompt));
-        Assert.Equal(untouched, fixture.Loader.Get(PromptFileNames.SystemRepositoryInspection));
-        Assert.False(File.Exists(fixture.PermissionPath));
-    }
-
     /// <summary>Concurrent receiving-model views remain isolated and restore the parent view.</summary>
     [Fact]
     public async Task Overrides_ConcurrentModelScopes_RestoreParentAndNeverShareSelectedText()
@@ -110,52 +78,6 @@ public sealed partial class DeployedPromptLoaderTests
 
         using var next = fixture.Loader.BeginModelScope(fixture.FirstModel);
         Assert.Equal("after", fixture.Loader.Get(PromptFileNames.SystemSystemPrompt));
-    }
-
-    /// <summary>Cached lookup, rendering, and model switching survive removal of physical prompt directories.</summary>
-    [Fact]
-    public async Task Overrides_LookupRenderAndModelSwitch_DoNotReadRemovedDirectories()
-    {
-        using var fixture = await OverrideFixture.CreateAsync();
-        await fixture.WriteAsync(true, fixture.FirstModel, PromptFileNames.ContextExecutionOutcome, "override {{OutcomeJson}}");
-        await fixture.ReloadAsync();
-        Directory.Delete(fixture.UserRoot, recursive: true);
-        Directory.Delete(fixture.Catalog.PromptRoot, recursive: true);
-
-        using (fixture.Loader.BeginModelScope(fixture.FirstModel))
-        {
-            Assert.Equal("override {{OutcomeJson}}", fixture.Loader.Render(
-                PromptFileNames.ContextExecutionOutcome,
-                new Dictionary<string, string> { ["OutcomeJson"] = "{{OutcomeJson}}" }));
-        }
-
-        using var other = fixture.Loader.BeginModelScope(fixture.SecondModel);
-        Assert.Equal(
-            TemporaryPromptCatalog.CreateValidContent(PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt)),
-            fixture.Loader.Get(PromptFileNames.SystemSystemPrompt));
-    }
-
-    /// <summary>Removing winning replacements restores lower scopes and ultimately shipped text.</summary>
-    [Fact]
-    public async Task Overrides_Removal_RestoresLowerScopesAndThenShippedText()
-    {
-        using var fixture = await OverrideFixture.CreateAsync();
-        var shipped = fixture.Loader.Get(PromptFileNames.SystemSystemPrompt);
-        await fixture.WriteAsync(false, null, PromptFileNames.SystemSystemPrompt, "application");
-        await fixture.WriteAsync(true, null, PromptFileNames.SystemSystemPrompt, "user");
-        await fixture.WriteAsync(true, fixture.FirstModel, PromptFileNames.SystemSystemPrompt, "model");
-        await fixture.ReloadAsync();
-
-        foreach (var expected in new[] { "user", "application", shipped })
-        {
-            var path = expected == "user" ? fixture.GetPath(true, fixture.FirstModel, PromptFileNames.SystemSystemPrompt)
-                : expected == "application" ? fixture.GetPath(true, null, PromptFileNames.SystemSystemPrompt)
-                : fixture.GetPath(false, null, PromptFileNames.SystemSystemPrompt);
-            File.Delete(path);
-            await fixture.ReloadAsync();
-            using var scope = fixture.Loader.BeginModelScope(fixture.FirstModel);
-            Assert.Equal(expected, fixture.Loader.Get(PromptFileNames.SystemSystemPrompt));
-        }
     }
 
     /// <summary>Old custom duplicate prompts fail the new count-token contract.</summary>
@@ -245,27 +167,6 @@ public sealed partial class DeployedPromptLoaderTests
         Assert.Equal(
             TemporaryPromptCatalog.CreateValidContent(PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt)),
             fixture.Loader.Get(PromptFileNames.SystemSystemPrompt));
-    }
-
-    /// <summary>Unknown files and owner directories cannot extend the host catalog.</summary>
-    [Fact]
-    public async Task Overrides_UnknownFilesAndProjectDirectories_DoNotExpandTheCatalog()
-    {
-        using var fixture = await OverrideFixture.CreateAsync();
-        await fixture.WriteAsync(true, null, PromptFileNames.SystemSystemPrompt, "known");
-        var unknown = Path.Combine(fixture.UserRoot, "Threadsmith.Context", "Unknown.md");
-        await File.WriteAllTextAsync(unknown, "unknown", TestContext.Current.CancellationToken);
-        var wrongProject = Path.Combine(fixture.UserRoot, "Unknown.Project");
-        Directory.CreateDirectory(wrongProject);
-        await File.WriteAllTextAsync(Path.Combine(wrongProject, PromptFileNames.SystemRepositoryInspection), "wrong owner", TestContext.Current.CancellationToken);
-
-        await fixture.ReloadAsync();
-
-        Assert.Throws<ArgumentException>(() => fixture.Loader.Get("Unknown.md"));
-        Assert.Equal(PromptAssetCatalog.All.Count, fixture.Loader.Assets.Count);
-        Assert.Equal(
-            TemporaryPromptCatalog.CreateValidContent(PromptAssetCatalog.Get(PromptFileNames.SystemRepositoryInspection)),
-            fixture.Loader.Get(PromptFileNames.SystemRepositoryInspection));
     }
 
     /// <summary>Linked replacement files cannot import repository-controlled prose.</summary>

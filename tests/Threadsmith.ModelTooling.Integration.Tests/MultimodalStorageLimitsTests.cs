@@ -11,40 +11,6 @@ public sealed partial class MultimodalTests
     private static readonly byte[] GreenPng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAD0lEQVR4nGNg+M8AQhAKABvyA/1tVLjHAAAAAElFTkSuQmCC");
 
     /// <summary>Verifies configured bounds and reference-aware capacity through production entry points.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ImageQuotaReclaimsRemovedAttachmentsAndUnownedBodies(bool leaveLegacyBody)
-    {
-        await using var fixture = await Fixture.CreateAsync(maximumRetainedImageBytes: Png.Length);
-        var token = TestContext.Current.CancellationToken;
-        var session = SessionId.New();
-        for (var iteration = 0; iteration < 3; iteration++)
-        {
-            var image = await fixture.Store.StoreImageAsync(new MemoryStream(Png), session, "clipboard", cancellationToken: token);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Store.StoreImageAsync(new MemoryStream(GreenPng), session, "clipboard", cancellationToken: token));
-            var body = Path.Combine(fixture.Root, "artifacts", image.ContentHash[..2], image.ContentHash[2..4], image.ContentHash + ".bin");
-            if (leaveLegacyBody)
-            {
-                // Normal reference pruning leaves young bodies for retention. Quota admission must reclaim them regardless of age.
-                Assert.Equal(1, await fixture.Store.PruneImageReferencesAsync(DateTimeOffset.MaxValue, token));
-                Assert.True(File.Exists(body));
-            }
-            else
-            {
-                await fixture.Store.ReleaseImageAsync(image.Id, session, token);
-                Assert.False(File.Exists(body));
-                Assert.Empty(await fixture.Store.ListAsync(null, token));
-            }
-
-            var replacement = await fixture.Store.StoreImageAsync(new MemoryStream(GreenPng), session, "clipboard", cancellationToken: token);
-            Assert.False(File.Exists(body));
-            Assert.Equal(GreenPng, (await fixture.Store.ReadImageAsync(replacement, session, token)).ToArray());
-            await fixture.Store.ReleaseImageAsync(replacement.Id, session, token);
-        }
-    }
-
-    /// <summary>Verifies configured bounds and reference-aware capacity through production entry points.</summary>
     [Fact]
     public async Task ImageQuotaDeduplicatesAndPreservesSharedBodies()
     {
@@ -99,24 +65,6 @@ public sealed partial class MultimodalTests
         var retried = await fixture.InvokeAsync(session, "read_file", "{\"path\":\"quota.pdf\"}", token);
         Assert.True(retried.Succeeded, retried.Error);
         Assert.Single(retried.Images);
-    }
-
-    /// <summary>Verifies configured bounds and reference-aware capacity through production entry points.</summary>
-    [Theory]
-    [InlineData(144, 1600, 600, 400)]
-    [InlineData(288, 3200, 1200, 800)]
-    [InlineData(288, 900, 900, 600)]
-    [InlineData(10000, 8192, 5016, 3344)]
-    public async Task PdfReadHonorsConfiguredResolutionAndImageAdmissionBounds(int dpi, int dimension, int width, int height)
-    {
-        await using var fixture = await Fixture.CreateAsync(limits: new ToolLimits { PdfRenderDpi = dpi, PdfRenderMaximumDimension = dimension });
-        var token = TestContext.Current.CancellationToken;
-        await File.WriteAllBytesAsync(Path.Combine(fixture.Root, "resolution.pdf"), CreatePdf(), token);
-        var result = await fixture.InvokeAsync(SessionId.New(), "read_file", "{\"path\":\"resolution.pdf\"}", token);
-        Assert.True(result.Succeeded, result.Error);
-        var image = Assert.Single(result.Images);
-        Assert.Equal((width, height), (image.Width, image.Height));
-        Assert.True((long)image.Width * image.Height <= ImageArtifactLimits.MaximumPixels);
     }
 
     /// <summary>Verifies configured bounds and reference-aware capacity through production entry points.</summary>

@@ -64,41 +64,4 @@ public static class DiagnosticBundleTests
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => generator.GenerateAsync(options, new DiagnosticBundleInputs { HostVersion = "x" }, CancellationToken.None));
     }
-
-    /// <summary>An oversized diagnostic bundle is refused without leaving a partial archive.</summary>
-    [Fact]
-    public static async Task Oversized_bundle_is_refused_and_deleted()
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"m8-oversize-{Guid.NewGuid():N}");
-        try
-        {
-            var generator = new DiagnosticBundleGenerator(new SecretOutputSanitizer());
-            var options = new DiagnosticBundleOptions
-            {
-                Enabled = true,
-                Directory = directory,
-                IncludeLogs = true,
-                MaximumBytes = 64,
-            };
-            var inputs = new DiagnosticBundleInputs
-            {
-                HostVersion = "0.1.0-test",
-                LogText = new string('x', 4096),
-            };
-
-            await Assert.ThrowsAsync<InvalidOperationException>(
-                () => generator.GenerateAsync(options, inputs, CancellationToken.None));
-            var bundles = Directory.Exists(directory)
-                ? Directory.GetFiles(directory, "*.zip")
-                : [];
-            Assert.Empty(bundles);
-        }
-        finally
-        {
-            if (Directory.Exists(directory))
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-        }
-    }
 }

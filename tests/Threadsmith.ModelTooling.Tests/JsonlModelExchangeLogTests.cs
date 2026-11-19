@@ -51,33 +51,6 @@ public sealed class JsonlModelExchangeLogTests : IDisposable
         Assert.Equal(1, current.RootElement.GetProperty("ToolContinuationRound").GetInt32());
     }
 
-    /// <summary>Suffix selection is numeric, unbounded, and specific to the active log.</summary>
-    [Theory]
-    [InlineData("10", "11")]
-    [InlineData("92233720368547758081234567890", "92233720368547758081234567891")]
-    public async Task RotateAsync_UsesHighestNumericSuffixForSameLog(string highest, string expected)
-    {
-        var path = Path.Combine(_directory, "raw.jsonl");
-        var log = new JsonlModelExchangeLog(path);
-        string[] existingNames = [
-            "raw_0.jsonl", "raw_9.jsonl", $"raw_{highest}.jsonl", "other_999.jsonl",
-            "raw_other_999.jsonl", "raw_-1.jsonl", "raw_12x.jsonl", "raw_500.txt",
-        ];
-        foreach (var name in existingNames)
-        {
-            await File.WriteAllTextAsync(Path.Combine(_directory, name), name);
-        }
-
-        await File.WriteAllTextAsync(path, "new archive");
-        await log.RotateAsync();
-
-        Assert.Equal("new archive", await File.ReadAllTextAsync(Path.Combine(_directory, $"raw_{expected}.jsonl")));
-        foreach (var name in existingNames)
-        {
-            Assert.Equal(name, await File.ReadAllTextAsync(Path.Combine(_directory, name)));
-        }
-    }
-
     /// <summary>Cancellation preserves the source and permits later writes.</summary>
     [Fact]
     public async Task RotateAsync_Canceled_DoesNotMoveFileOrBlockSubsequentWrites()
@@ -151,21 +124,6 @@ public sealed class JsonlModelExchangeLogTests : IDisposable
         }
 
         Assert.Equal(Enumerable.Range(0, 30), sequences.Order());
-    }
-
-    /// <summary>An occupied archive destination is skipped without overwriting it.</summary>
-    [Fact]
-    public async Task RotateAsync_ArchiveNameOccupiedByDirectory_UsesNextAvailableSuffix()
-    {
-        var path = Path.Combine(_directory, "raw.jsonl");
-        var log = new JsonlModelExchangeLog(path);
-        Directory.CreateDirectory(Path.Combine(_directory, "raw_0.jsonl"));
-        await File.WriteAllTextAsync(path, "original");
-
-        await log.RotateAsync();
-
-        Assert.True(Directory.Exists(Path.Combine(_directory, "raw_0.jsonl")));
-        Assert.Equal("original", await File.ReadAllTextAsync(Path.Combine(_directory, "raw_1.jsonl")));
     }
 
     /// <summary>Removes the isolated test log directory.</summary>

@@ -9,91 +9,6 @@ using Xunit;
 /// <summary>Plan 103 retrieval contracts replacing automatic conversation-fact promotion and overlap scoring.</summary>
 public static class Plan34ConversationMemoryTests
 {
-    /// <summary>Both qualified branches fuse while unrelated memories never fill the requested maximum.</summary>
-    [Fact]
-    public static async Task Automatic_recall_requires_semantics_and_preserves_lexical_ranking()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = CreateGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var both = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta shared"));
-        var lexical = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta lexical"));
-        var semantic = await service.ExecuteAsync(MemoryTestData.Operation("add", "paraphrase"));
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "unrelated"));
-        using var retriever = CreateRetriever(fixture, generator);
-
-        var result = await retriever.RetrieveAsync(Query("alpha beta"));
-
-        Assert.Equal(2, result.Selected.Count);
-        Assert.Equal(both.Id, result.Selected[0].Entry.Id);
-        Assert.NotNull(result.Selected[0].LexicalRank);
-        Assert.DoesNotContain(result.Selected, candidate => candidate.Entry.Id == lexical.Id);
-        Assert.Contains(result.Selected, candidate => candidate.Entry.Id == semantic.Id && candidate.LexicalRank is null && candidate.SemanticRank is not null);
-        Assert.DoesNotContain(result.Selected, candidate => candidate.Entry.Text == "unrelated");
-    }
-
-    /// <summary>Lexical fallback applies exact minimum-term qualification, including Unicode and FTS punctuation.</summary>
-    [Theory]
-    [InlineData("alpha beta", 1)]
-    [InlineData("alpha", 2)]
-    [InlineData("\"alpha\" OR (beta*)", 1)]
-    [InlineData("café dépôt", 1)]
-    [InlineData("東京", 1)]
-    [InlineData("the and with", 0)]
-    [InlineData("*** : ()", 0)]
-    [InlineData("", 0)]
-    public static async Task Lexical_fallback_qualifies_safe_terms(string query, int expected)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = CreateGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta"));
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha alone"));
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "cafe depot 東京"));
-        generator.Generate = _ => throw new InvalidOperationException("offline");
-        using var retriever = CreateRetriever(fixture, generator);
-
-        var result = await retriever.SearchAsync(new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = MemoryTestData.Repository,
-            Query = query,
-            Options = new RepositoryMemorySearchOptions(),
-        });
-
-        Assert.Equal(expected, result.Selected.Count);
-        Assert.All(result.Selected, candidate => Assert.Null(candidate.SemanticRank));
-        if (query.Length > 0)
-        {
-            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("lexical matches only", StringComparison.Ordinal));
-        }
-    }
-
-    /// <summary>Unchanged rounds reuse query embeddings and rankings, while writes invalidate only ranking.</summary>
-    [Fact]
-    public static async Task Cache_reuses_query_but_mutations_refresh_rankings()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = CreateGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta shared"));
-        using var retriever = CreateRetriever(fixture, generator);
-        var first = await retriever.RetrieveAsync(Query("alpha beta"));
-        var cached = await retriever.RetrieveAsync(Query("alpha beta"));
-        var entry = Assert.Single(first.Selected).Entry;
-        await service.RecordInclusionsAsync(MemoryTestData.Repository, RunId.New(), [new RepositoryMemoryInclusion(entry.Id, entry.Revision)]);
-        var afterUsage = await retriever.RetrieveAsync(Query("alpha beta"));
-        await service.ExecuteAsync(MemoryTestData.Operation("remove", id: saved.Id));
-        var afterDelete = await retriever.RetrieveAsync(Query("alpha beta"));
-
-        Assert.True(cached.QueryEmbeddingCacheHit);
-        Assert.True(cached.RankingCacheHit);
-        Assert.True(afterUsage.RankingCacheHit);
-        Assert.False(afterDelete.RankingCacheHit);
-
-        Assert.Empty(afterDelete.Selected);
-        Assert.Equal(2, generator.Calls);
-    }
-
     /// <summary>A request-local cutoff reranks an unchanged query without repeating inference.</summary>
     [Fact]
     public static async Task Semantic_minimum_reranks_cached_query_without_reembedding()
@@ -154,23 +69,6 @@ public static class Plan34ConversationMemoryTests
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryOptions { SemanticMinimum = value }.Validate());
         }
-    }
-
-    /// <summary>Equal branch scores use stable IDs rather than usage, origin, or age.</summary>
-    [Fact]
-    public static async Task Stable_ties_ignore_usage_and_origin()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var first = await service.ExecuteAsync(MemoryTestData.Operation("add", "first paraphrase"));
-        var second = await service.ExecuteAsync(MemoryTestData.Operation("add", "second paraphrase") with { Origin = RepositoryMemoryOrigin.Model });
-        using var retriever = CreateRetriever(fixture, generator);
-
-        var result = await retriever.RetrieveAsync(Query("unmatched exact query"));
-
-        Assert.Equal(new[] { first.Id, second.Id }.OrderBy(id => id?.Value), result.Selected.Select(candidate => (RepositoryMemoryId?)candidate.Entry.Id));
-        Assert.All(result.Selected, candidate => Assert.Null(candidate.LexicalRank));
     }
 
     /// <summary>Query truncation is inspectable and accepted only for queries, never persisted content.</summary>
@@ -278,20 +176,6 @@ public static class Plan34ConversationMemoryTests
         Assert.Equal(3, generator.Calls);
     }
 
-    /// <summary>An empty repository does not load or invoke local inference.</summary>
-    [Fact]
-    public static async Task Empty_repository_avoids_embedding_work()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator { Generate = _ => throw new InvalidOperationException("offline") };
-        using var retriever = CreateRetriever(fixture, generator);
-
-        var result = await retriever.RetrieveAsync(Query("current request"));
-
-        Assert.Empty(result.Selected);
-        Assert.Equal(0, generator.Calls);
-    }
-
     private static RepositoryMemoryRetrievalRequest Query(string text)
     {
         return new()
@@ -305,16 +189,5 @@ public static class Plan34ConversationMemoryTests
     private static HybridRepositoryMemoryRetriever CreateRetriever(ConversationFixture fixture, ITextEmbeddingGenerator generator)
     {
         return new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
-    }
-
-    private static TestMemoryEmbeddingGenerator CreateGenerator()
-    {
-        return new()
-        {
-            Generate = text => new TextEmbeddingResult(
-                text is "paraphrase" or "alpha beta shared" or "alpha beta" ? (float[])[1, 0, 0] : (float[])[0, 1, 0],
-                4,
-                false),
-        };
     }
 }

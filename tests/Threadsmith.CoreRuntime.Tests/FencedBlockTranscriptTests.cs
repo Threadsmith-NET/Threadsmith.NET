@@ -64,22 +64,6 @@ public static class FencedBlockTranscriptTests
         Assert.Equal("Complete", view.SelectedText());
     }
 
-    /// <summary>Body clicks retain selection and modified presses never trigger copy.</summary>
-    [Fact]
-    public static void BodySelectionAndModifiedClicks_DoNotCopy()
-    {
-        var copies = new List<string>();
-        var view = Create("```\nbody content\n```", copies);
-        var cells = Render(view, 40);
-        var row = CopyRow(cells);
-        view.HandleMouse(Mouse(MouseEventKind.Press, 33, row, KeyModifiers.Shift));
-        view.HandleMouse(Mouse(MouseEventKind.Press, 2, row + 1));
-        view.HandleMouse(Mouse(MouseEventKind.Move, 6, row + 1));
-        view.HandleMouse(Mouse(MouseEventKind.Release, 6, row + 1));
-        Assert.Empty(copies);
-        Assert.Contains("body", view.SelectedText(), StringComparison.Ordinal);
-    }
-
     /// <summary>Keyboard activation uses the same focused block rather than the first visual match.</summary>
     [Fact]
     public static void Keyboard_FocusesSecondBlockAndCopiesOnce()

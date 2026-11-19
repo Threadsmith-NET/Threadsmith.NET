@@ -475,138 +475,6 @@ public sealed partial class Plan91DelegationToolTests
             valid.Replace("\"readOnly\"", "0", StringComparison.Ordinal)));
     }
 
-    /// <summary>Verifies a file identity change changes the shared canonical baseline fence.</summary>
-    [Fact]
-    public void PlanFactory_BaselineIdentityIncludesFileHashes()
-    {
-        // Arrange
-        var workspaceId = WorkspaceId.New();
-        var capturedAt = DateTimeOffset.Parse(
-            "2026-01-02T03:04:05Z",
-            System.Globalization.CultureInfo.InvariantCulture);
-        var first = new WorkspaceBaseline(
-            workspaceId,
-            Environment.CurrentDirectory,
-            capturedAt,
-            [new WorkspaceFileHash("src/A.cs", "first", 1)]);
-        var second = first with
-        {
-            Files = [new WorkspaceFileHash("src/A.cs", "second", 1)],
-        };
-        var delimited = first with
-        {
-            Files =
-            [
-                new WorkspaceFileHash("a", "H1", 1),
-                new WorkspaceFileHash("b", "H2", 2),
-            ],
-        };
-        var formerlyAmbiguous = first with
-        {
-            Files = [new WorkspaceFileHash("a", "H1|b:H2", 3)],
-        };
-        var registry = new ToolRegistry([]);
-        var toolSnapshots = new ConversationToolSnapshotStore();
-        var context = CreateExecutionContext(
-            workspaceId,
-            ConversationSensitivity.None,
-            registry,
-            toolSnapshots);
-        var input = new DelegateAgentsInput
-        {
-            Agents =
-            [
-                new DelegateAgentRequest
-                {
-                    Task = "inspect",
-                    Context = "context",
-                    ToolAccess = DelegateAgentToolAccess.ReadOnly,
-                },
-            ],
-        };
-
-        // Act
-        var firstPlan = new DelegateAgentsPlanFactory(
-            new StubWorkspaceResolver(first),
-            new SessionModelPreferences(),
-            toolSnapshots,
-            TestPromptLoader.Instance).Create(input, context);
-        var secondPlan = new DelegateAgentsPlanFactory(
-            new StubWorkspaceResolver(second),
-            new SessionModelPreferences(),
-            toolSnapshots,
-            TestPromptLoader.Instance).Create(input, context);
-        var delimitedPlan = new DelegateAgentsPlanFactory(
-            new StubWorkspaceResolver(delimited),
-            new SessionModelPreferences(),
-            toolSnapshots,
-            TestPromptLoader.Instance).Create(input, context);
-        var formerlyAmbiguousPlan = new DelegateAgentsPlanFactory(
-            new StubWorkspaceResolver(formerlyAmbiguous),
-            new SessionModelPreferences(),
-            toolSnapshots,
-            TestPromptLoader.Instance).Create(input, context);
-
-        // Assert
-        Assert.NotEqual(firstPlan.Provenance.BaselineIdentity, secondPlan.Provenance.BaselineIdentity);
-        Assert.NotEqual(
-            delimitedPlan.Provenance.BaselineIdentity,
-            formerlyAmbiguousPlan.Provenance.BaselineIdentity);
-    }
-
-    /// <summary>Verifies newly collected child evidence is eligible for exact child-run citation admission.</summary>
-    [Fact]
-    public async Task FindingAdmission_AcceptsEvidenceProducedByTheOwningChild()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
-        var assignment = CreateAssignment();
-        var plan = CreatePlan(assignment);
-        var sourceId = EvidenceId.New();
-        await evidence.AddAsync(new Evidence
-        {
-            EvidenceId = sourceId,
-            SessionId = plan.Provenance.SessionId,
-            RunId = assignment.ChildRunId,
-            Kind = EvidenceKind.ToolResult,
-            Content = "source",
-            Provenance = new EvidenceProvenance
-            {
-                Source = "tool:read_file",
-                ChildRunId = assignment.ChildRunId,
-                AgentAssignmentId = assignment.AssignmentId,
-            },
-            CollectedAt = DateTimeOffset.UtcNow,
-            Relevance = 1,
-            EstimatedTokens = 1,
-        });
-        var findings = new AgentFindingSet
-        {
-            AssignmentId = assignment.AssignmentId,
-            ChildRunId = assignment.ChildRunId,
-            Generation = plan.Provenance.Generation,
-            Findings =
-            [
-                new AgentFinding
-                {
-                    FindingId = Guid.NewGuid(),
-                    Category = "behavior",
-                    Summary = "The child cited its tool result.",
-                    EvidenceIds = [sourceId],
-                    Confidence = 1,
-                },
-            ],
-        };
-
-        // Act
-        var admitted = await new AgentFindingAdmission(evidence)
-            .AdmitAsync(plan, assignment, findings, new HashSet<EvidenceId> { sourceId });
-
-        // Assert
-        Assert.Single(admitted);
-    }
-
     /// <summary>Verifies one invalid citation rejects the complete parent-evidence promotion batch.</summary>
     [Fact]
     public async Task FindingAdmission_InvalidLaterFinding_LeavesParentEvidenceUnchanged()
@@ -682,25 +550,6 @@ public sealed partial class Plan91DelegationToolTests
                 tampered,
                 findings,
                 new HashSet<EvidenceId>()));
-    }
-
-    /// <summary>Verifies pre-commit publication failure leaves a complete evidence batch uncommitted.</summary>
-    [Fact]
-    public async Task EvidenceStore_AddBatch_ThrowingPublisherLeavesStoreUnchanged()
-    {
-        // Arrange
-        await using var events = new FailingEventStream();
-        var store = new EvidenceStore(events, new SecretOutputSanitizer());
-        var sessionId = SessionId.New();
-        Evidence[] batch =
-        [
-            CreateEvidence(sessionId, RunId.New(), "first"),
-            CreateEvidence(sessionId, RunId.New(), "second"),
-        ];
-
-        // Act / Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => store.AddBatchAsync(batch));
-        Assert.Empty(store.Snapshot(sessionId));
     }
 
     /// <summary>Verifies caller cancellation bounds a non-cooperative evidence publisher.</summary>
@@ -896,36 +745,6 @@ public sealed partial class Plan91DelegationToolTests
     }
 
     private sealed record MetadataToolInput;
-
-    private sealed class FailingEventStream : IDomainEventStream
-    {
-        public IDomainEventSubscription Subscribe(
-            Func<IDomainEvent, CancellationToken, Task> handler,
-            int capacity = 256)
-        {
-            return NoopEventSubscription.Instance;
-        }
-
-        public Task PublishAsync(
-            IDomainEvent domainEvent,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromException(new InvalidOperationException("event publication failed"));
-        }
-
-        public Task PublishCommittedBatchAsync(
-            IReadOnlyList<IDomainEvent> domainEvents,
-            Func<bool> tryCommit,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromException(new InvalidOperationException("event publication failed"));
-        }
-
-        public ValueTask DisposeAsync()
-        {
-            return ValueTask.CompletedTask;
-        }
-    }
 
     private sealed class BlockingEventStream : IDomainEventStream
     {

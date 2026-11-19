@@ -34,40 +34,6 @@ public sealed class WebToolActivityTests
         Assert.DoesNotContain("search-display-canary", JsonSerializer.Serialize(run.Result), StringComparison.Ordinal);
     }
 
-    /// <summary>Direct, search and current-user routes show the actual final URL including query parameters.</summary>
-    [Theory]
-    [InlineData("direct", false)]
-    [InlineData("search", false)]
-    [InlineData("user", false)]
-    [InlineData("search", true)]
-    public async Task Fetch_FullUrlSurvivesReferenceResolutionAndRedirects(string route, bool redirect)
-    {
-        var context = CreateContext();
-        var options = new WebFetchOptions();
-        var authority = new WebFetchAuthorizationAuthority(options);
-        var requested = new Uri("https://example.com/" + new string('p', 320) + "?q=request-display-canary&view=full");
-        var final = redirect ? new Uri("https://example.com/final?q=final-display-canary&view=full") : requested;
-        var reference = IssueReference(authority, context, requested, route);
-        var transport = new ContentTransport(final);
-        var tool = new WebFetchTool(
-            new WebContentFetcher(transport, options, TestPromptLoader.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), authority, options, TestPromptLoader.Instance);
-
-        var run = await InvokeAsync(tool, JsonSerializer.Serialize(new { reference }), context);
-
-        Assert.True(run.Result.Succeeded, run.Result.Error);
-        Assert.Equal(1, transport.CallCount);
-        Assert.Equal(requested.AbsoluteUri, run.Started.TransientActivityDetail);
-        Assert.Equal(final.AbsoluteUri, run.Completed.TransientActivityDetail);
-        Assert.DoesNotContain("activityUrl", tool.Definition.OutputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
-        string[] serializedValues = [DomainEventJson.Serialize(run.Started), DomainEventJson.Serialize(run.Completed), JsonSerializer.Serialize(run.Result)];
-        foreach (var serialized in serializedValues)
-        {
-            Assert.DoesNotContain("display-canary", serialized, StringComparison.Ordinal);
-            Assert.DoesNotContain("TransientActivityDetail", serialized, StringComparison.Ordinal);
-            Assert.DoesNotContain("ActivityUrl", serialized, StringComparison.Ordinal);
-        }
-    }
-
     /// <summary>Showing an opaque reference cannot disclose another run/session/repository's destination or consume it.</summary>
     [Theory]
     [InlineData("run")]

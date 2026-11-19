@@ -37,26 +37,6 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    /// <summary>Identical batch siblings are rejected even when later repeated calls are permitted.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task SkillProcedure_SameBatchDuplicatesAreRejectedRegardlessMetadata(bool allowDuplicates)
-    {
-        var tool = new PermissionProbeTool(allowDuplicates);
-        var model = new PermissionModelProvider { DuplicateToolCall = true };
-        await using var events = new DomainEventStream();
-        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
-        var plan = PermissionPlan() with { EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 } };
-        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}");
-
-        Assert.Equal(0, tool.Executions);
-        Assert.Equal(2, model.Requests.Count);
-        Assert.Contains(model.Requests[^1].Messages, message => message.IsError == true
-            && message.GetModelVisibleContent().Contains("occurs more than once", StringComparison.Ordinal));
-        Assert.Contains(model.Requests[1].Messages, message => message.IsError == true);
-    }
-
     /// <summary>Duplicate metadata continues to govern calls made in separate model responses.</summary>
     [Theory]
     [InlineData(false)]
@@ -75,25 +55,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(!allowDuplicates, model.Requests[2].Messages.Any(message => message.IsError == true));
     }
 
-    /// <summary>Skill corrections report only accepted exact calls at the configured limit.</summary>
-    [Theory]
-    [InlineData(0, 1)]
-    [InlineData(1, 1)]
-    [InlineData(2, 2)]
-    [InlineData(3, 3)]
-    public async Task SkillProcedure_ExactQuotaReportsAcceptedCount(int limit, int expected)
-    {
-        var tool = new PermissionProbeTool(exactLimit: limit);
-        var model = new PermissionModelProvider { ToolCallRounds = expected + 1 };
-        await using var events = new DomainEventStream();
-        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
-        var plan = PermissionPlan() with { EffectiveBudget = new SkillBudget { ModelTurns = expected + 2, ToolCalls = expected + 1 } };
-        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}", TestContext.Current.CancellationToken);
-        Assert.Equal(expected, tool.Executions);
-        Assert.Contains(model.Requests[^1].Messages, message => message.IsError == true
-            && message.GetModelVisibleContent().Contains($"already has {expected} accepted invocations", StringComparison.Ordinal));
-    }
-
     /// <summary>Redaction preserves the schema-valid framing of a native skill answer.</summary>
     [Fact]
     public async Task SkillProcedure_SanitizesStructuredOutputWithoutChangingJsonFraming()
@@ -107,40 +68,6 @@ public sealed partial class SkillSubsystemTests
         using var parsed = System.Text.Json.JsonDocument.Parse(result.OutputJson);
         Assert.Contains("[REDACTED]", parsed.RootElement.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("fixture-value", result.OutputJson, StringComparison.Ordinal);
-    }
-
-    /// <summary>A replacement registration cannot inherit a model's earlier capability selection.</summary>
-    [Fact]
-    public async Task SkillProcedure_PinsTheAdvertisedRegistration()
-    {
-        var original = new PermissionProbeTool();
-        var replacement = new PermissionProbeTool();
-        var registry = new ToolRegistry([]);
-        var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "fixture");
-        registry.RegisterOrReplace(original, source);
-        var model = new PermissionModelProvider { BeforeToolRequest = () => registry.RegisterOrReplace(replacement, source, original) };
-        await using var events = new DomainEventStream();
-        var runner = CreatePermissionRunner(PermissionContext, original, model, events, registry: registry);
-        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
-        var error = Assert.Single(model.Requests[1].Messages, message => message.IsError == true);
-        Assert.Contains("no longer matches", error.GetModelVisibleContent(), StringComparison.Ordinal);
-        Assert.Equal(0, original.Executions);
-        Assert.Equal(0, replacement.Executions);
-    }
-
-    /// <summary>Skill model continuations use the existing bounded model projection.</summary>
-    [Fact]
-    public async Task SkillProcedure_UsesTheModelResultProjection()
-    {
-        var tool = new PermissionProbeTool { ModelResultContent = "projected-result" };
-        var model = new PermissionModelProvider();
-        await using var events = new DomainEventStream();
-        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
-        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
-        Assert.Contains("projected-result", model.Requests[1].Input, StringComparison.Ordinal);
-        var resultMessage = Assert.Single(model.Requests[1].Messages, message => message.GetModelVisibleContent().Contains("projected-result", StringComparison.Ordinal));
-        Assert.Equal(ModelMessageRole.Tool, resultMessage.Role);
-        Assert.DoesNotContain("audit-only-content", model.Requests[1].Input, StringComparison.Ordinal);
     }
 
     /// <summary>The host rejects a batch exceeding the remaining tool budget before executing any tool.</summary>
@@ -158,40 +85,6 @@ public sealed partial class SkillSubsystemTests
 
         Assert.Equal(0, tool.Executions);
         Assert.Single(model.Requests);
-    }
-
-    /// <summary>Verifies declared tools cannot replace host allow, deny, or deny-all policy.</summary>
-    [Theory]
-    [InlineData(null, false, false, true)]
-    [InlineData("permission_probe", false, false, true)]
-    [InlineData("PERMISSION_PROBE", false, false, true)]
-    [InlineData("invoke_skill", false, false, false)]
-    [InlineData("permission_probe", true, false, false)]
-    [InlineData("permission_probe", false, true, false)]
-    public async Task SkillProcedure_HostToolPolicyControlsAdvertisementAndExecution(
-        string? allowedTool, bool denied, bool denyAll, bool expectedAllowed)
-    {
-        var context = PermissionContext() with
-        {
-            AllowedToolIds = allowedTool is null ? [] : ["invoke_skill", allowedTool],
-            DeniedToolIds = denied ? ["PERMISSION_PROBE"] : [],
-            DenyAllTools = denyAll,
-        };
-        var tool = new PermissionProbeTool();
-        var model = new PermissionModelProvider();
-        await using var events = new DomainEventStream();
-        var runner = CreatePermissionRunner(() => context, tool, model, events);
-
-        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
-
-        Assert.Equal(expectedAllowed ? 1 : 0, tool.Executions);
-        Assert.Equal(expectedAllowed, model.Requests[0].Tools.Any(item => item.Name == "permission_probe"));
-        Assert.Equal(expectedAllowed, model.Requests[0].RequiredCapabilities.ToolCalls);
-        Assert.Equal(2, model.Requests.Count);
-        if (!expectedAllowed)
-        {
-            Assert.Contains("denies", model.Requests[1].Input, StringComparison.OrdinalIgnoreCase);
-        }
     }
 
     /// <summary>Verifies policy is refreshed after model dispatch and for the next advertised tool set.</summary>

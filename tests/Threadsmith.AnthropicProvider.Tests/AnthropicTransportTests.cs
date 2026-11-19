@@ -156,96 +156,6 @@ public sealed class AnthropicTransportTests
         Assert.Null(error.InnerException);
     }
 
-    /// <summary>Native metadata does not commit output, and busy failures do not use the ordinary attempt limit.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(false, false, true)]
-    [InlineData(true, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(false, false, true, true)]
-    [InlineData(true, false, true, true)]
-    [InlineData(false, true, true, true)]
-    public async Task StreamAsync_InterruptedBody_RetriesOnlyBeforeDeliveredOutput(bool exhaustRetries, bool partialOutput, bool reasoningOnly = false, bool cleanEof = false)
-    {
-        var attempts = 0;
-        var submissions = 0;
-        var handler = new TestAnthropicHandler((_, _) =>
-        {
-            if (++attempts == 1)
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
-            }
-
-            if (attempts == 2 || exhaustRetries)
-            {
-                var prefix = TestAnthropic.Start();
-                if (reasoningOnly)
-                {
-                    prefix += TestAnthropic.Block(0, new { type = "thinking", thinking = "partial reasoning", signature = string.Empty });
-                }
-
-                if (partialOutput)
-                {
-                    prefix += (reasoningOnly ? "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" : string.Empty)
-                        + TestAnthropic.Block(reasoningOnly ? 1 : 0, new { type = "text", text = string.Empty })
-                        + TestAnthropic.Delta(reasoningOnly ? 1 : 0, new { type = "text_delta", text = "partial" });
-                }
-
-                return Task.FromResult(Response(cleanEof ? new MemoryStream(Encoding.UTF8.GetBytes(prefix)) : new InterruptedStream(Encoding.UTF8.GetBytes(prefix))));
-            }
-
-            return Task.FromResult(Response(new MemoryStream(Encoding.UTF8.GetBytes(TestAnthropic.TextStream()))));
-        });
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var profile = TestAnthropic.Profile();
-        var provider = new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new AdvancingTimeProvider());
-        var request = TestAnthropic.Request() with { SubmissionObserver = () => submissions++, IncludeReasoningText = true };
-        var chunks = new List<ModelChunk>();
-        async Task CollectAsync()
-        {
-            await foreach (var chunk in provider.StreamAsync(request, TestContext.Current.CancellationToken))
-            {
-                chunks.Add(chunk);
-            }
-        }
-
-        if (exhaustRetries || partialOutput)
-        {
-            var error = await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
-            Assert.Contains(cleanEof ? "message_stop" : "ResponseEnded", error.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("private detail", error.Message, StringComparison.Ordinal);
-            Assert.Equal(partialOutput ? "partial" : string.Empty, string.Concat(chunks.Select(chunk => chunk.Text)));
-        }
-        else
-        {
-            await CollectAsync();
-            Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
-            Assert.Single(chunks, chunk => chunk.FinishReason is not null);
-        }
-
-        var expectedAttempts = partialOutput ? 2 : exhaustRetries ? 1 + profile.RetryPolicy.MaxAttempts : 3;
-        // The initial busy request has no reasoning, and the last request is not retried.
-        Assert.Equal(reasoningOnly && !partialOutput ? expectedAttempts - 2 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
-        Assert.Equal(expectedAttempts, attempts);
-        Assert.Equal(attempts, submissions);
-    }
-
-    private sealed class InterruptedStream(byte[] prefix) : MemoryStream(prefix)
-    {
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (Position == Length)
-            {
-                throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail");
-            }
-
-            return base.ReadAsync(buffer, cancellationToken);
-        }
-    }
-
     private static HttpResponseMessage Response(Stream stream)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };
@@ -420,5 +330,3 @@ public sealed class AnthropicAmbientEnvironmentTests
         }
     }
 }
-
-

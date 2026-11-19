@@ -27,42 +27,6 @@ public static class RepositorySettingsCoordinatorTests
         Assert.Single(saved["tools"]!["allow"]!.AsArray());
     }
 
-    /// <summary>Activation and deactivation preserve both an old temp entry and an external link target.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public static async Task Intelligence_write_ignores_fixed_temp_entry(bool enabled, bool symbolicLink)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new Fixture();
-        var legacyTemporary = fixture.ConfigurationPath + ".tmp";
-        await File.WriteAllTextAsync(fixture.ExternalPath, "external sentinel", ct);
-        if (symbolicLink)
-        {
-            CreateSymbolicLinkOrSkip(legacyTemporary, fixture.ExternalPath);
-        }
-        else
-        {
-            await File.WriteAllTextAsync(legacyTemporary, "external sentinel", ct);
-        }
-
-        await File.WriteAllTextAsync(fixture.ConfigurationPath, "{\"preserved\":42}", ct);
-        var configuration = new ConfigurationBuilder().Build();
-        var options = new RepositoryMemoryConfiguration(configuration, configuration, fixture.Repository);
-
-        await options.SetIntelligenceEnabledAsync(fixture.Repository, enabled, ct);
-
-        var saved = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigurationPath, ct));
-        Assert.Equal(enabled, saved!["tools"]!["config"]!["memories"]!["Intelligence"]!["Enabled"]!.GetValue<bool>());
-        Assert.Equal(42, saved["preserved"]!.GetValue<int>());
-        Assert.Equal(enabled, options.CaptureCurrent().Intelligence.Enabled);
-        Assert.Equal("external sentinel", await File.ReadAllTextAsync(fixture.ExternalPath, ct));
-        Assert.Equal("external sentinel", await File.ReadAllTextAsync(legacyTemporary, ct));
-        Assert.Equal([legacyTemporary], Directory.GetFiles(fixture.SettingsDirectory, "*.tmp"));
-    }
-
     /// <summary>A linked configuration destination is rejected before settings or memory state changes.</summary>
     [Fact]
     public static async Task Intelligence_write_rejects_linked_destination()

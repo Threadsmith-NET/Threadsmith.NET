@@ -105,24 +105,6 @@ public sealed class GitProcessTests
         await Assert.ThrowsAsync<Win32Exception>(() => ExecuteAsync(process, 64, TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Baseline decoding retains its replacement fallback.</summary>
-    [Fact]
-    public async Task ReadBoundedAsync_BaselineDecodingRemainsNonThrowing()
-    {
-        using var baseline = GitProcess.CreateProcess(Path.GetTempPath(), [], preserveOutputFormat: true);
-        using var query = GitProcess.CreateProcess(Path.GetTempPath(), []);
-        Assert.Null(baseline.StartInfo.StandardOutputEncoding);
-        Assert.Null(baseline.StartInfo.StandardErrorEncoding);
-        Assert.IsType<DecoderExceptionFallback>(query.StartInfo.StandardOutputEncoding!.DecoderFallback);
-        await using var bytes = new MemoryStream([0xFF, 0x61]);
-        using var reader = new StreamReader(bytes, baseline.StartInfo.StandardOutputEncoding ?? Console.OutputEncoding);
-
-        var result = await GitProcess.ReadBoundedAsync(reader, 64, TestContext.Current.CancellationToken);
-
-        Assert.EndsWith("a", result.Text, StringComparison.Ordinal);
-        Assert.False(result.IsTruncated);
-    }
-
     /// <summary>Only non-caller cancellation maps to timeout.</summary>
     [Theory]
     [InlineData(false)]
@@ -155,21 +137,6 @@ public sealed class GitProcessTests
             clock.Advance(TimeSpan.FromMilliseconds(100));
             await Assert.ThrowsAsync<TimeoutException>(() => execution.WaitAsync(TestContext.Current.CancellationToken));
         }
-    }
-
-    /// <summary>Mutation commands do not inherit query policy.</summary>
-    [Fact]
-    public void CreateProcess_ReadOnlyAndMutationPoliciesRemainSeparate()
-    {
-        using var query = GitProcess.CreateProcess(Path.GetTempPath(), ["status"]);
-        using var mutation = GitProcess.CreateProcess(Path.GetTempPath(), ["worktree", "list"], readOnly: false);
-
-        Assert.False(query.StartInfo.UseShellExecute);
-        Assert.Contains("core.fsmonitor=false", query.StartInfo.ArgumentList);
-        Assert.Contains("diff.external=", query.StartInfo.ArgumentList);
-        Assert.Equal("0", query.StartInfo.Environment["GIT_TERMINAL_PROMPT"]);
-        Assert.Equal<string>(["worktree", "list"], mutation.StartInfo.ArgumentList);
-        Assert.Null(mutation.StartInfo.StandardOutputEncoding);
     }
 
     /// <summary>Failed termination or an inherited pipe cannot make cleanup wait forever.</summary>

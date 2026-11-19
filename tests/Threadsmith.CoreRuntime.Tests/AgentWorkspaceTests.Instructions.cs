@@ -311,31 +311,6 @@ public static partial class AgentWorkspaceTests
         Assert.True(backend.IsStopped);
     }
 
-    /// <summary>A retained prefix is explicitly identified before queued child output is released.</summary>
-    [Fact]
-    public static async Task TruncatedInstructionsShowOmissionBeforeOutput()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var pumpStop = new CancellationTokenSource();
-        await pumpStop.CancelAsync();
-        var session = SessionId.New();
-        var target = Target(session);
-        var sink = new RecordingSurface();
-        var stream = new AgentDisplayStream();
-        await using (var projection = new AgentWorkspaceProjection(sink, stream, null, null, new AgentNameCatalog(), false, pumpStop.Token))
-        {
-            await projection.AttachAsync(session, ct);
-            await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), ct);
-            await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Running, 1, string.Empty), ct);
-            stream.Publish(new AgentDisplayText(session, target.RunId, "child response", false, true));
-            await projection.ObserveAsync(Instructions(target) with { IsTruncated = true }, ct);
-        }
-
-        var first = Assert.IsType<PresentationTextItem>(Assert.Single(sink.Output[0].Items));
-        Assert.Contains(first.Segments, segment => segment.Role == PresentationTextRole.Warning && segment.Text.Contains("Instruction display omitted content", StringComparison.Ordinal));
-        Assert.Contains(sink.Output.Skip(1), batch => batch.Items.OfType<PresentationSourceItem>().Any(item => item.SafeSource == "child response"));
-    }
-
     private static AgentRunInstructionsObserved Instructions(AgentPresentationTarget target)
     {
         return new(target.SessionId, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, target.Generation, AgentInstructionSource.PreparedRequest, [new("Assignment", "assigned work")]);

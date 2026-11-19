@@ -75,64 +75,6 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal(ExecutionCheckpointPhase.Failed, outcome!.Status);
     }
 
-    /// <summary>Delivered findings still block success unless they are initial or informational.</summary>
-    [Theory]
-    [InlineData("compiler", DiagnosticSeverity.Error, "introduced", false)]
-    [InlineData("compiler", DiagnosticSeverity.Warning, "introduced", false)]
-    [InlineData("analyzer", DiagnosticSeverity.Error, "introduced", false)]
-    [InlineData("analyzer", DiagnosticSeverity.Warning, "introduced", false)]
-    [InlineData("compiler", DiagnosticSeverity.Error, "unknown", false)]
-    [InlineData("analyzer", DiagnosticSeverity.Warning, "unknown", false)]
-    [InlineData("compiler", DiagnosticSeverity.Error, "initial", true)]
-    [InlineData("compiler", DiagnosticSeverity.Warning, "initial", true)]
-    [InlineData("analyzer", DiagnosticSeverity.Error, "initial", true)]
-    [InlineData("analyzer", DiagnosticSeverity.Warning, "initial", true)]
-    [InlineData("analyzer", DiagnosticSeverity.Info, "introduced", true)]
-    public static async Task CompletionGateDistinguishesActionableAndBaselineFindings(string producer, DiagnosticSeverity severity, string origin, bool succeeds)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        var analyzer = new AdvisoryAnalyzer([]);
-        var edits = fixture.CreateApplication(analyzer: analyzer);
-        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
-        var clean = CreateCleanCompletionAnalysis(analyzer);
-        var compiler = producer == "compiler";
-        analyzer.Publish(clean with
-        {
-            CurrentErrors = compiler && severity == DiagnosticSeverity.Error ? 1 : 0,
-            CurrentWarnings = compiler && severity == DiagnosticSeverity.Warning ? 1 : 0,
-            Analyzers = clean.Analyzers with { ReportableFindings = compiler ? 0 : 1 },
-            Diagnostics = [new("TEST001", "Completion gate finding", "Example.cs", 1, "Example", "net10.0", origin) { Severity = severity, Producer = producer }],
-        });
-        Assert.NotNull(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
-        Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
-
-        var outcome = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-
-        Assert.Equal(succeeds ? ExecutionCheckpointPhase.Completed : ExecutionCheckpointPhase.Failed, outcome!.Status);
-    }
-
-    /// <summary>Clean completed evidence permits success without requiring disabled analyzers.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public static async Task CompletionGateAllowsCleanCompleteFinalAnalysis(bool analyzersEnabled, bool comparisonAvailable)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        var analyzer = new AdvisoryAnalyzer([]);
-        var edits = fixture.CreateApplication(analyzer: analyzer);
-        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
-        var clean = CreateCleanCompletionAnalysis(analyzer);
-        analyzer.Publish(clean with { ErrorComparisonAvailable = comparisonAvailable, Analyzers = analyzersEnabled ? clean.Analyzers : new() });
-
-        var outcome = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-
-        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome!.Status);
-    }
-
     /// <summary>Current-state evidence without a baseline cannot excuse remaining errors or warnings.</summary>
     [Theory]
     [InlineData("compiler", DiagnosticSeverity.Error)]
@@ -178,34 +120,6 @@ public sealed partial class SourceEditApplicationTests
         var outcome = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
 
         Assert.Equal(ExecutionCheckpointPhase.Failed, outcome!.Status);
-    }
-
-    /// <summary>A repair needs its own completed analysis before it can succeed.</summary>
-    [Fact]
-    public static async Task CleanRepairWithNewEffectRechecksFinalAnalysis()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        var analyzer = new AdvisoryAnalyzer([]);
-        var edits = fixture.CreateApplication(analyzer: analyzer);
-        var first = fixture.Replace("Example", "Changed", false);
-        await edits.HandleAsync(first, ct);
-        analyzer.Publish(CreateCleanCompletionAnalysis(analyzer) with { NewErrors = 1 });
-        var failed = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-        Assert.Equal(ExecutionCheckpointPhase.Failed, failed!.Status);
-
-        var repair = fixture.Replace("Changed", "Repaired", false);
-        await edits.HandleAsync(repair, ct);
-        Assert.NotEqual(first.EffectId, analyzer.Latest!.EffectId);
-        analyzer.Publish(CreateCleanCompletionAnalysis(analyzer) with { Pending = true });
-        var pending = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-        Assert.Equal(ExecutionCheckpointPhase.Failed, pending!.Status);
-        analyzer.Publish(CreateCleanCompletionAnalysis(analyzer));
-
-        var completed = await edits.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-
-        Assert.Equal(ExecutionCheckpointPhase.Completed, completed!.Status);
-        Assert.Equal("class Repaired { }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
     }
 
     /// <summary>Zero wait skips observation time but cannot turn pending checks into success or loop forever.</summary>

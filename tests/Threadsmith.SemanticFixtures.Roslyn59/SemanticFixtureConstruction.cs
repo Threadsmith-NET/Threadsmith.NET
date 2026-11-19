@@ -2,14 +2,13 @@ namespace Threadsmith.SemanticFixtures.Roslyn59;
 
 using System.IO.Pipes;
 
-/// <summary>Provides an explicit construction barrier for cancellation regression tests.</summary>
+/// <summary>Provides a pipe barrier for cancellation and preparation tests.</summary>
 internal static class SemanticFixtureConstruction
 {
-    /// <summary>Blocks construction only when the test supplies a pipe marker beside this assembly.</summary>
-#pragma warning disable RS1035 // Test-only I/O makes non-cooperative construction observable and releasable.
-    internal static void WaitForRelease(string assemblyPath, string component)
+    /// <summary>Blocks only when the test supplies a pipe marker.</summary>
+#pragma warning disable RS1035 // Test-only I/O makes non-cooperative work observable and releasable.
+    internal static void WaitForRelease(string markerPath)
     {
-        var markerPath = assemblyPath + ".block-" + component;
         if (!File.Exists(markerPath))
         {
             return;

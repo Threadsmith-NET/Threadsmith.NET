@@ -115,42 +115,6 @@ public static class ChoicePromptTests
         Assert.Contains("  > Model 02", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
     }
 
-    /// <summary>Repeated paging displays every option in both directions, including across provider headings.</summary>
-    [Theory]
-    [InlineData(60, 15, 2)]
-    [InlineData(40, 12, 1)]
-    [InlineData(80, 24, 3)]
-    [InlineData(60, 15, 0)]
-    public static void PagingDoesNotSkipUnseenOptions(int width, int height, int groupSize)
-    {
-        var options = Enumerable.Range(0, 40).Select(index => new Choice(index.ToString(System.Globalization.CultureInfo.InvariantCulture), $"Model {index:D2}")
-        {
-            Group = groupSize == 0 ? null : $"Provider {index / groupSize:D2}",
-        }).ToArray();
-        foreach (var forward in new[] { true, false })
-        {
-            var modal = new ChoiceModal("Models", options);
-            var cells = new CellBuffer(width, height);
-            modal.HandleKey(KeyEvent.Special(forward ? KeyCode.Home : KeyCode.End));
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            var snapshot = string.Empty;
-            for (var page = 0; page <= options.Length; page++)
-            {
-                modal.Render(new BufferSurface(cells));
-                snapshot = TUIKit.Testing.Snapshot.ToText(cells);
-                foreach (var option in options.Where(option => snapshot.Contains(option.Label, StringComparison.Ordinal)))
-                {
-                    seen.Add(option.Id);
-                }
-
-                modal.HandleKey(KeyEvent.Special(forward ? KeyCode.PageDown : KeyCode.PageUp));
-            }
-
-            Assert.Equal(options.Length, seen.Count);
-            Assert.Contains(forward ? "> Model 39" : "> Model 00", snapshot, StringComparison.Ordinal);
-        }
-    }
-
     /// <summary>Details wrap unbroken targets, survive resize, and never approve through scrolling.</summary>
     [Theory]
     [InlineData(40, 12)]

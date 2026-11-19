@@ -156,14 +156,15 @@ An admitted MCP invocation appears immediately in its owner’s output pane as `
 
 ## Live HTTP verification
 
-The MCP transport suite always runs the in-repo real stdio server. HTTP verification is opt-in because it requires a real endpoint:
+The MCP transport suite runs the in-repo real stdio server. Use the explicit lifecycle probe for a reachable HTTP or SSE endpoint and a tool you are authorized to call.
 
 ```powershell
 $env:THREADSMITH_MCP_HTTP_ENDPOINT = "https://mcp.example.com/mcp"
 $env:THREADSMITH_MCP_HTTP_TOOL = "echo"
 $env:THREADSMITH_MCP_HTTP_ARGUMENTS = '{"message":"hello"}'
 $env:THREADSMITH_MCP_HTTP_MODE = "http" # or sse
-tests\Threadsmith.McpTransports.Tests\bin\Debug\net10.0\Threadsmith.McpTransports.Tests.exe
+dotnet build tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj
+dotnet test --project tests/Threadsmith.McpTransports.Tests/Threadsmith.McpTransports.Tests.csproj --no-build --explicit only --filter-method 'Threadsmith.McpTransports.Tests.SdkHttpTransportTests.ConfiguredEndpointCompletesMcpLifecycle' --fail-skips on --timeout 55s
 ```
 
-Unset the variables after testing. Use only an endpoint you trust and are authorized to call.
+The probe uses the production HTTP transport and checks connection, tool import, invocation, and disconnect. If an IDE or runner selects the probe without an endpoint or tool, it skips before making any network request. The manual command above uses `--fail-skips on` so missing setup still fails deliberate verification. Use an endpoint that accepts this unauthenticated probe, then unset the variables.

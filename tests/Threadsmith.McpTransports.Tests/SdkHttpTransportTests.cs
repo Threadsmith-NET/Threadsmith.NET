@@ -19,25 +19,6 @@ using Xunit;
 /// <summary>Verifies HTTP/SSE profile binding, transport mapping, authentication guards, and live opt-in connectivity.</summary>
 public sealed class SdkHttpTransportTests
 {
-    /// <summary>SSE and streamable-HTTP profiles map to their explicit SDK modes.</summary>
-    [Theory]
-    [InlineData(McpTransport.Sse, HttpTransportMode.Sse)]
-    [InlineData(McpTransport.Http, HttpTransportMode.StreamableHttp)]
-    public void Profile_maps_to_http_transport_options(McpTransport transport, HttpTransportMode expectedMode)
-    {
-        var profile = CreateProfile("https://mcp.example.test/endpoint", transport) with
-        {
-            Headers = new Dictionary<string, string> { ["X-Tenant"] = "example" },
-        };
-
-        var options = SdkHttpTransport.CreateOptions(profile);
-
-        Assert.Equal(new Uri(profile.Command), options.Endpoint);
-        Assert.Equal(expectedMode, options.TransportMode);
-        Assert.Equal(profile.StartupTimeout, options.ConnectionTimeout);
-        Assert.Equal("example", options.AdditionalHeaders?["X-Tenant"]);
-    }
-
     /// <summary>HTTP headers and OAuth stubs bind from configuration without resolving secrets.</summary>
     [Fact]
     public void Profile_loader_binds_headers_and_oauth_stub()
@@ -304,76 +285,6 @@ public sealed class SdkHttpTransportTests
 
         Assert.True(factoryCalled);
         Assert.True(result.Succeeded);
-    }
-
-    /// <summary>An imported HTTP tool exposes its host to the standard allow-list policy.</summary>
-    [Fact]
-    public void Http_imported_tool_network_host_is_policy_evaluated()
-    {
-        var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http);
-        var capability = new McpImportedCapability
-        {
-            Id = "remote:echo",
-            Kind = McpCapabilityKind.Tool,
-            ServerName = "echo",
-            InputSchemaJson = "{}",
-        };
-        var tool = new McpImportedTool(
-            new NoOpTransport(),
-            profile,
-            capability,
-            new SecretOutputSanitizer(),
-            TestPromptLoader.Instance);
-        var input = tool.DeserializeInput("{}");
-        var policy = new DefaultPolicyEngine();
-
-        Assert.Equal(ToolCategory.CodeExecution, tool.Definition.Category);
-        Assert.Equal(ToolSideEffect.ExecutesCode, tool.Definition.SideEffect);
-        Assert.Equal(ApprovalLevel.HostPolicy, tool.Definition.RequiredApproval);
-        Assert.Equal(RepositoryTrustLevel.TrustedBuild, tool.Definition.RequiredTrust);
-
-        var denied = policy.Evaluate(tool, input, CreateContext([]));
-        var allowed = policy.Evaluate(tool, input, CreateContext(["mcp.example.test"]));
-
-        Assert.False(denied.IsAllowed);
-        Assert.Contains("network host", denied.Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.True(allowed.IsAllowed);
-    }
-
-    /// <summary>Unknown-length HTTP bodies are rejected at the transport stream before full materialization.</summary>
-    [Fact]
-    public async Task Http_response_stream_enforces_pre_materialization_wire_bound()
-    {
-        using var client = new HttpClient(new McpBoundedHttpResponseHandler(
-            new DelegateHttpHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StreamContent(new MemoryStream(
-                    new byte[McpBoundedHttpResponseHandler.MaximumResponseBytes + 1])),
-            }))))
-        { Timeout = Timeout.InfiniteTimeSpan };
-
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => client.GetByteArrayAsync("https://mcp.example.test/result"));
-    }
-
-    /// <summary>Long-lived SSE responses reset the wire ceiling at each bounded event boundary.</summary>
-    [Fact]
-    public async Task Http_response_stream_bounds_each_sse_event_not_connection_lifetime()
-    {
-        var eventData = "data:" + new string('x', 600 * 1024) + "\n\n";
-        using var client = new HttpClient(new McpBoundedHttpResponseHandler(
-            new DelegateHttpHandler((_, _) =>
-            {
-                var content = new StringContent(eventData + eventData);
-                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
-                    "text/event-stream");
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-            })))
-        { Timeout = Timeout.InfiniteTimeSpan };
-
-        var result = await client.GetByteArrayAsync("https://mcp.example.test/events");
-
-        Assert.True(result.Length > McpBoundedHttpResponseHandler.MaximumResponseBytes);
     }
 
     /// <summary>A failed OAuth connection releases the redirect reservation owned by that attempt.</summary>
@@ -715,55 +626,99 @@ public sealed class SdkHttpTransportTests
         await transport.DisposeAsync();
     }
 
-    /// <summary>An explicitly configured live endpoint imports and invokes a real HTTP MCP tool.</summary>
+    /// <summary>The response body is rejected during reading when its length is unknown.</summary>
     [Fact]
-    public async Task Live_http_endpoint_connects_imports_invokes_and_disconnects()
+    public static async Task HttpWireBoundRejectsUnknownLengthBody()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        const int limit = 16;
+        var pipe = new Pipe();
+        await pipe.Writer.WriteAsync(new byte[limit + 1], cancellationToken);
+        await pipe.Writer.CompleteAsync();
+        using var content = new StreamContent(pipe.Reader.AsStream());
+        Assert.Null(content.Headers.ContentLength);
+        using var client = new HttpClient(new McpBoundedHttpResponseHandler(
+            new DelegateHttpHandler((_, _) => Task.FromResult(new HttpResponseMessage { Content = content })), limit))
+        { Timeout = Timeout.InfiniteTimeSpan };
+
+        using var response = await client.GetAsync("https://mcp.example.test/result", HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        Assert.Null(response.Content.Headers.ContentLength);
+        await Assert.ThrowsAsync<InvalidDataException>(() => response.Content.ReadAsByteArrayAsync(cancellationToken));
+    }
+
+    /// <summary>Each server-sent event has a separate wire budget.</summary>
+    [Fact]
+    public static async Task HttpWireBoundResetsBetweenSseEvents()
+    {
+        const string body = "data: first\n\ndata: second\n\n";
+        const int limit = 16;
+        var inner = new DelegateHttpHandler((_, _) => Task.FromResult(new HttpResponseMessage
+        {
+            Content = new StringContent(body, Encoding.UTF8, "text/event-stream"),
+        }));
+        using var client = new HttpClient(new McpBoundedHttpResponseHandler(inner, limit))
+        { Timeout = Timeout.InfiniteTimeSpan };
+
+        var result = await client.GetStringAsync("https://mcp.example.test/events", TestContext.Current.CancellationToken);
+
+        Assert.Equal(body, result);
+    }
+
+    /// <summary>Completes the production lifecycle against an explicitly selected remote endpoint.</summary>
+    [Fact(Explicit = true)]
+    [Trait("Category", "LiveIntegration")]
+    public static async Task ConfiguredEndpointCompletesMcpLifecycle()
+    {
+        var token = TestContext.Current.CancellationToken;
         var endpoint = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ENDPOINT");
         var toolName = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_TOOL");
-        var arguments = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ARGUMENTS") ?? "{}";
-        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(toolName))
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(toolName),
+            "Set THREADSMITH_MCP_HTTP_ENDPOINT and THREADSMITH_MCP_HTTP_TOOL for live MCP verification.");
+        Assert.True(
+            Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.Scheme is "https" or "http",
+            "Set THREADSMITH_MCP_HTTP_ENDPOINT to an absolute HTTP or HTTPS URI.");
+        var mode = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_MODE")?.ToLowerInvariant() switch
         {
-            Assert.Skip("Set THREADSMITH_MCP_HTTP_ENDPOINT and THREADSMITH_MCP_HTTP_TOOL for live HTTP MCP verification.");
+            null or "http" => McpTransport.Http,
+            "sse" => McpTransport.Sse,
+            _ => throw new InvalidOperationException("THREADSMITH_MCP_HTTP_MODE must be http or sse."),
+        };
+        var profile = CreateProfile(uri.AbsoluteUri, mode);
+        var secrets = new DictionarySecretStore();
+        await using var adapter = new McpAdapter(
+            _ => new SdkHttpTransport(secrets, NullLoggerFactory.Instance),
+            secrets,
+            new SecretOutputSanitizer(),
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance);
+        var connection = await adapter.ConnectAsync(profile, token);
+        Assert.True(connection.Succeeded, connection.Status.Error);
+        McpConnectionState disconnectState;
+        try
+        {
+            var tool = Assert.Single(connection.Tools, candidate => candidate.Capability.ServerName == toolName);
+            var arguments = Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_ARGUMENTS") ?? "{}";
+            var invocation = new ToolInvocationContext
+            {
+                RepositoryPath = Path.GetTempPath(),
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                AllowedNetworkHosts = [uri.Host],
+                RequestedBy = "mcp-live-probe",
+            };
+            var result = await tool.ExecuteAsync(
+                tool.DeserializeInput(arguments),
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation),
+                token);
+            Assert.NotEqual(JsonValueKind.Null, Assert.IsType<JsonElement>(result.Value).ValueKind);
+        }
+        finally
+        {
+            disconnectState = await adapter.DisconnectWithOutcomeAsync(profile.Id, token);
         }
 
-        var mode = string.Equals(
-            Environment.GetEnvironmentVariable("THREADSMITH_MCP_HTTP_MODE"),
-            "sse",
-            StringComparison.OrdinalIgnoreCase)
-            ? McpTransport.Sse
-            : McpTransport.Http;
-        var secretStore = new DictionarySecretStore();
-        var sanitizer = new SecretOutputSanitizer();
-        using var httpClient = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        var adapter = new McpAdapter(
-            _ => new SdkHttpTransport(secretStore, NullLoggerFactory.Instance, httpClient: httpClient, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
-            secretStore,
-            sanitizer,
-            NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var profile = CreateProfile(endpoint, mode);
-
-        var connection = await adapter.ConnectAsync(profile);
-
-        Assert.True(connection.Succeeded, connection.Status.Error);
-        var tool = Assert.Single(
-            connection.Tools,
-            candidate => string.Equals(candidate.Capability.ServerName, toolName, StringComparison.Ordinal));
-        var input = tool.DeserializeInput(arguments);
-        var result = await tool.ExecuteAsync(
-            input,
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                CreateContext([new Uri(endpoint).Host]))
-            { TimeProvider = new FakeTimeProvider() },
-            CancellationToken.None);
-        Assert.NotNull(result.Value);
-        await adapter.DisconnectAsync(profile.Id);
-        await adapter.DisposeAsync();
+        Assert.Equal(McpConnectionState.Disconnected, disconnectState);
+        Assert.Empty(adapter.GetConnections());
     }
 
     private static Dictionary<string, string> ParseForm(string form)
@@ -823,18 +778,6 @@ public sealed class SdkHttpTransportTests
             StartupTimeout = TimeSpan.FromSeconds(10),
             RequestTimeout = TimeSpan.FromSeconds(10),
             AllowedCapabilities = [McpCapabilityKind.Tool],
-        };
-    }
-
-    private static ToolInvocationContext CreateContext(IReadOnlyList<string> networkHosts)
-    {
-        return new()
-        {
-            RepositoryPath = Directory.GetCurrentDirectory(),
-            TrustLevel = RepositoryTrustLevel.TrustedBuild,
-            ApprovedRoots = [Directory.GetCurrentDirectory()],
-            AllowedNetworkHosts = networkHosts,
-            RequestedBy = "milestone9-test",
         };
     }
 

@@ -502,7 +502,7 @@ No CI or Linux/macOS checks were run. Skipped opt-in/platform cases remain unver
 
 ## Group B measurement
 
-The explicit `ListFilesTraversalTests.MeasureBuiltRepositoryTraversal` test uses `THREADSMITH_LIST_TRAVERSAL_REPOSITORY` to select an existing built repository. Run with `--explicit only --filter-method "*MeasureBuiltRepositoryTraversal" --output Detailed`. It compares raw file enumeration plus the existing segment filter at a 10,000-file limit, excluding authorization, metadata and scratchpad projection. One warmup and seven warm samples run per variant, baseline first; caches are not flushed. Timings are observations, not pass/fail assertions.
+The retired `ListFilesTraversalTests.MeasureBuiltRepositoryTraversal` benchmark compared raw file enumeration plus the existing segment filter at a 10,000-file limit, excluding authorization, metadata and scratchpad projection. It used one warmup and seven warm samples per variant, baseline first, without flushing caches. The results below are historical measurements.
 
 On this built checkout on the same Windows machine, both variants returned 10,000 files. Baseline predicate visits were 13,202 per sample; pruning reduced them to 12,239. Initial observed median durations were 91.636 ms before and 76.588 ms after (ranges 86.730–97.050 ms and 73.783–77.598 ms). These are narrow warm-enumeration measurements, not an end-to-end tool speedup or a Group D measurement. The test's initial output label incorrectly called the samples interleaved; only that label was corrected to match the actual baseline-first sampling.
 

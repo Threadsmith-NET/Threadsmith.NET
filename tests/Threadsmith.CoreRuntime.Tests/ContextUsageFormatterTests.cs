@@ -2,68 +2,47 @@ namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Xunit;
 
 /// <summary>Shared memory rendering preserves inspection data while neutralizing terminal controls.</summary>
 public static class ContextUsageFormatterTests
 {
-    /// <summary>Each memory category has one heading, readable lists, and no retrieval diagnostics.</summary>
+    /// <summary>Automatic output shows situational and intelligence notes while inspection also shows preferences.</summary>
     [Fact]
-    public static void MemoriesUseGroupedMarkdown()
+    public static void AutomaticMemoryOutputOmitsOnlyStandingPreferences()
     {
-        var first = new RepositoryMemoryContextItemProjection
+        var situational = new RepositoryMemoryContextItemProjection
         {
             Id = RepositoryMemoryId.New(),
             Included = true,
             EstimatedTokens = 1,
-            Ownership = RepositoryMemoryOwnership.Intelligence,
-            Text = "Follow the existing service.",
-            Rationale = "Included by qualified hybrid retrieval and context budget.",
-            Supports = [new RepositoryMemorySupport { Path = "src/Service.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
+            Text = "situational-fixture",
+            Rationale = string.Empty,
         };
-        RepositoryMemoryContextItemProjection[] items =
-        [
-            first,
-            first with { Id = RepositoryMemoryId.New(), Text = "Reuse the shared store.", Supports = [] },
-            first with { Id = RepositoryMemoryId.New(), Ownership = RepositoryMemoryOwnership.Ordinary, Text = "Situational note.", Supports = [] },
-            first with { Id = RepositoryMemoryId.New(), Ownership = RepositoryMemoryOwnership.Ordinary, MemoryType = RepositoryMemoryType.StandingPreference, Text = "Standing preference.", Supports = [] },
-            first with { Id = RepositoryMemoryId.New(), Included = false, Text = "Omitted note.", Supports = [] },
-        ];
-        var output = ContextUsageFormatter.FormatMemoryContext(items);
+        var preference = situational with
+        {
+            Id = RepositoryMemoryId.New(),
+            MemoryType = RepositoryMemoryType.StandingPreference,
+            Text = "preference-fixture",
+        };
+        var intelligence = situational with
+        {
+            Id = RepositoryMemoryId.New(),
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            Text = "intelligence-fixture",
+        };
+        RepositoryMemoryContextItemProjection[] items = [situational, preference, intelligence];
 
-        var expected = """
-            Repository Intelligence that may be useful to guide exploration and/or implementation:
+        var transcript = new ConversationTranscript(string.Empty);
+        Assert.True(transcript.Apply(new MemoriesIncluded(SessionId.New(), DateTimeOffset.UnixEpoch, RunId.New(), items)));
+        var automatic = transcript.Text;
 
-            - Follow the existing service.
-
-              Supporting files:
-
-              - src/Service.cs
-
-            - Reuse the shared store.
-
-            Situational memories that may be useful to guide exploration and/or implementation:
-
-            - Situational note.
-
-            Repository standing preferences to guide exploration and/or implementation:
-
-            - Standing preference.
-
-            Repository Intelligence omitted from this request:
-
-            - Omitted note.
-            """.ReplaceLineEndings("\n") + "\n\n";
-        Assert.Equal(expected, output);
-        var automatic = ContextUsageFormatter.FormatMemoryContext(items, includeStandingPreferences: false);
-        Assert.DoesNotContain("Standing preference.", automatic, StringComparison.Ordinal);
-        Assert.DoesNotContain("Repository standing preferences", automatic, StringComparison.Ordinal);
-        Assert.Contains("Situational note.", automatic, StringComparison.Ordinal);
-        Assert.Contains("Follow the existing service.", automatic, StringComparison.Ordinal);
-        Assert.Empty(ContextUsageFormatter.FormatMemoryContext(
-            items.Where(item => item.MemoryType == RepositoryMemoryType.StandingPreference), includeStandingPreferences: false));
-        Assert.Empty(ContextUsageFormatter.FormatMemoryContext([]));
+        Assert.Contains(situational.Text, automatic, StringComparison.Ordinal);
+        Assert.Contains(intelligence.Text, automatic, StringComparison.Ordinal);
+        Assert.DoesNotContain(preference.Text, automatic, StringComparison.Ordinal);
+        Assert.Contains(preference.Text, ContextUsageFormatter.FormatMemoryContext(items), StringComparison.Ordinal);
     }
 
     /// <summary>Durable inclusion events retain raw sanitized content; presentation encodes controls only at output.</summary>

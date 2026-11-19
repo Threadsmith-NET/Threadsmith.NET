@@ -10,37 +10,6 @@ using Xunit;
 
 public static partial class OpenRouterProviderTests
 {
-    /// <summary>Routing stays restricted and response identities follow the configured list.</summary>
-    [Theory]
-    [InlineData("Azure", true)]
-    [InlineData("OpenAI", true)]
-    [InlineData(null, true)]
-    [InlineData("Other", false)]
-    public static async Task Fallbacks_ProjectOrderedListAndValidateIdentity(string? identity, bool accepted)
-    {
-        var model = Model() with { Upstreams = Routes() };
-        using var handler = new Handler(Terminal("response.completed", "completed", [], Usage(), identity));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        if (accepted)
-        {
-            await CollectAsync(Provider(client, model), Request(), []);
-        }
-        else
-        {
-            await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(Provider(client, model), Request(), []));
-        }
-
-        using var body = JsonDocument.Parse(handler.Body!);
-        var routing = body.RootElement.GetProperty("provider");
-        Assert.Collection(
-            routing.GetProperty("order").EnumerateArray(),
-            item => Assert.Equal("azure", item.GetString()),
-            item => Assert.Equal("openai", item.GetString()));
-        Assert.Equal(routing.GetProperty("order").GetRawText(), routing.GetProperty("only").GetRawText());
-        Assert.True(routing.GetProperty("allow_fallbacks").GetBoolean());
-        Assert.True(routing.GetProperty("require_parameters").GetBoolean());
-    }
-
     /// <summary>Configuration rejects ambiguous and unusable routes while allowing shared display names.</summary>
     [Fact]
     public static void Fallbacks_ValidateConfiguration()

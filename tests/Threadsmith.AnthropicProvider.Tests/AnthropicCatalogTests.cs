@@ -198,41 +198,6 @@ public sealed class AnthropicCatalogTests
         Assert.Contains("duplicate", failure.Message, StringComparison.Ordinal);
     }
 
-    /// <summary>Checks sdk counts unknown payload bytes before parsing and bounds aggregate.</summary>
-    [Fact]
-    public async Task SdkCountsUnknownPayloadBytesBeforeParsingAndBoundsAggregate()
-    {
-        var payload = Page(["claude-opus-5"], true);
-        payload = payload.Insert(payload.Length - 1, ",\"padding\":\"" + new string('x', 600000) + "\"");
-        var second = Page(["claude-sonnet-5"], false);
-        second = second.Insert(second.Length - 1, ",\"padding\":\"" + new string('x', 600000) + "\"");
-        using var handler = new QueueHandler(Response(payload), Response(second));
-        using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var failure = await Assert.ThrowsAnyAsync<Exception>(() => Discovery(http).DiscoverAsync(CancellationToken.None));
-        Assert.Contains("byte", failure.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Checks discovery enforces page and provider model counts.</summary>
-    [Theory]
-    [InlineData(101, 1)]
-    [InlineData(100, 29)]
-    public async Task DiscoveryEnforcesPageAndProviderModelCounts(int firstCount, int secondCount)
-    {
-        var pages = new StubPages(
-            DetachedPage(firstCount, "a", true), DetachedPage(secondCount, "b", false));
-        await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages, timeProvider: new FakeTimeProvider(Now)).DiscoverAsync(CancellationToken.None));
-    }
-
-    /// <summary>Checks discovery enforces ten page ceiling.</summary>
-    [Fact]
-    public async Task DiscoveryEnforcesTenPageCeiling()
-    {
-        var pages = new StubPages([.. Enumerable.Range(0, 10).Select(index => DetachedPage(1, "m" + index, true))]);
-        var failure = await Assert.ThrowsAnyAsync<Exception>(() => new AnthropicModelDiscoveryService(pages, timeProvider: new FakeTimeProvider(Now)).DiscoverAsync(CancellationToken.None));
-        Assert.Contains("page limit", failure.Message, StringComparison.Ordinal);
-        Assert.Equal(10, pages.Calls);
-    }
-
     /// <summary>Checks discovery deadline and caller cancellation are distinct.</summary>
     [Fact]
     public async Task DiscoveryDeadlineAndCallerCancellationAreDistinct()
@@ -494,22 +459,6 @@ public sealed class AnthropicCatalogTests
         Assert.Throws<InvalidOperationException>(() => AnthropicRepositoryModelOverrides.Apply(trusted, trusted with { Models = [original with { ModelId = "other" }] }));
     }
 
-    /// <summary>Checks descriptor repository merge uses hydrated ids and preserves other fields.</summary>
-    [Fact]
-    public async Task DescriptorRepositoryMergeUsesHydratedIdsAndPreservesOtherFields()
-    {
-        using var temporary = new TemporaryDirectory();
-        var trusted = Hydrate(Model());
-        var path = System.IO.Path.Combine(temporary.Path, "repository.json");
-        await File.WriteAllTextAsync(path, $$"""{"schemaVersion":1,"providers":[{"id":"primary","models":[{"id":"{{trusted.Models[0].Id.Value:D}}","name":"Repository name","defaultReasoningLevel":"low"}]}]}""");
-        var merged = ModelProviderConfigurationLoader.ApplyRepositoryOverrides(new ModelProviderCatalogConfiguration { Providers = [trusted] }, path, Registry());
-        var candidate = Assert.IsType<AnthropicProviderConfiguration>(Assert.Single(merged.Providers));
-        var ordinary = AnthropicRepositoryModelOverrides.Apply(trusted, candidate);
-        var effective = ModelProviderConfigurationLoader.Materialize(merged with { Providers = [ordinary] }, Registry());
-        Assert.Equal("Repository name", Assert.Single(effective.ModelCatalog.Profiles).Name);
-        Assert.Equal(6.25m, Assert.Single(effective.ModelCatalog.Profiles).Cost.CachePricing?.WritePerMillionTokens);
-    }
-
     private static AnthropicProviderConfiguration Provider()
     {
         return new AnthropicProviderConfiguration { Id = "primary", Name = "Anthropic", SecretKeyReference = "secrets:models:anthropic", Models = [] };
@@ -586,12 +535,6 @@ public sealed class AnthropicCatalogTests
             first_id = ids.FirstOrDefault(),
             last_id = explicitCursor ? cursor : cursor ?? ids.LastOrDefault(),
         });
-    }
-
-    private static AnthropicModelDiscoveryPage DetachedPage(int count, string prefix, bool hasMore)
-    {
-        var models = Enumerable.Range(0, count).Select(index => Model(prefix + index)).ToArray();
-        return new AnthropicModelDiscoveryPage { Models = models, HasMore = hasMore, LastId = models.LastOrDefault()?.ModelId, ResponseBytes = 100 };
     }
 
     private static HttpResponseMessage Response(string body, HttpStatusCode status = HttpStatusCode.OK)

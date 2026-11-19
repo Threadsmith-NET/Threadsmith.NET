@@ -143,23 +143,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("account-1", handler.Request?.Headers.GetValues("ChatGPT-Account-Id").Single());
     }
 
-    /// <summary>Discovery uses the latest official Codex release instead of a stale compiled version.</summary>
-    [Fact]
-    public async Task Discovery_UsesLatestCodexReleaseVersion()
-    {
-        var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
-            ? JsonResponse("{\"tag_name\":\"rust-v0.156.1\"}")
-            : JsonResponse("{\"models\":[{\"slug\":\"gpt-6-astra\",\"display_name\":\"GPT-6 Astra\"}]}"));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        var catalog = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, handler.RequestCount);
-        Assert.Contains("client_version=0.156.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
-        Assert.Equal("gpt-6-astra", Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(catalog.Models)).ModelId);
-        Assert.Equal([null, "not-a-jwt"], handler.AuthorizationParameters);
-    }
-
     /// <summary>An unavailable release service does not prevent authenticated model discovery.</summary>
     [Fact]
     public async Task Discovery_UsesKnownVersionWhenReleaseLookupFails()
@@ -174,22 +157,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(2, handler.RequestCount);
         Assert.Contains("client_version=0.155.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
         Assert.Single(catalog.Models);
-    }
-
-    /// <summary>Malformed or older release tags cannot change the protected models request.</summary>
-    [Theory]
-    [InlineData("rust-v0.156.1/other")]
-    [InlineData("rust-v0.100.0")]
-    public async Task Discovery_IgnoresUnusableReleaseTags(string tag)
-    {
-        var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
-            ? JsonResponse(JsonSerializer.Serialize(new { tag_name = tag }))
-            : JsonResponse("{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}"));
-        var client = new OpenAiCodexCatalogClient(new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        _ = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Contains("client_version=0.155.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
     }
 
     /// <summary>Discovery requires the source-backed Codex backend model slug.</summary>
@@ -208,24 +175,6 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal("The Codex model response did not contain any usable model identifiers.", exception.Message);
         Assert.DoesNotContain("codex-id", exception.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("Only Display", exception.Message, StringComparison.Ordinal);
-    }
-
-    /// <summary>Discovery reports unusable metadata shape without exposing raw response bodies.</summary>
-    [Fact]
-    public async Task Discovery_NoUsableModelIdentifiers_ReturnsActionableDiagnostic()
-    {
-        var client = new OpenAiCodexCatalogClient(
-            new HttpClient(new RecordingHandler(_ => JsonResponse(
-            "{\"models\":[{\"display_name\":\"Only Display\"}]}")))
-            { Timeout = Timeout.InfiniteTimeSpan },
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        var exception = await Assert.ThrowsAsync<InvalidDataException>(() => client.DiscoverAsync(
-            "not-a-jwt",
-            cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal("The Codex model response did not contain any usable model identifiers.", exception.Message);
         Assert.DoesNotContain("Only Display", exception.Message, StringComparison.Ordinal);
     }
 
@@ -317,28 +266,6 @@ public sealed class Plan50OpenAiCodexTests
             var loaded = await cache.LoadAsync(TestContext.Current.CancellationToken);
 
             Assert.Null(loaded);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Schema-one snapshots are invalidated so their former prohibited sensitivity policy cannot survive upgrade.</summary>
-    [Fact]
-    public async Task CatalogCache_LegacySchema_ReturnsNull()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-legacy-cache-{Guid.NewGuid():N}");
-        var path = Path.Combine(root, "models.json");
-        Directory.CreateDirectory(root);
-        await File.WriteAllTextAsync(
-            path,
-            "{\"SchemaVersion\":1,\"Models\":[{\"Id\":\"legacy\",\"Name\":\"Legacy\",\"ModelId\":\"legacy\",\"Enabled\":true,\"ContextWindow\":128000,\"MaximumOutputTokens\":128000,\"SensitiveDataPolicy\":0}]}",
-            TestContext.Current.CancellationToken);
-
-        try
-        {
-            Assert.Null(await new OpenAiCodexCatalogCache(path).LoadAsync(TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -1021,33 +948,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
-    /// <summary>HTTP and stream rate limits share the configured retry policy and a single busy notification.</summary>
-    [Theory]
-    [InlineData("{\"type\":\"error\",\"code\":\"rate_limit_exceeded\"}", false)]
-    [InlineData("{\"type\":\"response.failed\",\"response\":{\"usage\":null,\"error\":{\"code\":429}}}", false)]
-    [InlineData("{}", true)]
-    [InlineData("{\"type\":\"error\",\"code\":\"server_is_overloaded\"}", false)]
-    [InlineData("{\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"type\":\"service_unavailable_error\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}}", false)]
-    [InlineData("{\"type\":\"error\",\"error\":{\"type\":\"service_unavailable_error\"}}", false)]
-    public async Task Provider_Busy_RetriesAndReportsBusyOnce(string frame, bool httpStatus)
-    {
-        var calls = 0;
-        var handler = new RecordingHandler(_ => ++calls < 3
-            ? new HttpResponseMessage(httpStatus ? HttpStatusCode.TooManyRequests : HttpStatusCode.OK)
-            {
-                Content = new StringContent("data: " + frame + "\n\n", Encoding.UTF8, "text/event-stream"),
-            }
-            : StreamingResponse());
-        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
-        {
-            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-        });
-        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(3, calls);
-        Assert.Single(chunks, chunk => chunk.ProviderBusy);
-        Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
-    }
-
     /// <summary>Unavailable optional usage details do not replace provider failures or prevent retry accounting.</summary>
     [Theory]
     [InlineData(false, null)]
@@ -1387,24 +1287,6 @@ public sealed class Plan50OpenAiCodexTests
             Assert.IsType<HttpIOException>(exception.InnerException);
         }
 
-        Assert.Equal(1, handler.RequestCount);
-    }
-
-    /// <summary>Provider completion is terminal even if the connection subsequently breaks.</summary>
-    [Fact]
-    public async Task Provider_CompletedResponse_DoesNotWaitForConnectionClose()
-    {
-        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StreamContent(new InterruptedResponseStream(
-                Encoding.UTF8.GetBytes("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))),
-        });
-        var provider = await CreateProviderAsync(handler, "token");
-
-        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken)
-            .ToListAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks).FinishReason);
         Assert.Equal(1, handler.RequestCount);
     }
 

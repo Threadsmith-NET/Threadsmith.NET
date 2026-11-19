@@ -27,19 +27,19 @@ public sealed partial class SubagentRoleLiveTests
         Converters = { new JsonStringEnumConverter() },
     };
 
-    /// <summary>Exercises every role against synthetic issue cases and controls using real file tools and models.</summary>
-    [Fact]
+    /// <summary>Records one explicitly selected role and fixture variant against a live provider.</summary>
+    [Fact(Explicit = true)]
     [Trait("Category", "LiveIntegration")]
-    public async Task AllRoles_RealProvider_RecordResponsesAndEfficiency()
+    public static async Task SelectedRoleRecordsProviderOutcome()
     {
-        if (Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_TESTS") != "1")
-        {
-            Assert.Skip("Set THREADSMITH_LIVE_AGENT_TESTS=1 to send synthetic fixtures to the trusted configured model.");
-        }
-
         var cancellationToken = TestContext.Current.CancellationToken;
-        var root = Path.Combine(Path.GetTempPath(), "threadsmith-agent-live-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
+        Assert.True(
+            AgentRoleNames.TryParse(Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_ROLE"), out var role),
+            "Set THREADSMITH_LIVE_AGENT_ROLE to a public role name.");
+        var variant = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_VARIANT") ?? "issue";
+        Assert.True(variant is "issue" or "control", "THREADSMITH_LIVE_AGENT_VARIANT must be issue or control.");
+        var control = variant == "control";
+        var root = Directory.CreateTempSubdirectory("threadsmith-agent-live-").FullName;
         try
         {
             var paths = ConfigurationBootstrap.ResolvePaths(root);
@@ -55,14 +55,12 @@ public sealed partial class SubagentRoleLiveTests
                 : providers.DefaultModelId ?? throw new InvalidOperationException("Configure a default provider model first.");
             var providerId = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_PROVIDER")
                 ?? providers.Providers.Single(provider => provider.Models.Any(model => model.Id == profileId)).Id;
-            var roleSettings = new Dictionary<string, string?>();
-            foreach (var role in Enum.GetValues<AgentRole>())
+            var key = "agents:roleModels:" + AgentRoleNames.GetName(role);
+            var roleSettings = new Dictionary<string, string?>
             {
-                var key = "agents:roleModels:" + AgentRoleNames.GetName(role);
-                roleSettings[key + ":providerId"] = providerId;
-                roleSettings[key + ":profileId"] = profileId.Value.ToString("D");
-            }
-
+                [key + ":providerId"] = providerId,
+                [key + ":profileId"] = profileId.Value.ToString("D"),
+            };
             var configured = new ConfigurationBuilder().AddConfiguration(configuration).AddInMemoryCollection(roleSettings).Build();
             using var ownedConfigured = configured as IDisposable;
             var userDirectory = Path.GetDirectoryName(paths.UserConfiguration)
@@ -82,59 +80,24 @@ public sealed partial class SubagentRoleLiveTests
                 Environment.GetEnvironmentVariable("THREADSMITH_LIVE_AGENT_REPORT_DIRECTORY")
                 ?? Path.Combine(Path.GetTempPath(), "threadsmith-agent-live-reports", DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss")));
             Directory.CreateDirectory(reportDirectory);
-            var failures = new List<string>();
-            bool[] variants = [false, true];
-            foreach (var role in Enum.GetValues<AgentRole>())
+            var fixture = CreateFixture(role, control);
+            var caseName = AgentRoleNames.GetName(role) + "-" + variant;
+            foreach (var file in fixture.Files)
             {
-                foreach (var control in variants)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var fixture = CreateFixture(role, control);
-                    var caseName = AgentRoleNames.GetName(role) + (control ? "-control" : "-issue");
-                    TestContext.Current.TestOutputHelper?.WriteLine($"Starting {caseName} on {profile.Name}.");
-                    var caseRoot = Path.Combine(root, caseName);
-                    Directory.CreateDirectory(caseRoot);
-                    foreach (var file in fixture.Files)
-                    {
-                        var path = Path.Combine(caseRoot, file.Key);
-                        Directory.CreateDirectory(Path.GetDirectoryName(path) ?? caseRoot);
-                        await File.WriteAllTextAsync(path, file.Value, cancellationToken);
-                    }
-
-                    var report = await RunCaseAsync(
-                        role,
-                        control,
-                        fixture,
-                        caseRoot,
-                        models,
-                        providerId,
-                        profile,
-                        models.TrustedProvider,
-                        cancellationToken);
-                    await File.WriteAllTextAsync(
-                        Path.Combine(reportDirectory, caseName + ".json"),
-                        JsonSerializer.Serialize(report, ReportJson),
-                        cancellationToken);
-                    failures.AddRange(report.Failures.Select(failure => caseName + ": " + failure));
-                    TestContext.Current.TestOutputHelper?.WriteLine(
-                        $"Finished {caseName}: {report.Outcome.Status}, {report.ModelRequests} model requests, "
-                        + $"{report.ToolCalls} tool calls, {report.Failures.Count} evaluation failures.");
-                }
+                var path = Path.Combine(root, file.Key);
+                Directory.CreateDirectory(Path.GetDirectoryName(path) ?? root);
+                await File.WriteAllTextAsync(path, file.Value, cancellationToken);
             }
 
-            Assert.True(failures.Count == 0, $"Live reports: {reportDirectory}{Environment.NewLine}{string.Join(Environment.NewLine, failures)}");
+            var report = await RunCaseAsync(role, control, fixture, root, models, providerId, profile, models.TrustedProvider, cancellationToken);
+            var reportPath = Path.Combine(reportDirectory, caseName + ".json");
+            await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, ReportJson), cancellationToken);
+            TestContext.Current.TestOutputHelper?.WriteLine(reportPath);
+            Assert.Empty(report.Failures);
         }
         finally
         {
-            var normalized = Path.GetFullPath(root);
-            var parent = Path.GetFullPath(Path.GetTempPath());
-            if (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(normalized)) != Path.TrimEndingDirectorySeparator(parent)
-                || !Path.GetFileName(normalized).StartsWith("threadsmith-agent-live-", StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException("Refusing to clean an unowned live fixture directory.");
-            }
-
-            Directory.Delete(normalized, recursive: true);
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -170,7 +133,7 @@ public sealed partial class SubagentRoleLiveTests
             new ModelProviderInstructionResolver(models.Catalog, prompts),
             models.RoleModels,
             new ModelProviderInstructionResolver(models.TrustedCatalog, prompts));
-        var options = new DelegateAgentsOptions { EnforceOperationalLimits = false };
+        var options = new DelegateAgentsOptions();
         var assignment = new AgentAssignment
         {
             AssignmentId = AgentAssignmentId.New(),
@@ -241,12 +204,11 @@ public sealed partial class SubagentRoleLiveTests
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId),
             prompts,
             trustedModels: recorded);
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var stopwatch = Stopwatch.StartNew();
         AgentRunOutcome outcome;
         try
         {
-            outcome = await runner.RunAsync(plan, assignment, timeout.Token);
+            outcome = await runner.RunAsync(plan, assignment, cancellationToken);
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested
             && exception is ModelProviderException or InvalidDataException or InvalidOperationException
@@ -334,8 +296,6 @@ public sealed partial class SubagentRoleLiveTests
             observations);
     }
 
-    private sealed record LiveFixture(string Objective, IReadOnlyDictionary<string, string> Files, IReadOnlyList<string> ExpectedTerms);
-
     private sealed record LiveReport(
         string Role,
         bool Control,
@@ -359,6 +319,8 @@ public sealed partial class SubagentRoleLiveTests
         IReadOnlyList<string> Observations);
 
     private sealed record LiveEvidence(Guid Id, string? Path, string Content);
+
+    private sealed record LiveFixture(string Objective, IReadOnlyDictionary<string, string> Files, IReadOnlyList<string> ExpectedTerms);
 
     private sealed class RecordingProvider : IModelProvider, IModelRequestPreparationResolver
     {

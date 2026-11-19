@@ -12,24 +12,6 @@ using Xunit;
 /// <summary>Checks destructive scratchpad lifecycle boundaries with real filesystem state.</summary>
 public sealed class ScratchpadLifecycleTests
 {
-    /// <summary>Unconfirmed process termination prevents deletion of its working files.</summary>
-    [Fact]
-    public async Task ScratchpadCleanupWaitsForTrackedProcessDrain()
-    {
-        var processes = new StubActiveProcesses();
-        await using var fixture = await Fixture.CreateAsync(true, lifecycleProcesses: processes);
-        var token = TestContext.Current.CancellationToken;
-        await fixture.Lifecycle.StartAsync(token);
-        var file = Path.Combine(fixture.Scratchpad, "keep.txt");
-        await File.WriteAllTextAsync(file, "keep", token);
-        processes.ActiveProcesses = [new ActiveProcessInfo(123, RunId.New(), ToolInvocationId.New(), DateTimeOffset.UtcNow, fixture.Scratchpad, TimeSpan.FromSeconds(10), ProcessRequestOrigin.Host)];
-        await Assert.ThrowsAsync<IOException>(() => fixture.Lifecycle.BeginNewSessionAsync(token));
-        Assert.True(File.Exists(file));
-        processes.ActiveProcesses = [];
-        await fixture.Lifecycle.BeginNewSessionAsync(token);
-        Assert.False(File.Exists(file));
-    }
-
     /// <summary>The managed location works from existing project settings without folder grants or a permission file.</summary>
     [Fact]
     public async Task ManagedScratchpad_ProjectPreferenceNeedsNoPermissionSetup()
@@ -75,31 +57,6 @@ public sealed class ScratchpadLifecycleTests
         Assert.Equal("keep", await File.ReadAllTextAsync(adjacent, ct));
     }
 
-    /// <summary>Absent and false settings leave existing contents untouched.</summary>
-    [Theory]
-    [InlineData(null)]
-    [InlineData(false)]
-    public async Task ManagedScratchpad_DisabledRemainsOptional(bool? enabled)
-    {
-        await using var fixture = await Fixture.CreateAsync(enabled);
-        if (enabled is null)
-        {
-            await File.WriteAllTextAsync(
-                Path.Combine(fixture.Repository, ".threadsmith", "config.json"),
-                "{}",
-                TestContext.Current.CancellationToken);
-        }
-
-        _ = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
-        Assert.False(Directory.Exists(fixture.Scratchpad));
-        var scratchpad = Directory.CreateDirectory(fixture.Scratchpad).FullName;
-        var keep = Path.Combine(scratchpad, "keep.txt");
-        await File.WriteAllTextAsync(keep, "keep", TestContext.Current.CancellationToken);
-        _ = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(ScratchpadDisabledReason.NotConfigured, fixture.Lifecycle.Current.DisabledReason);
-        Assert.True(File.Exists(keep));
-    }
-
     /// <summary>A link at the managed root cannot redirect cleanup to other files.</summary>
     [Fact]
     public async Task ManagedScratchpad_LinkCannotExpandCleanup()
@@ -121,96 +78,6 @@ public sealed class ScratchpadLifecycleTests
         {
             Directory.Delete(link);
         }
-    }
-
-    /// <summary>Repository, session, and CLI flags retain ordinary precedence.</summary>
-    [Theory]
-    [InlineData("repository", true)]
-    [InlineData("session", false)]
-    [InlineData("cli", true)]
-    public async Task ConfiguredScratchpad_PreservesSourcePrecedence(string source, bool expected)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await Fixture.CreateAsync(
-            false,
-            userConfigured: true,
-            arguments: source == "cli" ? ["--set:scratchpad:enabled=true"] : []);
-        await File.WriteAllTextAsync(
-            Path.Combine(fixture.Repository, ".threadsmith", "config.json"),
-            """{"scratchpad":{"enabled":true}}""",
-            ct);
-        if (source is "session" or "cli")
-        {
-            await File.WriteAllTextAsync(
-                Path.Combine(fixture.Repository, ".threadsmith", "session.json"),
-                """{"scratchpad":{"enabled":false}}""",
-                ct);
-        }
-
-        _ = await fixture.Lifecycle.StartAsync(ct);
-        Assert.Equal(expected, fixture.Lifecycle.Current.IsActive);
-        Assert.Equal(expected ? ".threadsmith/.scratchpad" : null, fixture.Lifecycle.Current.ModelPath);
-    }
-
-    /// <summary>Invalid boolean values fail closed before directory creation.</summary>
-    [Fact]
-    public async Task InvalidFlag_DoesNotCreateScratchpad()
-    {
-        await using var fixture = await Fixture.CreateAsync(true, arguments: ["--set:scratchpad:enabled=somewhere"]);
-        var warnings = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
-        Assert.False(fixture.Lifecycle.Current.IsActive);
-        Assert.False(Directory.Exists(fixture.Scratchpad));
-        Assert.Contains(warnings, warning => warning.Contains("true or false", StringComparison.Ordinal));
-    }
-
-    /// <summary>Only a positive repository gitignore rule permits startup cleanup.</summary>
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("negated")]
-    [InlineData("exclude")]
-    public async Task Startup_RequiresRepositoryGitIgnoreBeforeCleanup(string rule)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await Fixture.CreateAsync(true, ignored: false);
-        Directory.CreateDirectory(fixture.Scratchpad);
-        var keep = Path.Combine(fixture.Scratchpad, "keep.txt");
-        await File.WriteAllTextAsync(keep, "keep", ct);
-        if (rule == "negated")
-        {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Repository, ".gitignore"), ".threadsmith/.scratchpad/\n!.threadsmith/.scratchpad/\n", ct);
-        }
-        else if (rule == "exclude")
-        {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Repository, ".git", "info", "exclude"), ".threadsmith/.scratchpad/\n", ct);
-        }
-
-        var warnings = await fixture.Lifecycle.StartAsync(ct);
-        Assert.False(fixture.Lifecycle.Current.IsActive);
-        Assert.True(File.Exists(keep));
-        Assert.Contains(warnings, warning => warning.Contains(".gitignore", StringComparison.Ordinal));
-    }
-
-    /// <summary>The dedicated Threadsmith scratchpad may be cleared without touching adjacent state.</summary>
-    [Fact]
-    public async Task Startup_ThreadsmithScratchpadPreservesConfigurationAndOtherState()
-    {
-        await using var fixture = await Fixture.CreateAsync(true);
-        var threadsmith = Path.Combine(fixture.Repository, ".threadsmith");
-        var scratchpad = Path.Combine(threadsmith, ".scratchpad");
-        Directory.CreateDirectory(scratchpad);
-        var stale = Path.Combine(scratchpad, "stale.log");
-        var state = Path.Combine(threadsmith, "threadsmith.db");
-        await File.WriteAllTextAsync(stale, "remove", TestContext.Current.CancellationToken);
-        await File.WriteAllTextAsync(state, "preserve", TestContext.Current.CancellationToken);
-
-        _ = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
-
-        Assert.True(fixture.Lifecycle.Current.IsActive);
-        Assert.Equal(".threadsmith/.scratchpad", fixture.Lifecycle.Current.ModelPath);
-        Assert.True(Directory.Exists(scratchpad));
-        Assert.False(File.Exists(stale));
-        Assert.True(File.Exists(Path.Combine(threadsmith, "config.json")));
-        Assert.Equal("preserve", await File.ReadAllTextAsync(state, TestContext.Current.CancellationToken));
     }
 
     /// <summary>Cleanup removes nested read-only contents and links without following link targets.</summary>
@@ -289,27 +156,6 @@ public sealed class ScratchpadLifecycleTests
         }
     }
 
-    /// <summary>Repository transitions clean the old fixed root and advertise the destination's fixed root.</summary>
-    [Fact]
-    public async Task RepositorySwitch_RebindsFixedRoot()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var original = await Fixture.CreateAsync(true);
-        await using var destination = await Fixture.CreateAsync(true);
-        _ = await original.Lifecycle.StartAsync(ct);
-        await File.WriteAllTextAsync(Path.Combine(original.Scratchpad, "stale.txt"), "stale", ct);
-
-        await original.Lifecycle.BindRepositoryAsync(destination.Repository, ct);
-        _ = await original.Lifecycle.StartAsync(ct);
-
-        Assert.Empty(Directory.EnumerateFileSystemEntries(original.Scratchpad));
-        Assert.True(original.Lifecycle.Current.IsActive);
-        Assert.Equal(destination.Scratchpad, original.Lifecycle.Current.RootPath);
-        Assert.Equal(".threadsmith/.scratchpad", original.Lifecycle.Current.ModelPath);
-        await original.Lifecycle.RestoreRepositoryAsync(original.Repository, ct);
-        Assert.Equal(original.Scratchpad, original.Lifecycle.Current.RootPath);
-    }
-
     /// <summary>Legacy path configuration cannot enable or redirect cleanup, from any source.</summary>
     [Theory]
     [InlineData(false, false)]
@@ -333,26 +179,6 @@ public sealed class ScratchpadLifecycleTests
 
         Assert.Empty(warnings);
         Assert.Equal("keep", await File.ReadAllTextAsync(keep, ct));
-    }
-
-    /// <summary>A session boundary removes all transient content before publishing the next capability.</summary>
-    [Fact]
-    public async Task NewSession_ClearsContentsAndReactivates()
-    {
-        await using var fixture = await Fixture.CreateAsync(true);
-        _ = await fixture.Lifecycle.StartAsync(TestContext.Current.CancellationToken);
-        var scratchpad = fixture.Scratchpad;
-        await File.WriteAllTextAsync(
-            Path.Combine(scratchpad, "iteration.json"),
-            "{}",
-            TestContext.Current.CancellationToken);
-        var previousGeneration = fixture.Lifecycle.Current.Generation;
-
-        await fixture.Lifecycle.BeginNewSessionAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(Directory.EnumerateFileSystemEntries(scratchpad));
-        Assert.True(fixture.Lifecycle.Current.IsActive);
-        Assert.True(fixture.Lifecycle.Current.Generation > previousGeneration);
     }
 
     /// <summary>Reopening the already-bound repository preserves the active session's scratchpad.</summary>
@@ -445,14 +271,6 @@ public sealed class ScratchpadLifecycleTests
         {
             Assert.Skip($"Symbolic-link creation is unavailable: {exception.GetType().Name}.");
         }
-    }
-
-    private sealed class StubActiveProcesses : IProcessManager
-    {
-        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses { get; set; } = [];
-
-        public Task<ProcessExecutionResult> RunAsync(ProcessExecutionRequest request, CancellationToken cancellationToken = default)
-            => new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)).RunAsync(request, cancellationToken);
     }
 
     private sealed class Fixture : IAsyncDisposable

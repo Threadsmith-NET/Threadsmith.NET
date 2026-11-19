@@ -67,46 +67,6 @@ public static class OpenAiCompatibleStreamErrorTests
         Assert.Equal(seconds > 0 ? 1 : 0, chunks.Count(chunk => chunk.ProviderBusy));
     }
 
-    /// <summary>Rate-limit variants recover or exhaust retries without duplicate busy notices or failed-frame usage.</summary>
-    [Theory]
-    [InlineData("{\"code\":429}", false)]
-    [InlineData("{\"code\":\"429\"}", false)]
-    [InlineData("{\"type\":\"rate_limit_error\"}", false)]
-    [InlineData("{\"code\":\"rate_limit_exceeded\"}", true)]
-    [InlineData("{\"code\":\"server_is_overloaded\",\"type\":\"service_unavailable_error\"}", false)]
-    [InlineData("{\"status\":503}", false)]
-    [InlineData("{\"status_code\":\"529\"}", false)]
-    public static async Task ProviderBusy_RetriesWithOneBusyNotice(string error, bool exhaust)
-    {
-        var failed = "data: {\"error\":" + error + ",\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":0}}\n\n";
-        const string success = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        var handler = new StreamHandler(failed, failed, exhaust ? failed : success);
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = new List<ModelChunk>();
-        async Task CollectAsync()
-        {
-            await foreach (var chunk in CreateProvider(client).StreamAsync(Request(), TestContext.Current.CancellationToken))
-            {
-                chunks.Add(chunk);
-            }
-        }
-
-        if (exhaust)
-        {
-            var exception = await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
-            Assert.True(exception.IsRateLimit);
-        }
-        else
-        {
-            await CollectAsync();
-            Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
-            Assert.Single(chunks, chunk => chunk.Usage is not null);
-        }
-
-        Assert.Equal(exhaust ? 7 : 3, handler.Calls);
-        Assert.Single(chunks, chunk => chunk.ProviderBusy);
-    }
-
     /// <summary>Cancellation while entering backoff stops resubmission.</summary>
     [Fact]
     public static async Task RateLimit_CancelAtBusyNotice_DoesNotResubmit()

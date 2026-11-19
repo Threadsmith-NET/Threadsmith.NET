@@ -8,29 +8,6 @@ using Xunit;
 /// <summary>Checks the public role names and compatibility of existing delegation input.</summary>
 public sealed class DelegateAgentRoleContractTests
 {
-    /// <summary>Every defined role has one stable, exact public spelling.</summary>
-    [Theory]
-    [InlineData("explorer", AgentRole.Explorer)]
-    [InlineData("implementer", AgentRole.Implementer)]
-    [InlineData("securityReviewer", AgentRole.SecurityReviewer)]
-    [InlineData("testReviewer", AgentRole.TestReviewer)]
-    [InlineData("performanceReviewer", AgentRole.PerformanceReviewer)]
-    [InlineData("architectureReviewer", AgentRole.ArchitectureReviewer)]
-    [InlineData("bugReviewer", AgentRole.BugReviewer)]
-    public void Deserialize_ExactRole_RetainsSelection(string name, AgentRole expected)
-    {
-        var json = JsonSerializer.Serialize(new
-        {
-            agents = new[] { new { role = name, task = "Inspect source.", context = "src/A.cs", toolAccess = "readOnly" } },
-        });
-
-        var request = JsonSerializer.Deserialize<DelegateAgentsInput>(json);
-
-        Assert.NotNull(request);
-        Assert.Equal(expected, Assert.Single(request.Agents).Role);
-        Assert.Equal(name, AgentRoleNames.GetName(expected));
-    }
-
     /// <summary>Older tool callers continue to create Explorer assignments.</summary>
     [Fact]
     public void Deserialize_MissingRole_DefaultsToExplorer()

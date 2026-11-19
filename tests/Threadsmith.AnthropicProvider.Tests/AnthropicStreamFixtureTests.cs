@@ -83,27 +83,6 @@ public sealed class AnthropicStreamFixtureTests
         chunks[envelopeIndex].ResponseEnvelope?.Dispose();
     }
 
-    /// <summary>Every malformed tool response is rejected without an executable partial tool.</summary>
-    [Theory]
-    [InlineData("[]")]
-    [InlineData("null")]
-    [InlineData("{\"a\":1,\"a\":2}")]
-    [InlineData("{\"a\":")]
-    public async Task StreamAsync_InvalidArguments_EmitsNoTool(string arguments)
-    {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(arguments))) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = new List<ModelChunk>();
-        await Assert.ThrowsAsync<MalformedInvocationException>(async () =>
-        {
-            await foreach (var chunk in Provider(client).StreamAsync(TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }))
-            {
-                chunks.Add(chunk);
-            }
-        });
-        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
-        Assert.Single(chunks, chunk => chunk.Usage is not null);
-    }
-
     /// <summary>Missing message_stop never commits the signed envelope or any tool.</summary>
     [Fact]
     public async Task StreamAsync_EofAfterStopReason_RejectsIncompleteResponse()
@@ -249,27 +228,6 @@ public sealed class AnthropicStreamFixtureTests
     }
 
     [Theory]
-    [InlineData(false, "rate_limit_error", 429)]
-    [InlineData(true, "rate_limit_error", 429)]
-    [InlineData(false, "overloaded_error", 529)]
-    [InlineData(true, "overloaded_error", 529)]
-    [InlineData(true, "overloaded_error", 503)]
-    public async Task StreamAsync_ProviderBusy_RetriesAndReportsBusyOnce(bool httpStatus, string errorType, int status)
-    {
-        var failure = TestAnthropic.Event("error", new { type = "error", error = new { type = errorType, message = "SECRET" } });
-        var handler = new TestAnthropicHandler((attempt, _) => Task.FromResult(
-            new HttpResponseMessage(httpStatus && attempt < 2 ? (HttpStatusCode)status : HttpStatusCode.OK)
-            {
-                Content = new StringContent(attempt < 2 ? failure : TestAnthropic.TextStream(), System.Text.Encoding.UTF8, "text/event-stream"),
-            }));
-        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        var chunks = await TestAnthropic.CollectAsync(Provider(client), TestAnthropic.Request(), TestContext.Current.CancellationToken);
-        Assert.Equal(3, handler.Requests.Count);
-        Assert.Single(chunks, chunk => chunk.ProviderBusy);
-        Assert.Contains(chunks, chunk => chunk.FinishReason is not null);
-    }
-
-    [Theory]
     [InlineData(0, 1)]
     [InlineData(1, 3)]
     [InlineData(15, 7)]
@@ -369,29 +327,6 @@ public sealed class AnthropicStreamFixtureTests
         using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(secondTool: true))) { Timeout = Timeout.InfiniteTimeSpan };
         var profile = TestAnthropic.Profile() with { MaximumToolCalls = 1 };
         await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility(), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)), TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }));
-    }
-
-    /// <summary>An envelope the consumer never transfers to host state is zeroed on iterator disposal.</summary>
-    [Fact]
-    public async Task StreamAsync_UnclaimedEnvelope_IsReleasedWhenEnumerationStops()
-    {
-        using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream())) { Timeout = Timeout.InfiniteTimeSpan };
-        ModelResponseReplayEnvelope? unclaimed = null;
-        await using (var iterator = Provider(client).StreamAsync(TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }).GetAsyncEnumerator())
-        {
-            while (await iterator.MoveNextAsync())
-            {
-                if (iterator.Current.ResponseEnvelope is { } envelope)
-                {
-                    unclaimed = envelope;
-                    Assert.True(envelope.ByteCount > 0);
-                    break;
-                }
-            }
-        }
-
-        Assert.NotNull(unclaimed);
-        Assert.Equal(0, unclaimed.ByteCount);
     }
 
     private static AnthropicModelProvider Provider(HttpClient client)

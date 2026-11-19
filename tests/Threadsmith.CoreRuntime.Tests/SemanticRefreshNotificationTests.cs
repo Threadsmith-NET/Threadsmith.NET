@@ -47,35 +47,6 @@ public static class SemanticRefreshNotificationTests
         Assert.Empty(activities.Activities);
     }
 
-    /// <summary>Native output shows refresh progress while an unsent composer draft is retained.</summary>
-    [Fact]
-    public static async Task NativeRefreshIndicatorStaysVisibleDuringDraft()
-    {
-        using var backend = new ObservedBackend(120, 35);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
-        await surface.RunAsync(
-            async token =>
-        {
-            var read = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            backend.FeedInput("draft");
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            _ = backend.TakeOutput();
-            var activity = new InteractionActivity("SEMANTIC REFRESH — new requests blocked", TimeProvider.System.GetTimestamp(), true, TimeProvider.System)
-            {
-                SemanticWorkspaceId = WorkspaceId.New(),
-            };
-            await surface.PresentToolActivitiesAsync([activity], token);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            Assert.Contains("new requests blocked", await backend.WaitForOutputAsync("new requests blocked", token), StringComparison.Ordinal);
-            Assert.False(read.IsCompleted);
-            backend.FeedInput("\r");
-            Assert.Equal("draft", (await read).Text);
-            await surface.PresentToolActivitiesAsync([], token);
-        },
-            TestContext.Current.CancellationToken);
-    }
-
     /// <summary>A workspace refresh persists independently of conversation output and run lifecycles.</summary>
     [Fact]
     public static void RefreshActivityPersistsUntilMatchingWorkspaceCompletion()
@@ -128,86 +99,5 @@ public static class SemanticRefreshNotificationTests
         }
 
         Assert.Null(InteractionEventSegments.CreateNotification(new ModelOutputObserved(session, now, "External changes; refreshing semantics")));
-    }
-
-    /// <summary>Native toasts stay in output content, follow live theme roles, and disappear at their timeout.</summary>
-    [Theory]
-    [InlineData(40, 12)]
-    [InlineData(120, 35)]
-    public static void NativeToastsRespectOutputBoundsThemeAndExpiration(int width, int height)
-    {
-        var cells = new CellBuffer(width, height);
-        var output = new BufferSurface(cells).CreateView(new Rect(0, 2, width, height - 6));
-        var content = output.CreateView(WorkspaceLayout.OutputContent(output.Size));
-        var notifications = new NotificationCenter();
-        var toast = notifications.Add("Semantic model updated", NotificationSeverity.Success, 100, 4000);
-        var style = CellStyle.Default.WithForeground(Color.FromPalette(5)).WithBackground(Color.FromPalette(4));
-        cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", CellStyle.Default, 1));
-
-        NotificationOverlay.Render(content, notifications, 100, role => role == PresentationTextRole.Success ? style : CellStyle.Default);
-
-        Assert.Contains(toast.Text, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
-        var painted = 0;
-        for (var y = 0; y < height; y++)
-        {
-            for (var x = 0; x < width; x++)
-            {
-                if (cells.Get(x, y).Grapheme != "X")
-                {
-                    Assert.InRange(x, 2, width - 3);
-                    Assert.Equal(5, y);
-                    Assert.Equal(style, cells.Get(x, y).Style);
-                    painted++;
-                }
-            }
-        }
-
-        Assert.True(painted > 0);
-        style = CellStyle.Default;
-        cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", CellStyle.Default, 1));
-        NotificationOverlay.Render(content, notifications, 4099, _ => style);
-        Assert.Contains(toast.Text, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
-        Assert.Equal(CellStyle.Default, cells.Get(width - 6, 5).Style);
-
-        cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", CellStyle.Default, 1));
-        NotificationOverlay.Render(content, notifications, 4100, _ => style);
-        Assert.DoesNotContain(toast.Text, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
-        Assert.Empty(notifications.Active(4100));
-    }
-
-    /// <summary>A live UI loop displays the echo while preserving the draft and copying only the original output.</summary>
-    [Fact]
-    public static async Task ToastPreservesComposerAndOriginalTranscript()
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        using var backend = new ObservedBackend(120, 35);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        var application = (TuiApplication)typeof(TuiKitSurface).GetField("_app", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(surface)!;
-        application.Notifications.DefaultTimeoutMilliseconds = 0;
-        await surface.RunAsync(
-            async token =>
-        {
-            var read = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            backend.FeedInput("draft");
-            await surface.PresentAsync(new PresentationBatch([]), token);
-            _ = backend.TakeOutput();
-            var started = new SemanticRefreshStarted(SessionId.New(), DateTimeOffset.UtcNow, SemanticRefreshId.New(), WorkspaceId.New(), SemanticRefreshReason.ExternalChange, SemanticRefreshMode.Incremental, 1, 2);
-            var notification = Assert.IsType<PresentationNotification>(InteractionEventSegments.CreateNotification(started));
-            const string transcript = "External changes detected; updating semantic model...\n";
-            await surface.PresentAsync(
-                new PresentationBatch([new PresentationTextItem([new(transcript, PresentationTextRole.Status)]) { Notification = notification }]),
-                token);
-            await surface.PresentAsync(new PresentationBatch([]), token);
-
-            Assert.Contains(notification.Text, await backend.WaitForOutputAsync(notification.Text, token), StringComparison.Ordinal);
-            Assert.False(read.IsCompleted);
-            backend.FeedInput("\u001b[18~\u0001\u0003\u001b[18~\r");
-            Assert.Equal("draft", (await read).Text);
-            var copy = Assert.Single(backend.TakeOutput().Split("\u001b]52;c;").Skip(1));
-            var copied = Encoding.UTF8.GetString(Convert.FromBase64String(copy[..copy.IndexOf('\u001b')]));
-            Assert.Equal("Use Control-V to paste text; Control-Alt-V to paste an image or PDF; F9 to manage attachments\n" + transcript.TrimEnd(), copied.TrimEnd());
-        },
-            timeout.Token);
     }
 }

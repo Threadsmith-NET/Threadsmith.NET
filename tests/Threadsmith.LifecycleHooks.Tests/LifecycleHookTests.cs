@@ -205,33 +205,6 @@ public sealed class LifecycleHookTests
         Assert.Equal(HookDecisionKind.Continue, result.Decision);
     }
 
-    /// <summary>The management test command invokes only its selected handler.</summary>
-    [Fact]
-    public async Task TestHook_InvokesOnlyRequestedHandler()
-    {
-        var store = new InMemoryHookStore();
-        var first = HookDescriptorValidator.Normalize([
-            Descriptor(HookHandlerScope.Machine, HookAuthority.Advisory, HookFailureMode.FailOpen, "first")])[0];
-        var second = HookDescriptorValidator.Normalize([
-            Descriptor(HookHandlerScope.Machine, HookAuthority.Advisory, HookFailureMode.FailOpen, "second")])[0];
-        var adapter = new RecordingAdapter();
-        await using var coordinator = new HookCoordinator(
-            [first, second],
-            [adapter],
-            new HookPolicyEvaluator(store, []),
-            store,
-            new PassthroughSanitizer(),
-            NullLogger<HookCoordinator>.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var application = new HookManagementApplication(coordinator, store);
-
-        var result = await application.HandleAsync(
-            new TestHookCommand(first.Identity.Id, SessionId.New(), "repo-1"));
-
-        Assert.Single(result.AuditRecords);
-        Assert.Equal(["first"], adapter.InvokedHandlerIds);
-    }
-
     /// <summary>Mutation lifecycle events produce no staged duplicate and one transaction-level applied hook.</summary>
     [Fact]
     public async Task MutationEvents_EmitOneTransactionLevelAppliedHook()

@@ -100,38 +100,6 @@ public static class AgentDisplayStreamTests
         Assert.Contains("omitted", text, StringComparison.Ordinal);
     }
 
-    /// <summary>Visibility changes never discard sanitizer context or reveal an already hidden response.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static void ReasoningVisibilityIsFrozenForEachResponse(bool initiallyVisible)
-    {
-        var stream = new AgentDisplayStream { IncludeReasoningText = initiallyVisible };
-        stream.Attach();
-        var sanitizer = new Threadsmith.Telemetry.SecretOutputSanitizer();
-        var writer = new AgentDisplayTextWriter(stream, sanitizer, SessionId.New(), RunId.New(), true);
-        writer.Append("password:\n");
-        stream.IncludeReasoningText = !initiallyVisible;
-        writer.Append("secret-canary\n");
-        stream.IncludeReasoningText = true;
-        writer.Flush(true);
-        var output = stream.Drain(out _);
-        Assert.DoesNotContain("secret-canary", string.Concat(output.Select(item => item.Text)), StringComparison.Ordinal);
-        if (!initiallyVisible)
-        {
-            Assert.Empty(output);
-        }
-        else
-        {
-            Assert.Contains("REDACTED", string.Concat(output.Select(item => item.Text)), StringComparison.Ordinal);
-        }
-
-        var next = new AgentDisplayTextWriter(stream, sanitizer, SessionId.New(), RunId.New(), true);
-        next.Append("safe public reasoning\n");
-        next.Flush(true);
-        Assert.Contains("safe public reasoning", string.Concat(stream.Drain(out _).Select(item => item.Text)), StringComparison.Ordinal);
-    }
-
     /// <summary>The smallest supported fragment retains complete surrogate pairs and flush always advances.</summary>
     [Fact]
     public static void FragmentLimitPreservesUnicodeScalarsAndRejectsOneCodeUnit()

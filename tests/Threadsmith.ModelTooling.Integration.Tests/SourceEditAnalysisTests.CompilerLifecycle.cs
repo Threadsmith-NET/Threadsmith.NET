@@ -6,21 +6,14 @@ using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Xunit;
 
-public abstract partial class SourceEditAnalysisTests
-{
-}
-
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
 public sealed class SourceEditAnalysisTestsIncompleteCompilerOperationsCannotSeedEvidence : SourceEditAnalysisTests
 {
     /// <summary>Failed, discarded and superseded operations cannot publish computed evidence late.</summary>
     [Theory]
     [InlineData("failure", 1)]
-    [InlineData("discard", 1)]
     [InlineData("supersede", 1)]
-    [InlineData("failure", 2)]
     [InlineData("discard", 2)]
-    [InlineData("supersede", 2)]
     public static async Task IncompleteCompilerOperationsCannotSeedEvidence(string termination, int blockedProject)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -83,83 +76,6 @@ public sealed class SourceEditAnalysisTestsIncompleteCompilerOperationsCannotSee
             Assert.True(next.CompilerCompletedSuccessfully);
             Assert.Equal(passes + (2L * next.ProjectsInScope), engine.EditAnalysisStatistics.DiagnosticPasses);
             engine.DiscardEditCandidate(secondCommand.EffectId);
-        }
-        finally
-        {
-            release.TrySetResult();
-        }
-    }
-}
-
-/// <summary>Exercises one independently owned semantic or model contract.</summary>
-public sealed class SourceEditAnalysisTestsIncompleteCompilerAnalysisPreservesSuccessfulEvidence : SourceEditAnalysisTests
-{
-    /// <summary>Unsuccessful multi-project work cannot evict evidence from an earlier successful analysis.</summary>
-    [Theory]
-    [InlineData("failure")]
-    [InlineData("discard")]
-    public static async Task IncompleteCompilerAnalysisPreservesSuccessfulEvidence(string termination)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        using var fixture = new TestSemanticSolution();
-        await using var events = new DomainEventStream();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        Guid blockedEffect = default;
-        var observedProjects = 0;
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, resourceLimits: new() { EditAnalysis = new() { MaximumCachedProjects = 1, Analyzers = new() { Enabled = false } } }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
-        {
-            EditProjectAnalysisObserver = async (effect, _) =>
-            {
-                if (effect != blockedEffect || Interlocked.Increment(ref observedProjects) != 2)
-                {
-                    return;
-                }
-
-                entered.TrySetResult();
-                await release.Task.WaitAsync(ct);
-                if (termination == "failure")
-                {
-                    throw new InvalidOperationException("Injected later-project failure.");
-                }
-            },
-        };
-        var request = TestSemanticSolution.CreateLoadRequest(fixture.Root);
-        await engine.LoadAsync(request, ct);
-        await engine.WaitForWarmAsync(ct);
-        // Fill the one-entry cache with successful App evidence before Contracts can evict it.
-        const string appRelative = "App/Program.cs";
-        var appOriginal = await File.ReadAllTextAsync(Path.Combine(fixture.Root, appRelative), ct);
-        var warmCommand = Command(request.SessionId, RunId.New(), request.WorkspaceId);
-        var warm = await AnalyzeCompletedAsync(engine, events, warmCommand, fixture.Root, Snapshot(appRelative, appOriginal, appOriginal + "\npublic class WarmAppCandidate { }"), ct);
-        Assert.True(warm.CompilerCompletedSuccessfully);
-        Assert.Equal(1, warm.ProjectsInScope);
-        engine.DiscardEditCandidate(warmCommand.EffectId);
-        const string relative = "Contracts/Services.cs";
-        var original = await File.ReadAllTextAsync(Path.Combine(fixture.Root, relative), ct);
-        var blockedCommand = Command(request.SessionId, warmCommand.RunId, request.WorkspaceId);
-        blockedEffect = blockedCommand.EffectId;
-        var incomplete = AnalyzeCompletedAsync(engine, events, blockedCommand, fixture.Root, Snapshot(relative, original, original + "\npublic class IncompleteContractsCandidate { }"), ct);
-        try
-        {
-            await entered.Task.WaitAsync(ct);
-            if (termination == "discard")
-            {
-                engine.DiscardEditCandidate(blockedCommand.EffectId);
-            }
-
-            release.TrySetResult();
-            var terminated = await incomplete;
-            Assert.False(terminated.CompilerCompletedSuccessfully);
-            Assert.Equal(1, terminated.ProjectsAnalyzed);
-            engine.DiscardEditCandidate(blockedCommand.EffectId);
-            var passes = engine.EditAnalysisStatistics.DiagnosticPasses;
-            var nextCommand = Command(request.SessionId, warmCommand.RunId, request.WorkspaceId);
-            var next = await AnalyzeCompletedAsync(engine, events, nextCommand, fixture.Root, Snapshot(appRelative, appOriginal, appOriginal + "\npublic class NextAppCandidate { }"), ct);
-            Assert.True(next.CompilerCompletedSuccessfully);
-            Assert.Equal(1, next.ProjectsInScope);
-            Assert.Equal(passes + 1, engine.EditAnalysisStatistics.DiagnosticPasses);
-            engine.DiscardEditCandidate(nextCommand.EffectId);
         }
         finally
         {

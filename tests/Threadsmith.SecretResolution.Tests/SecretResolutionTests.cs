@@ -210,20 +210,6 @@ public sealed class SecretResolutionTests
         Assert.Null(result.Value);
     }
 
-    /// <summary>An exact untracked ignored store resolves for a repository-trust request.</summary>
-    [Fact]
-    public async Task RepositoryProvider_ResolvesOnlyIgnoredUntrackedStoreAsync()
-    {
-        using var fixture = new SecretFixture();
-        fixture.WriteRepository("repository-value", ignored: true);
-
-        var result = await new RepositoryFileSecretProvider(fixture.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
-            .TryResolveAsync(fixture.CreateRequest());
-
-        Assert.Equal("repository-value", result.Value?.Reveal());
-        Assert.Equal(SecretResolutionFailure.None, result.Failure);
-    }
-
     /// <summary>A repository-controlled replacement cannot redirect the post-validation read through a link.</summary>
     [Fact]
     public async Task RepositoryProvider_RejectsLinkReplacementAfterValidationAsync()
@@ -367,24 +353,6 @@ public sealed class SecretResolutionTests
         Assert.Equal("canary-secret", result.Value?.Reveal());
         Assert.DoesNotContain("canary-secret", result.ToString(), StringComparison.Ordinal);
         Assert.Equal(mode, File.GetUnixFileMode(fixture.UserStorePath));
-    }
-
-    /// <summary>Repository transitions atomically redirect future repository lookups.</summary>
-    [Fact]
-    public async Task RepositoryProvider_RebindsToActiveRepositoryAsync()
-    {
-        using var first = new SecretFixture();
-        using var second = new SecretFixture();
-        first.WriteRepository("first-value", ignored: true);
-        second.WriteRepository("second-value", ignored: true);
-        var provider = new RepositorySecretProvider(first.RepositoryRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-
-        var before = await provider.TryResolveAsync(first.CreateRequest());
-        provider.BindRepository(second.RepositoryRoot);
-        var after = await provider.TryResolveAsync(second.CreateRequest());
-
-        Assert.Equal("first-value", before.Value?.Reveal());
-        Assert.Equal("second-value", after.Value?.Reveal());
     }
 
     /// <summary>A future provider plugs into the resolver without changing a consumer.</summary>

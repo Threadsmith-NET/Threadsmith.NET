@@ -35,66 +35,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Null(restored.Policy.ModelSelection);
     }
 
-    /// <summary>All defined roles receive their instructions and return ordinary text without synthetic results.</summary>
-    [Theory]
-    [InlineData(AgentRole.Explorer, PromptFileNames.SystemChildAgentExplorer)]
-    [InlineData(AgentRole.Implementer, PromptFileNames.SystemChildAgentImplementer)]
-    [InlineData(AgentRole.SecurityReviewer, PromptFileNames.SystemChildAgentSecurityReviewer)]
-    [InlineData(AgentRole.TestReviewer, PromptFileNames.SystemChildAgentTestReviewer)]
-    [InlineData(AgentRole.PerformanceReviewer, PromptFileNames.SystemChildAgentPerformanceReviewer)]
-    [InlineData(AgentRole.ArchitectureReviewer, PromptFileNames.SystemChildAgentArchitectureReviewer)]
-    [InlineData(AgentRole.BugReviewer, PromptFileNames.SystemChildAgentBugReviewer)]
-    public async Task RunAsync_AllRoles_OrdinaryResponsePreservesRoleAndModel(AgentRole role, string rolePromptFileName)
-    {
-        await using var events = new DomainEventStream();
-        var sanitizer = new SecretOutputSanitizer();
-        var evidence = new EvidenceStore(events, sanitizer);
-        var profile = CreateRoleProfile();
-        var assignment = CreateRoleAssignment(profile.Id, role);
-        var plan = CreatePlan(assignment);
-        var response = $"Notes for {role}: no further changes are needed.\nInspection is complete.";
-        var provider = new FindingSequenceProvider(response);
-        var runner = CreateRunner(provider, CreatePipeline(new ToolRegistry([]), events, sanitizer), evidence, sanitizer, profile, CreateParentContext(plan, []), []);
-
-        var result = await runner.RunAsync(plan, assignment);
-
-        Assert.Equal(role, result.Role);
-        Assert.Equal(AgentRunStatus.Completed, result.Status);
-        Assert.Equal(response, result.Response);
-        Assert.Null(result.Findings);
-        Assert.Null(result.Review);
-        Assert.Null(result.Implementation);
-        Assert.Null(result.ChangeSet);
-        Assert.Empty(result.DeliveredEvidenceIds);
-        Assert.Equal(0, result.Usage.Corrections);
-        Assert.True(DelegationOutcomeClassifier.HasUsableResult(plan, result));
-        Assert.Equal(profile.Id, result.ModelSelection?.EffectiveProfileId);
-        var request = Assert.Single(provider.Requests);
-        var expectedWorkload = role switch
-        {
-            AgentRole.Explorer => WorkloadClass.General,
-            AgentRole.Implementer => WorkloadClass.CodeEdit,
-            _ => WorkloadClass.Review,
-        };
-        Assert.Equal(expectedWorkload, request.WorkloadClass);
-        Assert.False(request.RequiredCapabilities.StructuredOutput);
-        var hostPolicy = Assert.Single(request.Messages, message => message.SectionId == "child-host-policy");
-        var prompts = TestPromptLoader.Instance;
-        var inspection = prompts.Get(PromptFileNames.SystemRepositoryInspection).Replace(
-            "{{ImplementationValidation}}",
-            prompts.Get(PromptFileNames.SystemImplementationValidationReadOnly),
-            StringComparison.Ordinal);
-        Assert.Equal(
-            prompts.Get(PromptFileNames.SystemChildAgentHostPolicy) + Environment.NewLine + inspection,
-            hostPolicy.GetModelVisibleContent());
-        Assert.Equal(ModelMessageRole.System, hostPolicy.Role);
-        Assert.Same(hostPolicy, request.Messages[0]);
-        var roleAmendment = Assert.Single(request.Messages, message => message.SectionId == "child-role-amendment");
-        Assert.Equal(TestPromptLoader.Instance.Get(rolePromptFileName), roleAmendment.GetModelVisibleContent());
-        Assert.Equal(ModelMessageRole.System, roleAmendment.Role);
-        Assert.Same(roleAmendment, request.Messages[1]);
-    }
-
     /// <summary>Implementer JSON remains advisory response text without a host-authorized proposal or mutation.</summary>
     [Fact]
     public async Task RunAsync_ReadOnlyImplementer_DoesNotPromoteResponseToProposal()

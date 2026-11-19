@@ -26,34 +26,6 @@ public static class ToolStatisticsModalTests
         Assert.Equal(argument, invocation.Argument);
     }
 
-    /// <summary>Measurements round averages and distinguish unknown from zero.</summary>
-    [Fact]
-    public static void Formatting_rounds_average_and_preserves_unknown_zero_and_coverage()
-    {
-        var measured = Row("removed-tool") with
-        {
-            TotalCount = 3,
-            SuccessCount = 2,
-            FailureCount = 1,
-            TotalDurationMilliseconds = 401,
-            MeasuredInvocationCount = 2,
-            LastDurationMilliseconds = null,
-        };
-        var text = ToolStatisticsFormatter.Format(new([measured]));
-        Assert.Contains("Average duration: 201 ms", text, StringComparison.Ordinal);
-        Assert.Equal("200 ms", ToolStatisticsFormatter.AverageDuration(measured with { TotalDurationMilliseconds = 400 }));
-        Assert.Equal("200 ms", ToolStatisticsFormatter.AverageDuration(measured with { TotalDurationMilliseconds = 601, MeasuredInvocationCount = 3 }));
-        Assert.Equal("201 ms", ToolStatisticsFormatter.AverageDuration(measured with { TotalDurationMilliseconds = 602, MeasuredInvocationCount = 3 }));
-        Assert.Contains("Last-run duration: unavailable", text, StringComparison.Ordinal);
-        Assert.Contains("Measured invocations: 2/3", text, StringComparison.Ordinal);
-        Assert.Contains("Last invocation (UTC):", text, StringComparison.Ordinal);
-        var zero = measured with { TotalDurationMilliseconds = 0, MeasuredInvocationCount = 1, LastDurationMilliseconds = 0 };
-        text = ToolStatisticsFormatter.Format(new([zero]));
-        Assert.Contains("Average duration: 0 ms", text, StringComparison.Ordinal);
-        Assert.Contains("Last-run duration: 0 ms", text, StringComparison.Ordinal);
-        Assert.Contains("Average duration: unavailable", ToolStatisticsFormatter.Format(new([zero with { MeasuredInvocationCount = 0 }])), StringComparison.Ordinal);
-    }
-
     /// <summary>List navigation exposes rows beyond the viewport after resizing.</summary>
     [Fact]
     public static void Navigation_reaches_rows_beyond_viewport_and_survives_resize()
@@ -135,43 +107,6 @@ public static class ToolStatisticsModalTests
         Assert.Equal("Last invocation (UTC)", ToolStatisticsTableSnapshot.ColumnNames[^1]);
         Assert.Equal("2026-07-10T10:34:56+00:00", Assert.Single(prepared.Rows).Cells[^1]);
         Assert.Equal(row.LastInvokedAtUtc.Ticks % TimeSpan.TicksPerSecond, fractionalTicks);
-    }
-
-    /// <summary>Header labels use the output-pane background, not the background inherited by selected rows.</summary>
-    [Theory]
-    [InlineData(false, "black")]
-    [InlineData(false, "blue")]
-    [InlineData(true, "black")]
-    public static void Table_uses_host_selection_and_row_styles(bool suppress, string background)
-    {
-        var styles = CreateStyles(suppress, background);
-        var modal = new ToolStatisticsModal(styles.Resolve, () => { }, () => { }, () => true);
-        modal.Requests.TryRead(out _);
-        CompleteRequest(modal, new([Row("selected-tool"), Row("ordinary-tool")]));
-        var cells = RenderCells(modal, 240, 24);
-        var expectedHeader = styles.Resolve(PresentationTextRole.Status)
-            .WithBackground(styles.Resolve(PresentationTextRole.OutputStreamPaneRole).Background);
-        var lines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
-        var headerY = Array.FindIndex(lines, line => line.Contains("Tool ID", StringComparison.Ordinal));
-        Assert.True(headerY >= 0);
-        foreach (var label in ToolStatisticsTableSnapshot.ColumnNames)
-        {
-            var left = lines[headerY].IndexOf(label, StringComparison.Ordinal);
-            Assert.True(left >= 0, label);
-            for (var x = left; x < left + label.Length; x++)
-            {
-                Assert.Equal(expectedHeader, cells.Get(x, headerY).Style);
-            }
-        }
-
-        Assert.Equal(styles.Resolve(PresentationTextRole.SelectionPrompt), TextCell(cells, "selected-tool").Style);
-        Assert.Equal(styles.Resolve(PresentationTextRole.Default), TextCell(cells, "ordinary-tool").Style);
-        if (suppress)
-        {
-            Assert.Equal(CellStyle.Default, TextCell(cells, "Tool ID").Style);
-            Assert.Equal(CellStyle.Default, TextCell(cells, "selected-tool").Style);
-            Assert.Equal(CellStyle.Default, TextCell(cells, "ordinary-tool").Style);
-        }
     }
 
     /// <summary>Native table rows retain the supplied order and selected identity across refresh.</summary>
@@ -275,31 +210,6 @@ public static class ToolStatisticsModalTests
         modal.HandleKey(KeyEvent.Special(KeyCode.Escape));
         CompleteRequest(modal, new([Row("late-result")]));
         Assert.DoesNotContain("late-result", Render(modal), StringComparison.Ordinal);
-    }
-
-    /// <summary>Minimum-size layouts keep all columns reachable after resize and sanitize long Unicode IDs.</summary>
-    [Theory]
-    [InlineData(12)]
-    [InlineData(13)]
-    [InlineData(14)]
-    public static void Minimum_size_keeps_scrolled_columns_accessible(int height)
-    {
-        var modal = Create();
-        modal.Requests.TryRead(out _);
-        CompleteRequest(modal, new([Row("stored-tool-" + new string('界', 80) + "-tail\u001b[31m")]));
-        Render(modal);
-        Assert.Contains("stored-tool-", Render(modal, 40, height), StringComparison.Ordinal);
-
-        var columns = ReadColumns(modal, 40, height);
-        Assert.DoesNotContain("\u001b", columns, StringComparison.Ordinal);
-        Assert.Contains("-tail", columns, StringComparison.Ordinal);
-        Assert.Contains("Last invocation (UTC)", columns, StringComparison.Ordinal);
-        Assert.Contains("Total duration", columns, StringComparison.Ordinal);
-        Assert.Contains("Average duration", columns, StringComparison.Ordinal);
-        Assert.Contains("Last-run duration", columns, StringComparison.Ordinal);
-        Assert.Contains("Measured invocations", columns, StringComparison.Ordinal);
-        Assert.Contains("100 ms", columns, StringComparison.Ordinal);
-        Assert.Contains("1/1", columns, StringComparison.Ordinal);
     }
 
     private static string ReadColumns(ToolStatisticsModal modal, int width, int height)

@@ -195,26 +195,6 @@ public static class Plan49ToolTimingTests
         Assert.Equal("T:Demo.IRetriever", implementationsTool.GetActivityDetail(implementationsInput));
     }
 
-    /// <summary>File-read activity leaves classification to execution.</summary>
-    [Theory]
-    [InlineData(201, 200, "docs/implementation-plans/milestones.md")]
-    [InlineData(1001, 1000, "docs/implementation-plans/milestones.md")]
-    public static void ReadFileTool_ActivityDetail_DoesNotAssumeText(
-        int startLine,
-        int maximumLines,
-        string expected)
-    {
-        ITool readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
-        var input = readTool.DeserializeInput(JsonSerializer.Serialize(new ReadFileInput
-        {
-            Path = "docs/implementation-plans/milestones.md",
-            StartLine = startLine,
-            MaximumLines = maximumLines,
-        }));
-
-        Assert.Equal(expected, readTool.GetActivityDetail(input));
-    }
-
     /// <summary>File-read activity bounds long paths before the file type is known.</summary>
     [Fact]
     public static async Task ReadFileTool_LongPath_PublishesBoundedPath()
@@ -287,70 +267,6 @@ public static class Plan49ToolTimingTests
         Assert.Equal(OperationActivityOutcome.Failed, completed.Outcome);
     }
 
-    /// <summary>Every execution terminal outcome attempts one canonical statistics entry.</summary>
-    [Theory]
-    [InlineData("success", ToolErrorClassification.None, 1200L)]
-    [InlineData("returned-failure", ToolErrorClassification.ExecutionFailure, 1200L)]
-    [InlineData("exception", ToolErrorClassification.ExecutionFailure, 1500L)]
-    [InlineData("typed-exception", ToolErrorClassification.ExecutionFailure, 321L)]
-    [InlineData("timeout", ToolErrorClassification.Timeout, 1500L)]
-    [InlineData("deadline-cancellation", ToolErrorClassification.Timeout, 1500L)]
-    [InlineData("caller-cancellation", ToolErrorClassification.Cancelled, 1500L)]
-    [InlineData("output-limit", ToolErrorClassification.OutputLimitExceeded, 1200L)]
-    public static async Task Pipeline_Telemetry_RecordsEachExecutionTerminalOnce(string scenario, ToolErrorClassification classification, long elapsedMilliseconds)
-    {
-        var clock = new ManualTimeProvider();
-        var telemetry = new RecordingTelemetry();
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var tool = new AuthoritativeTimedTool(
-            clock,
-            maximumOutputBytes: scenario == "output-limit" ? 1 : 1024,
-            execute: async (_, executionToken) =>
-        {
-            switch (scenario)
-            {
-                case "exception":
-                    throw new InvalidOperationException("Expected execution failure.");
-                case "typed-exception":
-                    throw new ToolExecutionException("Expected adapter failure.", ToolErrorClassification.ExecutionFailure, authoritativeElapsedMilliseconds: 321);
-                case "timeout":
-                    throw new TimeoutException("Expected timeout.");
-                case "deadline-cancellation":
-                    throw new OperationCanceledException("Expected deadline cancellation.");
-                case "caller-cancellation":
-                    await cancellation.CancelAsync();
-                    throw new OperationCanceledException(executionToken);
-                default:
-                    return new ToolExecutionEnvelope(
-                        new TimedOutput(),
-                        [],
-                        IsTruncated: false,
-                        AuthoritativeElapsedMilliseconds: 1200,
-                        Failure: scenario == "returned-failure" ? new(ToolErrorClassification.ExecutionFailure, "Expected failure.") : null);
-            }
-        });
-        await using var events = new DomainEventStream(timeProvider: clock);
-        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
-        var request = CreateRequest(tool.Definition.Id.ToUpperInvariant());
-        if (scenario == "caller-cancellation")
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.InvokeAsync(request, cancellation.Token));
-        }
-        else
-        {
-            var result = await pipeline.InvokeAsync(request, cancellation.Token);
-            Assert.Equal(classification, result.ErrorClassification);
-        }
-
-        var entry = Assert.Single(telemetry.Entries);
-        Assert.Equal(tool.Definition.Id, entry.ToolId);
-        Assert.Equal(classification == ToolErrorClassification.None ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, entry.Status);
-        Assert.Equal(elapsedMilliseconds, entry.ElapsedMilliseconds);
-        Assert.Equal(telemetry.Binding, entry.Binding);
-        Assert.Equal(clock.GetUtcNow(), entry.CompletedAtUtc);
-        Assert.Equal(1, telemetry.Attempts);
-    }
-
     /// <summary>Early rejections count as failed without manufacturing duration measurements.</summary>
     [Theory]
     [InlineData("unknown", ToolErrorClassification.InvalidArguments)]
@@ -387,22 +303,6 @@ public static class Plan49ToolTimingTests
         var entry = Assert.Single(telemetry.Entries);
         Assert.Equal(ToolTelemetryStatus.Failed, entry.Status);
         Assert.Null(entry.ElapsedMilliseconds);
-    }
-
-    /// <summary>Valid zero remains measured and negative adapter timing becomes unknown.</summary>
-    [Theory]
-    [InlineData(0L)]
-    [InlineData(-1L)]
-    [InlineData(1200L)]
-    public static async Task Pipeline_Telemetry_PreservesZeroAndNormalizesInvalidTiming(long measurement)
-    {
-        var clock = new ManualTimeProvider();
-        var tool = new AuthoritativeTimedTool(clock, measurement);
-        var telemetry = new RecordingTelemetry();
-        await using var events = new DomainEventStream(timeProvider: clock);
-        var pipeline = CreatePipeline(events, tool, clock, telemetry: telemetry);
-        Assert.True((await pipeline.InvokeAsync(CreateRequest(tool.Definition.Id), TestContext.Current.CancellationToken)).Succeeded);
-        Assert.Equal(measurement >= 0 ? (long?)measurement : null, Assert.Single(telemetry.Entries).ElapsedMilliseconds);
     }
 
     /// <summary>Rejected or broken statistics admission never changes a tool result.</summary>

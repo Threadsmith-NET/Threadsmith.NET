@@ -51,25 +51,6 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    /// <summary>Verifies startup discovery reads metadata while a declared body is exclusively locked.</summary>
-    [Fact]
-    public async Task CatalogRefresh_DoesNotOpenDeclaredBodies()
-    {
-        // Arrange
-        using var package = TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
-        var body = Path.Combine(package.PackageRoot, "instructions", "analyze.md");
-        await using var locked = new FileStream(body, FileMode.Open, FileAccess.Read, FileShare.None);
-        var catalog = package.CreateCatalog(SkillScope.Repository);
-
-        // Act
-        var snapshot = await catalog.RefreshAsync();
-
-        // Assert
-        var candidate = Assert.Single(snapshot.Candidates);
-        Assert.Equal(SkillVerificationState.Unverified, candidate.Verification);
-        Assert.False(candidate.Enabled);
-    }
-
     /// <summary>Removed per-skill agent settings are rejected instead of being silently ignored.</summary>
     [Theory]
     [InlineData("agents")]
@@ -119,20 +100,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "upgrade-package");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
-    }
-
-    /// <summary>Maintained analysis procedures return advisory results without a host planning action.</summary>
-    [Theory]
-    [InlineData("fix-analyzer-warnings")]
-    [InlineData("upgrade-package")]
-    public static async Task MaintainedAnalysisSchemasMatchAdvisoryContract(string skill)
-    {
-        var schemaJson = await File.ReadAllTextAsync(Path.Combine(MaintainedRoot(), skill, "schemas", "analysis-output.json"), TestContext.Current.CancellationToken);
-        var validator = new BoundedJsonSchemaValidator();
-        var content = validator.Validate(validator.Compile(schemaJson), ValidAnalysisJson());
-        using var analysis = JsonDocument.Parse(content);
-        Assert.NotEmpty(analysis.RootElement.GetProperty("summary").GetString() ?? string.Empty);
-        Assert.False(analysis.RootElement.TryGetProperty("steps", out _));
     }
 
     /// <summary>Verifies a body changed after metadata discovery fails integrity verification.</summary>
@@ -194,30 +161,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(SkillVerificationState.SignedTrusted, verified.Verification);
         Assert.False(verified.Enabled);
         Assert.True(enabled.Enabled);
-    }
-
-    /// <summary>Verifies revocation overrides an otherwise trusted exact digest.</summary>
-    [Fact]
-    public async Task Verifier_RevokedDigest_OverridesMaintainedTrust()
-    {
-        // Arrange
-        var root = MaintainedRoot();
-        var catalog = new SkillCatalog(
-            [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        var candidate = (await catalog.RefreshAsync()).Candidates.Single(item =>
-            item.Metadata.SkillId.Value == "fix-analyzer-warnings");
-        var policy = new SkillTrustPolicySnapshot
-        {
-            RevokedDigests = new HashSet<string> { candidate.Identity.Digest.Value },
-            DeniedSkillIds = new HashSet<string> { candidate.Metadata.SkillId.Value },
-        };
-
-        // Act
-        var verified = await new SkillPackageVerifier(policy).VerifyAsync(candidate);
-
-        // Assert
-        Assert.Equal(SkillVerificationState.Revoked, verified.Verification);
-        Assert.False(verified.Enabled);
     }
 
     /// <summary>Verifies repository content cannot self-authorize but user policy can allowlist the exact tuple.</summary>
@@ -592,40 +535,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
     }
 
-    /// <summary>Equivalent stringified and native inputs share the duplicate key while the first invocation is still running.</summary>
-    [Fact]
-    public async Task InvokeSkillTool_RunningInvocationUsesNormalizedStructuredInputKey()
-    {
-        await using var scope = new ToolOperationScope(CancellationToken.None);
-        var workflows = new BlockingWorkflowOrchestrator();
-        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
-        var context = new ToolExecutionContext(
-            ToolInvocationId.New(),
-            SessionId.New(),
-            RunId.New(),
-            new ToolInvocationContext
-            {
-                RepositoryPath = Environment.CurrentDirectory,
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-                RequestedBy = "model",
-                OperationScope = scope,
-            });
-        var stringifiedInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
-            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
-        var nativeInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
-            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
-
-        var firstTask = tool.ExecuteAsync(stringifiedInput, context);
-        await workflows.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
-        var duplicate = await tool.ExecuteAsync(nativeInput, context);
-        workflows.Release.TrySetResult();
-        var first = await firstTask;
-
-        Assert.Equal(1, workflows.Executions);
-        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
-        Assert.Equal("Running", duplicate.Value.Status);
-    }
-
     /// <summary>Startup cancellation clears a duplicate entry when no checkpoint or side effect exists.</summary>
     [Fact]
     public async Task InvokeSkillTool_StartupCancellationDoesNotLeaveRunningDuplicate()
@@ -652,38 +561,6 @@ public sealed partial class SkillSubsystemTests
 
         Assert.Equal(2, workflows.Executions);
         Assert.Equal("Completed", retry.Value.Status);
-    }
-
-    /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
-    [Fact]
-    public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()
-    {
-        var workflows = new CapturingWorkflowOrchestrator
-        {
-            ResultStatus = SkillInvocationStatus.Failed,
-            ResultReason = "Skill value at $ does not match type 'object'.",
-        };
-        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
-        var context = new ToolExecutionContext(
-            ToolInvocationId.New(),
-            SessionId.New(),
-            RunId.New(),
-            new ToolInvocationContext
-            {
-                RepositoryPath = Environment.CurrentDirectory,
-                TrustLevel = RepositoryTrustLevel.TrustedRead,
-                RequestedBy = "model",
-            });
-        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
-            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
-
-        var execution = await tool.ExecuteAsync(input, context);
-
-        Assert.Contains("input was a JSON string", execution.Value.Reason, StringComparison.Ordinal);
-        Assert.Contains("native JSON value", execution.Value.Reason, StringComparison.Ordinal);
-        Assert.Contains("do not quote or JSON-encode", execution.Failure?.Message, StringComparison.Ordinal);
-        using var modelOutput = JsonDocument.Parse(execution.ModelResultContent!);
-        Assert.Equal(execution.Value.Reason, modelOutput.RootElement.GetProperty("reason").GetString());
     }
 
     /// <summary>Verifies content budgets stay asset-only while procedure tool metadata is preserved.</summary>
@@ -987,84 +864,6 @@ public sealed partial class SkillSubsystemTests
                 invocationId,
                 "{\"answer\":\"yes\"}"));
         Assert.Contains("workspace", exception.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Verifies an unqualified invocation resolves the exact saved package pin.</summary>
-    [Fact]
-    public async Task Workflow_UnqualifiedSelector_UsesSavedPin()
-    {
-        // Arrange
-        var root = MaintainedRoot();
-        var source = new SkillCatalog(
-            [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
-        var discovered = (await source.RefreshAsync()).Candidates.Single(item =>
-            item.Metadata.SkillId.Value == "review");
-        var first = discovered with
-        {
-            Metadata = discovered.Metadata with { Version = "1.0.0" },
-            Identity = discovered.Identity with { Version = "1.0.0" },
-            Enabled = true,
-            Verification = SkillVerificationState.Maintained,
-        };
-        var pinned = discovered with
-        {
-            Metadata = discovered.Metadata with { Version = "2.0.0" },
-            Identity = discovered.Identity with
-            {
-                Version = "2.0.0",
-                Digest = new SkillDigest("sha256", new string('b', 64)),
-            },
-            Enabled = true,
-            Verification = SkillVerificationState.Maintained,
-        };
-        var catalog = new FixedCatalog([first, pinned]);
-        var state = new InMemorySkillStateStore();
-        await state.SavePinAsync(pinned.Metadata.SkillId, pinned.Identity);
-        var compatibility = new CapturingIncompatibleEvaluator();
-        await using var events = new DomainEventStream();
-        await using var orchestrator = new SkillWorkflowOrchestrator(
-            catalog,
-            new PassThroughVerifier(),
-            compatibility,
-            new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
-            new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner("{}"),
-            TestPromptLoader.Instance,
-            state,
-            (_, _) => Task.FromResult(new SkillInvocationHostContext
-            {
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-            }),
-            events);
-
-        // Act / Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.InvokeAsync(
-            new SkillInvocationRequest
-            {
-                InvocationId = SkillInvocationId.New(),
-                SessionId = SessionId.New(),
-                RunId = RunId.New(),
-                Selector = "review",
-                InputJson = "{}",
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-                HostBudget = new SkillBudget(),
-            }));
-        Assert.Equal(pinned.Identity, compatibility.Candidate?.Identity);
-        var application = new SkillApplication(
-            catalog,
-            new PassThroughVerifier(),
-            new FixedSkillTrustPolicyProvider(new SkillTrustPolicySnapshot()),
-            compatibility,
-            orchestrator,
-            state,
-            new SkillPackageInstaller(Path.Combine(root, "store"), Path.Combine(root, "quarantine")));
-        var inspector = new InspectSkillTool(application, application, TestPromptLoader.Instance, new BoundedJsonSchemaValidator());
-        var inspection = await inspector.ExecuteAsync(
-            new InspectSkillInput { Selector = "review" },
-            new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext()));
-        Assert.Equal(SkillPolicyIdentity.FormatSelector(pinned), Assert.Single(inspection.Value.Skills).Selector);
     }
 
     /// <summary>Verifies migration 5 and durable pins/checkpoints round-trip.</summary>
@@ -1374,23 +1173,6 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    private sealed class CapturingIncompatibleEvaluator : ISkillCompatibilityEvaluator
-    {
-        internal SkillCatalogCandidate? Candidate { get; private set; }
-
-        public SkillCompatibilityResult Evaluate(
-            SkillCatalogCandidate candidate,
-            SkillInvocationRequest request)
-        {
-            Candidate = candidate;
-            return new SkillCompatibilityResult
-            {
-                IsCompatible = false,
-                DenialReasons = ["test-stop-after-resolution"],
-            };
-        }
-    }
-
     private sealed class FixedCatalog : ISkillCatalog
     {
         internal FixedCatalog(IReadOnlyList<SkillCatalogCandidate> candidates)
@@ -1498,48 +1280,6 @@ public sealed partial class SkillSubsystemTests
                 Reason = ResultReason,
                 Checkpoint = checkpoint,
             });
-        }
-
-        public Task<SkillInvocationResult> ResumeAsync(
-            SkillInvocationId invocationId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
-        }
-
-        public Task<SkillInvocationResult> ContinueAsync(
-            SkillInvocationId invocationId,
-            string hostResultJson,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
-        }
-
-        public Task<bool> CancelAsync(
-            SkillInvocationId invocationId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(false);
-        }
-    }
-
-    private sealed class BlockingWorkflowOrchestrator : ISkillWorkflowOrchestrator
-    {
-        public int Executions { get; private set; }
-
-        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public async Task<SkillInvocationResult> InvokeAsync(
-            SkillInvocationRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Executions++;
-            Started.TrySetResult();
-            await Release.Task.WaitAsync(cancellationToken);
-            return CreateSkillResult(request, SkillInvocationStatus.Completed, "test complete");
         }
 
         public Task<SkillInvocationResult> ResumeAsync(

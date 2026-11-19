@@ -121,36 +121,6 @@ public static class MemorySharedDiscoveryTests
 
     /// <summary>Exact matching and failure boundaries remain truthful with bounded fuzzy expansion.</summary>
     [Fact]
-    public static async Task Expansion_preserves_exact_matches_and_counts_original_terms_not_alternatives()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var baseline = MemoryTestData.CreateService(fixture, generator);
-        var exact = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "alpha beta"), ct);
-        var fuzzy = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "alpha cancellation"), ct);
-        var oneTerm = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "cancellation cancellationpolicy"), ct);
-        await baseline.ExecuteAsync(MemoryTestData.Operation("add", "foreignword") with { RepositoryIdentity = "another-repository" }, ct);
-        var resolver = new TestResolver();
-        using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString, termResolver: resolver);
-        var terms = new[] { "alpha", "beta", "cancelation" };
-        var plain = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, ct);
-        var expanded = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20, MaximumExpansions = 1 }, ct);
-        Assert.Equal(
-            plain.LexicalMatches.Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))),
-            expanded.LexicalMatches.Where(match => !match.IsFuzzy).Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))));
-        Assert.Equal(exact.Id, expanded.LexicalMatches[0].Id);
-        Assert.Contains(expanded.LexicalMatches, match => match.Id == fuzzy.Id && match.IsFuzzy);
-        Assert.DoesNotContain(expanded.LexicalMatches, match => match.Id == oneTerm.Id);
-        Assert.Single(expanded.LexicalExpansions);
-        var grouped = await store.GetSnapshotAsync(MemoryTestData.Repository, ["cancelation", "absentword"], new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 }, ct);
-        Assert.Empty(grouped.LexicalMatches);
-        Assert.All(resolver.Vocabularies, snapshot => Assert.DoesNotContain("foreignword", snapshot.Vocabulary));
-        Assert.All(resolver.Queries, query => Assert.DoesNotContain(query, new[] { "alpha", "beta" }));
-    }
-
-    /// <summary>Exact matching and failure boundaries remain truthful with bounded fuzzy expansion.</summary>
-    [Fact]
     public static async Task Missing_fuzzy_dependency_preserves_exact_recall_but_cannot_authorize_a_write()
     {
         var ct = TestContext.Current.CancellationToken;

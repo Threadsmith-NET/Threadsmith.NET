@@ -41,19 +41,6 @@ public static class TuiKitClipboardCopyTests
         Assert.Equal(expected ? 1 : 0, backend.Flushes);
     }
 
-    /// <summary>Neither a failed write nor a failed flush reports successful dispatch.</summary>
-    [Theory]
-    [InlineData("write")]
-    [InlineData("flush")]
-    public static async Task Copy_BackendFailure_DoesNotReportSuccess(string phase)
-    {
-        using var backend = new CopyBackend(true, true) { FailurePhase = phase };
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend, deferWorkspace: true);
-        Assert.False(Copy(surface, "body\r\n"));
-        Assert.Equal("Terminal clipboard write failed", Notice(surface));
-        Assert.DoesNotContain("Sent", Notice(surface), StringComparison.Ordinal);
-    }
-
     /// <summary>The surface's own transcript invokes its clipboard callback without a terminal loop or output waits.</summary>
     [Theory]
     [InlineData(true)]

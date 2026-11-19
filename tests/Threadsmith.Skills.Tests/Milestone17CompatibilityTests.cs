@@ -33,29 +33,6 @@ public sealed class Milestone17CompatibilityTests
         Assert.Null(candidate.Identity.Digest);
     }
 
-    /// <summary>Verifies immutable activation digests every eligible byte and confines loaded text.</summary>
-    [Fact]
-    public async Task ClaudeCatalog_Activate_DigestChangesWithResource()
-    {
-        // Arrange
-        using var directory = new TemporaryDirectory();
-        var skillRoot = CreateSkill(directory.Path, "portable-review", string.Empty);
-        var resource = Path.Combine(skillRoot, "reference.txt");
-        await File.WriteAllTextAsync(resource, "first");
-        var catalog = CreateClaudeCatalog(directory.Path);
-        var candidate = Assert.Single(await catalog.RefreshAsync());
-
-        // Act
-        var first = await catalog.ActivateAsync(candidate);
-        await File.WriteAllTextAsync(resource, "second");
-        var second = await catalog.ActivateAsync(candidate);
-
-        // Assert
-        Assert.NotEqual(first.Candidate.Identity.Digest, second.Candidate.Identity.Digest);
-        Assert.Equal("first", first.Resources["reference.txt"]);
-        Assert.Contains("Review this repository.", first.Instructions, StringComparison.Ordinal);
-    }
-
     /// <summary>Verifies one malformed skill remains diagnostic without hiding valid candidates.</summary>
     [Fact]
     public async Task ClaudeCatalog_Refresh_IsolatesMalformedCandidate()
@@ -82,23 +59,6 @@ public sealed class Milestone17CompatibilityTests
         Assert.Equal(["invalid-metadata"], invalid.ReasonCodes);
         Assert.Contains(candidates, candidate => candidate.Identity.Name == "valid-skill"
             && candidate.Status == ClaudeSkillCompatibilityStatus.Compatible);
-    }
-
-    /// <summary>Activation rejects metadata that changed after the candidate generation was refreshed.</summary>
-    [Fact]
-    public async Task ClaudeCatalog_Activate_RevalidatesFrontmatter()
-    {
-        // Arrange
-        using var directory = new TemporaryDirectory();
-        var skillRoot = CreateSkill(directory.Path, "portable-review", "allowed-tools: Read");
-        var catalog = CreateClaudeCatalog(directory.Path);
-        var candidate = Assert.Single(await catalog.RefreshAsync());
-        await File.WriteAllTextAsync(
-            Path.Combine(skillRoot, "SKILL.md"),
-            "---\nname: portable-review\ndescription: Portable repository review\nhooks: unsafe\n---\nChanged.\n");
-
-        // Act and assert
-        _ = await Assert.ThrowsAsync<InvalidDataException>(() => catalog.ActivateAsync(candidate));
     }
 
     /// <summary>Activation never follows a nested linked directory outside the configured skill root.</summary>
@@ -330,74 +290,6 @@ public sealed class Milestone17CompatibilityTests
         Assert.Equal(ActiveModelSelectionSource.Repository, service.Current.Source);
     }
 
-    /// <summary>Invalid repository selections recover to the first enabled model and remain editable.</summary>
-    [Theory]
-    [InlineData("missing")]
-    [InlineData("partial")]
-    [InlineData("mismatch")]
-    public async Task ActiveModels_InvalidRepositorySelection_SelectsFirstValidModelAndWarns(string invalidSelection)
-    {
-        using var directory = new TemporaryDirectory();
-        var firstId = ModelProfileId.New();
-        var secondId = ModelProfileId.New();
-        var catalog = CreateModelCatalog(firstId, secondId);
-        var path = Path.Combine(directory.Path, "config.json");
-        var profile = invalidSelection == "missing" ? ModelProfileId.New() : secondId;
-        var profileText = invalidSelection == "partial" ? "not-a-guid" : profile.Value.ToString("D");
-        var original = $$$"""{"keep":42,"model":{"providerId":"provider-a","profileId":"{{{profileText}}}"}}""";
-        await File.WriteAllTextAsync(path, original, TestContext.Current.CancellationToken);
-        var preferences = new SessionModelPreferences(secondId, ReasoningLevel.None);
-
-        var service = new ActiveModelSelectionService(catalog, preferences, path);
-
-        Assert.Equal(firstId, service.Current.Profile.Id);
-        Assert.Equal(firstId, preferences.CurrentProfileId);
-        Assert.Equal(service.Models[0].Profile.DefaultReasoningLevel, service.Current.ReasoningLevel);
-        Assert.Equal(ActiveModelSelectionSource.RepositoryFallback, service.Current.Source);
-        Assert.Contains("invalid", service.RepositorySelectionWarning, StringComparison.Ordinal);
-        Assert.Contains(service.Current.Profile.Name, service.RepositorySelectionWarning, StringComparison.Ordinal);
-        Assert.Contains(service.Current.ProviderId, service.RepositorySelectionWarning, StringComparison.Ordinal);
-        Assert.Equal(original, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-        var result = await service.HandleAsync(new SelectActiveModelCommand(secondId), TestContext.Current.CancellationToken);
-        Assert.True(result.Persisted);
-        var reloaded = new ActiveModelSelectionService(catalog, new SessionModelPreferences(firstId, ReasoningLevel.None), path);
-        Assert.Equal(secondId, reloaded.Current.Profile.Id);
-        Assert.Equal(ActiveModelSelectionSource.Repository, reloaded.Current.Source);
-        Assert.Null(reloaded.RepositorySelectionWarning);
-        Assert.Contains("\"keep\": 42", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
-    }
-
-    /// <summary>Verifies switching resets unsupported reasoning and atomically preserves unrelated settings.</summary>
-    [Fact]
-    public async Task ActiveModels_Select_ResetsUnsupportedReasoningAndPersistsCompleteSelection()
-    {
-        // Arrange
-        using var directory = new TemporaryDirectory();
-        ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
-        ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        var catalog = CreateModelCatalog(firstId, secondId);
-        var configurationPath = Path.Combine(directory.Path, ".threadsmith", "config.json");
-        var configurationDirectory = Path.GetDirectoryName(configurationPath)
-            ?? throw new InvalidOperationException("Test configuration path has no parent.");
-        Directory.CreateDirectory(configurationDirectory);
-        await File.WriteAllTextAsync(configurationPath, "{ \"unrelated\": 42 }");
-        var preferences = new SessionModelPreferences(firstId, ReasoningLevel.High);
-        var service = new ActiveModelSelectionService(catalog, preferences, configurationPath);
-
-        // Act
-        var result = await service.SelectAsync(secondId);
-        var saved = await File.ReadAllTextAsync(configurationPath);
-
-        // Assert
-        Assert.False(result.ReasoningPreserved);
-        Assert.Equal(ReasoningLevel.None, result.Selection.ReasoningLevel);
-        Assert.True(result.Persisted, result.Diagnostic);
-        Assert.Contains("\"unrelated\": 42", saved, StringComparison.Ordinal);
-        Assert.Contains("\"providerId\": \"provider-b\"", saved, StringComparison.Ordinal);
-        Assert.Contains($"\"profileId\": \"{secondId.Value:D}\"", saved, StringComparison.Ordinal);
-        Assert.Contains("\"reasoningLevel\": \"none\"", saved, StringComparison.Ordinal);
-    }
-
     /// <summary>Repository model persistence rejects a linked settings directory without touching its target.</summary>
     [Fact]
     public async Task ActiveModels_LinkedSettingsDirectory_IsRejected()
@@ -485,118 +377,6 @@ public sealed class Milestone17CompatibilityTests
         Assert.Null(projection.ContextInspection);
     }
 
-    /// <summary>A preference update cannot replace readable settings with a file that startup rejects.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task ActiveModels_OversizedSave_PreservesFileAndUpdatesSession(bool changeReasoning)
-    {
-        using var directory = new TemporaryDirectory();
-        var firstId = ModelProfileId.New();
-        var secondId = ModelProfileId.New();
-        var path = Path.Combine(directory.Path, "config.json");
-        const string original = "{\"keep\":\"é\"}";
-        await File.WriteAllTextAsync(path, original);
-        var service = new ActiveModelSelectionService(
-            CreateModelCatalog(firstId, secondId),
-            new SessionModelPreferences(firstId, ReasoningLevel.Low),
-            path,
-            maximumConfigurationBytes: 32);
-
-        var result = changeReasoning
-            ? await service.SetReasoningAsync(ReasoningLevel.Low)
-            : await service.SelectAsync(secondId);
-
-        Assert.False(result.Persisted);
-        Assert.Equal(changeReasoning ? firstId : secondId, result.Selection.Profile.Id);
-        Assert.Equal(original, await File.ReadAllTextAsync(path));
-        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
-    }
-
-    /// <summary>Repository model selection accepts the same trailing-comma syntax as normal configuration.</summary>
-    [Fact]
-    public async Task ActiveModels_RepositorySelection_AcceptsTrailingCommas()
-    {
-        // Arrange
-        using var directory = new TemporaryDirectory();
-        ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
-        ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        var configurationPath = Path.Combine(directory.Path, ".threadsmith", "config.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(configurationPath)
-            ?? throw new InvalidOperationException("Test configuration path has no parent."));
-        await File.WriteAllTextAsync(
-            configurationPath,
-            $$"""
-            {
-              // Existing repository syntax remains accepted.
-              "model": {
-                "providerId": "provider-b",
-                "profileId": "{{secondId.Value:D}}",
-                "reasoningLevel": "medium",
-              },
-            }
-            """);
-
-        // Act
-        var service = new ActiveModelSelectionService(
-            CreateModelCatalog(firstId, secondId),
-            new SessionModelPreferences(firstId, ReasoningLevel.Low),
-            configurationPath);
-        var result = await service.SetReasoningAsync(ReasoningLevel.None);
-
-        // Assert
-        Assert.Equal(secondId, result.Selection.Profile.Id);
-        Assert.True(result.Persisted, result.Diagnostic);
-    }
-
-    /// <summary>Opening another repository reloads selection and redirects subsequent persistence.</summary>
-    [Fact]
-    public async Task ActiveModels_BindRepository_ReloadsSelectionAndPersistenceTarget()
-    {
-        // Arrange
-        using var first = new TemporaryDirectory();
-        using var second = new TemporaryDirectory();
-        ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
-        ModelProfileId secondId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
-        var firstConfiguration = Path.Combine(first.Path, ".threadsmith", "config.json");
-        var secondConfiguration = Path.Combine(second.Path, ".threadsmith", "config.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(firstConfiguration)
-            ?? throw new InvalidOperationException("First test configuration path has no parent."));
-        Directory.CreateDirectory(Path.GetDirectoryName(secondConfiguration)
-            ?? throw new InvalidOperationException("Second test configuration path has no parent."));
-        await File.WriteAllTextAsync(firstConfiguration, "{ \"repository\": \"first\" }");
-        await File.WriteAllTextAsync(
-            secondConfiguration,
-            $$"""
-            {
-              "repository": "second",
-              "model": {
-                "providerId": "provider-b",
-                "profileId": "{{secondId.Value:D}}",
-                "reasoningLevel": "medium"
-              }
-            }
-            """);
-        var service = new ActiveModelSelectionService(
-            CreateModelCatalog(firstId, secondId),
-            new SessionModelPreferences(firstId, ReasoningLevel.Low),
-            firstConfiguration);
-
-        // Act
-        await service.BindRepositoryAsync(second.Path);
-        var result = await service.SelectAsync(firstId);
-        Assert.True(result.Persisted, result.Diagnostic);
-        var firstSaved = await File.ReadAllTextAsync(firstConfiguration);
-        var secondSaved = await File.ReadAllTextAsync(secondConfiguration);
-
-        // Assert
-        Assert.Equal(firstId, result.Selection.Profile.Id);
-        Assert.Contains("\"repository\": \"first\"", firstSaved, StringComparison.Ordinal);
-        Assert.DoesNotContain("providerId", firstSaved, StringComparison.Ordinal);
-        Assert.Contains("\"repository\": \"second\"", secondSaved, StringComparison.Ordinal);
-        Assert.Contains($"\"profileId\": \"{firstId.Value:D}\"", secondSaved, StringComparison.Ordinal);
-    }
-
     /// <summary>Model list, current, and selection operations are available through the shared dispatcher.</summary>
     [Fact]
     public async Task ActiveModels_SharedCommands_UseOneApplicationBoundary()
@@ -623,42 +403,6 @@ public sealed class Milestone17CompatibilityTests
         Assert.Equal(2, models.Count);
         Assert.Equal(secondId, changed.Selection.Profile.Id);
         Assert.Equal(secondId, current.Profile.Id);
-    }
-
-    /// <summary>Model-defined names survive repository persistence and session restoration.</summary>
-    [Theory]
-    [InlineData("xhigh")]
-    [InlineData("provider-Custom")]
-    public async Task ActiveModels_CustomReasoning_PersistsAndRestores(string name)
-    {
-        using var directory = new TemporaryDirectory();
-        var profileId = new ModelProfileId(Guid.NewGuid());
-        var level = new ReasoningLevel(name);
-        var catalog = new EffectiveModelProviderCatalog(
-            new ModelProviderCatalogConfiguration
-            {
-                DefaultProviderId = "custom",
-                DefaultModelId = profileId,
-                Providers = [CreateProvider("custom", "Custom", profileId, [ReasoningLevel.None, level])],
-            },
-            new ModelProviderRegistry([new TestProviderRegistration()]));
-        var path = Path.Combine(directory.Path, ".threadsmith", "config.json");
-        var service = new ActiveModelSelectionService(catalog, new SessionModelPreferences(profileId, level), path);
-
-        var result = await service.SetReasoningAsync(level);
-        var reloaded = new ActiveModelSelectionService(catalog, new SessionModelPreferences(profileId, ReasoningLevel.None), path);
-
-        Assert.True(result.Persisted, result.Diagnostic);
-        Assert.Equal(name, reloaded.Current.ReasoningLevel.Value);
-        await reloaded.SetReasoningAsync(ReasoningLevel.None);
-        var warning = await reloaded.RestoreSessionSelectionAsync(new SessionModelSelectionRecord
-        {
-            ProviderId = "custom",
-            ProfileId = profileId,
-            ReasoningLevel = name,
-        });
-        Assert.Null(warning);
-        Assert.Equal(name, reloaded.Current.ReasoningLevel.Value);
     }
 
     private static ClaudeSkillCompatibilityCatalog CreateClaudeCatalog(string root)

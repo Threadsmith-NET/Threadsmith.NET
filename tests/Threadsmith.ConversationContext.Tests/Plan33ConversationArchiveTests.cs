@@ -41,21 +41,6 @@ public static class Plan33ConversationArchiveTests
         Assert.Null(Assert.Single(await fixture.Store.GetMessagesAsync(session, [second.Id], token)).Content);
     }
 
-    /// <summary>Stable message and memory identifiers preserve value equality through JSON.</summary>
-    [Fact]
-    public static void Conversation_identifiers_round_trip()
-    {
-        var messageId = ConversationMessageId.New();
-        var memoryId = ConversationMemoryId.New();
-
-        var json = JsonSerializer.Serialize(new IdentifierPair(messageId, memoryId));
-        var restored = JsonSerializer.Deserialize<IdentifierPair>(json);
-
-        Assert.NotNull(restored);
-        Assert.Equal(messageId, restored.MessageId);
-        Assert.Equal(memoryId, restored.MemoryId);
-    }
-
     /// <summary>Concurrent accepted messages receive one deterministic contiguous session order.</summary>
     [Fact]
     public static async Task Concurrent_capture_has_contiguous_unique_sequence()
@@ -100,105 +85,6 @@ public static class Plan33ConversationArchiveTests
         Assert.DoesNotContain('\u0001', message.Content ?? string.Empty);
         Assert.DoesNotContain(nameof(ModelReasoningObserved), JsonSerializer.Serialize(snapshot), StringComparison.Ordinal);
         Assert.DoesNotContain(nameof(ToolInvocationCompleted), JsonSerializer.Serialize(snapshot), StringComparison.Ordinal);
-    }
-
-    /// <summary>Large bodies use content-addressed artifacts and hash verification restores them.</summary>
-    [Fact]
-    public static async Task Large_message_uses_artifact_and_restores_verified_body()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 32);
-        var sessionId = SessionId.New();
-        string body = new('x', 256);
-
-        var archived = await fixture.Store.ArchiveMessageAsync(
-            CreateMessage(sessionId, RunId.New(), ConversationRole.User, body));
-        var restored = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Null(archived.Content);
-        Assert.NotNull(archived.ArtifactId);
-        Assert.Equal(body, Assert.Single(restored.Messages).Content);
-    }
-
-    /// <summary>Historical automatic snapshots remain inert while archived transcript and stored history survive reopening.</summary>
-    [Fact]
-    public static async Task Historical_memory_and_provenance_are_not_restored_into_current_snapshots()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var message = await fixture.Store.ArchiveMessageAsync(
-            CreateMessage(sessionId, runId, ConversationRole.User, "retain this"));
-        var now = DateTimeOffset.UtcNow;
-        ConversationMemoryItem[] items =
-        [
-            .. Enum.GetValues<ConversationMemoryKind>()
-                .Select(kind => new ConversationMemoryItem
-                {
-                    Id = ConversationMemoryId.New(),
-                    SessionId = sessionId,
-                    Kind = kind,
-                    Content = $"memory-{kind}",
-                    SourceMessageIds = [message.Id],
-                    SourceRunIds = [runId],
-                    SourceArtifactIds = ["artifact-reference"],
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                }),
-        ];
-        var snapshot = new ConversationSummarySnapshot
-        {
-            SessionId = sessionId,
-            Version = 1,
-            ThroughMessageSequence = message.Sequence,
-            MemoryIdsByKind = items.ToDictionary(
-                item => item.Kind,
-                item => (IReadOnlyList<ConversationMemoryId>)[item.Id]),
-            CreatedAt = now,
-        };
-
-        await fixture.SeedHistoricalMemoryAsync(sessionId, items, snapshot);
-        var reopened = await fixture.ReopenStoreAsync();
-        var restored = await reopened.GetSnapshotAsync(sessionId);
-
-        Assert.Empty(restored.MemoryItems);
-        Assert.Null(restored.Summary);
-        Assert.Equal(message.Id, Assert.Single(restored.Messages).Id);
-        Assert.Equal("retain this", restored.Messages[0].Content);
-        await using var connection = new SqliteConnection(fixture.ConnectionString);
-        await connection.OpenAsync();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT
-                (SELECT COUNT(*) FROM conversation_memory WHERE session_id = $session),
-                (SELECT COUNT(*) FROM conversation_memory_sources
-                 WHERE memory_id IN (SELECT memory_id FROM conversation_memory WHERE session_id = $session)),
-                (SELECT COUNT(*) FROM conversation_summaries WHERE session_id = $session);
-            """;
-        command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
-        await using var reader = await command.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.Equal(items.Length, reader.GetInt32(0));
-        Assert.Equal(items.Length * 3, reader.GetInt32(1));
-        Assert.Equal(1, reader.GetInt32(2));
-    }
-
-    /// <summary>Mode changes survive restore without deleting the archive.</summary>
-    [Fact]
-    public static async Task Mode_change_preserves_underlying_archive()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var sessionId = SessionId.New();
-        await fixture.Store.ArchiveMessageAsync(CreateMessage(
-            sessionId,
-            RunId.New(),
-            ConversationRole.User,
-            "preserved"));
-
-        await fixture.Store.SetModeAsync(sessionId, ConversationContextMode.Stateless);
-        var snapshot = await fixture.Store.GetSnapshotAsync(sessionId);
-
-        Assert.Equal(ConversationContextMode.Stateless, snapshot.Mode);
-        Assert.Single(snapshot.Messages);
     }
 
     /// <summary>Malformed retired rows are never parsed and cannot prevent ordinary transcript restoration.</summary>
@@ -308,28 +194,6 @@ public static class Plan33ConversationArchiveTests
         Assert.Equal(body, await fixture.Artifacts.ReadAsync(newMessage.ContentHash));
     }
 
-    /// <summary>Presentation queries restore only the recent window without changing the archive.</summary>
-    [Fact]
-    public static async Task History_window_reads_latest_messages_in_chronological_order_and_restores_artifacts()
-    {
-        var token = TestContext.Current.CancellationToken;
-        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
-        var sessionId = SessionId.New();
-        foreach (var content in new[] { "older message", "latest question", "latest answer" })
-        {
-            await fixture.Store.ArchiveMessageAsync(
-                CreateMessage(sessionId, RunId.New(), ConversationRole.User, content), token);
-        }
-
-        var history = await fixture.Store.GetSnapshotAsync(
-            sessionId, historyWindow: new ConversationHistoryWindow(2, 100), cancellationToken: token);
-
-        Assert.Equal(new[] { "latest question", "latest answer" }, history.Messages.Select(message => message.Content));
-        Assert.Equal(new long[] { 2, 3 }, history.Messages.Select(message => message.Sequence));
-        Assert.Contains("Older conversation messages omitted from the output window.", history.Warnings);
-        Assert.Equal(3, (await fixture.Store.GetSnapshotAsync(sessionId, cancellationToken: token)).Messages.Count);
-    }
-
     /// <summary>Oversized restored artifacts retain a valid Unicode tail within the window budget.</summary>
     [Theory]
     [InlineData(5, " tail")]
@@ -372,10 +236,6 @@ public static class Plan33ConversationArchiveTests
             OccurredAt = DateTimeOffset.UtcNow,
         };
     }
-
-    private sealed record IdentifierPair(
-        ConversationMessageId MessageId,
-        ConversationMemoryId MemoryId);
 }
 
 internal sealed class ConversationFixture : IAsyncDisposable

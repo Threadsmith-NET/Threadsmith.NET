@@ -112,6 +112,10 @@ Use `--include` with the changed file paths to focus whitespace and analyzer che
 
 ## Testing changes
 
+Use small, isolated unit tests for business rules, validation, mapping, and state transitions. Keep them under 50 ms and use in-memory inputs with fakes at external boundaries. Use integration tests when the behavior depends on a real database, subprocess, network boundary, or evaluated workspace. Aim to keep each integration case under 60 seconds by limiting the fixture and exercising one distinct behavior per case.
+
+Keep repository traversal and repeated inference benchmarks out of Test Explorer. CI warns when an executed case exceeds the 60-second target in its xUnit report. Duration alone does not fail a test or the pipeline; failed tests and missing required cases still fail CI.
+
 Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
 
 Before submitting new or changed tests, review these sources of local/CI differences:
@@ -169,7 +173,7 @@ Also run checks owned by the area you changed:
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
 
-Test fixtures remain parallel and own their mutable resources. On non-Windows platforms, the semantic workspace composition continues to omit Roslyn 5.9's optional SQLite service. This preserves the mitigation for the process-shared in-memory write-cache design documented in the [Roslyn 5.6 source](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs) until repeated cross-platform evidence proves the workaround unnecessary. Roslyn uses its built-in nonpersistent fallback; semantic queries remain available, but persisted symbol indexes are not reused between runs. Composition and concurrent-query tests exercise this fallback on every platform, including Windows.
+Test fixtures remain parallel and own their mutable resources. The semantic workspace omits Roslyn 5.9's optional SQLite service on all platforms. This keeps the mitigation for the non-Windows process-shared write cache documented in the [Roslyn 5.6 source](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs) and removes the optional native storage path from Windows as a precaution. Roslyn's built-in nonpersistent fallback preserves semantic queries without reusing persisted symbol indexes between runs. Composition and concurrent-query tests exercise the production host on every platform; this does not change Threadsmith's own SQLite storage.
 
 ## Commits
 

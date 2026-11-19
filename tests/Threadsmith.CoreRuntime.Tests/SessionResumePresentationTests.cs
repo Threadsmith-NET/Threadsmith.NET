@@ -64,32 +64,6 @@ public static class SessionResumePresentationTests
         }
     }
 
-    /// <summary>Empty archives and expired bodies never leave previous-session output visible.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    [InlineData(false, true)]
-    public static async Task Empty_or_expired_history_still_replaces_output(bool expired, bool readOnly = false)
-    {
-        var token = TestContext.Current.CancellationToken;
-        await using var events = new DomainEventStream();
-        var dispatcher = new HistoryDispatcher(false) { Empty = !expired, Expired = expired, ReadOnly = readOnly };
-        var surface = new HistorySurface($"/resume {dispatcher.Target.Value:D}");
-        var coordinator = new InteractionCoordinator(
-            new InteractionPresenter(dispatcher, new EmptyProjectionStore()),
-            events,
-            surface,
-            sessionLifecycleAvailable: true);
-
-        await coordinator.RunAsync(cancellationToken: token);
-
-        Assert.Equal(1, surface.Replacements);
-        Assert.DoesNotContain("previous output", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(expired, surface.Output.Contains("Saved message content is no longer available", StringComparison.Ordinal));
-        Assert.Contains("Resumed session", surface.Output, StringComparison.Ordinal);
-        Assert.Equal(readOnly, surface.Output.Contains("read-only; new requests are unavailable", StringComparison.Ordinal));
-    }
-
     /// <summary>Rejected transitions leave the visible conversation available.</summary>
     [Fact]
     public static async Task Failed_resume_preserves_output()

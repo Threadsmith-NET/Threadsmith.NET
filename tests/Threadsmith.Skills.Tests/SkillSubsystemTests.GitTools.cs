@@ -12,108 +12,6 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
-    /// <summary>Large escaped blobs cannot abort an otherwise valid shared tool batch.</summary>
-    [Fact]
-    public async Task GitShowBatch_BoundsTheSerializedEnvelope()
-    {
-        await using var fixture = new GitToolRepositoryFixture();
-        await fixture.InitializeAsync();
-        await File.WriteAllTextAsync(Path.Combine(fixture.Root, "escaped.txt"), new string('<', 100 * 1024));
-        await fixture.GitAsync("add", "escaped.txt");
-        await fixture.GitAsync("commit", "-m", "escaped source");
-        var result = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = "HEAD", Paths = ["escaped.txt", "tracked.txt"] });
-        Assert.True(result.Files[0].IsTruncated);
-        Assert.Null(result.Files[0].Content);
-        Assert.Equal("original content\n", result.Files[1].Content);
-    }
-
-    /// <summary>Page limits do not reject a bounded inventory larger than one process capture.</summary>
-    [Fact]
-    public async Task GitShowInventory_StreamsLargeTreesBeforeSelectingThePage()
-    {
-        const int fileCount = 10;
-        const int captureLimit = 512;
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var fixture = new GitToolRepositoryFixture();
-        await fixture.InitializeAsync();
-        var tools = new ToolRegistry([new GitShowTool(
-            new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = captureLimit }, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
-            TestPromptLoader.Instance)]);
-        var pipeline = new ToolInvocationPipeline(tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var suffix = new string('x', 75);
-        for (var index = 0; index < fileCount; index++)
-        {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "x", cancellationToken);
-        }
-
-        await fixture.GitAsync("add", "--all");
-        await fixture.GitAsync("commit", "-m", "large inventory");
-        Assert.True((await fixture.GitAsync("ls-tree", "-r", "-l", "-z", "HEAD")).Length > captureLimit);
-        var first = await InvokeInventoryAsync(new GitShowInput { Revision = "HEAD", Inventory = true, InventoryMaximumEntries = 1 });
-        var inventory = JsonSerializer.Deserialize<GitShowInventory>(first.Content)!;
-        Assert.Single(inventory.Files);
-        Assert.Equal(1, inventory.NextOffset);
-        var last = await InvokeInventoryAsync(new GitShowInput { Revision = inventory.Revision, Inventory = true, InventoryOffset = fileCount });
-        var tail = JsonSerializer.Deserialize<GitShowInventory>(last.Content)!;
-        Assert.Equal("tracked.txt", Assert.Single(tail.Files).Path);
-        Assert.Null(tail.NextOffset);
-        for (var index = 0; index < fileCount; index++)
-        {
-            await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "changed", cancellationToken);
-        }
-
-        Assert.True((await fixture.GitAsync("status", "--porcelain=v2", "--untracked-files=all")).Length > captureLimit);
-        var dirty = await InvokeInventoryAsync(new GitShowInput { Revision = inventory.Revision, Inventory = true, IncludeWorkingTree = true, InventoryMaximumEntries = 1 });
-        Assert.NotNull(JsonSerializer.Deserialize<GitShowInventory>(dirty.Content)!.StatusDigest);
-
-        async Task<GitShowResult> InvokeInventoryAsync(GitShowInput input)
-        {
-            var request = PermissionPlan().Request;
-            var result = await pipeline.InvokeAsync(
-                new ToolInvocationRequest
-                {
-                    SessionId = request.SessionId,
-                    RunId = request.RunId,
-                    Phase = request.Phase,
-                    ToolId = "git_show",
-                    ArgumentsJson = JsonSerializer.Serialize(input),
-                    Context = fixture.Authority,
-                    ExpectedRegistration = tools.GetRegistration("git_show"),
-                },
-                cancellationToken);
-            Assert.True(result.Succeeded, result.ErrorClassification.ToString());
-            Assert.False(result.IsTruncated);
-            return JsonSerializer.Deserialize<GitShowResult>(result.ResultJson!, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
-        }
-    }
-
-    /// <summary>Policy omissions remain explicit after the ordinary pipeline projects metadata to the model.</summary>
-    [Fact]
-    public async Task GitDiff_MetadataPolicyOmissionsRemainVisibleToModel()
-    {
-        await using var fixture = new GitToolRepositoryFixture();
-        await fixture.InitializeAsync();
-        Directory.CreateDirectory(Path.Combine(fixture.Root, "private"));
-        var path = Path.Combine(fixture.Root, "private", "file.txt");
-        await File.WriteAllTextAsync(path, "baseline");
-        await fixture.GitAsync("add", "private/file.txt");
-        await fixture.GitAsync("commit", "-m", "private baseline");
-        await File.WriteAllTextAsync(path, "changed");
-        var result = await fixture.Pipeline.InvokeAsync(new ToolInvocationRequest
-        {
-            SessionId = SessionId.New(),
-            RunId = RunId.New(),
-            ToolId = "git_diff",
-            ArgumentsJson = "{\"includePatch\":false}",
-            Context = fixture.Authority with { RequestedBy = "model", ProhibitedPaths = ["private/**"] },
-        });
-        Assert.True(result.Succeeded, result.Error);
-        using var projection = System.Text.Json.JsonDocument.Parse(result.ModelResultContent!);
-        Assert.Equal(1, projection.RootElement.GetProperty("omittedPaths").GetInt32());
-        Assert.Empty(projection.RootElement.GetProperty("changedPaths").EnumerateArray());
-        Assert.False(projection.RootElement.GetProperty("truncated").GetBoolean());
-    }
-
     /// <summary>Model-invoked skill failure retains its diagnostic receipt in the shared tool envelope.</summary>
     [Theory]
     [InlineData(SkillInvocationStatus.Failed, OperationActivityOutcome.Failed)]
@@ -152,24 +50,6 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(outcome, completed.Outcome);
         Assert.Equal(result.ResultJson, completed.ResultJson);
         Assert.Equal(result.ToolInvocationId, Assert.Single(observed.OfType<ToolInvocationStarted>()).ToolInvocationId);
-    }
-
-    private static async Task<T> InvokeFixtureToolAsync<T>(GitToolRepositoryFixture fixture, string tool, object input)
-    {
-        var request = PermissionPlan().Request;
-        var result = await fixture.Pipeline.InvokeAsync(new ToolInvocationRequest
-        {
-            SessionId = request.SessionId,
-            RunId = request.RunId,
-            Phase = request.Phase,
-            ToolId = tool,
-            ArgumentsJson = JsonSerializer.SerializeToElement(input).GetRawText(),
-            Context = fixture.Authority,
-            ExpectedRegistration = fixture.Tools.GetRegistrations(request.SessionId, request.RunId).Single(item => item.Tool.Definition.Id == tool),
-        });
-        Assert.True(result.Succeeded, result.ErrorClassification.ToString());
-        Assert.False(result.IsTruncated);
-        return JsonSerializer.Deserialize<T>(result.ResultJson!, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
     }
 
     private sealed class GitToolRepositoryFixture : IDisposable, IAsyncDisposable

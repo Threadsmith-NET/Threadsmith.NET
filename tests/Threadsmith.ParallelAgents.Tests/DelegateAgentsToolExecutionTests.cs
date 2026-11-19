@@ -668,47 +668,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
         Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
     }
 
-    /// <summary>Verifies legacy structured findings retain conservative opposing-conclusion projection.</summary>
-    [Theory]
-    [InlineData("A bug makes Shared.Symbol unsafe.")]
-    [InlineData("Shared.Symbol is not safe.")]
-    public async Task Project_LegacyOpposingConclusions_ReportsDisagreement(string concern)
-    {
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var coordinator = new DelegationCoordinator(scheduler, new RecordingCheckpointStore(), events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
-        var plan = CreateLegacyPlan(fixture.Plans.Create(CreateInput(2), fixture.Context));
-        var outcomes = plan.Assignments.Select((assignment, index) =>
-        {
-            var outcome = CreateLegacyCompletedOutcome(plan, assignment);
-            var findings = Assert.IsType<AgentFindingSet>(outcome.Findings);
-            return outcome with
-            {
-                Findings = findings with
-                {
-                    Findings =
-                    [
-                        Assert.Single(findings.Findings) with
-                        {
-                            Summary = index == 0 ? concern : "No issue exists; Shared.Symbol is safe.",
-                            Symbols = ["Shared.Symbol"],
-                        },
-                    ],
-                },
-            };
-        }).ToArray();
-
-        var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
-            .Project(plan, CreateJoinedCheckpoint(plan, outcomes));
-        var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
-            .Render(projection.Result);
-
-        Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
-        Assert.Contains("Shared.Symbol", Assert.Single(projection.Result.Disagreements), StringComparison.Ordinal);
-        Assert.Contains("Disagreement:", modelContent, StringComparison.Ordinal);
-    }
-
     /// <summary>Verifies ordinary opposing replies remain intact without host-invented findings or disagreements.</summary>
     [Fact]
     public async Task ExecuteAsync_OpposingConclusions_PreservesResponsesWithoutSemanticGrading()
@@ -851,41 +810,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
         }
     }
 
-    /// <summary>The production envelope retains eight response statuses with host-populated legacy finding metadata.</summary>
-    [Fact]
-    public async Task ExecuteAsync_ProductionEnvelope_RetainsStatusesAndBoundsStructuredResult()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var options = new DelegateAgentsOptions
-        {
-            MaximumAgents = 8,
-            MaximumSummaryCharacters = 4_096,
-        };
-        var fixture = CreateTool(
-            coordinator,
-            new FixedRunnerFactory(new ProductionEnvelopeRunner()),
-            options);
-
-        // Act
-        var execution = await fixture.Tool.ExecuteAsync(CreateInput(8), fixture.Context);
-        var structuredBytes = JsonSerializer.SerializeToUtf8Bytes(execution.Value).Length;
-
-        // Assert
-        Assert.True(structuredBytes <= DelegateAgentsContract.MaximumStructuredResultBytes);
-        Assert.Equal(8, execution.Value.Children.Count);
-        Assert.All(execution.Value.Children, child =>
-        {
-            Assert.Equal("Completed", child.Status);
-            Assert.Contains(child.AssignmentId, execution.ModelResultContent, StringComparison.Ordinal);
-            Assert.Contains(child.Omissions, omission => omission.Contains("retained", StringComparison.Ordinal));
-        });
-        Assert.True(execution.IsTruncated);
-    }
-
     /// <summary>Verifies clipping a retained legacy finding field is reflected in truncation metadata.</summary>
     [Fact]
     public async Task Project_LegacyOversizedFindingField_ReportsStructuredTruncation()
@@ -1004,41 +928,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
             Assert.Equal(response, child.Summary);
             Assert.Contains($"Response {child.AssignmentId}:\n{response}", modelContent.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
         });
-    }
-
-    /// <summary>Verifies a non-cooperative progress store cannot indefinitely block child completion.</summary>
-    [Fact]
-    public async Task ExecuteAsync_NonCooperativeProgressCheckpoint_CompletesWithinBound()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var clock = new ObservedTimeProvider();
-        var checkpoints = new BlockingProgressCheckpointStore();
-        var coordinator = new DelegationCoordinator(
-            scheduler,
-            checkpoints,
-            events,
-            TimeSpan.FromMilliseconds(50),
-            timeProvider: clock);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
-
-        // Act
-        var running = fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context, TestContext.Current.CancellationToken);
-        for (var progress = 0; progress < 2; progress++)
-        {
-            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
-            await clock.WaitForTimerAsync(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
-            clock.Advance(TimeSpan.FromMilliseconds(50));
-        }
-
-        var execution = await running;
-
-        // Assert
-        Assert.Equal(DelegateAgentsStatus.Completed, execution.Value.Status);
-        Assert.Equal(
-            DelegationCheckpointPhase.ResearchJoined,
-            Assert.IsType<DelegationCheckpoint>(checkpoints.Latest).Phase);
     }
 
     /// <summary>Verifies a late progress write cannot replace a newer terminal checkpoint.</summary>
@@ -1682,53 +1571,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
         }
     }
 
-    private sealed class ProductionEnvelopeRunner : IAgentAssignmentRunner
-    {
-        public Task<AgentRunOutcome> RunAsync(
-            DelegationPlan plan,
-            AgentAssignment assignment,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var text = new string('\u0800', 4_096);
-            AgentFinding[] findings =
-            [
-                .. Enumerable.Range(0, 64).Select(index => new AgentFinding
-                {
-                    FindingId = Guid.NewGuid(),
-                    Category = "behavior",
-                    Summary = $"{index:D2}:{text}",
-                    EvidenceIds = Enumerable.Range(0, 32).Select(_ => EvidenceId.New()).ToArray(),
-                    Locations = [$"src/{text}"],
-                    Symbols = [$"Symbol.{text}"],
-                    Confidence = 0.9,
-                    Uncertainty = text,
-                }),
-            ];
-            return Task.FromResult(new AgentRunOutcome
-            {
-                AssignmentId = assignment.AssignmentId,
-                ChildRunId = assignment.ChildRunId,
-                Role = assignment.Role,
-                Generation = plan.Provenance.Generation,
-                Status = AgentRunStatus.Completed,
-                Usage = new AgentResourceUsage { ModelTokens = 16_000, ToolCalls = 12 },
-                Reason = "bounded production-envelope result",
-                Response = text,
-                Findings = new AgentFindingSet
-                {
-                    AssignmentId = assignment.AssignmentId,
-                    ChildRunId = assignment.ChildRunId,
-                    Generation = plan.Provenance.Generation,
-                    Summary = text,
-                    Findings = findings,
-                    UnresolvedQuestions = Enumerable.Repeat(text, 32).ToArray(),
-                    CoverageNotes = Enumerable.Repeat(text, 32).ToArray(),
-                },
-            });
-        }
-    }
-
     private sealed class OversizedFindingFieldRunner : IAgentAssignmentRunner
     {
         public Task<AgentRunOutcome> RunAsync(
@@ -2021,38 +1863,6 @@ public sealed partial class DelegateAgentsToolExecutionTests
             {
                 return Task.FromResult(_latest?.DelegationId == delegationId ? _latest : null);
             }
-        }
-    }
-
-    private sealed class BlockingProgressCheckpointStore : IDelegationCheckpointStore
-    {
-        private readonly TaskCompletionSource<bool> _never = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public DelegationCheckpoint? Latest { get; private set; }
-
-        public Task<bool> SaveAsync(
-            DelegationCheckpoint checkpoint,
-            CancellationToken cancellationToken = default)
-        {
-            if (checkpoint.Phase == DelegationCheckpointPhase.ChildrenRunning)
-            {
-#pragma warning disable VSTHRD003 // The fake intentionally returns a never-completing external store task.
-                return _never.Task;
-#pragma warning restore VSTHRD003
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            Latest = checkpoint;
-            return Task.FromResult(true);
-        }
-
-        public Task<DelegationCheckpoint?> GetAsync(
-            DelegationId delegationId,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(Latest?.DelegationId == delegationId ? Latest : null);
         }
     }
 

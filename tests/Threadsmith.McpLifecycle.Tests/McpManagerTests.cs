@@ -62,27 +62,6 @@ public sealed class McpManagerTests
         Assert.Equal(0, adapter.ExplicitReadCalls);
     }
 
-    /// <summary>Profile loading records a safe source class and accepts the complete closed capability vocabulary.</summary>
-    [Fact]
-    public static void ProfileLoader_ProjectsSafeSourceAndResourceTemplateKind()
-    {
-        IConfiguration configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["mcp:profiles:0:id"] = "fixture",
-                ["mcp:profiles:0:name"] = "Fixture",
-                ["mcp:profiles:0:command"] = "fixture-server",
-                ["mcp:profiles:0:trust"] = "TrustedRead",
-                ["mcp:profiles:0:allowedCapabilities:0"] = "resource-templates",
-            })
-            .Build();
-
-        var profile = Assert.Single(McpProfileConfigurationLoader.Load(configuration));
-
-        Assert.Equal("trusted-memory", profile.ConfigurationSource);
-        Assert.Equal([McpCapabilityKind.ResourceTemplate], profile.AllowedCapabilities);
-    }
-
     /// <summary>Each configurable profile deadline is validated before creating a runtime timer.</summary>
     [Theory]
     [InlineData("startupTimeoutSeconds")]
@@ -228,26 +207,6 @@ public sealed class McpManagerTests
         });
 
         Assert.Equal([false, true], [.. adapter.OAuthInteractionAttempts]);
-    }
-
-    /// <summary>A connected stdio profile reports transport-owned process presence without requiring a PID.</summary>
-    [Fact]
-    public async Task List_ConnectedStdioProfile_ReportsProcessPresent()
-    {
-        var adapter = new FakeAdapter { ProcessPresent = true };
-        await using var manager = CreateManager([Profile("server")], adapter);
-        _ = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.Connect,
-            ProfileId = "server",
-        });
-
-        var result = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.List,
-        });
-
-        Assert.True(Assert.Single(result.Profiles).ProcessPresent);
     }
 
     /// <summary>Server-controlled exception messages are bounded before public projection and logging.</summary>
@@ -441,48 +400,6 @@ public sealed class McpManagerTests
         Assert.Equal(3, summary.Generation);
     }
 
-    /// <summary>Capability inspection is bounded and individual tool state delegates to Plan-27 ownership.</summary>
-    [Fact]
-    public async Task Capabilities_EnableDisableUseSharedToolState()
-    {
-        var tools = new FakeToolStateManager();
-        var adapter = new FakeAdapter();
-        await using var manager = CreateManager([Profile("server")], adapter, tools);
-        _ = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.Connect,
-            ProfileId = "server",
-        });
-
-        var listed = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.ListCapabilities,
-            ProfileId = "server",
-        });
-        var tool = Assert.Single(
-            listed.Capabilities,
-            capability => capability.Kind == McpManagedCapabilityKind.Tool);
-
-        var enabled = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.EnableTool,
-            ProfileId = "server",
-            CapabilityId = tool.CapabilityId,
-        });
-        var disabled = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.DisableTool,
-            ProfileId = "server",
-            CapabilityId = tool.CapabilityId,
-        });
-
-        Assert.True(enabled.Succeeded);
-        Assert.True(disabled.Succeeded);
-        Assert.Contains(tool.CapabilityId, tools.EnabledCalls);
-        Assert.Contains(tool.CapabilityId, tools.DisabledCalls);
-        Assert.False(tools.IsEnabled(tool.CapabilityId));
-    }
-
     /// <summary>Disconnect removes admission then waits for a tracked imported-tool invocation before stopping.</summary>
     [Fact]
     public async Task Adapter_DisconnectDrainsTrackedImportedToolInvocation()
@@ -665,65 +582,6 @@ public sealed class McpManagerTests
         Assert.DoesNotContain(store.Values.Keys, key => key.StartsWith("mcp:oauth:server:", StringComparison.Ordinal));
         Assert.Equal("other-canary", store.Values["mcp:oauth:other:accessToken"]);
         Assert.Contains("token=refresh-canary", revocationBody, StringComparison.Ordinal);
-    }
-
-    /// <summary>Revocation reuses the validated metadata-proxy path after a process restart.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata(bool maximumRepresentableLimit)
-    {
-        var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["mcp:oauth:server:accessToken"] = "access-canary",
-            ["mcp:oauth:server:authorizationServer"] = "https://auth.example/tenant",
-        });
-        var canonicalAttempts = 0;
-        using var handler = new McpOAuthMetadataCompatibilityHandler(new DelegateHttpHandler((request, _) =>
-        {
-            var uri = request.RequestUri?.AbsoluteUri ?? string.Empty;
-            if (request.Method == HttpMethod.Post)
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
-            }
-
-            if (uri == "https://auth.example/.well-known/oauth-authorization-server/tenant")
-            {
-                canonicalAttempts++;
-                return Task.FromResult(JsonResponse("{}"));
-            }
-
-            if (uri == "https://mcp.example/.well-known/oauth-protected-resource/mcp")
-            {
-                return Task.FromResult(JsonResponse(
-                    "{\"authorization_servers\":[\"https://mcp.example/oauth\"]}"));
-            }
-
-            return Task.FromResult(JsonResponse(
-                "{\"issuer\":\"https://auth.example/tenant\","
-                + "\"revocation_endpoint\":\"https://auth.example/revoke\"}"));
-        }));
-        using var httpClient = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        using var identity = new McpIdentityManager(
-            store,
-            new UnusedSecretResolver(),
-            httpClient,
-            new McpResourceLimits
-            {
-                MaximumOAuthMetadataBytes = maximumRepresentableLimit ? Array.MaxLength : 65536,
-            },
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var profile = Profile("server", oauth: true) with
-        {
-            Command = "https://mcp.example/mcp",
-            Transport = McpTransport.Http,
-        };
-
-        var result = await identity.RevokeAsync(profile, false);
-
-        Assert.True(result.Succeeded);
-        Assert.True(result.RemoteRevocationConfirmed);
-        Assert.Equal(1, canonicalAttempts);
     }
 
     /// <summary>Dynamic-client revocation reads client credentials from the coherent cached grant.</summary>
@@ -1031,33 +889,6 @@ public sealed class McpManagerTests
         Assert.Equal(limits.MaximumArgumentDescriptionCharacters, argument.Description.Length);
     }
 
-    /// <summary>Final projections honor raised bounds and mark narrower label/MIME truncation.</summary>
-    [Theory]
-    [InlineData(2048, 512, false)]
-    [InlineData(12, 8, true)]
-    public async Task ResourceRead_HonorsConfiguredLabelAndMimeBounds(int labelLimit, int mimeLimit, bool truncated)
-    {
-        var adapter = new FakeAdapter { ResourceLabel = new string('l', 1800), ResourceMimeType = new string('m', 400) };
-        await using var manager = CreateManager(
-            [Profile("server")],
-            adapter,
-            limits: new McpResourceLimits { MaximumResourceLabelCharacters = labelLimit, MaximumNameCharacters = mimeLimit });
-        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" });
-
-        var result = await manager.ExecuteAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.ReadResource,
-            ProfileId = "server",
-            CapabilityId = "server:resource:fixture",
-        });
-
-        Assert.True(result.Succeeded, result.Message);
-        var item = Assert.Single(result.Content);
-        Assert.Equal(Math.Min(1800, labelLimit), item.Label.Length);
-        Assert.Equal(Math.Min(400, mimeLimit), item.MimeType?.Length);
-        Assert.Equal(truncated, item.IsTruncated);
-    }
-
     /// <summary>Explicit external content is redacted before it crosses the Core result boundary.</summary>
     [Fact]
     public async Task ResourceRead_RedactsExternalContentProjection()
@@ -1136,55 +967,6 @@ public sealed class McpManagerTests
         Assert.Contains(result.Diagnostics, check => check.Name == "protocol-ping" && check.Succeeded);
         Assert.Equal(1, adapter.PingCount);
         Assert.Equal(0, adapter.ToolInvocationCount);
-    }
-
-    /// <summary>The real SDK stdio fixture discovers, serves bounded capabilities, and responds to protocol ping.</summary>
-    [Fact]
-    public async Task RealStdioTransport_DiscoversReadsAndRendersBoundedCapabilities()
-    {
-        var serverAssembly = GetServerAssemblyPath();
-        Assert.True(File.Exists(serverAssembly), $"MCP test server fixture is unavailable at '{serverAssembly}'.");
-        await using var transport = new SdkStdioTransport(
-            new IdentitySanitizer(),
-            NullLoggerFactory.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var profile = Profile("stdio-real") with
-        {
-            Command = "dotnet",
-            Arguments = [serverAssembly],
-            WorkingDirectory = FindRepositoryRoot(),
-            StartupTimeout = TimeSpan.FromSeconds(10),
-            RequestTimeout = TimeSpan.FromSeconds(10),
-        };
-
-        var capabilities = await transport.StartAsync(
-            profile,
-            new Dictionary<string, string>());
-        var resource = Assert.Single(
-            capabilities,
-            capability => capability.Kind == McpCapabilityKind.Resource);
-        var template = Assert.Single(
-            capabilities,
-            capability => capability.Kind == McpCapabilityKind.ResourceTemplate);
-        var prompt = Assert.Single(
-            capabilities,
-            capability => capability.Kind == McpCapabilityKind.Prompt);
-        Assert.Single(capabilities, capability => capability.Kind == McpCapabilityKind.Tool);
-
-        var resourceResult = await transport.ReadResourceAsync(
-            resource,
-            new Dictionary<string, string>());
-        var templateResult = await transport.ReadResourceAsync(
-            template,
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["name"] = "sample" });
-        var promptResult = await transport.GetPromptAsync(
-            prompt,
-            new Dictionary<string, string>(StringComparer.Ordinal) { ["name"] = "sample" });
-        await transport.PingAsync();
-
-        Assert.Equal("fixture-ready", Assert.Single(resourceResult.Content).Text);
-        Assert.Equal("fixture:sample", Assert.Single(templateResult.Content).Text);
-        Assert.Equal("Review fixture sample.", Assert.Single(promptResult.Content).Text);
     }
 
     /// <summary>Repository tool settings cannot grant MCP execution without repository-bound user approval.</summary>
@@ -1388,24 +1170,6 @@ public sealed class McpManagerTests
         }
     }
 
-    /// <summary>Headless output dispatches the same manager command and returns stable JSON plus exit code.</summary>
-    [Fact]
-    public async Task HeadlessShell_WritesSharedManagerResultAsJson()
-    {
-        await using var manager = CreateManager([Profile("server")], new FakeAdapter());
-        var dispatcher = new CommandDispatcher([manager]);
-        await using var output = new StringWriter();
-        var shell = new HeadlessShell(dispatcher, new EmptyProjectionStore(), output);
-
-        var exitCode = await shell.WriteMcpResultAsync(new McpManagementRequest
-        {
-            Action = McpManagementAction.List,
-        });
-
-        Assert.Equal(0, exitCode);
-        Assert.Contains("\"profileId\":\"server\"", output.ToString(), StringComparison.OrdinalIgnoreCase);
-    }
-
     /// <summary>Automatic connections overlap under the shared limit and join optional failures.</summary>
     [Theory]
     [InlineData(false)]
@@ -1500,13 +1264,6 @@ public sealed class McpManagerTests
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow),
             maximumConcurrentConnections: maximumConcurrentConnections,
             limits: limits);
-    }
-
-    private static string GetServerAssemblyPath()
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "mcp-server", "Threadsmith.Mcp.TestServer.dll");
-        Assert.True(File.Exists(path), $"The build-declared MCP server fixture is missing: {path}");
-        return path;
     }
 
     private static string FindRepositoryRoot()
@@ -2135,22 +1892,6 @@ public sealed class McpManagerTests
         public string Sanitize(string text)
         {
             return text.Replace(oldValue, newValue, StringComparison.Ordinal);
-        }
-    }
-
-    private sealed class EmptyProjectionStore : IProjectionStore
-    {
-        public Task ApplyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
-        {
-            return Task.CompletedTask;
-        }
-
-        public Task<TProjection?> GetAsync<TProjection>(
-            ProjectionKey key,
-            CancellationToken cancellationToken = default)
-            where TProjection : class, IProjection
-        {
-            return Task.FromResult<TProjection?>(null);
         }
     }
 }

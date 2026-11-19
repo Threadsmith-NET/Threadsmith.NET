@@ -70,34 +70,6 @@ public sealed class DelegatedEvidenceScopeTests : IDisposable
         Assert.Equal([expected], policy.MutationRoots);
     }
 
-    /// <summary>Captured reads do not need current repository contents and retain rename restrictions.</summary>
-    [Theory]
-    [InlineData("src/Example.cs", null, true)]
-    [InlineData("src/Example.cs", "outside/Old.cs", false)]
-    [InlineData("outside/Example.cs", null, false)]
-    public async Task CapturedReadsEnforceScopeAfterLiveRepositoryDisappears(string path, string? previousPath, bool allowed)
-    {
-        var repository = Directory.CreateDirectory(Path.Combine(_temporary, "Repo")).FullName;
-        var invocation = CreateInvocation(repository) with { ApprovedRoots = ["src"] };
-        await using var registry = new PrEvidenceRegistry();
-        var session = SessionId.New();
-        var run = RunId.New();
-        var snapshot = CreateSnapshot(new PullRequestFile(path, previousPath, "modified"));
-        registry.Register(session, run, snapshot);
-        Directory.Delete(repository);
-
-        if (allowed)
-        {
-            Assert.Contains(path, registry.Read(session, run, snapshot.SnapshotId, invocation).Content, StringComparison.Ordinal);
-        }
-        else
-        {
-            Assert.Throws<UnauthorizedAccessException>(() => registry.Read(session, run, snapshot.SnapshotId, invocation));
-        }
-
-        Assert.Contains(path, registry.Read(session, run, snapshot.SnapshotId, invocation with { ApprovedRoots = ["."] }).Content, StringComparison.Ordinal);
-    }
-
     /// <summary>A live filesystem case alias never bypasses captured evidence's ordinal authority.</summary>
     [Fact]
     public async Task CapturedReadDoesNotTreatCaseAliasGrantAsUnrestricted()

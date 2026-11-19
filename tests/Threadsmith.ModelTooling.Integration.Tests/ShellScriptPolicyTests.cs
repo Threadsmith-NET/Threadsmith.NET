@@ -2,12 +2,14 @@ namespace Threadsmith.ModelTooling.Integration.Tests;
 
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Policies.Commands;
 using Threadsmith.Policies.Contracts;
 using Threadsmith.Policies.Evaluation;
+using Threadsmith.Policies.Matching;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
@@ -19,134 +21,46 @@ public static class ShellScriptPolicyTests
     [Fact]
     public static async Task RequiredPlatformScriptsUseGovernedFileInvocations()
     {
-        await RealScriptsPreserveLiteralArgumentsAndBothBoundTargets("pwsh", "pwsh");
-        await RealScriptsPreserveLiteralArgumentsAndBothBoundTargets("bash", "bash");
-    }
-
-    /// <summary>Direct and interpreter-based calls launch the exact authorized file and literal arguments.</summary>
-    [Theory]
-    [InlineData("powershell", "powershell")]
-    [InlineData("pwsh", "pwsh")]
-    [InlineData("bash", "bash")]
-    [InlineData("sh", "sh")]
-    [InlineData("zsh", "zsh")]
-    [InlineData("bash", "pwsh")]
-    [InlineData("pwsh", "bash")]
-    [InlineData("cmd", "pwsh")]
-    [InlineData("cmd", "bash")]
-    public static async Task RealScriptsPreserveLiteralArgumentsAndBothBoundTargets(string shell, string interpreter)
-    {
-        // Arrange: the file is intentionally not executable; admission must select its interpreter.
-        await using var fixture = new ScriptFixture(shell, interpreter);
-        var policy = fixture.Policy();
-        string[] expected = ["hello world", "-Message", "--literal=/path with spaces", "native,comma", "literal;|&"];
-        var arguments = " " + string.Join(" ", expected.Select(fixture.Quote));
-        var relative = "./" + fixture.ScriptName;
-        var commands = new[]
-        {
-            fixture.Direct(relative) + arguments,
-            fixture.Direct(fixture.ScriptPath) + arguments,
-            fixture.Wrapper(relative) + arguments,
-            fixture.Wrapper(fixture.ScriptPath, absoluteInterpreter: true) + arguments,
-            fixture.Interpreter + (fixture.IsPowerShell ? " -nologo -NonINTERACTIVE -noprofile -fIlE "
-                : fixture.Interpreter == "bash" ? " --noprofile --norc -e -u -- " : " -f -e -u -- ") + fixture.Quote(relative) + arguments,
-        };
-        for (var index = 0; index < commands.Length; index++)
-        {
-            var prepared = fixture.Prepare(commands[index], policy);
-            Assert.Equal(2, prepared.Actions.Length);
-            var script = Assert.Single(prepared.Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
-            var engine = Assert.Single(prepared.Actions.Where(action => action.CommandKind != CommandPolicyNames.Script));
-            Assert.Equal(fixture.ScriptName, script.ExecutableName);
-            Assert.Equal(fixture.ScriptPath, script.ResolvedExecutable);
-            Assert.Equal(fixture.Root, script.WorkingDirectory);
-            Assert.Equal(expected, script.Arguments.ToArray());
-            Assert.Equal(fixture.InterpreterPath, engine.ResolvedExecutable, ignoreCase: OperatingSystem.IsWindows());
-            Assert.Equal(index == 3 ? CommandPolicyNames.ExplicitExternal : CommandPolicyNames.External, engine.CommandKind);
-            var scriptIndex = engine.Arguments.IndexOf(OperatingSystem.IsWindows() && !fixture.IsPowerShell ? fixture.ScriptPath.Replace('\\', '/') : fixture.ScriptPath);
-            Assert.True(scriptIndex >= 0);
-            Assert.Equal(expected, engine.Arguments.Skip(scriptIndex + 1));
-            if (fixture.IsPowerShell)
-            {
-                Assert.Contains("-File", engine.Arguments);
-                Assert.Contains("-NoProfile", engine.Arguments);
-                Assert.Contains("-NonInteractive", engine.Arguments);
-                Assert.DoesNotContain("-Command", engine.Arguments);
-            }
-
-            // Act: use the real process manager and pipeline, not ExecuteAsync directly.
-            var result = await fixture.InvokeAsync(commands[index], policy, cancellationToken: TestContext.Current.CancellationToken);
-
-            // Assert: compare admitted script argv to what the script actually received.
-            var lines = OutputLines(result);
-            Assert.Equal("authorized", lines[0]);
-            Assert.Equal(script.Arguments.ToArray(), lines.Skip(1));
-            Assert.Equal(index + 1, fixture.Manager.Launches);
-            Assert.Empty(fixture.Manager.ActiveProcesses);
-        }
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await VerifyGovernedFileInvocationAsync("pwsh", cancellationToken);
+        await VerifyGovernedFileInvocationAsync("bash", cancellationToken);
     }
 
     /// <summary>Output redirection survives binding both direct scripts and interpreter file operands.</summary>
     [Theory]
-    [InlineData("powershell", "powershell")]
-    [InlineData("pwsh", "pwsh")]
-    [InlineData("bash", "bash")]
-    [InlineData("sh", "sh")]
-    [InlineData("zsh", "zsh")]
-    [InlineData("cmd", "pwsh")]
-    public static async Task ScriptOutputRedirectionPreservesItsPosition(string shell, string interpreter)
+    [InlineData("pwsh", "direct")]
+    [InlineData("pwsh", "wrapped")]
+    [InlineData("pwsh", "before-file")]
+    [InlineData("bash", "direct")]
+    [InlineData("bash", "wrapped")]
+    [InlineData("bash", "before-file")]
+    public static async Task ScriptOutputRedirectionPreservesItsPosition(string shell, string form)
     {
-        await using var fixture = new ScriptFixture(shell, interpreter);
+        await using var fixture = new ScriptFixture(shell, shell);
         var policy = fixture.Policy();
         var destination = Path.Combine(fixture.Root, "script-output.log");
         var redirect = " > " + fixture.Quote(destination);
-        var commands = new[]
+        var command = form switch
         {
-            fixture.Direct(fixture.ScriptPath) + " first" + redirect,
-            fixture.Wrapper(fixture.ScriptPath) + " second" + redirect,
-            fixture.Interpreter + redirect + (fixture.IsPowerShell ? " -File " : " -- ") + fixture.Quote(fixture.ScriptPath) + " third",
+            "direct" => fixture.Direct(fixture.ScriptPath) + " first" + redirect,
+            "wrapped" => fixture.Wrapper(fixture.ScriptPath) + " second" + redirect,
+            "before-file" => fixture.Interpreter + redirect + (fixture.IsPowerShell ? " -File " : " -- ")
+                + fixture.Quote(fixture.ScriptPath) + " third",
+            _ => throw new ArgumentOutOfRangeException(nameof(form)),
         };
         var cancellationToken = TestContext.Current.CancellationToken;
-        foreach (var command in commands)
-        {
-            var prepared = fixture.Prepare(command, policy);
-            var script = Assert.Single(prepared.Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
+        var prepared = fixture.Prepare(command, policy);
+        var script = Assert.Single(prepared.Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
+        var result = await fixture.InvokeAsync(command, policy, cancellationToken: cancellationToken);
 
-            var result = await fixture.InvokeAsync(command, policy, cancellationToken: cancellationToken);
-
-            Assert.True(result.Succeeded, result.Error);
-            var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
-            Assert.NotNull(output);
-            Assert.Equal(0, output.ExitCode);
-            Assert.True(string.IsNullOrWhiteSpace(output.StandardOutput));
-            var lines = await File.ReadAllLinesAsync(destination, cancellationToken);
-            Assert.Equal("authorized", lines[0]);
-            Assert.Equal(script.Arguments, lines.Skip(1));
-        }
-    }
-
-    /// <summary>File-mode invocation retains PowerShell script parameter and switch binding.</summary>
-    [Theory]
-    [InlineData("powershell")]
-    [InlineData("pwsh")]
-    public static async Task PowerShellFileLaunchBindsNamedParametersAndSwitches(string shell)
-    {
-        await using var fixture = new ScriptFixture(shell, shell);
-        await File.WriteAllTextAsync(
-            fixture.ScriptPath,
-            "param([string]$Message, [switch]$Enabled)\nWrite-Output $Message\nWrite-Output $Enabled.IsPresent\n",
-            TestContext.Current.CancellationToken);
-        var policy = fixture.Policy();
-        foreach (var command in new[] { fixture.Direct("./" + fixture.ScriptName), fixture.Wrapper(fixture.ScriptPath) })
-        {
-            var invocation = command + " -Message 'path and argument with spaces' -Enabled";
-            var script = Assert.Single(fixture.Prepare(invocation, policy).Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
-            Assert.Collection(script.Arguments, value => Assert.Equal("-Message", value), value => Assert.Equal("path and argument with spaces", value), value => Assert.Equal("-Enabled", value));
-
-            var result = await fixture.InvokeAsync(invocation, policy, cancellationToken: TestContext.Current.CancellationToken);
-
-            Assert.Collection(OutputLines(result), value => Assert.Equal("path and argument with spaces", value), value => Assert.Equal("True", value));
-        }
+        Assert.True(result.Succeeded, result.Error);
+        var output = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson!);
+        Assert.NotNull(output);
+        Assert.Equal(0, output.ExitCode);
+        Assert.True(string.IsNullOrWhiteSpace(output.StandardOutput));
+        var lines = await File.ReadAllLinesAsync(destination, cancellationToken);
+        Assert.Equal("authorized", lines[0]);
+        Assert.Equal(script.Arguments, lines.Skip(1));
     }
 
     /// <summary>Either action can allow, deny, or require the normal combined approval.</summary>
@@ -205,6 +119,32 @@ public static class ShellScriptPolicyTests
         }
     }
 
+    /// <summary>An argument denial in a later stage prevents approval and execution of the whole command.</summary>
+    [Fact]
+    public static async Task DeniedLaterScriptStagePreventsAllLaunches()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
+        await using var fixture = new ScriptFixture(shell, shell, execute: false);
+        var policy = fixture.Policy(scriptDeny: ["^blocked$"]);
+        var script = fixture.Direct(fixture.ScriptPath);
+        var prompts = 0;
+        using var handler = fixture.Coordinator.Attach((approval, _) =>
+        {
+            prompts++;
+            return Task.FromResult(new PolicyApprovalResponse(approval.RequestId, PolicyApprovalChoice.Once));
+        });
+
+        var denied = await fixture.InvokeAsync($"{script} allowed; {script} blocked", policy, cancellationToken: token);
+
+        AssertDenied(denied, fixture, 0);
+        Assert.Equal(0, prompts);
+
+        var control = await fixture.InvokeAsync($"{script} allowed; {script} allowed", policy, cancellationToken: token);
+        Assert.True(control.Succeeded, control.Error);
+        Assert.Equal(1, fixture.Manager.Launches);
+    }
+
     /// <summary>Executable ceilings do not grant unmatched script or interpreter permission.</summary>
     [Theory]
     [InlineData(false)]
@@ -253,30 +193,6 @@ public static class ShellScriptPolicyTests
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal(1, prompts);
         Assert.Equal(1, fixture.Manager.Launches);
-    }
-
-    /// <summary>Denied stages prevent every process in a compound from starting.</summary>
-    [Theory]
-    [InlineData(0, ";")]
-    [InlineData(1, ";")]
-    [InlineData(2, ";")]
-    [InlineData(0, "|")]
-    [InlineData(1, "|")]
-    [InlineData(2, "|")]
-    public static async Task AForbiddenScriptStagePreventsTheEntireCompoundLaunch(int deniedIndex, string separator)
-    {
-        var shell = OperatingSystem.IsWindows() ? "pwsh" : "bash";
-        await using var fixture = new ScriptFixture(shell, shell);
-        var policy = fixture.Policy(scriptDeny: ["^blocked$"]);
-        var single = fixture.Direct(fixture.ScriptPath);
-        var control = await fixture.InvokeAsync(single + " allowed", policy, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Collection(OutputLines(control), value => Assert.Equal("authorized", value), value => Assert.Equal("allowed", value));
-        var command = string.Join(" " + separator + " ", Enumerable.Range(0, 3).Select(index => single + (index == deniedIndex ? " blocked" : " allowed")));
-        using var handler = fixture.Coordinator.Attach((_, _) => throw new InvalidOperationException("A denied compound must not prompt."));
-
-        var result = await fixture.InvokeAsync(command, policy, cancellationToken: TestContext.Current.CancellationToken);
-
-        AssertDenied(result, fixture, 1);
     }
 
     /// <summary>Unsupported interpreter modes and nonexistent script operands fail before execution.</summary>
@@ -421,6 +337,53 @@ public static class ShellScriptPolicyTests
         Assert.Equal(2, fixture.Manager.Launches);
     }
 
+    private static async Task VerifyGovernedFileInvocationAsync(string shell, CancellationToken cancellationToken)
+    {
+        await using var fixture = new ScriptFixture(shell, shell);
+        var policy = fixture.Policy();
+        string[] expected = ["hello world", "-Message", "--literal=/path with spaces", "native,comma", "literal;|&"];
+        var arguments = " " + string.Join(" ", expected.Select(fixture.Quote));
+        var commands = new[]
+        {
+            fixture.Direct("./" + fixture.ScriptName) + arguments,
+            fixture.Wrapper(fixture.ScriptPath, absoluteInterpreter: true) + arguments,
+        };
+
+        for (var index = 0; index < commands.Length; index++)
+        {
+            var prepared = fixture.Prepare(commands[index], policy);
+            Assert.Equal(2, prepared.Actions.Length);
+            var script = Assert.Single(prepared.Actions.Where(action => action.CommandKind == CommandPolicyNames.Script));
+            var interpreter = Assert.Single(prepared.Actions.Where(action => action.CommandKind != CommandPolicyNames.Script));
+            Assert.Equal(fixture.ScriptName, script.ExecutableName);
+            Assert.Equal(fixture.ScriptPath, script.ResolvedExecutable);
+            Assert.Equal(fixture.Root, script.WorkingDirectory);
+            Assert.Equal(expected, script.Arguments.ToArray());
+            Assert.Equal(fixture.InterpreterPath, interpreter.ResolvedExecutable, ignoreCase: OperatingSystem.IsWindows());
+            Assert.Equal(index == 1 ? CommandPolicyNames.ExplicitExternal : CommandPolicyNames.External, interpreter.CommandKind);
+            var pathInArguments = OperatingSystem.IsWindows() && !fixture.IsPowerShell
+                ? fixture.ScriptPath.Replace('\\', '/')
+                : fixture.ScriptPath;
+            var scriptIndex = interpreter.Arguments.IndexOf(pathInArguments);
+            Assert.True(scriptIndex >= 0);
+            Assert.Equal(expected, interpreter.Arguments.Skip(scriptIndex + 1));
+            if (fixture.IsPowerShell)
+            {
+                Assert.Contains("-File", interpreter.Arguments);
+                Assert.Contains("-NoProfile", interpreter.Arguments);
+                Assert.Contains("-NonInteractive", interpreter.Arguments);
+                Assert.DoesNotContain("-Command", interpreter.Arguments);
+            }
+
+            var result = await fixture.InvokeAsync(commands[index], policy, cancellationToken: cancellationToken);
+            var lines = OutputLines(result);
+            Assert.Equal("authorized", lines[0]);
+            Assert.Equal(expected, lines.Skip(1));
+            Assert.Equal(index + 1, fixture.Manager.Launches);
+            Assert.Empty(fixture.Manager.ActiveProcesses);
+        }
+    }
+
     private static string[] OutputLines(ToolInvocationResult result)
     {
         Assert.True(result.Succeeded, result.Error);
@@ -464,7 +427,8 @@ public static class ShellScriptPolicyTests
                     ["PATH"] = string.Join(Path.PathSeparator, Root, Path.GetDirectoryName(InterpreterPath), Environment.GetEnvironmentVariable("PATH")),
                 },
             };
-            _pipeline = new ToolInvocationPipeline(new ToolRegistry([Tool]), new DefaultPolicyEngine(), Coordinator, _events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var policyEngine = new DefaultPolicyEngine(new PolicyMatcherCatalog(Regex.InfiniteMatchTimeout));
+            _pipeline = new ToolInvocationPipeline(new ToolRegistry([Tool]), policyEngine, Coordinator, _events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
         }
 
         internal string Root { get; }

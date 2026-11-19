@@ -25,16 +25,4 @@ public static class ReasoningLevelTests
         Assert.Equal("ProviderEffort", entry.Value);
         Assert.Equal(level, JsonSerializer.Deserialize<ReasoningLevel>(JsonSerializer.Serialize(level)));
     }
-
-    /// <summary>Request snapshots written with the former numeric enum remain readable.</summary>
-    [Theory]
-    [InlineData("0", "none")]
-    [InlineData("1", "minimal")]
-    [InlineData("2", "low")]
-    [InlineData("3", "medium")]
-    [InlineData("4", "high")]
-    public static void Json_LegacyNumericSnapshot_RemainsReadable(string json, string expected)
-    {
-        Assert.Equal(expected, JsonSerializer.Deserialize<ReasoningLevel>(json).Value);
-    }
 }

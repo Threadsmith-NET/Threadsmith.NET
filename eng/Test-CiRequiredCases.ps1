@@ -66,9 +66,21 @@ if ($RunnerOS -eq 'Linux') {
 $reports = @(Get-ChildItem -LiteralPath $ResultsDirectory -Filter '*.xunit' -File -Recurse)
 if ($reports.Count -eq 0) { throw "No xUnit reports found in $ResultsDirectory." }
 $cases = @{}
+$failures = [System.Collections.Generic.List[string]]::new()
 foreach ($report in $reports) {
     [xml] $document = Get-Content -LiteralPath $report.FullName -Raw
     foreach ($case in $document.SelectNodes('/assemblies/assembly/collection/test')) {
+        if ($case.result -ne 'NotRun') {
+            $seconds = 0.0
+            if (-not [double]::TryParse($case.time, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$seconds) -or
+                -not [double]::IsFinite($seconds) -or $seconds -lt 0) {
+                $failures.Add("$($case.name) has an invalid xUnit duration: '$($case.time)'.")
+            }
+            elseif ($seconds -gt 60) {
+                Write-Warning "$($case.name) took $($case.time) seconds, exceeding the 60-second target."
+            }
+        }
+
         $method = "$($case.type).$($case.method)"
         if ($required.ContainsKey($method)) {
             if (-not $cases.ContainsKey($method)) { $cases[$method] = @() }
@@ -76,12 +88,11 @@ foreach ($report in $reports) {
         }
     }
 }
-$failures = @()
 foreach ($method in ($required.Keys | Sort-Object)) {
     $observed = @($cases[$method] | Where-Object { $null -ne $_ })
     $names = @($observed.name | Sort-Object -Unique)
     if ($names.Count -ne $required[$method] -or @($observed | Where-Object result -ne 'Pass').Count -gt 0) {
-        $failures += "$method expected $($required[$method]) passing cases; observed $($names.Count) unique cases, results: $($observed.result -join ', ')."
+        $failures.Add("$method expected $($required[$method]) passing cases; observed $($names.Count) unique cases, results: $($observed.result -join ', ').")
     }
 }
 if ($failures.Count -gt 0) { throw ($failures -join [Environment]::NewLine) }

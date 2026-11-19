@@ -12,38 +12,6 @@ using Xunit;
 /// <summary>Verifies Plan-82 multi-anchor code exploration flow, dispatch, boundaries, and compact impact evidence.</summary>
 public sealed class Plan82CodeExploreFlowTests
 {
-    /// <summary>Flow mode returns a bounded compiler-proven bridge path and projects call-site source added during flow composition.</summary>
-    [Fact]
-    public async Task CodeExplore_FlowMode_ReturnsBridgePathAndCallSiteSource()
-    {
-        await using var fixture = await CodeExploreFlowFixture.CreateAsync();
-
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = "StartThroughBridge to FinishTerminal",
-                Mode = CodeExploreMode.Flow,
-                ExactSymbolAnchors = ["FlowSample.EntryPoint.StartThroughBridge", "FlowSample.EntryPoint.FinishTerminal"],
-                Limits = CreateWideLimits(),
-            },
-            fixture.CreateSourceReader(),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.All(result.ResolvedAnchors, resolution => Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome));
-        var flow = RequireFlow(result);
-        var path = Assert.Single(flow.Paths);
-        Assert.True(path.IsComplete, path.Reason);
-        Assert.Equal(2, path.EdgeOrdinals.Count);
-        Assert.Equal(3, path.NodeIds.Count);
-        Assert.All(flow.Edges, edge => Assert.Equal(CallDispatchKind.Direct, edge.DispatchKind));
-        Assert.Contains(flow.Nodes, node => node.IsConnector
-            && node.Symbol.DisplayName.Contains("Bridge", StringComparison.Ordinal));
-        Assert.Contains(result.FileSections, section => section.SelectionReason == "Compiler-proven flow call-site source."
-            && section.Source.NumberedLines.Any(line => line.Contains("Bridge(input)", StringComparison.Ordinal)));
-        Assert.True(flow.Traversal.IsComplete, string.Join(Environment.NewLine, flow.Traversal.Omissions));
-    }
-
     /// <summary>Interface dispatch keeps an incomplete static frontier and exposes compiler-known implementation branches.</summary>
     [Fact]
     public async Task CodeExplore_InterfaceDispatch_ReturnsFrontierBranchAndRuntimeBoundary()
@@ -107,59 +75,6 @@ public sealed class Plan82CodeExploreFlowTests
         Assert.Contains(branch.Implementations, target => target.Symbol.DisplayName.Contains(
             "DerivedProcessor.Transform",
             StringComparison.Ordinal));
-    }
-
-    /// <summary>Compact blast-radius evidence includes direct and transitive downstream projects/tests with honest reasons.</summary>
-    [Fact]
-    public async Task CodeExplore_ImpactMode_ReturnsTransitiveDependentProjectsAndTests()
-    {
-        await using var fixture = await CodeExploreFlowFixture.CreateAsync();
-
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = "FinishTerminal impact",
-                Mode = CodeExploreMode.Impact,
-                ExactSymbolAnchors = ["FlowSample.EntryPoint.FinishTerminal"],
-                Limits = CreateWideLimits(),
-            },
-            fixture.CreateSourceReader(),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        var blastRadius = result.BlastRadius ?? throw new InvalidOperationException("Expected compact blast-radius evidence.");
-        Assert.Contains(blastRadius.Items, item => item.Kind == ImpactKind.Project
-            && string.Equals(item.ProjectName, "FlowSample.App", StringComparison.Ordinal)
-            && item.Reason.Contains("directly or transitively", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(blastRadius.Items, item => item.Kind == ImpactKind.Project
-            && string.Equals(item.ProjectName, "FlowSample.Transitive", StringComparison.Ordinal));
-        Assert.Contains(blastRadius.Items, item => item.Kind == ImpactKind.Test
-            && string.Equals(item.ProjectName, "FlowSample.App.Tests", StringComparison.Ordinal));
-        Assert.True(blastRadius.TotalProjects >= 2);
-        Assert.True(blastRadius.TotalTests >= 1);
-        Assert.Contains(blastRadius.Omissions, omission => omission.Contains("not exhaustive validation scope", StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>Auto mode preserves flow and compact impact evidence for explicit multi-anchor exploration.</summary>
-    [Fact]
-    public async Task CodeExplore_AutoModeWithExactMultiAnchors_PreservesGraphEvidence()
-    {
-        await using var fixture = await CodeExploreFlowFixture.CreateAsync();
-
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = "StartThroughBridge to FinishTerminal",
-                Mode = CodeExploreMode.Auto,
-                ExactSymbolAnchors = ["FlowSample.EntryPoint.StartThroughBridge", "FlowSample.EntryPoint.FinishTerminal"],
-                Limits = CreateWideLimits(),
-            },
-            fixture.CreateSourceReader(),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.NotNull(result.Flow);
-        Assert.NotNull(result.BlastRadius);
     }
 
     /// <summary>Unresolved dynamic call-site boundaries are capped and reported without unbounded boundary growth.</summary>

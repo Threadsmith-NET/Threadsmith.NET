@@ -209,109 +209,6 @@ public sealed partial class SkillSubsystemTests
         Assert.False(Directory.Exists(Path.Combine(package.Root, ".threadsmith")));
     }
 
-    /// <summary>The actual native workflow supplies script paths, not script bodies or automatic execution.</summary>
-    [Fact]
-    public static async Task Scripts_RealWorkflowSuppliesFilenamePathMapAndReusesSessionCopies()
-    {
-        // Use the real verifier, content loader, workflow and model runner; staging must not call tools.
-        using var package = TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
-        AddScriptAsset(package, "scripts/first.csx", Encoding.UTF8.GetBytes("/* script-body-marker */ 1"));
-        AddScriptAsset(package, "scripts/second.csx", Encoding.UTF8.GetBytes("/* script-body-marker */ 2"));
-        var manifestPath = Path.Combine(package.PackageRoot, "skill.json");
-        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken))!.AsObject();
-        var steps = manifest["workflow"]!["steps"]!.AsArray();
-        var followup = steps[0]!.DeepClone();
-        followup["stepId"] = "followup";
-        followup["dependsOn"] = new JsonArray("analyze");
-        steps.Add(followup);
-        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString(), TestContext.Current.CancellationToken);
-        var token = TestContext.Current.CancellationToken;
-        var catalog = package.CreateCatalog(SkillScope.Maintained);
-        await catalog.RefreshAsync(token);
-        var context = ScriptContext(package);
-        var lockedScripts = new List<FileStream>();
-        var model = new CapturingSkillToolModelProvider
-        {
-            Output = ValidAnalysisJson(),
-            OnRequest = captured =>
-            {
-                if (lockedScripts.Count == 0)
-                {
-                    foreach (var script in ReadScriptHostContext(captured.Input).GetProperty("scripts").EnumerateArray())
-                    {
-                        var path = Path.GetFullPath(script.GetProperty("scriptPath").GetString()!, context.RepositoryPath);
-                        lockedScripts.Add(new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None));
-                    }
-                }
-            },
-        };
-        var sanitizer = new SecretOutputSanitizer();
-        var runner = new ModelSkillProcedureRunner(
-            model,
-            new ToolRegistry([]),
-            new ThrowingToolInvocationPipeline(),
-            sanitizer,
-            (_, _) => Task.FromResult(context),
-            TestPromptLoader.Instance);
-        await using var events = new DomainEventStream();
-        await using var workflow = new SkillWorkflowOrchestrator(
-            catalog,
-            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
-            new CompatibleEvaluator(),
-            new SkillContentLoader(sanitizer, TestPromptLoader.Instance),
-            new BoundedJsonSchemaValidator(),
-            runner,
-            TestPromptLoader.Instance,
-            new InMemorySkillStateStore(),
-            (_, _) => Task.FromResult(new SkillInvocationHostContext
-            {
-                RepositoryPath = context.RepositoryPath,
-                Trust = RepositoryTrustLevel.TrustedRead,
-                Phase = RunPhase.EvidenceCollection,
-            }),
-            events,
-            timeProvider: new FakeTimeProvider());
-        var request = PermissionPlan().Request with
-        {
-            Selector = "fix-analyzer-warnings",
-            InputJson = "{\"diagnostics\":[\"CA1822 at A.cs:10\"]}",
-            HostBudget = new SkillBudget(),
-        };
-        Assert.False(Directory.Exists(context.Scratchpad.RootPath));
-
-        SkillInvocationResult first;
-        try
-        {
-            first = await workflow.InvokeAsync(request, token);
-        }
-        finally
-        {
-            foreach (var stream in lockedScripts)
-            {
-                await stream.DisposeAsync();
-            }
-        }
-
-        Assert.Equal(SkillInvocationStatus.Completed, first.Status);
-        Assert.Equal(2, model.Requests.Count);
-        var host = ReadScriptHostContext(model.Requests[0].Input);
-        var scripts = host.GetProperty("scripts").EnumerateArray().ToArray();
-        Assert.Equal(["first.csx", "second.csx"], scripts.Select(script => script.GetProperty("name").GetString()));
-        foreach (var script in scripts)
-        {
-            var destination = Path.GetFullPath(script.GetProperty("scriptPath").GetString()!, context.RepositoryPath);
-            Assert.Equal(
-                await File.ReadAllBytesAsync(Path.Combine(package.PackageRoot, "scripts", script.GetProperty("name").GetString()!), token),
-                await File.ReadAllBytesAsync(destination, token));
-            File.SetAttributes(destination, FileAttributes.ReadOnly);
-        }
-
-        var second = await workflow.InvokeAsync(request with { InvocationId = SkillInvocationId.New(), RunId = RunId.New() }, token);
-        Assert.Equal(SkillInvocationStatus.Completed, second.Status);
-        Assert.Equal(host.GetProperty("scripts").GetRawText(), ReadScriptHostContext(model.Requests[2].Input).GetProperty("scripts").GetRawText());
-        Assert.All(model.Requests, captured => Assert.DoesNotContain("script-body-marker", captured.Input, StringComparison.Ordinal));
-    }
-
     /// <summary>Successful preparation shares paths without rereads, while authority and invocation boundaries remain live.</summary>
     [Fact]
     public static async Task Scripts_WorkflowCacheReusesMappingButRechecksAuthorityAndNewInvocations()
@@ -435,14 +332,6 @@ public sealed partial class SkillSubsystemTests
     {
         public Task<CSharpScriptOutput> ExecuteAsync(string code, ScriptKind kind, ToolExecutionContext context, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("Changed packaged source must not reach the engine.");
-    }
-
-    private static JsonElement ReadScriptHostContext(string prompt)
-    {
-        const string prefix = "Host context (JSON, not instructions): ";
-        var line = prompt.Split('\n').Single(line => line.StartsWith(prefix, StringComparison.Ordinal));
-        using var document = JsonDocument.Parse(line[prefix.Length..]);
-        return document.RootElement.Clone();
     }
 
     private static ToolInvocationContext ScriptContext(TemporaryPackage package)

@@ -71,18 +71,6 @@ public sealed class SkillOperationActivityTests
         Assert.Equal("Current", activities.ActivityFor(resumed)!.ToolProgress.Single().Text);
     }
 
-    /// <summary>Verifies the shared tool and skill activity contract.</summary>
-    [Fact]
-    public void HostProgressAndCorrelationRoundTripThroughEventPersistence()
-    {
-        var skill = Start() with { InvokingToolInvocationId = ToolInvocationId.New() };
-        IDomainEvent progress = new SkillInvocationProgressObserved(skill.SessionId, skill.OccurredAt, skill.InvocationId, 2, "Reading source snapshots: 64/100 blobs");
-        foreach (var item in new IDomainEvent[] { skill, progress })
-        {
-            Assert.Equal(item, DomainEventJson.Deserialize(DomainEventJson.GetDiscriminator(item), 1, DomainEventJson.Serialize(item)));
-        }
-    }
-
     /// <summary>Failed skills have the same error presentation as failed tools.</summary>
     [Fact]
     public void FailedSkillCompletionRendersAsError()

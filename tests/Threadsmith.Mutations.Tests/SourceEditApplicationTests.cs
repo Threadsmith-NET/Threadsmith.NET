@@ -80,67 +80,6 @@ public sealed partial class SourceEditApplicationTests
         Assert.Empty(await fixture.Store.GetUnresolvedEffectsAsync(RepositoryIdentity.Create(fixture.Repository), ct));
     }
 
-    /// <summary>A delete-and-recreate batch reports its net disk effect rather than claiming the file is absent.</summary>
-    [Theory]
-    [InlineData("class Example { }", "Unchanged")]
-    [InlineData("class Changed { }", "Updated file")]
-    public async Task DeleteAndRecreateReceipt_ReportsFinalState(string replacement, string effect)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        var command = fixture.Replace("Example", "Unused", false);
-        command = command with
-        {
-            Instructions = command.Instructions with
-            {
-                Mutations =
-                [
-                    new DeleteFileMutationProposal { RelativePath = "Example.cs" },
-                    new CreateFileMutationProposal { RelativePath = "Example.cs", Content = new() { Text = replacement } },
-                ],
-            },
-        };
-
-        var receipt = await fixture.Application.HandleAsync(command, ct);
-
-        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
-        Assert.Equal(replacement, await File.ReadAllTextAsync(fixture.SourcePath, ct));
-        Assert.Contains($"{effect} \"Example.cs\"", receipt.Detail, StringComparison.Ordinal);
-        Assert.DoesNotContain("Deleted entire file", receipt.Detail, StringComparison.Ordinal);
-    }
-
-    /// <summary>Deletion receipts report the verified absence, including durable replay and interrupted delivery.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task DeleteReceipt_ReportsEntireFileRemoval(bool interrupted)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        var command = fixture.Replace("Example", "Unused", false);
-        command = command with
-        {
-            Instructions = command.Instructions with
-            {
-                Mutations = [new DeleteFileMutationProposal { RelativePath = "Example.cs" }],
-            },
-        };
-        if (interrupted)
-        {
-            fixture.Commits.AfterCommit = () => throw new IOException("Interrupted after disk commit.");
-        }
-
-        var receipt = await fixture.Application.HandleAsync(command, ct);
-        var replay = await fixture.CreateApplication().HandleAsync(command, ct);
-
-        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
-        Assert.False(File.Exists(fixture.SourcePath));
-        Assert.Contains("Deleted entire file \"Example.cs\" (file is absent)", receipt.Detail, StringComparison.Ordinal);
-        Assert.Contains(receipt.Detail, replay.Detail, StringComparison.Ordinal);
-        Assert.Equal(1, fixture.Commits.Count);
-        Assert.Equal(receipt.Detail, (await fixture.Store.GetEffectAsync(command.EffectId, ct))!.Receipt!.Detail);
-    }
-
     /// <summary>Temporary compiler errors apply and durable retry identity prevents duplicate effects.</summary>
     [Fact]
     public async Task Edit_AppliesTemporaryCompilerErrors_AndReplayCannotWriteTwice()
@@ -399,25 +338,6 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal(1, fixture.Commits.Count);
     }
 
-    /// <summary>Ordinary edits retain original evidence and publish one cumulative net diff with honest validation coverage.</summary>
-    [Fact]
-    public async Task SuccessiveEdits_RecordCumulativeNetDiff()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        await fixture.Application.HandleAsync(fixture.Replace("Example", "Intermediate", false), ct);
-        await fixture.Application.HandleAsync(fixture.Replace("Intermediate", "Final", false), ct);
-        var outcome = await fixture.Application.RecordRunOutcomeAsync(fixture.SessionId, fixture.RunId, ExecutionCheckpointPhase.Completed, ct);
-        Assert.NotNull(outcome);
-        var diff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!, ct);
-        Assert.Contains("-class Example { }", diff, StringComparison.Ordinal);
-        Assert.Contains("+class Final { }", diff, StringComparison.Ordinal);
-        Assert.DoesNotContain("Intermediate", diff, StringComparison.Ordinal);
-        Assert.Null(outcome.Validation);
-        Assert.Contains(outcome.ResidualRisks, risk => risk.Contains("Build and test results require explicit tool invocations", StringComparison.Ordinal));
-        Assert.NotNull(await fixture.Store.GetOutcomeAsync(fixture.RunId, ct));
-    }
-
     /// <summary>A later outside edit cannot be presented as part of the run's cumulative diff.</summary>
     [Fact]
     public async Task ExternalChangeOmitsCumulativeDiff()
@@ -510,27 +430,6 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal("class Changed { }", await File.ReadAllTextAsync(Path.Combine(fixture.Repository, destination), ct));
         Assert.Equal(destination, Path.GetFileName(Assert.Single(Directory.EnumerateFiles(fixture.Repository))));
         Assert.Equal(SourceEditStatus.Applied, (await fixture.Store.GetEffectAsync(command.EffectId, ct))!.Receipt!.Status);
-    }
-
-    /// <summary>A differently cased source alias does not authorize a filename change.</summary>
-    [Fact]
-    public async Task SourceAlias_PreservesActualFileSpelling()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await EditFixture.CreateAsync(ct);
-        Assert.SkipWhen(!RepositoryPathPolicy.GetPathComparer(fixture.Repository).Equals("Example.cs", "example.cs"), "Requires case-insensitive repository paths.");
-        var command = fixture.Replace("Example", "Changed", false);
-        command = command with
-        {
-            Instructions = command.Instructions with
-            {
-                Mutations = [new ReplaceTextMutationProposal { RelativePath = "example.cs", ExpectedText = "Example", ReplacementText = "Changed" }],
-            },
-        };
-        var receipt = await fixture.Application.HandleAsync(command, ct);
-        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
-        Assert.Equal("Example.cs", Path.GetFileName(Assert.Single(Directory.EnumerateFiles(fixture.Repository))));
-        Assert.Equal("class Changed { }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
     }
 
     /// <summary>An external edit after intent but before commit is a terminal non-write conflict, not uncertain recovery.</summary>

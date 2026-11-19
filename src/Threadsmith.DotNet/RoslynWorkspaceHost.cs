@@ -3,21 +3,16 @@ namespace Threadsmith.DotNet;
 using System.Composition.Hosting;
 using Microsoft.CodeAnalysis.Host.Mef;
 
-/// <summary>Composes workspace services without Roslyn's shared Unix SQLite write cache.</summary>
+/// <summary>Composes nonpersistent semantic services and the workspace-owned analyzer loader.</summary>
 internal static class RoslynWorkspaceHost
 {
     private const string SqliteFactoryName = "Microsoft.CodeAnalysis.SQLite.v2.SQLitePersistentStorageService+ServiceFactory";
-    private static readonly Lazy<MefHostServices> NonPersistentServices = new(CreateNonPersistentServices);
+    private static readonly Lazy<MefHostServices> _services = new(CreateServices);
 
-    /// <summary>Gets platform-appropriate services for every semantic workspace.</summary>
-    internal static MefHostServices Services => OperatingSystem.IsWindows()
-        ? MefHostServices.DefaultHost
-        : WithoutPersistentStorage;
+    /// <summary>Gets the nonpersistent composition for every semantic workspace.</summary>
+    internal static MefHostServices Services => _services.Value;
 
-    /// <summary>Gets the nonpersistent composition, also exercised on Windows by contract tests.</summary>
-    internal static MefHostServices WithoutPersistentStorage => NonPersistentServices.Value;
-
-    private static MefHostServices CreateNonPersistentServices()
+    private static MefHostServices CreateServices()
     {
         var parts = MefHostServices.DefaultAssemblies.SelectMany(assembly => assembly.GetTypes()).ToArray();
         if (!parts.Any(type => type.FullName == SqliteFactoryName))
@@ -30,6 +25,7 @@ internal static class RoslynWorkspaceHost
         // A query lock cannot protect against background flushes owned by other workspaces.
         var composition = new ContainerConfiguration()
             .WithParts(parts.Where(type => type.FullName != SqliteFactoryName))
+            .WithPart<WorkspaceAnalyzerServiceFactory>()
             .CreateContainer();
         return MefHostServices.Create(composition);
     }

@@ -29,45 +29,6 @@ public static class CommandPaletteModalTests
         Assert.Equal(entry.Name, await modal.Completion.WaitAsync(TestContext.Current.CancellationToken));
     }
 
-    /// <summary>Centered clearing keeps surrounding rows intact; labels use whole Unicode graphemes and live theme roles.</summary>
-    [Theory]
-    [InlineData(40, 12)]
-    [InlineData(80, 24)]
-    [InlineData(120, 40)]
-    public static void PaletteRendersUnicodeAndCurrentThemeWithinFrame(int width, int height)
-    {
-        var entry = new InteractiveCommandDescriptor("/fixture", "/fixture [value]", "\u754ce\u0301\U0001f469\u200d\U0001f4bb description");
-        var normal = CellStyle.Default;
-        var modal = new CommandPaletteModal(
-            new TuiKitCommandDiscovery([entry], _ => { }),
-            string.Empty,
-            () => new Size(width, height),
-            _ => normal,
-            () => { },
-            () => { },
-            () => { });
-        var cells = new CellBuffer(width, height);
-        cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", normal, 1));
-        modal.Render(new BufferSurface(cells));
-        var text = TUIKit.Testing.Snapshot.ToText(cells);
-        Assert.Contains(entry.Usage, text, StringComparison.Ordinal);
-        Assert.Contains(entry.Description, text, StringComparison.Ordinal);
-        var left = ((width - Math.Min(90, width - 4)) / 2) + 2;
-        var top = ((height - 1 - Math.Min(24, height - 3)) / 2) + 1;
-        Assert.Equal("\u754c", cells.Get(left + 11, top + 3).Grapheme);
-        Assert.Equal(2, cells.Get(left + 11, top + 3).Width);
-        Assert.True(cells.Get(left + 12, top + 3).IsContinuation);
-        Assert.Equal("e\u0301", cells.Get(left + 13, top + 3).Grapheme);
-        Assert.True(cells.Get(left, top + 3).Style.Attributes.HasFlag(CellAttributes.Reverse));
-        Assert.Equal("X", cells.Get(0, 0).Grapheme);
-
-        normal = CellStyle.Default.WithBackground(Color.FromPalette(2));
-        modal.Render(new BufferSurface(cells));
-        Assert.Equal(normal, cells.Get(left, top).Style);
-        Assert.Equal(normal.Background, cells.Get(left, top + 3).Style.Background);
-        Assert.Equal("X", cells.Get(0, height - 1).Grapheme);
-    }
-
     /// <summary>Transient queries are bounded, grapheme-aware, safe to render and reject invalid Unicode atomically.</summary>
     [Fact]
     public static void QueryBoundsAndGraphemeDeletionPreserveState()

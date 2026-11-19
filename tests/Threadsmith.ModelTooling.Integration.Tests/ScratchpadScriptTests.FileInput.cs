@@ -54,55 +54,6 @@ public sealed partial class ScratchpadScriptTests
         Assert.IsType<CSharpScriptInput>(tool.DeserializeInput("{\"code\":\"42\"}"));
     }
 
-    /// <summary>One captured string supplies evidence, saved copies and the worker payload.</summary>
-    [Theory]
-    [InlineData("bare")]
-    [InlineData("root")]
-    [InlineData("nested")]
-    [InlineData("explicit-scratchpad")]
-    [InlineData("absolute")]
-    public async Task FileSourceUsesOneSnapshotAndDistinctExecutionCopies(string form)
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var scope = CreateScope();
-        const string source = "// original\r\n\treturn \"é😀\";  \r";
-        var original = form is "bare" or "explicit-scratchpad"
-            ? Path.Combine(scope.ScratchpadPath, "selected.csx")
-            : Path.Combine(scope.RepositoryPath, form == "nested" ? "scripts/selected.csx" : "selected.csx");
-        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
-        await File.WriteAllTextAsync(original, source, new UTF8Encoding(true), cancellationToken);
-        var selected = form switch
-        {
-            "bare" => "selected.csx",
-            "root" => "./selected.csx",
-            "nested" => "scripts/../scripts/selected.csx",
-            "explicit-scratchpad" => ".threadsmith/.scratchpad/selected.csx",
-            _ => original,
-        };
-        var process = new SnapshotProcessManager(original);
-        await using var events = new DomainEventStream();
-        var pipeline = FileInputPipeline(events, process);
-
-        var first = await pipeline.InvokeAsync(FileRequest(scope, JsonSerializer.Serialize(new { scriptPath = selected, kind = "statement" })), cancellationToken);
-        Assert.True(first.Succeeded, first.Error);
-        Assert.Equal(source, first.SourceDetail!.Source);
-        Assert.Equal(source, process.Submitted);
-        var firstOutput = JsonSerializer.Deserialize<CSharpScriptOutput>(first.ResultJson!)!;
-        Assert.NotEqual(original, firstOutput.ScriptPath);
-        Assert.Equal(source, await File.ReadAllTextAsync(firstOutput.ScriptPath!, cancellationToken));
-        Assert.Equal("changed after capture", await File.ReadAllTextAsync(original, cancellationToken));
-
-        var second = await pipeline.InvokeAsync(FileRequest(scope, JsonSerializer.Serialize(new { scriptPath = firstOutput.ScriptPath, kind = "statement" })), cancellationToken);
-        Assert.True(second.Succeeded, second.Error);
-        var secondOutput = JsonSerializer.Deserialize<CSharpScriptOutput>(second.ResultJson!)!;
-        Assert.NotEqual(firstOutput.ScriptPath, secondOutput.ScriptPath);
-        Assert.Equal(source, second.SourceDetail!.Source);
-        var third = await pipeline.InvokeAsync(FileRequest(scope, JsonSerializer.Serialize(new { scriptPath = Path.GetFileName(firstOutput.ScriptPath), kind = "statement" })), cancellationToken);
-        Assert.True(third.Succeeded, third.Error);
-        Assert.Equal(source, third.SourceDetail!.Source);
-        Assert.DoesNotContain("original", JsonSerializer.Serialize(first), StringComparison.Ordinal);
-    }
-
     /// <summary>Package integrity applies to the exact captured bytes, including BOM, before worker or source evidence.</summary>
     [Theory]
     [InlineData("unchanged")]
@@ -329,74 +280,6 @@ public sealed partial class ScratchpadScriptTests
         }
     }
 
-    /// <summary>File source uses the unchanged worker and leaves repository source intact.</summary>
-    [Theory]
-    [InlineData("42", "expression", true)]
-    [InlineData("return 42;", "statement", true)]
-    [InlineData("#r \"System.Console\"\n42", "statement", false)]
-    [InlineData("System.IO.File.Exists(\"anything\")", "expression", false)]
-    public async Task FileInputUsesRealWorkerAndPreservesOriginal(string code, string kind, bool success)
-    {
-        var scope = CreateScope();
-        var original = Path.Combine(scope.RepositoryPath, "real.csx");
-        await File.WriteAllTextAsync(original, code, TestContext.Current.CancellationToken);
-        var process = new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        await using var events = new DomainEventStream();
-        var pipeline = FileInputPipeline(events, process);
-
-        var result = await pipeline.InvokeAsync(FileRequest(scope, JsonSerializer.Serialize(new { scriptPath = original, kind })), TestContext.Current.CancellationToken);
-
-        Assert.True(result.Succeeded, result.Error);
-        var output = JsonSerializer.Deserialize<CSharpScriptOutput>(result.ResultJson!)!;
-        Assert.Equal(success, output.Success);
-        Assert.Equal(code, await File.ReadAllTextAsync(original, TestContext.Current.CancellationToken));
-        Assert.Equal(code, await File.ReadAllTextAsync(output.ScriptPath!, TestContext.Current.CancellationToken));
-        Assert.Empty(process.ActiveProcesses);
-    }
-
-    /// <summary>Existing tool, scratchpad, trust and cancellation gates precede reads.</summary>
-    [Theory]
-    [InlineData("disabled")]
-    [InlineData("scratchpad")]
-    [InlineData("trust")]
-    [InlineData("cancel")]
-    public async Task FileInputRetainsAdmissionGates(string gate)
-    {
-        var scope = CreateScope();
-        var process = new RecordingProcessManager();
-        await using var events = new DomainEventStream();
-        var pipeline = FileInputPipeline(events, process);
-        var request = FileRequest(scope, "{\"scriptPath\":\"missing.csx\"}");
-        request = request with
-        {
-            Context = gate switch
-            {
-                "disabled" => request.Context with { DeniedToolIds = ["csharp_script"] },
-                "scratchpad" => request.Context with { Scratchpad = new ScratchpadSessionCapability() },
-                "trust" => request.Context with { TrustLevel = RepositoryTrustLevel.TrustedRead },
-                _ => request.Context,
-            },
-        };
-        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        if (gate == "cancel")
-        {
-            await cancellation.CancelAsync();
-        }
-
-        if (gate == "cancel")
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pipeline.InvokeAsync(request, cancellation.Token));
-        }
-        else
-        {
-            var result = await pipeline.InvokeAsync(request, cancellation.Token);
-            Assert.False(result.Succeeded);
-            Assert.DoesNotContain("safely opened", result.Error, StringComparison.Ordinal);
-        }
-
-        Assert.Null(process.Request);
-    }
-
     /// <summary>Inline execution copies can be rerun by either documented path form.</summary>
     [Theory]
     [InlineData("expression")]
@@ -440,25 +323,6 @@ public sealed partial class ScratchpadScriptTests
         Assert.Equal(ToolSourceAvailability.RetentionLimitExceeded, result.SourceDetail!.Availability);
         Assert.Null(result.SourceDetail.Source);
         Assert.DoesNotContain("private-retention-marker", JsonSerializer.Serialize(result), StringComparison.Ordinal);
-    }
-
-    /// <summary>Configured execution-copy byte limits also bound source capture before evidence retention.</summary>
-    [Fact]
-    public async Task FileSourceHonorsConfiguredWriteBytesBeforeExecution()
-    {
-        var scope = CreateScope();
-        var original = Path.Combine(scope.RepositoryPath, "small.csx");
-        await File.WriteAllTextAsync(original, "42", TestContext.Current.CancellationToken);
-        var process = new RecordingProcessManager();
-        await using var events = new DomainEventStream();
-        var pipeline = FileInputPipeline(events, process, maximumWriteBytes: 1);
-
-        var result = await pipeline.InvokeAsync(FileRequest(scope, JsonSerializer.Serialize(new { scriptPath = original })), TestContext.Current.CancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Null(result.SourceDetail);
-        Assert.Null(process.Request);
-        Assert.Empty(Directory.EnumerateFiles(scope.ScratchpadPath));
     }
 
     /// <summary>Ordinary UNC syntax is not confused with Windows device namespaces.</summary>

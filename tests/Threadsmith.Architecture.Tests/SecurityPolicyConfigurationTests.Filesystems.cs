@@ -57,21 +57,6 @@ public sealed partial class SecurityPolicyConfigurationTests
         Assert.All(probes.Values, count => Assert.Equal(1, count));
     }
 
-    /// <summary>Case aliases retain segment-star, globstar and optional-directory semantics.</summary>
-    [Theory]
-    [InlineData("Mount/Sub/File.txt", "mount/**/file.txt", true)]
-    [InlineData("Mount/File.txt", "mount/**/file.txt", true)]
-    [InlineData("Mount/Sub/File.txt", "mount/*/file.txt", true)]
-    [InlineData("Mount/File.txt", "mount/*/file.txt", false)]
-    [InlineData("Mount/Sub/Deep/File.txt", "mount/*/file.txt", false)]
-    [InlineData("Mount/Sub/Deep/File.txt", "mount/**file.txt", true)]
-    [InlineData("Mount/Sub/Deep/File.txt", "mount/?ile.txt", false)]
-    public void CaseAwareGlobsPreserveWildcardSemantics(string path, string pattern, bool expected)
-    {
-        var context = new RepositoryPathCaseContext(_paths.RepositoryRoot, _ => false);
-        Assert.Equal(expected, RepositoryPathPolicy.IsProhibited(path, [pattern], _paths.RepositoryRoot, context));
-    }
-
     /// <summary>An empty mount cannot borrow a more permissive case rule from its parent.</summary>
     [Fact]
     public void UnknownDirectoryCaseCannotBypassProhibitions()

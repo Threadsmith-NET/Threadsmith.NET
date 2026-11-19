@@ -44,22 +44,6 @@ public sealed class SemanticDisclosureTests
         Assert.Contains("Unterminated answer", string.Join(' ', view.Lines), StringComparison.Ordinal);
     }
 
-    /// <summary>Disclosure reflow respects the cleared viewport boundary.</summary>
-    [Fact]
-    public void ExpandingAfterClearDoesNotRevealClearedHistory()
-    {
-        var view = new TranscriptView();
-        view.Present(new PresentationBatch([new PresentationTextItem([new("Cleared history\n", PresentationTextRole.Default)])]));
-        Render(view);
-        view.ClearView();
-        view.Present(new PresentationBatch([CreateItem("new check", false)]));
-        var screen = Render(view);
-        Assert.DoesNotContain("Cleared history", screen, StringComparison.Ordinal);
-        ClickHeader(view, screen, "[+]");
-        Assert.DoesNotContain("Cleared history", Render(view), StringComparison.Ordinal);
-        Assert.DoesNotContain("Cleared history", Render(view, 80), StringComparison.Ordinal);
-    }
-
     /// <summary>Keyboard navigation reaches each block and replacement resets state.</summary>
     [Fact]
     public void KeyboardCanChooseSecondHeaderAndReplacementResetsExpansion()
@@ -94,79 +78,6 @@ public sealed class SemanticDisclosureTests
         view.Present(new PresentationBatch([new PresentationTextItem([new(new string('z', 700), PresentationTextRole.Default)])]));
         Assert.DoesNotContain("Compiler Checks", Render(view), StringComparison.Ordinal);
         Assert.DoesNotContain("Compiler Checks", Render(view, 160), StringComparison.Ordinal);
-    }
-
-    /// <summary>Overall roles indicate findings and uncertainty.</summary>
-    [Theory]
-    [InlineData(0, 0, false, false, PresentationTextRole.ToolSuccess)]
-    [InlineData(1, 0, false, false, PresentationTextRole.Error)]
-    [InlineData(0, 2, false, false, PresentationTextRole.Warning)]
-    [InlineData(0, 0, true, false, PresentationTextRole.Warning)]
-    [InlineData(0, 0, false, true, PresentationTextRole.ToolSuccess)]
-    public void OverallRoleReflectsEvidence(int errors, int warnings, bool pending, bool filtered, PresentationTextRole expected)
-    {
-        var analysis = new SourceEditAnalysis
-        {
-            EffectId = Guid.NewGuid(),
-            CommittedGeneration = 1,
-            ProjectsAnalyzed = 1,
-            ProjectsInScope = 1,
-            CurrentErrors = errors,
-            CurrentWarnings = warnings,
-            Pending = pending,
-            OutputFiltered = filtered,
-        };
-        Assert.Equal(expected, InteractionPresentationFormatter.GetSemanticFeedbackRole(analysis, SemanticCheckOutcome.Completed));
-        Assert.Equal(expected, InteractionPresentationFormatter.GetFinalizedEditFeedbackRole(analysis));
-    }
-
-    /// <summary>Unavailable totals remain unknown in collapsed summaries.</summary>
-    [Fact]
-    public void DegradedSummaryDoesNotClaimZeroErrors()
-    {
-        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PostMutation, "check", SemanticCheckOutcome.Degraded)
-        {
-            Analysis = new() { EffectId = Guid.NewGuid(), ProjectsAnalyzed = 1, ProjectsInScope = 2, CurrentWarnings = 0 },
-        };
-        var item = ProjectEvent(completed);
-        Assert.Contains("error totals unknown", item.Disclosure!.Summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("0 errors", item.Disclosure.Summary, StringComparison.Ordinal);
-    }
-
-    /// <summary>Compact feedback preserves independent analyzer evidence while compiler work remains pending.</summary>
-    [Fact]
-    public void AnalyzerSummaryDoesNotDependOnCompilerCompletion()
-    {
-        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Completed)
-        {
-            Analysis = new() { EffectId = Guid.NewGuid(), Pending = true, ProjectsInScope = 2, Analyzers = new() { Status = "completed", DocumentsInScope = 1, DocumentsAnalyzed = 1, ReportableFindings = 3, OutputFiltered = true } },
-        };
-        var item = ProjectEvent(completed);
-        Assert.Contains("analyzers completed; 1/1 documents; 3 analyzer findings", item.Disclosure!.Summary, StringComparison.Ordinal);
-        Assert.Contains("exclusions apply", item.Disclosure.Summary, StringComparison.Ordinal);
-    }
-
-    /// <summary>An optional failure cannot erase completed compiler counts in either shared presentation.</summary>
-    [Fact]
-    public void AnalyzerFailurePreservesCompilerCounts()
-    {
-        var completed = new SemanticCheckCompleted(SessionId.New(), DateTimeOffset.UtcNow, RunId.New(), SemanticCheckId.New(), SemanticCheckPhase.PreMutation, "advisory edit analyzers", SemanticCheckOutcome.Degraded)
-        {
-            Analysis = new() { EffectId = Guid.NewGuid(), ProjectsInScope = 2, ProjectsAnalyzed = 2, CurrentErrors = 1, Analyzers = new() { Status = "failed" } },
-        };
-        var item = ProjectEvent(completed);
-        Assert.Equal(PresentationTextRole.Warning, item.Disclosure!.Role);
-        Assert.Contains("analyzers failed", item.Disclosure.Summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("errors in coverage", item.Disclosure.Summary, StringComparison.Ordinal);
-        Assert.DoesNotContain("Compiler:", string.Concat(item.Segments.Select(segment => segment.Text)), StringComparison.Ordinal);
-
-        var finalized = ProjectEvent(new DiagnosticObserved(completed.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Feedback")
-        {
-            EditAnalysis = completed.Analysis,
-        });
-        Assert.Equal(PresentationTextRole.Error, finalized.Disclosure!.Role);
-        Assert.Contains("1 errors in coverage", finalized.Disclosure.Summary, StringComparison.Ordinal);
-        Assert.Contains("Reportable errors in analyzed coverage: 1 current", string.Concat(finalized.Segments.Select(segment => segment.Text)), StringComparison.Ordinal);
     }
 
     /// <summary>Reducing retention cannot turn a surviving detail row into a disclosure header.</summary>

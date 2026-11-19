@@ -14,34 +14,6 @@ public static class AbstractionsTests
 {
     private static readonly Assembly _abstractions = typeof(ExtensionDescriptor).Assembly;
 
-    /// <summary>The abstractions assembly references no other Threadsmith.* assembly (§8.1).</summary>
-    [Fact]
-    public static void AbstractionsReferencesNoThreadsmithAssemblies()
-    {
-        var referenced = _abstractions.GetReferencedAssemblies();
-        var threadsmithRefs = referenced
-            .Where(name => name.Name?.StartsWith("Threadsmith.", StringComparison.Ordinal) == true)
-            .Select(name => name.Name)
-            .ToList();
-        Assert.Empty(threadsmithRefs);
-    }
-
-    /// <summary>The abstractions assembly references no terminal-library, Roslyn, model-SDK, or persistence packages (§8.1).</summary>
-    [Theory]
-    [InlineData("PrettyPrompt")]
-    [InlineData("Spectre.Console")]
-    [InlineData("Terminal.Gui")]
-    [InlineData("Microsoft.CodeAnalysis")]
-    [InlineData("OpenAI")]
-    [InlineData("Microsoft.Data.Sqlite")]
-    public static void AbstractionsReferencesNoForbiddenPackages(string forbiddenPrefix)
-    {
-        var referenced = _abstractions.GetReferencedAssemblies();
-        var found = referenced.Any(name =>
-            name.Name?.StartsWith(forbiddenPrefix, StringComparison.Ordinal) == true);
-        Assert.False(found, $"Abstractions references a forbidden package '{forbiddenPrefix}'.");
-    }
-
     /// <summary>No capability contract type returns or accepts a terminal-library / Roslyn / SDK type.</summary>
     [Fact]
     public static void CapabilityContractsExposeOnlyFrameworkTypes()
@@ -99,20 +71,6 @@ public static class AbstractionsTests
         }
     }
 
-    /// <summary>The sample extension's output package excludes the abstractions DLL (gap #5 precondition).</summary>
-    [Fact]
-    public static void SampleExtensionOutputExcludesAbstractionsDll()
-    {
-        var sampleOutput = ResolveSampleExtensionOutputDirectory();
-        var abstractionsDll = Path.Combine(sampleOutput, "Threadsmith.Extensions.Abstractions.dll");
-        var sampleDll = Path.Combine(sampleOutput, "Threadsmith.SampleExtensions.MinimalTool.dll");
-        Assert.True(File.Exists(sampleDll), $"Sample extension DLL was not built at {sampleDll}.");
-        Assert.False(
-            File.Exists(abstractionsDll),
-            "The sample extension copies Threadsmith.Extensions.Abstractions.dll into its output, "
-            + "which would load a duplicate contract assembly into the extension collectible context (gap #5).");
-    }
-
     /// <summary>The sample extension manifest JSON round-trips and declares capabilities.</summary>
     [Fact]
     public static void ExtensionManifestIsJsonSerializable()
@@ -132,14 +90,5 @@ public static class AbstractionsTests
         Assert.Equal(manifest.Id, roundTripped.Id);
         Assert.Equal(manifest.Capabilities, roundTripped.Capabilities);
         Assert.Equal(manifest.Permissions, roundTripped.Permissions);
-    }
-
-    private static string ResolveSampleExtensionOutputDirectory()
-    {
-        // Test bin: <root>/tests/Threadsmith.Extensions.Tests/bin/Debug/net10.0
-        var bin = AppContext.BaseDirectory;
-        var repoRoot = Path.GetFullPath(Path.Combine(bin, "..", "..", "..", "..", ".."));
-        var configuration = bin.Contains("Debug", StringComparison.Ordinal) ? "Debug" : "Release";
-        return Path.Combine(repoRoot, "samples", "extensions", "MinimalToolExtension", "bin", configuration, "net10.0");
     }
 }

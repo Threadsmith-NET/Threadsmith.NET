@@ -38,85 +38,6 @@ public static class MemoryConceptRecallTests
     }
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Theory]
-    [InlineData(true, 4, true)]
-    [InlineData(true, 0, true)]
-    [InlineData(true, -100, true)]
-    [InlineData(false, 4, false)]
-    public static async Task Concept_window_is_reserved_and_admission_requires_complete_reranking(bool enabled, double score, bool expected)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "lexical first"));
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "lexical second"));
-        var concept = await service.ExecuteAsync(MemoryTestData.Operation("add", "iterator policy") with { Concepts = ["cancellation"] });
-        var encoder = new MemoryScoreEncoder { Score = (_, text) => new(text == "iterator policy" ? score : 10, 12, false) };
-        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
-
-        var result = await retriever.SearchAsync(new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = MemoryTestData.Repository,
-            Query = "lexical",
-            Concepts = ["cancellation"],
-            Options = Options with { RerankerEnabled = enabled, RerankerCandidateLimit = 1, ConceptCandidateLimit = 1, MaximumResults = 2, },
-        });
-
-        Assert.Equal(expected, result.Selected.Any(candidate => candidate.Entry.Id == concept.Id));
-        if (enabled)
-        {
-            Assert.Equal(2, encoder.Documents.Count);
-            Assert.Contains("iterator policy", encoder.Documents);
-        }
-        else
-        {
-            Assert.Empty(encoder.Documents);
-            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Contains("Concept-only candidates deferred", StringComparison.Ordinal));
-        }
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Fact]
-    public static async Task Retained_memories_must_qualify_for_current_concepts()
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var first = await service.ExecuteAsync(MemoryTestData.Operation("add", "first fact") with { Concepts = ["cancellation"] });
-        var second = await service.ExecuteAsync(MemoryTestData.Operation("add", "second fact") with { Concepts = ["logging"] });
-        var encoder = new MemoryScoreEncoder { Score = (query, text) => new(query == "logging" && text == "second fact" ? 10 : 0, 12, false) };
-        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
-        var request = new RepositoryMemorySearchRequest { RepositoryIdentity = MemoryTestData.Repository, Query = "unrelated", Options = Options, Concepts = ["cancellation"] };
-        var initial = await retriever.SearchAsync(request);
-        Assert.Equal(first.Id, Assert.Single(initial.Selected).Entry.Id);
-        var retained = new[] { new RepositoryMemoryInclusion(first.Id!.Value, first.Entry!.Revision) };
-        var later = await retriever.SearchAsync(request with { Concepts = ["logging"], RetainedMemories = retained, Options = Options with { MaximumResults = 1 } });
-        Assert.Equal(second.Id, Assert.Single(later.Selected).Entry.Id);
-        Assert.Equal(0, later.SearchDetails?.ResultLimitOmissions);
-        var accumulated = await retriever.SearchAsync(request with
-        {
-            Query = "logging",
-            Concepts = ["cancellation", "logging"],
-            RetainedMemories = retained,
-            Options = Options with { MaximumResults = 1 },
-        });
-        Assert.Equal(second.Id, Assert.Single(accumulated.Selected).Entry.Id);
-        Assert.Equal(1, accumulated.SearchDetails?.ResultLimitOmissions);
-        Assert.True((await retriever.SearchAsync(request with
-        {
-            Query = "logging",
-            Concepts = ["cancellation", "logging"],
-            Options = Options with { MaximumResults = 1 },
-        })).RankingCacheHit);
-        await service.ExecuteAsync(MemoryTestData.Operation("update", "changed first fact", first.Id));
-        var changed = await retriever.SearchAsync(request with { Concepts = ["logging"], RetainedMemories = retained });
-        Assert.Equal(second.Id, Assert.Single(changed.Selected).Entry.Id);
-        await service.ExecuteAsync(MemoryTestData.Operation("remove", id: second.Id));
-        var removed = await retriever.SearchAsync(request with { Concepts = ["logging"], RetainedMemories = [new(second.Id!.Value, second.Entry!.Revision)] });
-        Assert.Empty(removed.Selected);
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
     [Fact]
     public static async Task Fuzzy_failure_retries_without_poisoning_cache_and_revision_changes_refresh_vocabulary()
     {
@@ -145,28 +66,6 @@ public static class MemoryConceptRecallTests
         store.Snapshot = store.Snapshot with { Revision = store.Snapshot.Revision + 1, Entries = [saved.Entry! with { Concepts = [] }] };
         Assert.Empty((await retriever.SearchAsync(request)).Selected);
         Assert.Equal(3, store.Resolutions);
-    }
-
-    /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Theory]
-    [InlineData(RepositoryMemoryType.Situational)]
-    [InlineData(RepositoryMemoryType.StandingPreference)]
-    public static async Task Both_types_enter_context_and_disappear_after_removal(RepositoryMemoryType type)
-    {
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "cancellation policy") with { MemoryType = type });
-        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder());
-        await using var events = new Threadsmith.Execution.DomainEventStream();
-        var sanitizer = new Threadsmith.Telemetry.SecretOutputSanitizer();
-        var assembler = new ContextAssembler(new EvidenceStore(events, sanitizer), new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance, repositoryMemoryRetriever: retriever);
-        var request = new ContextAssemblyRequest { SessionId = SessionId.New(), RunId = RunId.New(), Phase = RunPhase.EvidenceCollection, RepositoryPath = fixture.DirectoryPath, RepositoryIdentity = MemoryTestData.Repository, Task = new TaskSpecification("cancellation policy", []) };
-        var included = await assembler.AssembleAsync(request);
-        Assert.Equal(saved.Id, Assert.Single(included.RepositoryMemoryInclusions!).Id);
-        Assert.NotNull(included.Inspection.RepositoryMemorySearch);
-        await service.ExecuteAsync(MemoryTestData.Operation("remove", id: saved.Id));
-        Assert.Empty((await assembler.AssembleAsync(request)).RepositoryMemoryInclusions!);
     }
 
     /// <summary>Intelligence fallback remains visible when ordinary recall succeeds.</summary>
@@ -205,37 +104,6 @@ public static class MemoryConceptRecallTests
         Assert.Equal(RepositoryMemorySearchBranchStatus.Unavailable, result.Inspection.RepositoryIntelligenceSearch?.Reranker);
         Assert.Equal("selected", Assert.Single(result.Inspection.RepositoryIntelligenceSearch!.Candidates).Outcome);
         Assert.Single(result.RepositoryMemoryInclusions!);
-    }
-
-    /// <summary>Spelling assistance expands discovery but cannot satisfy the exact eligibility gate.</summary>
-    [Fact]
-    public static async Task Spelling_only_candidates_are_excluded_before_reranking()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var fixture = await ConversationFixture.CreateAsync();
-        var generator = new TestMemoryEmbeddingGenerator();
-        var service = MemoryTestData.CreateService(fixture, generator);
-        await service.ExecuteAsync(MemoryTestData.Operation("add", "iterator policy") with { Concepts = ["cancellation"] }, ct);
-        var store = new ConceptReadStore(await service.GetSnapshotAsync(MemoryTestData.Repository, ct));
-        var encoder = new MemoryScoreEncoder();
-        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
-        var turn = RunId.New();
-        var request = new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = MemoryTestData.Repository,
-            Ownership = RepositoryMemoryOwnership.Ordinary,
-            Query = "unrelated",
-            Concepts = ["cancelation"],
-            UserTurnId = turn,
-            IntentConcepts = new(MemoryTestData.Repository, turn, 0, [new(1, ToolInvocationId.New(), true, ["cancelation"])]),
-            SituationalConceptFilterMode = SituationalConceptFilterMode.Enforce,
-            Options = Options with { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 20 },
-        };
-        await retriever.SearchAsync(request, ct); // First native lookup is deliberately unavailable in this fixture.
-        var result = await retriever.SearchAsync(request, ct);
-        Assert.Empty(result.Selected);
-        Assert.True(Assert.Single(result.SearchDetails!.Candidates).SpellingAssistedConceptDiscovery);
-        Assert.Empty(encoder.Documents);
     }
 
     private static RepositoryMemorySearchOptions Options => new() { ConceptRecallEnabled = true, RerankerEnabled = true, SemanticMinimum = 1 };

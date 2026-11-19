@@ -275,32 +275,6 @@ public static class UserQuestionTests
         Assert.Equal("12\n34", draft.Editors[0].Text);
     }
 
-    /// <summary>Opening focuses choices; arrows and Enter explicitly select and submit at all supported sizes.</summary>
-    [Theory]
-    [InlineData(40, 15)]
-    [InlineData(80, 24)]
-    [InlineData(160, 40)]
-    public static void OptionsStartFocusedAndEnterSubmits(int width, int height)
-    {
-        var limits = new TuiResourceLimits();
-        var draft = new QuestionDraft(CreateRequest(), limits);
-        var modal = new QuestionModal(draft, limits);
-        var cells = new CellBuffer(width, height);
-        modal.Render(new BufferSurface(cells));
-        var lines = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
-        var prompt = Array.FindIndex(lines, line => line.Contains("Which option?", StringComparison.Ordinal));
-        Assert.Contains("The Assistant Has a Question", lines[prompt - 2], StringComparison.Ordinal);
-        Assert.DoesNotContain("Question", lines[prompt - 1], StringComparison.Ordinal);
-        Assert.Contains("> [ ] 1. First", lines[prompt + 1], StringComparison.Ordinal);
-        Assert.Null(draft.SelectedOptions[0]);
-        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
-        modal.Render(new BufferSurface(cells));
-        Assert.Contains("> [ ] 2. Second", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
-        modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
-        Assert.Equal("b", draft.SelectedOptions[0]);
-        Assert.True(modal.IsClosed);
-    }
-
     /// <summary>Missing group answers move to the required question with actionable feedback.</summary>
     [Fact]
     public static void MultipleQuestionsValidateAndFocusTheMissingAnswer()

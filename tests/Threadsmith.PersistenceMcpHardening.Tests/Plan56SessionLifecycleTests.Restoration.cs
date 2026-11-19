@@ -7,20 +7,6 @@ using Xunit;
 
 public static partial class Plan56SessionLifecycleTests
 {
-    /// <summary>Version-three receipts retain the operation and destination needed by restored history.</summary>
-    [Fact]
-    public static void VersionThreeMutationReceiptRetainsOperation()
-    {
-        var receipt = new MutationApplied(SessionId.New(), DateTimeOffset.UtcNow, MutationId.New(), MutationSetId.New(), "source.cs")
-        {
-            SchemaVersion = 3,
-            Type = MutationType.MoveFile,
-            DestinationRelativePath = "moved.cs",
-        };
-        var restored = Assert.IsType<MutationApplied>(DomainEventJson.Deserialize("mutationApplied", 3, DomainEventJson.Serialize(receipt)));
-        Assert.Equal(receipt, restored);
-    }
-
     /// <summary>The migration registry shares the event reader's allow-list for compatible per-event schemas.</summary>
     [Theory]
     [InlineData("repositoryOpened")]

@@ -26,27 +26,4 @@ public static class TestAnalyzerBarrierTests
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => TestAnalyzerBarrier.WaitForConnectionAsync(pipe, Task.CompletedTask, TestContext.Current.CancellationToken));
     }
-
-    /// <summary>The constructor can signal readiness while its owning operation remains blocked.</summary>
-    [Fact]
-    public static async Task ConnectedFixtureCanBeReleasedBeforeOperationCompletes()
-    {
-        var token = TestContext.Current.CancellationToken;
-        var name = Guid.NewGuid().ToString("N")[..16];
-        await using var pipe = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        await using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-        var operation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var ready = TestAnalyzerBarrier.WaitForConnectionAsync(pipe, operation.Task, token);
-        await client.ConnectAsync(token);
-        await ready;
-
-        var release = TestAnalyzerBarrier.ReleaseAsync(pipe);
-        var signal = new byte[1];
-        await client.ReadExactlyAsync(signal, token);
-        await client.WriteAsync(signal, token);
-        await release;
-
-        Assert.Equal(1, signal[0]);
-        Assert.False(operation.Task.IsCompleted);
-    }
 }

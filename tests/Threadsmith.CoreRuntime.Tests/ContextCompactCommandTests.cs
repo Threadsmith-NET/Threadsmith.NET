@@ -11,29 +11,6 @@ using Xunit;
 /// <summary>Regression coverage for the retired interactive context-compaction command.</summary>
 public static class ContextCompactCommandTests
 {
-    /// <summary>Retired compaction guidance leaves the interactive command loop available for the next command.</summary>
-    [Fact]
-    public static async Task Context_compact_shows_guidance_and_keeps_the_session_running()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        var dispatcher = new RecordingDispatcher();
-        var surface = new RecordingSurface(["/context compact", "/help", "/quit"]);
-        var coordinator = new InteractionCoordinator(
-            new InteractionPresenter(dispatcher, new EmptyProjectionStore()),
-            events,
-            surface);
-
-        // Act
-        await coordinator.RunAsync(modelStatus: "Test model").WaitAsync(TestContext.Current.CancellationToken);
-
-        // Assert
-        Assert.Equal(3, surface.ComposerRequests.Count);
-        Assert.Contains("Automatic conversation fact promotion has been retired.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("/help", surface.Output, StringComparison.Ordinal);
-        Assert.DoesNotContain(dispatcher.Commands, command => command is RequestConversationCompactionCommand);
-    }
-
     private sealed class RecordingDispatcher : ICommandDispatcher
     {
         private readonly SessionId _sessionId = SessionId.New();

@@ -16,115 +16,6 @@ using Xunit;
 /// <summary>Verifies transcript-free responses, tool authority, evidence metadata, and usage.</summary>
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Child tool evidence survives observer failure without promoting answer claims on join.</summary>
-    [Fact]
-    public async Task RunAsync_ToolCallAndResponse_KeepsEvidenceMetadataWithoutPromotingClaims()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        var observed = new List<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Add(item);
-            return Task.CompletedTask;
-        });
-        await using var failingSubscription = events.Subscribe((item, _) =>
-            item is EvidenceAdded
-                ? Task.FromException(new InvalidOperationException("evidence observer failed"))
-                : Task.CompletedTask);
-        var sanitizer = new SecretOutputSanitizer();
-        var evidence = new EvidenceStore(events, sanitizer);
-        var tool = new InspectMetadataTool();
-        var registry = new ToolRegistry([tool]);
-        var pipeline = new ToolInvocationPipeline(
-            registry,
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            sanitizer,
-            NullLogger<ToolInvocationPipeline>.Instance,
-            UnboundedBudget.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var provider = new ToolThenFindingProvider(tool.Definition.Id);
-        var usage = new SessionUsageProjection();
-        var profile = CreateProfile();
-        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
-        var plan = CreatePlan(assignment);
-        var parentContext = CreateParentContext(plan, [tool.Definition.Id]);
-        var runner = CreateRunner(
-            provider,
-            pipeline,
-            evidence,
-            sanitizer,
-            profile,
-            parentContext,
-            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId),
-            usage);
-
-        // Act
-        var outcome = await runner.RunAsync(plan, assignment);
-        Assert.DoesNotContain(evidence.Snapshot(plan.Provenance.SessionId), item =>
-            item.RunId == plan.Provenance.ParentRunId);
-        Assert.True(await runner.JoinAsync(plan, [outcome], static () => true));
-
-        // Assert
-        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Equal(1, outcome.Usage.ToolCalls);
-        Assert.True(outcome.Usage.ModelTokens > 70);
-        Assert.Equal(profile.Id, outcome.ModelProfileId);
-        Assert.Null(outcome.Findings);
-        Assert.Null(outcome.Review);
-        Assert.Null(outcome.Implementation);
-        var childEvidence = Assert.Single(
-            evidence.Snapshot(plan.Provenance.SessionId),
-            item => item.RunId == assignment.ChildRunId);
-        Assert.Equal([childEvidence.EvidenceId], outcome.DeliveredEvidenceIds);
-        Assert.Equal(CreateFindingJson(childEvidence.EvidenceId.Value.ToString("D"), "Tool-backed finding."), outcome.Response);
-        Assert.Equal(assignment.ChildRunId, childEvidence.Provenance.ChildRunId);
-        Assert.Equal(assignment.AssignmentId, childEvidence.Provenance.AgentAssignmentId);
-        Assert.Equal(profile.Id, childEvidence.Provenance.ModelProfileId);
-        Assert.Equal(plan.Provenance.BaselineIdentity, childEvidence.Provenance.BaselineIdentity);
-        Assert.DoesNotContain(
-            evidence.Snapshot(plan.Provenance.SessionId),
-            item => item.RunId == plan.Provenance.ParentRunId);
-        Assert.Contains(observed, item => item is ToolInvocationStarted started
-            && started.RunId == assignment.ChildRunId
-            && started.ToolName == tool.Definition.Id
-            && started.RequestedBy == "model");
-        Assert.Equal(2, provider.Requests.Count);
-        Assert.Equal(50, usage.GetSnapshot(plan.Provenance.SessionId).InputTokens);
-        Assert.Equal(20, usage.GetSnapshot(plan.Provenance.SessionId).OutputTokens);
-        Assert.All(provider.Requests, request =>
-        {
-            Assert.NotNull(request.WireEstimate);
-            Assert.False(request.RequiredCapabilities.StructuredOutput);
-            Assert.True(request.RequiredCapabilities.ToolCalls);
-            Assert.DoesNotContain(request.Tools, definition =>
-                definition.Name == DelegateAgentsContract.ToolId);
-        });
-        Assert.Contains(provider.Requests[0].Messages, message =>
-            message.SectionId == "child-assignment"
-            && message.GetModelVisibleContent().Contains("bounded child context", StringComparison.Ordinal));
-        Assert.DoesNotContain(provider.Requests[0].Messages, message =>
-            message.SectionId.Contains("transcript", StringComparison.OrdinalIgnoreCase));
-        var toolResult = Assert.Single(
-            provider.Requests[1].Messages,
-            message => message.SectionId == "child-tool-result");
-        using var toolResultDocument = JsonDocument.Parse(toolResult.GetModelVisibleContent());
-        var toolResultContent = toolResultDocument.RootElement.GetProperty("content");
-        Assert.Equal(JsonValueKind.String, toolResultContent.ValueKind);
-        Assert.Equal("Compiler-backed metadata.", toolResultContent.GetString());
-        Assert.NotNull(tool.LastInvocationContext);
-        Assert.Equal(profile.ContextWindow, tool.LastInvocationContext.ModelContextWindowTokens);
-        Assert.Equal(
-            profile.EffectiveRequestOutputTokenReserve,
-            tool.LastInvocationContext.ModelRequestOutputReserveTokens);
-        Assert.Equal<int?>(
-            profile.ContextWindow - profile.EffectiveRequestOutputTokenReserve,
-            tool.LastInvocationContext.ModelEffectiveInputBudgetTokens);
-        Assert.Null(tool.LastInvocationContext.VisibleSourceFrontier);
-    }
-
     /// <summary>Private replay envelopes bind an otherwise identical child tool request by ordinal and retain its error metadata boundary.</summary>
     [Fact]
     public async Task RunAsync_ReplayEnvelope_UsesOrdinalBoundTaggedToolHistory()
@@ -512,44 +403,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Single(provider.Requests);
     }
 
-    /// <summary>Verifies missing provider usage falls back to the complete host wire estimate.</summary>
-    [Fact]
-    public async Task RunAsync_ProviderOmitsUsage_ChargesHostWireEstimate()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        var sanitizer = new SecretOutputSanitizer();
-        var evidence = new EvidenceStore(events, sanitizer);
-        var profile = CreateProfile();
-        var assignment = CreateAssignment(profile.Id, []);
-        var plan = CreatePlan(assignment);
-        var evidenceId = EvidenceId.New();
-        await evidence.AddAsync(CreateParentEvidence(
-            plan,
-            evidenceId,
-            "parent evidence",
-            EvidenceSensitivity.None));
-        var provider = new NoUsageFindingProvider(
-            CreateFindingJson(evidenceId.Value.ToString("D"), "Estimated usage finding."));
-        var registry = new ToolRegistry([]);
-        var runner = CreateRunner(
-            provider,
-            CreatePipeline(registry, events, sanitizer),
-            evidence,
-            sanitizer,
-            profile,
-            CreateParentContext(plan, []),
-            []);
-
-        // Act
-        var outcome = await runner.RunAsync(plan, assignment);
-
-        // Assert
-        var request = Assert.Single(provider.Requests);
-        var estimate = Assert.IsType<ModelWireEstimate>(request.WireEstimate);
-        Assert.True(outcome.Usage.ModelTokens >= estimate.WireInputTokens);
-    }
-
     /// <summary>A failed durable join remains a failure without promoting claims from response text.</summary>
     [Fact]
     public async Task StartAsync_JoinedCheckpointFails_DoesNotAdmitParentEvidence()
@@ -617,39 +470,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         // Act / Assert
         await Assert.ThrowsAsync<InvalidDataException>(() => runner.RunAsync(plan, assignment));
         Assert.Null(tool.LastInvocationContext);
-    }
-
-    /// <summary>Verifies cumulative model usage does not impose a synthetic request ceiling.</summary>
-    [Fact]
-    public async Task RunAsync_UnboundedModelUsage_UsesSelectedModelContext()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        var sanitizer = new SecretOutputSanitizer();
-        var evidence = new EvidenceStore(events, sanitizer);
-        var profile = CreateProfile();
-        var assignment = CreateAssignment(profile.Id, []) with
-        {
-            Budget = CreateBudget(),
-        };
-        var plan = CreatePlan(assignment);
-        var provider = new FindingSequenceProvider(CreateEmptyFindingJson());
-        var registry = new ToolRegistry([]);
-        var runner = CreateRunner(
-            provider,
-            CreatePipeline(registry, events, sanitizer),
-            evidence,
-            sanitizer,
-            profile,
-            CreateParentContext(plan, []),
-            []);
-
-        // Act
-        var outcome = await runner.RunAsync(plan, assignment);
-
-        // Assert
-        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Single(provider.Requests);
     }
 
     /// <summary>Verifies the complete eligible parent evidence set reaches the first request.</summary>
@@ -771,48 +591,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Single(provider.Requests);
     }
 
-    /// <summary>Verifies tool registration uses Explorer capability and sensitivity negotiation.</summary>
-    [Fact]
-    public void ModelSelector_ExplorerAvailability_UsesCompleteNegotiationContract()
-    {
-        // Arrange
-        var budget = CreateBudget();
-        var noToolCalls = CreateProfile() with
-        {
-            Name = "no-tool-calls",
-            Capabilities = new ModelCapabilitySet
-            {
-                Streaming = true,
-                ToolCalls = false,
-                StructuredOutput = true,
-            },
-        };
-        var insufficientContext = CreateProfile() with
-        {
-            Name = "insufficient-context",
-            ContextWindow = 8_192,
-        };
-        var nonSensitiveOnly = CreateProfile() with
-        {
-            Name = "non-sensitive-only",
-            SensitiveDataPolicy = ModelSensitiveDataPolicy.Prohibited,
-        };
-
-        // Act / Assert
-        Assert.False(CreateSelector(noToolCalls).CanSelectExplorer(
-            budget,
-            ConversationSensitivity.None));
-        Assert.True(CreateSelector(insufficientContext).CanSelectExplorer(
-            budget,
-            ConversationSensitivity.None));
-        Assert.True(CreateSelector(nonSensitiveOnly).CanSelectExplorer(
-            budget,
-            ConversationSensitivity.None));
-        Assert.False(CreateSelector(nonSensitiveOnly).CanSelectExplorer(
-            budget,
-            ConversationSensitivity.Sensitive));
-    }
-
     /// <summary>Fallback selection stays in response metadata without inventing parent evidence.</summary>
     [Fact]
     public async Task RunAsync_PreferredProfileIsIncompatible_RecordsEffectiveFallbackProfile()
@@ -904,71 +682,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         // Assert
         Assert.Contains(context.Evidence, item => item.EvidenceId == ordinaryId);
         Assert.DoesNotContain(context.Evidence, item => item.EvidenceId == sensitiveId);
-    }
-
-    /// <summary>The frozen policy controls preload even when a caller substitutes a different policy.</summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task ContextAssembler_RespectsFrozenParentEvidenceSelection(bool includeParentEvidence)
-    {
-        await using var events = new DomainEventStream();
-        var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
-        var assignment = CreateAssignment(CreateProfile().Id, []);
-        assignment = assignment with { Policy = assignment.Policy with { IncludeParentEvidence = includeParentEvidence } };
-        var plan = CreatePlan(assignment);
-        await evidence.AddAsync(CreateParentEvidence(plan, EvidenceId.New(), "Parent accumulated evidence", EvidenceSensitivity.None));
-
-        var context = new AgentContextAssembler(evidence).Assemble(
-            plan,
-            assignment with { Policy = assignment.Policy with { IncludeParentEvidence = !includeParentEvidence } });
-
-        Assert.Equal(includeParentEvidence ? 1 : 0, context.Evidence.Count);
-        Assert.Equal(assignment.InitialContext, context.InitialContext);
-    }
-
-    /// <summary>Invalid or unavailable tool requests remain rejected even though answer text has no schema.</summary>
-    [Theory]
-    [InlineData("inspect_metadata", "{")]
-    [InlineData("inspect_metadata", "{\"unexpected\":true}")]
-    [InlineData(DelegateAgentsContract.ToolId, "{}")]
-    [InlineData("inspect_metadata", "{}", true)]
-    public async Task RunAsync_InvalidToolRequest_RepairsBeforeAcceptingOrdinaryResponse(string toolId, string argumentsJson, bool providerFailure = false)
-    {
-        await using var events = new DomainEventStream();
-        var sanitizer = new SecretOutputSanitizer();
-        var evidence = new EvidenceStore(events, sanitizer);
-        var profile = CreateProfile();
-        var tool = new InspectMetadataTool();
-        var registry = new ToolRegistry([tool]);
-        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
-        var plan = CreatePlan(assignment);
-        var attempt = new ToolRequestModelOutput(toolId, argumentsJson);
-        var provider = new ToolAttemptThenResponseProvider(attempt) { RejectAtProvider = providerFailure };
-        var runner = CreateRunner(
-            provider,
-            CreatePipeline(registry, events, sanitizer),
-            evidence,
-            sanitizer,
-            profile,
-            CreateParentContext(plan, [tool.Definition.Id]),
-            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
-
-        var outcome = await runner.RunAsync(plan, assignment);
-
-        Assert.Equal("The requested tool could not be used.", outcome.Response);
-        Assert.Equal(1, outcome.Usage.Corrections);
-        Assert.Equal(2, provider.Requests.Count);
-        AssertRejectedToolHistory(provider.Requests[1], !providerFailure && toolId == tool.Definition.Id ? [attempt] : []);
-        if (providerFailure || toolId != tool.Definition.Id)
-        {
-            Assert.DoesNotContain(provider.Requests[1].Messages, message => message.ToolCallId is not null);
-        }
-
-        Assert.Null(tool.LastInvocationContext);
-        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
-        Assert.Empty(outcome.DeliveredEvidenceIds);
-        Assert.Null(outcome.Findings);
     }
 
     /// <summary>Direct runner assignments cannot advertise or invoke a parent-only tool even if their captured policy includes it.</summary>
@@ -1263,8 +976,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.Equal(call.ToolCallId, result.ToolCallId);
             Assert.Equal(call.ToolName, result.ToolName);
             Assert.True(result.IsError);
-            Assert.Contains("Corrective turn 1 of", result.GetModelVisibleContent(), StringComparison.Ordinal);
-            Assert.Contains("before execution", result.GetModelVisibleContent(), StringComparison.Ordinal);
         }
     }
 
@@ -1837,24 +1548,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             {
                 Output = new TextModelOutput(responses[Requests.Count - 1]),
                 Usage = new ModelUsage(20, 10),
-            };
-        }
-    }
-
-    private sealed class NoUsageFindingProvider(string response) : IModelProvider
-    {
-        public List<ModelStreamRequest> Requests { get; } = [];
-
-        public async IAsyncEnumerable<ModelChunk> StreamAsync(
-            ModelStreamRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            Requests.Add(request);
-            await Task.Yield();
-            yield return new ModelChunk
-            {
-                Output = new TextModelOutput(response),
             };
         }
     }

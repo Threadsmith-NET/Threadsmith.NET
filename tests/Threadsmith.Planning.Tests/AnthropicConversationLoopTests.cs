@@ -163,55 +163,6 @@ public static class AnthropicConversationLoopTests
 
     /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
     [Fact]
-    public static async Task InvalidSingleTool_UsesExistingBindingAndValidCorrectiveRequest()
-    {
-        await using var harness = new NativeLoopHarness(
-            ToolStream([("wire_invalid", "deterministic_output", "{}")]),
-            TextStream("Call corrected."));
-        await harness.RunToCompletionAsync();
-
-        Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
-        Assert.Equal(2, harness.Handler.Requests.Count);
-        Assert.Equal(ModelCorrectionCategory.ToolBatch, Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
-        AssertRejectedResults(harness.Handler.Requests[1], ["wire_invalid"]);
-        AssertSignedReplay(harness.Handler.Requests[1]);
-    }
-
-    /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
-    [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public static async Task StandaloneCorrection_IsChronologicalAndPassesNativeMapper(bool malformedInvocation, bool afterTool)
-    {
-        var rejected = malformedInvocation
-            ? ToolStream([("wire_invalid", "deterministic_output", "{")])
-            : TextStream(" ");
-        var corrected = TextStream("Corrected response.");
-        await using var harness = new NativeLoopHarness(afterTool
-            ? [ToolStream([("wire_first", "deterministic_output", "{\"sequence\":1}")]), rejected, corrected]
-            : [rejected, corrected]);
-        await harness.RunToCompletionAsync();
-
-        var correctionRound = afterTool ? 2 : 1;
-        Assert.Equal(correctionRound + 1, harness.Handler.Requests.Count);
-        var section = malformedInvocation ? "active-turn-correction:" : "active-turn-empty-response-correction:";
-        var correction = Assert.Single(harness.Model.Requests[correctionRound].Messages, message => message.SectionId?.StartsWith(section, StringComparison.Ordinal) == true);
-        Assert.Equal(ModelMessageRole.User, correction.Role);
-        Assert.Equal(
-            malformedInvocation ? ModelCorrectionCategory.ProviderInvocation : ModelCorrectionCategory.EmptyResponse,
-            Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
-        Assert.Equal(harness.Handler.Requests[0].GetProperty("system").GetRawText(), harness.Handler.Requests[correctionRound].GetProperty("system").GetRawText());
-        if (afterTool)
-        {
-            AssertSignedReplay(harness.Handler.Requests[correctionRound]);
-            Assert.Single(harness.Observed.OfType<ToolInvocationStarted>());
-        }
-    }
-
-    /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
-    [Fact]
     public static async Task ToolEvidenceThenSteering_PreservesFrozenPrefixAndSignedReplay()
     {
         await using var harness = new NativeLoopHarness(

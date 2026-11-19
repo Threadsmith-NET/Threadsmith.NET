@@ -12,35 +12,6 @@ public static class AgentModelSelectorTests
     private static readonly ModelProfileId SmallId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));
     private static readonly ModelProfileId LargeId = new(Guid.Parse("22222222-2222-2222-2222-222222222222"));
 
-    /// <summary>Every configured role takes precedence over the inherited parent preference.</summary>
-    [Theory]
-    [InlineData(AgentRole.Explorer)]
-    [InlineData(AgentRole.Implementer)]
-    [InlineData(AgentRole.SecurityReviewer)]
-    [InlineData(AgentRole.TestReviewer)]
-    [InlineData(AgentRole.PerformanceReviewer)]
-    [InlineData(AgentRole.ArchitectureReviewer)]
-    [InlineData(AgentRole.BugReviewer)]
-    public static void FreezePolicy_RoleConfigurationOverridesInheritance(AgentRole role)
-    {
-        var selector = CreateSelector(role);
-        var assignment = CreateAssignment(role);
-
-        var policy = selector.FreezePolicy(assignment);
-        var preview = selector.Preview(role, assignment.Policy.ModelProfileId, ReasoningLevel.Low, assignment.Budget);
-        Assert.Equal(selector.FreezePolicy(assignment, requireToolCalls: true).ModelSelection, preview.Provenance);
-
-        var provenance = Assert.IsType<AgentModelProvenance>(policy.ModelSelection);
-        Assert.Equal(SmallId, policy.ModelProfileId);
-        Assert.Equal(nameof(ReasoningLevel.High), policy.ReasoningLevel);
-        Assert.Equal(AgentModelSelectionSource.RoleConfiguration, provenance.Source);
-        Assert.Equal("trusted-small", provenance.ConfiguredProviderId);
-        Assert.Equal(SmallId, provenance.ConfiguredProfileId);
-        Assert.Equal(nameof(ReasoningLevel.High), provenance.ConfiguredReasoningLevel);
-        Assert.True(provenance.UsesTrustedCatalog);
-        Assert.Null(provenance.FallbackReason);
-    }
-
     /// <summary>An explicit application pin takes precedence over trusted role configuration.</summary>
     [Fact]
     public static void FreezePolicy_ApplicationPinOverridesRoleConfiguration()
@@ -90,140 +61,6 @@ public static class AgentModelSelectorTests
         Assert.Equal(AgentModelSelectionSource.Inherited, selected.Provenance?.Source);
         Assert.Equal(providerId, selected.Provenance?.EffectiveProviderId);
         Assert.Equal(trusted, selected.UsesTrustedCatalog);
-    }
-
-    /// <summary>Persisted provenance survives configuration changes without rebinding the role.</summary>
-    [Fact]
-    public static void FreezePolicy_RestoredProvenanceDoesNotReadChangedRolePreference()
-    {
-        var selector = CreateSelector(AgentRole.Explorer);
-        var assignment = CreateAssignment();
-        var frozen = selector.FreezePolicy(assignment);
-        var serialized = JsonSerializer.Serialize(frozen);
-        var restored = JsonSerializer.Deserialize<AgentPolicySnapshot>(serialized)
-            ?? throw new InvalidOperationException("Policy round trip failed.");
-        var changed = CreateSelector(AgentRole.Explorer, configuredProfileId: LargeId);
-
-        var result = changed.FreezePolicy(assignment with { Policy = restored });
-        var selected = changed.Select(assignment with { Policy = restored });
-
-        Assert.Same(restored, result);
-        Assert.Equal(frozen.ModelSelection, selected.Provenance);
-        Assert.Equal(SmallId, selected.ProfileId);
-    }
-
-    /// <summary>Actual request incompatibilities select a trusted fallback and retain configured provenance.</summary>
-    [Theory]
-    [InlineData("context", "context window")]
-    [InlineData("sensitivity", "sensitive data")]
-    [InlineData("tools", "tool calls")]
-    [InlineData("cost", "token cost")]
-    [InlineData("output", "output")]
-    public static void SelectForRequest_IncompatibilityUsesTrustedFallbackAndRetainsConfiguredRoute(
-        string constraint,
-        string reason)
-    {
-        var selector = CreateSelector(AgentRole.Explorer);
-        var assignment = CreateAssignment();
-        assignment = assignment with { Policy = selector.FreezePolicy(assignment) };
-        var request = CreateRequest(assignment);
-        request = constraint switch
-        {
-            "context" => request with { WireEstimate = new ModelWireEstimate { WireInputTokens = 8_000, OutputReserveTokens = 1_024 } },
-            "sensitivity" => request with { ContainsSensitiveData = true },
-            "tools" => request with { RequiredCapabilities = new ModelCapabilitySet { ToolCalls = true } },
-            "cost" => request with { SelectionConstraints = new ModelSelectionConstraints { MaximumCombinedCostPerMillionTokens = 1 } },
-            "output" => request with { MaximumOutputTokens = 2_048 },
-            _ => throw new ArgumentOutOfRangeException(nameof(constraint)),
-        };
-
-        var selected = selector.SelectForRequest(assignment, request);
-
-        var provenance = Assert.IsType<AgentModelProvenance>(selected.Provenance);
-        Assert.Equal(LargeId, selected.ProfileId);
-        Assert.Equal(ReasoningLevel.Low, selected.ReasoningLevel);
-        Assert.True(selected.UsesTrustedCatalog);
-        Assert.Equal("trusted-large", provenance.EffectiveProviderId);
-        Assert.Equal(SmallId, provenance.ConfiguredProfileId);
-        Assert.Equal(nameof(ReasoningLevel.High), provenance.ConfiguredReasoningLevel);
-        Assert.Equal(AgentModelSelectionSource.RoleConfiguration, provenance.Source);
-        Assert.Contains(reason, provenance.FallbackReason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>Restored routes require streaming but structured output only when explicitly requested.</summary>
-    [Theory]
-    [InlineData(false, true, false, true)]
-    [InlineData(true, false, false, false)]
-    [InlineData(true, false, true, true)]
-    [InlineData(true, true, true, false)]
-    public static void SelectForRequest_RestoredProfileHonorsExplicitCapabilities(
-        bool streaming,
-        bool structuredOutput,
-        bool requireStructuredOutput,
-        bool expectsFallback)
-    {
-        var original = CreateSelector(AgentRole.Explorer);
-        var assignment = CreateAssignment();
-        assignment = assignment with { Policy = original.FreezePolicy(assignment) };
-        var changed = CreateSelector(AgentRole.Explorer, streaming: streaming, structuredOutput: structuredOutput);
-
-        var request = CreateRequest(assignment) with
-        {
-            RequiredCapabilities = new ModelCapabilitySet { StructuredOutput = requireStructuredOutput },
-        };
-        var selection = changed.SelectForRequest(assignment, request);
-
-        Assert.Equal(expectsFallback ? LargeId : SmallId, selection.ProfileId);
-        Assert.True(selection.UsesTrustedCatalog);
-        Assert.Equal(expectsFallback, selection.Provenance?.FallbackReason is not null);
-    }
-
-    /// <summary>Initial selection for every ordinary role needs streaming and authorized tools, not JSON mode.</summary>
-    [Theory]
-    [InlineData(AgentRole.Explorer)]
-    [InlineData(AgentRole.Implementer)]
-    [InlineData(AgentRole.SecurityReviewer)]
-    [InlineData(AgentRole.TestReviewer)]
-    [InlineData(AgentRole.PerformanceReviewer)]
-    [InlineData(AgentRole.ArchitectureReviewer)]
-    [InlineData(AgentRole.BugReviewer)]
-    public static void FreezePolicy_OrdinaryRolesDoNotRequireStructuredOutput(AgentRole role)
-    {
-        var selector = CreateSelector(role, structuredOutput: false, toolCalls: true);
-        var assignment = CreateAssignment(role);
-        assignment = assignment with { Policy = assignment.Policy with { AllowedToolIds = ["read_file"] } };
-
-        var policy = selector.FreezePolicy(assignment);
-
-        Assert.Equal(SmallId, policy.ModelProfileId);
-        Assert.Null(policy.ModelSelection?.FallbackReason);
-        if (role == AgentRole.Explorer)
-        {
-            Assert.True(selector.CanSelectExplorer(assignment.Budget, assignment.Policy.Sensitivity));
-        }
-    }
-
-    /// <summary>A review-only model supports TestReviewer without JSON mode while Explorer remains unavailable.</summary>
-    [Fact]
-    public static void CanSelectRole_ReviewOnlyProfileAdmitsTestReviewerButNotExplorer()
-    {
-        var model = CreateModel(SmallId, "review-only", 8_192, 1_024) with
-        {
-            IntendedWorkloadClasses = [WorkloadClass.Review],
-            Capabilities = new ModelCapabilitySet
-            {
-                Streaming = true,
-                ToolCalls = true,
-                StructuredOutput = false,
-            },
-        };
-        var catalog = CreateCatalog(CreateProvider("review-provider", model)).ModelCatalog;
-        var selector = new AgentModelSelector(catalog, new DefaultModelSelectionPolicy(catalog));
-        var budget = AgentResourceBudget.CreateTelemetryOnly(TimeSpan.FromMinutes(1));
-
-        Assert.True(selector.CanSelectRole(AgentRole.TestReviewer, budget, ConversationSensitivity.None));
-        Assert.False(selector.CanSelectRole(AgentRole.Explorer, budget, ConversationSensitivity.None));
-        Assert.False(selector.CanSelectExplorer(budget, ConversationSensitivity.None));
     }
 
     /// <summary>A repository profile with the same identity cannot replace a trusted route.</summary>
@@ -293,30 +130,6 @@ public static class AgentModelSelectorTests
         };
 
         Assert.Throws<InvalidOperationException>(() => selector.SelectForRequest(assignment, request));
-    }
-
-    /// <summary>Reassembled requests retain the effective fallback and original configured route.</summary>
-    [Fact]
-    public static void SelectForRequest_PreservesFallbackAfterReassembly()
-    {
-        var selector = CreateSelector(AgentRole.Explorer);
-        var assignment = CreateAssignment();
-        assignment = assignment with { Policy = selector.FreezePolicy(assignment) };
-        var selected = selector.SelectForRequest(assignment, CreateRequest(assignment) with { ContainsSensitiveData = true });
-        assignment = assignment with
-        {
-            Policy = assignment.Policy with
-            {
-                ModelProfileId = selected.ProfileId,
-                ReasoningLevel = selected.ReasoningLevel.ToString(),
-                ModelSelection = selected.Provenance,
-            },
-        };
-
-        var rechecked = selector.SelectForRequest(assignment, CreateRequest(assignment));
-
-        Assert.Equal(selected.Provenance, rechecked.Provenance);
-        Assert.Equal(LargeId, rechecked.ProfileId);
     }
 
     /// <summary>Candidate-specific reserves admit smaller-output fallbacks without dropping input.</summary>

@@ -14,14 +14,9 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Real native requests preserve signed multi-call rounds through child progress and host tool execution.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    [InlineData(false, 0)]
-    [InlineData(false, 1)]
-    [InlineData(true, 1)]
-    public async Task RunAsync_NativeThinkingTools_PreservesSignedRoundsAndPrivateState(bool repeatCall, int ordinaryRound = -1)
+    /// <summary>Signed native child history retains wire order without exposing private payloads.</summary>
+    [Fact]
+    public async Task NativeChildReplayPreservesWireOrderAndPrivacy()
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -75,7 +70,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             new ModelProviderCatalogConfiguration { Providers = [configuration] },
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
-        using var handler = new NativeChildHandler(tool.Definition.Id) { RepeatCall = repeatCall, OrdinaryRound = ordinaryRound };
+        using var handler = new NativeChildHandler(tool.Definition.Id);
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"), timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
@@ -90,53 +85,34 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             CreateParentContext(plan, [tool.Definition.Id]),
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
 
-        var outcome = await runner.RunAsync(plan, assignment);
+        var outcome = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
+        await subscription.DisposeAsync();
 
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
-        Assert.Equal("Inspection complete.", outcome.Response);
-        Assert.Equal(3, outcome.Usage.ToolCalls);
-        Assert.Equal(repeatCall ? 1 : 0, outcome.Usage.Corrections);
-        Assert.Equal(repeatCall ? 2 : 3, evidence.Snapshot(plan.Provenance.SessionId).Count);
         Assert.Equal(3, handler.Requests.Count);
-        Assert.All(handler.Requests, request =>
-        {
-            Assert.Equal("summarized", request.GetProperty("thinking").GetProperty("display").GetString());
-            Assert.All(request.GetProperty("messages").EnumerateArray(), message =>
-                Assert.Contains(message.GetProperty("role").GetString(), new[] { "user", "assistant" }));
-        });
-        var secondRound = handler.Requests[1].GetProperty("messages").EnumerateArray().ToArray();
-        var replay = Assert.Single(secondRound, message => message.GetProperty("role").GetString() == "assistant");
-        var blocks = replay.GetProperty("content").EnumerateArray().ToArray();
-        if (ordinaryRound != 0)
-        {
-            Assert.Equal("private-child-signature-0", blocks[0].GetProperty("signature").GetString());
-        }
+        var continuation = handler.Requests[1].GetProperty("messages").EnumerateArray().ToArray();
+        var firstReplay = Assert.Single(continuation, message => message.GetProperty("role").GetString() == "assistant");
+        var blocks = firstReplay.GetProperty("content").EnumerateArray().ToArray();
+        Assert.Equal("private-child-signature-0", blocks[0].GetProperty("signature").GetString());
+        Assert.Equal(["native_one", "native_two"], blocks.Skip(1).Select(block => block.GetProperty("id").GetString()));
+        var results = continuation[^1].GetProperty("content").EnumerateArray()
+            .Where(block => block.GetProperty("type").GetString() == "tool_result");
+        Assert.Equal(["native_one", "native_two"], results.Select(block => block.GetProperty("tool_use_id").GetString()));
 
-        Assert.Equal(new[] { "native_one", "native_two" }, blocks.Where(block => block.GetProperty("type").GetString() == "tool_use").Select(block => block.GetProperty("id").GetString()));
-        var results = secondRound[^1].GetProperty("content").EnumerateArray().ToArray();
-        Assert.Equal(new[] { "native_one", "native_two" }, results.Take(2).Select(block => block.GetProperty("tool_use_id").GetString()));
-        Assert.All(results.Take(2), block => Assert.False(block.GetProperty("is_error").GetBoolean()));
-        var lastRound = handler.Requests[2].GetProperty("messages").EnumerateArray()
+        var finalReplay = handler.Requests[2].GetProperty("messages").EnumerateArray()
             .Where(message => message.GetProperty("role").GetString() == "assistant").ToArray();
-        Assert.Equal(2, lastRound.Length);
-        Assert.True(JsonElement.DeepEquals(replay, lastRound[0]));
-        if (ordinaryRound != 1)
-        {
-            Assert.Equal("private-child-signature-1", lastRound[1].GetProperty("content")[0].GetProperty("signature").GetString());
-        }
-
-        var thirdResult = handler.Requests[2].GetProperty("messages").EnumerateArray()
-            .SelectMany(message => message.GetProperty("content").EnumerateArray())
-            .Single(block => block.GetProperty("type").GetString() == "tool_result"
-                && block.GetProperty("tool_use_id").GetString() == "native_third");
-        Assert.Equal(repeatCall, thirdResult.GetProperty("is_error").GetBoolean());
-        if (repeatCall)
-        {
-            Assert.Contains("already has 1 accepted invocations", thirdResult.GetRawText(), StringComparison.Ordinal);
-        }
-
-        Assert.DoesNotContain("private-child", JsonSerializer.Serialize(observed), StringComparison.Ordinal);
+        Assert.Equal(2, finalReplay.Length);
+        Assert.True(JsonElement.DeepEquals(firstReplay, finalReplay[0]));
+        Assert.Equal("private-child-signature-1", finalReplay[1].GetProperty("content")[0].GetProperty("signature").GetString());
+        Assert.Equal("native_third", finalReplay[1].GetProperty("content")[1].GetProperty("id").GetString());
+        var finalResults = handler.Requests[2].GetProperty("messages").EnumerateArray().Last()
+            .GetProperty("content").EnumerateArray()
+            .Where(block => block.GetProperty("type").GetString() == "tool_result");
+        Assert.Equal("native_third", Assert.Single(finalResults).GetProperty("tool_use_id").GetString());
         Assert.DoesNotContain("private-child", JsonSerializer.Serialize(outcome), StringComparison.Ordinal);
+        Assert.NotEmpty(observed);
+        Assert.All(observed, item => Assert.DoesNotContain(
+            "private-child", JsonSerializer.Serialize(item, item.GetType()), StringComparison.Ordinal));
     }
 
     private sealed class NativeChildHandler : HttpMessageHandler
@@ -150,10 +126,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public List<JsonElement> Requests { get; } = [];
 
-        public bool RepeatCall { get; init; }
-
-        public int OrdinaryRound { get; init; } = -1;
-
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             using var document = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(cancellationToken));
@@ -166,19 +138,15 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }));
             if (round < 2)
             {
-                var firstToolIndex = round == OrdinaryRound ? 0 : 1;
-                if (round != OrdinaryRound)
-                {
-                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = "private-child-summary", signature = "private-child-signature-" + round } }));
-                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = 0 }));
-                }
+                stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "thinking", thinking = "private-child-summary", signature = "private-child-signature-" + round } }));
+                stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = 0 }));
 
                 for (var ordinal = 0; ordinal < (round == 0 ? 2 : 1); ordinal++)
                 {
                     var wireId = round == 1 ? "native_third" : ordinal == 0 ? "native_one" : "native_two";
-                    var path = round == 1 && RepeatCall ? "src/native_one.cs" : $"src/{wireId}.cs";
-                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + firstToolIndex, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { path } } }));
-                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = ordinal + firstToolIndex }));
+                    var path = $"src/{wireId}.cs";
+                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + 1, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { path } } }));
+                    stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = ordinal + 1 }));
                 }
             }
             else

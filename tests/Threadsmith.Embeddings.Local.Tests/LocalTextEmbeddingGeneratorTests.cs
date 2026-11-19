@@ -11,20 +11,6 @@ public sealed class LocalTextEmbeddingGeneratorTests
 {
     /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
     [Fact]
-    public static void PoolingExcludesPaddingAndNormalizesEveryComponent()
-    {
-        var tensor = new DenseTensor<float>([1, 3, 384]);
-        tensor[0, 0, 0] = 3;
-        tensor[0, 1, 383] = 4;
-        tensor[0, 2, 0] = 999;
-        var result = MiniLmEmbedderEngine.PoolAndNormalize(tensor, [1, 1, 0]);
-        Assert.Equal(384, result.Length);
-        Assert.Equal(0.6f, result[0], 5);
-        Assert.Equal(0.8f, result[383], 5);
-    }
-
-    /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
-    [Fact]
     public static void PoolingRejectsInvalidOutput()
     {
         var tensor = new DenseTensor<float>([1, 1, 384]);

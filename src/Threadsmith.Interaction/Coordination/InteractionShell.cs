@@ -893,7 +893,7 @@ public class InteractionPresenter
                     ? string.Empty
                     : $"\n{tool.ResultPreview}\n";
                 var origin = tool.ActivityOrigin is null ? string.Empty : $" [{tool.ActivityOrigin}]";
-                return $"Tool {tool.ToolName} ({tool.RequestedBy}){origin}: {status}{error}{result}\n";
+                return $"Tool {tool.ToolName} ({tool.RequestedBy}){(tool.IsScriptOrigin ? " (csharp_scripting)" : string.Empty)}{origin}: {status}{error}{result}\n";
             }) ?? [];
         var approvals = state?.PendingApprovals.Select(approval =>
             $"Approval pending: {approval.Action}\n") ?? [];

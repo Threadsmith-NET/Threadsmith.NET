@@ -43,7 +43,7 @@ internal static class ConversationToolAvailability
     {
         var definitions = registrations.Select(item => item.Tool.Definition).ToArray();
         if (pipeline is not ToolInvocationPipeline scriptPipeline || context is null || prompts is null
-            || !registrations.Any(item => item.Implementation is CSharpScriptTool && IsAdvertised(item.Tool.Definition, context)))
+            || !registrations.Any(item => scriptPipeline.IsScriptHostAvailable(item, context)))
         {
             return definitions;
         }
@@ -53,7 +53,13 @@ internal static class ConversationToolAvailability
             if (scriptPipeline.IsScriptCallable(registrations[index], context))
             {
                 var definition = definitions[index];
-                definitions[index] = definition with { DescriptionResolver = () => definition.Description + " " + prompts.Get(PromptFileNames.ToolScriptCallableMarker) };
+                definitions[index] = definition with
+                {
+                    DescriptionResolver = () => definition.Description + " "
+                        + prompts.Get(PromptFileNames.ToolScriptCallableMarker)
+                        + " JSON schema for ResultJson (not the reply envelope): "
+                        + definition.OutputSchema.JsonSchema,
+                };
             }
         }
 

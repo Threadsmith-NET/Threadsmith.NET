@@ -256,6 +256,33 @@ public sealed class ProcessManager : IProcessManager
         }
     }
 
+    /// <summary>Commits caller accounting and provenance only when the result fits the worker exchange.</summary>
+    internal static ScriptToolReply AdmitScriptReply(ScriptToolReply reply, ref int bytesRemaining)
+    {
+        var size = Encoding.UTF8.GetByteCount(reply.ResultJson ?? string.Empty) + (long)Encoding.UTF8.GetByteCount(reply.Error ?? string.Empty);
+        if (size <= bytesRemaining && reply is PendingScriptReply pending)
+        {
+            try
+            {
+                pending.Commit();
+            }
+            catch (InvalidOperationException)
+            {
+                const string reason = "The result exceeded the caller's budget.";
+                reply = new(false, null, false, "Denied", reason);
+                size = Encoding.UTF8.GetByteCount(reason);
+            }
+        }
+
+        if (size > bytesRemaining)
+        {
+            return new(false, null, true, "OutputLimitExceeded", "Script result budget exhausted.");
+        }
+
+        bytesRemaining -= (int)size;
+        return reply;
+    }
+
     private async Task<ProcessExecutionResult> RunStartedProcessAsync(
         Process process,
         ProcessExecutionRequest request,
@@ -281,7 +308,15 @@ public sealed class ProcessManager : IProcessManager
             {
                 if (request.ScriptHandlers is not null)
                 {
-                    scriptOutput = (await ExchangeScriptAsync(process, request, timeoutCancellation.Token), false);
+                    try
+                    {
+                        scriptOutput = (await ExchangeScriptAsync(process, request, timeoutCancellation.Token), false);
+                    }
+                    catch (EndOfStreamException)
+                    {
+                        // No final frame: retain the actual worker exit code and bounded stderr.
+                        timeoutCancellation.Token.ThrowIfCancellationRequested();
+                    }
                 }
                 else if (request.StandardInput is not null)
                 {
@@ -380,7 +415,7 @@ public sealed class ProcessManager : IProcessManager
                 cancellationToken);
             if (frame.Kind == ScriptFrameKind.Final)
             {
-                return frame.Payload;
+                return frame.Payload.Length > 0 ? frame.Payload : throw new InvalidDataException("Empty script final frame.");
             }
 
             var call = JsonSerializer.Deserialize<ScriptToolRequest>(frame.Payload) ?? throw new InvalidDataException("Missing tool call.");
@@ -394,7 +429,7 @@ public sealed class ProcessManager : IProcessManager
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    operation = handler(call.ArgumentsJson, handlerLifetime.Token);
+                    operation = Task.Run(() => handler(call.ArgumentsJson, handlerLifetime.Token), handlerLifetime.Token);
                     await Task.WhenAny(operation, exit);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (exit.IsCompleted)
@@ -431,15 +466,7 @@ public sealed class ProcessManager : IProcessManager
                 }
             }
 
-            var size = Encoding.UTF8.GetByteCount(reply.ResultJson ?? string.Empty) + (long)Encoding.UTF8.GetByteCount(reply.Error ?? string.Empty);
-            if (size > bytesRemaining)
-            {
-                reply = new(false, null, true, "OutputLimitExceeded", "Script result budget exhausted.");
-            }
-            else
-            {
-                bytesRemaining -= (int)size;
-            }
+            reply = AdmitScriptReply(reply, ref bytesRemaining);
 
             await ScriptWorkerProtocol.WriteAsync(writer, ScriptFrameKind.Reply, sequence, JsonSerializer.Serialize(reply), (6 * ScriptWorkerProtocol.ResultBytes) + 4096, cancellationToken);
         }

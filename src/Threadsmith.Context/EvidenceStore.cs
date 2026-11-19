@@ -82,6 +82,8 @@ public sealed class EvidenceStore : IEvidenceStore
             {
                 foreach (var item in prepared)
                 {
+                    const string superseded = "Superseded by a different source file version.";
+                    var incoming = item;
                     if (item.Provenance.RepositoryPath is { } root
                         && item.FileDependencies.Any(dependency => dependency.Sha256 is not null)
                         && _dependencies.TryGetValue(item.SessionId, out var paths))
@@ -98,16 +100,31 @@ public sealed class EvidenceStore : IEvidenceStore
                         foreach (var identity in affected)
                         {
                             var previous = _items[(item.SessionId, identity)];
-                            if (previous.CollectedAt <= item.CollectedAt && previous.FileDependencies.Any(old => item.FileDependencies.Any(current =>
-                                pathComparers[root].Equals(old.Path, current.Path)
-                                && current.Sha256 is not null && !string.Equals(old.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase))))
+                            var supersedesPrevious = false;
+                            foreach (var current in item.FileDependencies.Where(dependency => dependency.Sha256 is not null))
                             {
-                                Store(previous with { IsStale = true, StaleReason = "Superseded by a different source file version." });
+                                foreach (var old in previous.FileDependencies.Where(old => pathComparers[root].Equals(old.Path, current.Path)
+                                    && !string.Equals(old.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    if ((current.ObservedAt ?? item.CollectedAt) >= (old.ObservedAt ?? previous.CollectedAt))
+                                    {
+                                        supersedesPrevious = true;
+                                    }
+                                    else if (old.Sha256 is not null)
+                                    {
+                                        incoming = incoming with { IsStale = true, StaleReason = superseded };
+                                    }
+                                }
+                            }
+
+                            if (supersedesPrevious)
+                            {
+                                Store(previous with { IsStale = true, StaleReason = superseded });
                             }
                         }
                     }
 
-                    Store(item);
+                    Store(incoming);
                 }
             }
 

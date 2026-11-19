@@ -929,7 +929,7 @@ public sealed class HeadlessShell
                 ? tool.Succeeded ? "succeeded" : "failed"
                 : "running";
             await _output.WriteLineAsync(
-                $"Tool {tool.ToolName}: {status}".AsMemory(),
+                $"Tool {tool.ToolName}{(tool.IsScriptOrigin ? " (csharp_scripting)" : string.Empty)}: {status}".AsMemory(),
                 cancellationToken);
             if (tool.ResultPreview is not null)
             {

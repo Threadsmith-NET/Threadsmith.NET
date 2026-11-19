@@ -522,6 +522,10 @@ public sealed record ToolProvenanceSource(
     [JsonIgnore]
     public string? ReadDigest { get; init; }
 
+    /// <summary>Time of the originating nested read, not the enclosing script completion.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? NestedReadAt { get; init; }
+
     /// <summary>Observed text page, when available.</summary>
     [JsonIgnore]
     public SourceRange? ReadRange { get; init; }
@@ -622,6 +626,10 @@ public sealed record ToolInvocationResult
 
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
+
+    /// <summary>When read_file produced the result, before tool lifecycle notifications and evidence admission.</summary>
+    [JsonIgnore]
+    internal DateTimeOffset? ReadObservedAt { get; init; }
 
     /// <summary>Captured effective output ceiling for a live continuation.</summary>
     [JsonIgnore]

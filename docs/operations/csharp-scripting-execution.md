@@ -51,7 +51,7 @@ Declare `csharp_script` as a required tool when a native skill needs it. Packagi
 
 ## Calling host tools
 
-Use tools marked “Callable from C# scripts.” `Tools.Available` lists the current names. Pass ordinary tool arguments as a JSON string and await each call before the next:
+Use tools marked “Callable from C# scripts.” Their advertised descriptions include the JSON schema for `ResultJson`, not for the reply envelope. `Tools.Available` lists the current names. Pass ordinary tool arguments as a JSON string and await each call before the next:
 
 ```csharp
 var reply = await Tools.InvokeAsync("find_symbol", "{\"query\":\"Widget\"}");

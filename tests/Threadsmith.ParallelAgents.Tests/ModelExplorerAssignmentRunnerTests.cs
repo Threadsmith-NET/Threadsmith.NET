@@ -59,8 +59,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     }
 
     /// <summary>A same-profile child continuation drops a stale script marker without gaining registrations.</summary>
-    [Fact]
-    public async Task ChildRequestsRefreshScriptMarkersWithoutChangingProfile()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChildRequestsRefreshScriptMarkersWithoutChangingProfile(bool removeScript)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -75,10 +77,18 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         assignment = assignment with { Policy = assignment.Policy with { TrustCeiling = RepositoryTrustLevel.FullyTrustedAutomation } };
         var plan = CreatePlan(assignment);
         var parent = CreateParentContext(plan, ids);
-        parent = parent with { Invocation = parent.Invocation with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation } };
+        parent = parent with
+        {
+            Invocation = parent.Invocation with
+            {
+                TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+                Scratchpad = new() { IsActive = true, RootPath = Path.Combine(parent.Invocation.RepositoryPath, ".threadsmith", ".scratchpad"), DisabledReason = ScratchpadDisabledReason.None },
+            },
+        };
         var provider = new ToolThenFindingProvider(tool.Definition.Id, firstRequest: () =>
         {
-            Assert.True(registry.Remove(read.Definition.Id, read));
+            ITool removed = removeScript ? script : read;
+            Assert.True(registry.Remove(removed.Definition.Id, removed));
             registry.RegisterOrReplace(new InspectMetadataTool(toolId: "outside_snapshot"), new ToolActivitySource(ToolActivitySourceKind.BuiltIn));
         });
         var runner = CreateRunner(
@@ -99,7 +109,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.Equal(profile.Id, request.ResolvedProfileId);
             Assert.DoesNotContain(request.Tools, item => item.Name == "outside_snapshot");
         });
-        Assert.EndsWith("Callable from C# scripts.", Assert.Single(provider.Requests[0].Tools, item => item.Name == read.Definition.Id).Description, StringComparison.Ordinal);
+        var scriptDescription = Assert.Single(provider.Requests[0].Tools, item => item.Name == read.Definition.Id).Description;
+        Assert.Contains("Callable from C# scripts.", scriptDescription, StringComparison.Ordinal);
+        Assert.EndsWith(read.Definition.OutputSchema.JsonSchema, scriptDescription, StringComparison.Ordinal);
         Assert.Equal(read.Definition.Description, Assert.Single(provider.Requests[1].Tools, item => item.Name == read.Definition.Id).Description);
     }
 

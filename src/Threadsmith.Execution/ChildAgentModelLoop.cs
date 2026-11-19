@@ -833,7 +833,7 @@ internal sealed class ChildAgentModelLoop
 
     private static void ChargeDelivery(AgentBudgetLedger ledger, ToolInvocationResult result, string content, int evidenceItems)
     {
-        var files = result.Sources.Where(source => string.Equals(source.Kind, "file", StringComparison.OrdinalIgnoreCase))
+        var files = result.Sources.Where(source => source.NestedReadAt is null && string.Equals(source.Kind, "file", StringComparison.OrdinalIgnoreCase))
             .Select(source => source.Identifier)
             .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
             .Count();
@@ -889,7 +889,7 @@ internal sealed class ChildAgentModelLoop
                 Sensitivity = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive
                     ? EvidenceSensitivity.Sensitive
                     : EvidenceSensitivity.None,
-                InvalidationKeys = ["repository"],
+                InvalidationKeys = ToolEvidenceAdmission.GetInvalidationKeys(result),
             },
             cancellationToken);
         var modelContent = JsonSerializer.Serialize(new

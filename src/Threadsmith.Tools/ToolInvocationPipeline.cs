@@ -1006,6 +1006,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 input,
                 executionContext,
                 timeoutCancellation.Token);
+            DateTimeOffset? readObservedAt = tool.Definition.Id == "read_file" ? _timeProvider.GetUtcNow() : null;
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
@@ -1169,6 +1170,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                     ? JsonOutputSanitizer.SanitizeJsonOrText(retained, _sanitizer) : null,
                 Concepts = observedConcepts,
                 SourceDetail = sourceDetail,
+                ReadObservedAt = readObservedAt,
                 Sources = scriptSources.Count == 0 ? execution.Sources : [.. execution.Sources, .. scriptSources.Distinct()],
                 Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,

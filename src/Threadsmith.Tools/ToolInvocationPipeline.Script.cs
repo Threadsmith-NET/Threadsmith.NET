@@ -1,10 +1,13 @@
 namespace Threadsmith.Tools;
 
-using System.Text;
 using Threadsmith.Core;
 
 /// <summary>Caller-owned state shared with nested tool admission for one model round.</summary>
 internal sealed record ScriptCaller(IConversationToolSnapshotStore? Snapshots, ToolCallHistory History, Action? Reserve = null, Action<ToolInvocationResult>? Charge = null, Action<string>? Accepted = null, Func<string, string>? Normalize = null, Func<ToolInvocationResult, IEnumerable<ToolProvenanceSource>>? ReadSources = null);
+
+/// <summary>Host-only accounting performed after a nested reply fits the exchange budget.</summary>
+internal sealed record PendingScriptReply(ToolInvocationResult Result, Action Commit)
+    : ScriptToolReply(Result.Succeeded, Result.ResultJson, Result.IsTruncated, Result.ErrorClassification.ToString(), Result.Error);
 
 public sealed partial class ToolInvocationPipeline
 {
@@ -20,11 +23,19 @@ public sealed partial class ToolInvocationPipeline
             && ConversationToolAvailability.IsAdvertised(definition, context);
     }
 
-    private bool IsNormallyEnabled(ToolRegistration expected)
+    /// <summary>Checks that the captured outer script remains available to this caller.</summary>
+    internal bool IsScriptHostAvailable(ToolRegistration registration, ToolInvocationContext context) =>
+        registration.Implementation is CSharpScriptTool
+        && context.Scratchpad is { IsActive: true, RootPath: not null }
+        && IsNormallyEnabled(registration, context)
+        && ConversationToolAvailability.IsAdvertised(registration.Tool.Definition, context);
+
+    private bool IsNormallyEnabled(ToolRegistration expected, ToolInvocationContext? context = null)
     {
         try
         {
-            return ToolRegistrationIdentity.Matches(_registry.GetRegistration(expected.Tool.Definition.Id), expected);
+            var id = expected.Tool.Definition.Id;
+            return ToolRegistrationIdentity.Matches(context is null ? _registry.GetRegistration(id) : _registry.GetRegistration(id, context), expected);
         }
         catch (KeyNotFoundException)
         {
@@ -51,7 +62,6 @@ public sealed partial class ToolInvocationPipeline
             return handlers;
         }
 
-        var remaining = ScriptWorkerProtocol.ResultBytes;
         foreach (var registration in saved)
         {
             var definition = ToolRuntimePolicy.ApplyCeiling(registration.Tool, context.SecurityPolicy).Definition;
@@ -107,20 +117,14 @@ public sealed partial class ToolInvocationPipeline
                         caller.History.ObserveResult(definition, normalized, result);
                     }
 
-                    var size = Encoding.UTF8.GetByteCount(result.ResultJson ?? string.Empty) + (long)Encoding.UTF8.GetByteCount(result.Error ?? string.Empty);
-                    if (size > remaining)
+                    return new PendingScriptReply(result, () =>
                     {
-                        return new(false, null, true, "OutputLimitExceeded", "Script result budget exhausted.");
-                    }
-
-                    caller.Charge?.Invoke(result);
-                    remaining -= (int)size;
-                    if (result.Succeeded && id == "read_file" && caller.ReadSources is { } readSources)
-                    {
-                        sources.AddRange(readSources(result));
-                    }
-
-                    return new(result.Succeeded, result.ResultJson, result.IsTruncated, result.ErrorClassification.ToString(), result.Error);
+                        caller.Charge?.Invoke(result);
+                        if (result.Succeeded && caller.ReadSources is { } readSources)
+                        {
+                            sources.AddRange(readSources(result));
+                        }
+                    });
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or UnauthorizedAccessException or KeyNotFoundException)
                 {

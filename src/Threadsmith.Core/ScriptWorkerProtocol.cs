@@ -26,7 +26,7 @@ public sealed record ScriptFrame(ScriptFrameKind Kind, string Payload);
 public sealed record ScriptToolRequest(string ToolId, string ArgumentsJson);
 
 /// <summary>Sanitized result delivered to a script, not a grant of further authority.</summary>
-public sealed record ScriptToolReply(bool Succeeded, string? ResultJson, bool IsTruncated, string? ErrorClassification, string? Error);
+public record ScriptToolReply(bool Succeeded, string? ResultJson, bool IsTruncated, string? ErrorClassification, string? Error);
 
 /// <summary>Versioned UTF-8 frames. Each direction has one writer and one reader.</summary>
 public static class ScriptWorkerProtocol
@@ -68,7 +68,17 @@ public static class ScriptWorkerProtocol
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(maximumBytes);
         var header = new byte[10];
-        await stream.ReadExactlyAsync(header, cancellationToken);
+        var headerBytes = await stream.ReadAtLeastAsync(header, header.Length, throwOnEndOfStream: false, cancellationToken);
+        if (headerBytes == 0)
+        {
+            throw new EndOfStreamException("Worker pipe closed between frames.");
+        }
+
+        if (headerBytes != header.Length)
+        {
+            throw new InvalidDataException("Incomplete script frame header.");
+        }
+
         var kind = (ScriptFrameKind)header[1];
         var length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(6));
         if (header[0] != 1 || BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(2)) != sequence || length < 0 || length > maximumBytes(kind))
@@ -77,7 +87,11 @@ public static class ScriptWorkerProtocol
         }
 
         var bytes = new byte[length];
-        await stream.ReadExactlyAsync(bytes, cancellationToken);
+        if (await stream.ReadAtLeastAsync(bytes, length, throwOnEndOfStream: false, cancellationToken) != length)
+        {
+            throw new InvalidDataException("Incomplete script frame payload.");
+        }
+
         return new ScriptFrame(kind, _encoding.GetString(bytes));
     }
 }

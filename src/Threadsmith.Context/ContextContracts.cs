@@ -79,7 +79,7 @@ public sealed record EvidenceProvenance
 }
 
 /// <summary>File version and optional range on which source evidence depends.</summary>
-public sealed record EvidenceFileDependency(string Path, string? Sha256, SourceRange? Range = null);
+public sealed record EvidenceFileDependency(string Path, string? Sha256, SourceRange? Range = null, DateTimeOffset? ObservedAt = null);
 
 /// <summary>One governed evidence item with provenance, relevance, and invalidation state.</summary>
 public sealed record Evidence

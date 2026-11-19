@@ -45,7 +45,9 @@ public sealed class ScriptToolCallerTests
             var advertised = Assert.Single(model.Requests).Tools;
             foreach (var tool in tools)
             {
-                var expected = tool.Definition.Description + (scripting && tool == read ? " Callable from C# scripts." : string.Empty);
+                var expected = tool.Definition.Description + (scripting && tool == read
+                    ? " Callable from C# scripts. JSON schema for ResultJson (not the reply envelope): " + tool.Definition.OutputSchema.JsonSchema
+                    : string.Empty);
                 Assert.Equal(expected, Assert.Single(advertised, item => item.Name == tool.Definition.Id).Description);
             }
         }
@@ -98,8 +100,7 @@ public sealed class ScriptToolCallerTests
             Assert.Equal(new[] { "{", "    int value = 1;" }, read.Lines);
             Assert.DoesNotContain(evidence.Snapshot(session), item => item.Provenance.Source == "tool:read_file");
 
-            // Keep the real admitted identity and dependencies; fix observation order without a real-time wait.
-            await evidence.AddAsync(finding with { CollectedAt = DateTimeOffset.UnixEpoch }, cancellationToken);
+            fixture.Clock.Advance(TimeSpan.FromSeconds(1));
             await File.WriteAllTextAsync(file, original.Replace("value = 1", "value = 2", StringComparison.Ordinal), cancellationToken);
             await RunAsync(application, session, "Read the changed Foo", cancellationToken);
 
@@ -109,6 +110,10 @@ public sealed class ScriptToolCallerTests
             Assert.Equal(dependency, Assert.Single(stale.FileDependencies, item => item.Path == "Foo.cs"));
             var later = Assert.Single(evidence.Snapshot(session), item => item.Provenance.Source == "tool:read_file");
             Assert.NotEqual(dependency.Sha256, Assert.Single(later.FileDependencies).Sha256);
+            var delayed = finding with { EvidenceId = EvidenceId.New(), CollectedAt = later.CollectedAt.AddTicks(1) };
+            await evidence.AddAsync(delayed, cancellationToken);
+            Assert.True(evidence.Find(session, delayed.EvidenceId)!.IsStale);
+            Assert.False(evidence.Find(session, later.EvidenceId)!.IsStale);
             Assert.Equal(4, model.Requests.Count);
         }
         finally
@@ -141,13 +146,15 @@ public sealed class ScriptToolCallerTests
             })),
             ToolCall("search", "{\"query\":\"MissingWidget\",\"glob\":\"*.cs\"}"),
             new ModelChunk { Text = "Search complete.", FinishReason = ModelFinishReason.Stop });
-        var application = fixture.CreateApplication(events, pipeline, model);
+        var evidence = new EvidenceStore(events, fixture.Sanitizer);
+        var application = fixture.CreateApplication(events, pipeline, model, evidence);
         try
         {
             var session = await application.HandleAsync(new CreateSessionCommand("semantic turn"), cancellationToken);
             await RunAsync(application, session, "Find MissingWidget", cancellationToken);
 
             Assert.True(process.NestedReply is { Succeeded: true }, process.NestedReply?.Error ?? DescribeRequests(model));
+            Assert.Contains("semantic", Assert.Single(evidence.Snapshot(session), item => item.Provenance.Source == "tool:csharp_script").InvalidationKeys);
             Assert.Equal(1, resolver.Calls);
             Assert.True(process.NestedReply!.Succeeded, process.NestedReply.Error);
             Assert.Equal("[]", process.NestedReply.ResultJson);
@@ -395,7 +402,8 @@ public sealed class ScriptToolCallerTests
             {
                 Assert.NotNull(request.ScriptHandlers);
                 Assert.True(request.ScriptHandlers.TryGetValue(_nestedTool, out var handler));
-                NestedReply = await handler(_arguments, cancellationToken);
+                var remaining = ScriptWorkerProtocol.ResultBytes;
+                NestedReply = ProcessManager.AdmitScriptReply(await handler(_arguments, cancellationToken), ref remaining);
                 Assert.True(NestedReply.Succeeded, NestedReply.Error);
             }
 

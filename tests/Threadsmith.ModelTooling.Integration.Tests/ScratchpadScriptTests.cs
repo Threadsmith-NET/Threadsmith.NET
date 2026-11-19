@@ -79,12 +79,15 @@ public sealed partial class ScratchpadScriptTests : IDisposable
     }
 
     /// <summary>A held-open host reply cannot keep a cancelled worker process alive.</summary>
-    [Fact]
-    public async Task CancellationReleasesWorkerBeforeNestedHandlerFinishes()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CancellationReleasesWorkerBeforeNestedHandlerFinishes(bool blockStartup)
     {
         var token = TestContext.Current.CancellationToken;
         using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
         var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseStartup = new ManualResetEventSlim();
         var reply = new TaskCompletionSource<ScriptToolReply>(TaskCreationOptions.RunContinuationsAsynchronously);
         var manager = new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider());
         await using var engine = CreateExchangeEngine(manager);
@@ -95,6 +98,11 @@ public sealed partial class ScratchpadScriptTests : IDisposable
                 ["read_file"] = (_, handlerToken) =>
                 {
                     started.SetResult(handlerToken);
+                    if (blockStartup)
+                    {
+                        releaseStartup.Wait(token);
+                    }
+
                     return reply.Task.WaitAsync(token);
                 },
             },
@@ -114,6 +122,7 @@ public sealed partial class ScratchpadScriptTests : IDisposable
         }
         finally
         {
+            releaseStartup.Set();
             reply.TrySetResult(new(true, "{}", false, null, null));
         }
     }

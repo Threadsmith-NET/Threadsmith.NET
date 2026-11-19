@@ -278,10 +278,10 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
             { ScriptPath = scriptPath };
         }
 
-        if (result.ExitCode != 0 || result.StandardOutputTruncated)
+        if (result.ExitCode != 0 || result.StandardOutputTruncated || result.StandardOutput.Length == 0)
         {
             var error = string.IsNullOrWhiteSpace(result.StandardError)
-                ? $"The C# scripting worker exited with code {result.ExitCode}."
+                ? $"The C# scripting worker exited with code {result.ExitCode} without a usable final result."
                 : result.StandardError;
             return new CSharpScriptOutput(
                 false,

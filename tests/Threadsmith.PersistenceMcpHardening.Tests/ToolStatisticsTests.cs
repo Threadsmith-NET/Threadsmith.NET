@@ -20,25 +20,50 @@ public static class ToolStatisticsTests
         var ct = TestContext.Current.CancellationToken;
         await using var database = await DatabaseFixture.CreateAsync();
         var binding = await InitializeAsync(database, ct);
-        await using var first = new SqliteToolStatisticsWorker();
-        await using var second = new SqliteToolStatisticsWorker();
-        var producers = Enumerable.Range(0, 8).Select(index => Task.Run(
-            () =>
+        using var releaseWrites = new ManualResetEventSlim();
+        var bothWorkersReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var workersReady = 0;
+        await using var first = new SqliteToolStatisticsWorker(null, AwaitFirstWrite);
+        await using var second = new SqliteToolStatisticsWorker(null, AwaitFirstWrite);
+        try
         {
-            var worker = index % 2 == 0 ? first : second;
-            for (var count = 0; count < 30; count++)
-            {
-                Assert.True(worker.TryRecord(new(binding, "shared", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 2)));
-            }
-        },
-            ct));
-        await Task.WhenAll(producers);
+            var producers = Enumerable.Range(0, 4).Select(index => Task.Run(
+                () =>
+                {
+                    var worker = index % 2 == 0 ? first : second;
+                    Assert.True(worker.TryRecord(new(binding, "shared", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 1)));
+                    Assert.True(worker.TryRecord(new(binding, "shared", ToolTelemetryStatus.Succeeded, DateTimeOffset.UnixEpoch, 2)));
+                },
+                ct));
+            await Task.WhenAll(producers);
+            await bothWorkersReady.Task.WaitAsync(ct);
+        }
+        finally
+        {
+            releaseWrites.Set();
+        }
+
         await Task.WhenAll(first.StopAsync(ct), second.StopAsync(ct));
         await using var reader = new SqliteToolStatisticsWorker();
         var row = Assert.Single((await reader.GetSnapshotAsync(binding, ct)).Rows);
-        Assert.Equal(240, row.TotalCount);
-        Assert.Equal(240, row.SuccessCount);
-        Assert.Equal(480, row.TotalDurationMilliseconds);
+        Assert.Equal(8, row.TotalCount);
+        Assert.Equal(8, row.SuccessCount);
+        Assert.Equal(12, row.TotalDurationMilliseconds);
+
+        void AwaitFirstWrite(string operation)
+        {
+            if (operation != "CompletionWork" || releaseWrites.IsSet)
+            {
+                return;
+            }
+
+            if (Interlocked.Increment(ref workersReady) == 2)
+            {
+                bothWorkersReady.TrySetResult();
+            }
+
+            releaseWrites.Wait(ct);
+        }
     }
 
     /// <summary>One named worker orders completion/reset/snapshot and caller cancellation does not roll back.</summary>

@@ -72,6 +72,7 @@ jobs:
         shell: pwsh
         run: |
           $parallelModules = if ($env:RUNNER_OS -eq 'macOS') { 1 } else { 4 }
+          if ($env:RUNNER_OS -eq 'Windows') { [DateTimeOffset]::UtcNow.ToString('O') | Set-Content TestResults/ci/test-started-utc.txt }
           $resultsDirectory = Join-Path $PWD "TestResults/run-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
           if (Test-Path -LiteralPath $resultsDirectory) { throw "Test evidence directory must be fresh: $resultsDirectory" }
           dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules --list-tests | Tee-Object TestResults/ci/discovered-tests.log
@@ -100,6 +101,30 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./eng/Test-CiRequiredCases.ps1 -RunnerOS $env:RUNNER_OS -ResultsDirectory "TestResults/run-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+
+      - name: Report Windows native test crashes
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $startFile = 'TestResults/ci/test-started-utc.txt'
+          if (!(Test-Path -LiteralPath $startFile)) { return }
+          $startTime = [DateTimeOffset]::Parse((Get-Content -LiteralPath $startFile -Raw).Trim()).LocalDateTime
+          # Application Error records identify the faulting module without uploading process memory.
+          $events = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; Id = 1000; StartTime = $startTime } -MaxEvents 50 -ErrorAction SilentlyContinue
+          $crashes = @(foreach ($event in $events) {
+            $fields = @{}
+            foreach ($field in ([xml] $event.ToXml()).Event.EventData.Data) { $fields[$field.Name] = $field.InnerText }
+            if ($fields.AppName -notmatch '^(Threadsmith\..*|dotnet|testhost)\.exe$') { continue }
+            [pscustomobject]@{
+              timestampUtc = $event.TimeCreated.ToUniversalTime().ToString('O')
+              application = $fields.AppName
+              module = $fields.ModuleName
+              moduleVersion = $fields.ModuleVersion
+              exception = $fields.ExceptionCode
+              offset = $fields.FaultingOffset
+            }
+          })
+          ConvertTo-Json -InputObject $crashes | Tee-Object TestResults/ci/windows-native-crashes.json
 
       - name: Report macOS native test crashes
         if: ${{ failure() && runner.os == 'macOS' }}

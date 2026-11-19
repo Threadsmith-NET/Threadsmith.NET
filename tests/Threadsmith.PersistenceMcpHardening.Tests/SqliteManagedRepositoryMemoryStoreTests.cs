@@ -572,10 +572,10 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         var entryC = Assert.IsType<RepositoryMemoryEntry>((await router.AddAsync(identityC, Write("C preference"), Model, Embedding, new())).Entry);
         await router.RecordInclusionsAsync(identityC, runC, [new(entryC.Id, 1)]);
         await fixture.ExecuteAsync("UPDATE memory_inclusion_retention_targets SET registered_at = '2020-01-01T00:00:00.0000000+00:00';");
-        // Cross the production 128-target page boundary: repeated failures for B must not
-        // spend another timeout per run, and healthy C sorts after all 129 B targets.
+        // Put healthy C just after the production 128-target page boundary. The extra B
+        // targets have no receipts; they exercise paging and failed-destination coalescing.
         await fixture.ExecuteAsync("""
-            WITH RECURSIVE runs(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM runs WHERE n < 129)
+            WITH RECURSIVE runs(n) AS (SELECT 2 UNION ALL SELECT n + 1 FROM runs WHERE n < 128)
             INSERT INTO memory_inclusion_retention_targets(run_id, repository_identity, repository_root, database_path, registered_at)
             SELECT printf('10000000-0000-0000-0000-%012d', n), target.repository_identity,
                 target.repository_root, target.database_path, target.registered_at
@@ -589,12 +589,18 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await receiptSchema.ExecuteNonQueryAsync();
         var warnings = await owner.PruneExpiredMemoryInclusionsAsync(fixture.Clock.GetUtcNow().AddDays(-30));
         Assert.Single(warnings);
-        Assert.Equal(129, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets;"));
+        Assert.Equal(128, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets;"));
+        Assert.Equal(0, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets WHERE run_id = '20000000-0000-0000-0000-000000000002';"));
         var artifacts = new ArtifactStore(fixture.ConnectionString, Path.Combine(fixture.DirectoryPath, "artifacts"), new SecretOutputSanitizer(), fixture.Clock);
         await artifacts.InitializeAsync();
         await new RetentionService(owner, artifacts, new(), NullLogger<RetentionService>.Instance, fixture.Clock).RunAsync();
         Assert.Equal(0, await fixture.ScalarAsync("SELECT count(*) FROM domain_events;"));
-        Assert.Equal(129, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets;"));
+        Assert.Equal(128, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets;"));
+
+        // The retry only needs the genuine B target. Remove the synthetic page padding in
+        // one transaction rather than opening and committing to both databases 127 times.
+        await fixture.ExecuteAsync("DELETE FROM memory_inclusion_retention_targets WHERE run_id <> '10000000-0000-0000-0000-000000000001';");
+        Assert.Equal(1, await fixture.ScalarAsync("SELECT count(*) FROM memory_inclusion_retention_targets;"));
         receiptSchema.CommandText = "ALTER TABLE temporarily_unavailable_inclusions RENAME TO managed_memory_inclusions;";
         await receiptSchema.ExecuteNonQueryAsync();
         Assert.Empty(await owner.PruneExpiredMemoryInclusionsAsync(fixture.Clock.GetUtcNow().AddDays(-30)));

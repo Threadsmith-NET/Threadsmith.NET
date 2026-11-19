@@ -101,7 +101,6 @@ public sealed class EditAnalyzerTestsAutomaticBlockedWorkIgnoresDeadlineAndCoale
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
-        var analyzer = StageExecutionAnalyzer(fixture.Root);
         var file = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
@@ -112,7 +111,7 @@ public sealed class EditAnalyzerTestsAutomaticBlockedWorkIgnoresDeadlineAndCoale
         await engine.WaitForWarmAsync(ct);
         var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var marker = analyzer + ".block-execution";
+        var marker = ExecutionBarrierPath(fixture.Root);
         await File.WriteAllTextAsync(marker, pipeName, ct);
         var command = new ApplySourceEditCommand(session, RunId.New(), workspace, Guid.NewGuid(), new() { Rationale = "Exercise automatic candidate ownership.", Mutations = [] });
         var compiler = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -22,7 +22,6 @@ public sealed class EditAnalyzerTestsCompilerCompletesWhileAnalyzerIsBlocked : E
     {
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
-        var analyzer = StageExecutionAnalyzer(fixture.Root);
         var ct = TestContext.Current.CancellationToken;
         var path = Path.Combine(fixture.Root, "Contracts", "AnalyzerCases.cs");
         const string original = Violations + "\npublic class AnalyzerBarrier {}";
@@ -43,7 +42,7 @@ public sealed class EditAnalyzerTestsCompilerCompletesWhileAnalyzerIsBlocked : E
         };
         var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var marker = analyzer + ".block-execution";
+        var marker = ExecutionBarrierPath(fixture.Root);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
         await File.WriteAllTextAsync(marker, pipeName, ct);
         var pending = engine.AnalyzeAnalyzerCandidateAsync(source, source, [document], options, false, true, cancellation.Token);

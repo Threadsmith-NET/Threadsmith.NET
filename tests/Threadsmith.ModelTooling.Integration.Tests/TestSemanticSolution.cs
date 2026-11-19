@@ -87,8 +87,7 @@ internal sealed class TestSemanticSolution : IDisposable
                 File.Copy(Path.Combine(SourceRoot, relativePath), destinationPath);
             }
 
-            // Roslyn retains loaded analyzer assemblies for the process lifetime. Share the
-            // immutable deployed DLL, while each owner has independent project/obj state.
+            // Share the immutable fixture binary; each owner has independent project/obj state.
             var analyzerPath = Path.Combine(SourceRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll");
             if (!File.Exists(analyzerPath))
             {

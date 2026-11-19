@@ -21,20 +21,6 @@ public sealed class SemanticFixtureAnalyzer : DiagnosticAnalyzer
     private static readonly DiagnosticDescriptor CompilationRule = new(
         "TS1171", "Compilation-only probe", "Compilation-only probe", "Compatibility", DiagnosticSeverity.Info, isEnabledByDefault: true, customTags: [WellKnownDiagnosticTags.CompilationEnd]);
 
-    /// <summary>Initializes a new instance of the <see cref="SemanticFixtureAnalyzer"/> class.</summary>
-#pragma warning disable RS1035 // The test-only marker deterministically exercises analyzer construction failure.
-    public SemanticFixtureAnalyzer()
-    {
-        SemanticFixtureConstruction.WaitForRelease(
-            typeof(SemanticFixtureAnalyzer).Assembly.Location,
-            "analyzer");
-        if (File.Exists(typeof(SemanticFixtureAnalyzer).Assembly.Location + ".fail-load"))
-        {
-            throw new InvalidOperationException("The Plan 117 analyzer load-failure marker is present.");
-        }
-    }
-#pragma warning restore RS1035
-
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [ProbeRule, CompilationRule];
 
@@ -52,7 +38,7 @@ public sealed class SemanticFixtureAnalyzer : DiagnosticAnalyzer
 #pragma warning disable RS1035 // Test-only execution barrier uses the existing fixture protocol.
                 if (declaration.Identifier.ValueText is "AnalyzerBarrier" or "AnalyzerBarrierFailure")
                 {
-                    SemanticFixtureConstruction.WaitForRelease(typeof(SemanticFixtureAnalyzer).Assembly.Location, "execution");
+                    SemanticFixtureConstruction.WaitForRelease(declaration.SyntaxTree.FilePath + ".block-execution");
                 }
 #pragma warning restore RS1035
                 if (declaration.Identifier.ValueText is "AnalyzerFailure" or "AnalyzerBarrierFailure")

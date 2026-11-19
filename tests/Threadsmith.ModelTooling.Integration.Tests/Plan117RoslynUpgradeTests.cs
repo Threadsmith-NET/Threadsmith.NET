@@ -171,11 +171,8 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
     public static async Task CodeExplore_ExactIdentityCannotClaimAbsenceFromOmittedCandidateProjects(string anchor, bool symbolId)
     {
         var root = CopyFixtureToTemporaryRoot();
-        var analyzerDirectory = Path.Combine(AppContext.BaseDirectory, "plan118", "exact-anchors", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(analyzerDirectory);
-        var analyzerPath = Path.Combine(analyzerDirectory, "Threadsmith.SemanticFixtures.Roslyn59.dll");
-        File.Copy(Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"), analyzerPath);
-        var markerPath = analyzerPath + ".block-generator";
+        var analyzerPath = Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll");
+        var markerPath = Path.Combine(root, "App", "generator.block");
         var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var events = new DomainEventStream();
@@ -189,7 +186,10 @@ public sealed class Plan117RoslynUpgradeTestsCodeExplore_ExactIdentityCannotClai
             contracts.Save(contractsPath);
             var appPath = Path.Combine(root, "App", "App.csproj");
             var app = XDocument.Load(appPath);
-            app.Root!.Add(new XElement("ItemGroup", new XElement("Analyzer", new XAttribute("Include", analyzerPath))));
+            app.Root!.Add(new XElement(
+                "ItemGroup",
+                new XElement("Analyzer", new XAttribute("Include", analyzerPath)),
+                new XElement("AdditionalFiles", new XAttribute("Include", markerPath))));
             app.Save(appPath);
             await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "Decoy.cs"), "namespace Decoy; public class Owner { public void Calculate() {} } public class GeneratedByRoslyn59 { public int Value => 1; } public class CS {}", TestContext.Current.CancellationToken);
             await File.WriteAllTextAsync(Path.Combine(root, "App", "Program.cs"), "namespace Wanted; public class Owner { public void Calculate() {} } public class CS {}", TestContext.Current.CancellationToken);
@@ -371,8 +371,7 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BlockedAnalyzerConst
         var clock = new ObservedTimeProvider();
         await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, timeProvider: clock);
         var request = CreateLoadRequest(temporaryRoot);
-        var analyzerPath = Path.Combine(AppContext.BaseDirectory, "plan117", $"analyzer-blocking-{component}-{refresh}-{retireOwner}", "Threadsmith.SemanticFixtures.Roslyn59.dll");
-        var markerPath = analyzerPath + ".block-" + component;
+        var analyzerPath = Path.Combine(temporaryRoot, "Contracts", "BlockingProbe.dll");
         try
         {
             // Arrange: a refresh starts with a usable workspace that must survive cancellation.
@@ -386,11 +385,9 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BlockedAnalyzerConst
             }
 
             var originalInventory = engine.GetRefreshInventory();
-            // Loaded analyzer assemblies stay locked on Windows; keep them in test output, outside disposable inputs.
-            Directory.CreateDirectory(Path.GetDirectoryName(analyzerPath)!);
-            File.Copy(Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"), analyzerPath, overwrite: true);
+            var bytes = TestAnalyzerBinary.EmitBlockingConstructor(component, pipeName, TestContext.Current.CancellationToken);
+            await File.WriteAllBytesAsync(analyzerPath, bytes, TestContext.Current.CancellationToken);
             SetFixtureAnalyzerPath(temporaryRoot, analyzerPath);
-            await File.WriteAllTextAsync(markerPath, pipeName, TestContext.Current.CancellationToken);
             // Act: cancel only after the real Roslyn constructor has entered its synchronous barrier.
             var operation = refresh ? engine.RefreshFullAsync(cancellation.Token) : engine.LoadAsync(request, cancellation.Token);
             await TestAnalyzerBarrier.WaitForConnectionAsync(pipe, operation, TestContext.Current.CancellationToken);
@@ -429,7 +426,6 @@ public sealed class Plan117RoslynUpgradeTestsSemanticEngine_BlockedAnalyzerConst
         finally
         {
             // Release abandoned construction before removing its owned fixture inputs.
-            File.Delete(markerPath);
             try
             {
                 await TestAnalyzerBarrier.ReleaseAsync(pipe);

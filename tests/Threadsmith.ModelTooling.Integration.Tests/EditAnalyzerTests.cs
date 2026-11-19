@@ -57,19 +57,8 @@ public abstract partial class EditAnalyzerTests
         await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n[*.cs]\ndotnet_analyzer_diagnostic.severity = none\n" + string.Join('\n', FixtureDiagnosticIds.Select(id => "dotnet_diagnostic." + id + ".severity = suggestion")), cancellationToken);
     }
 
-    private protected static string StageExecutionAnalyzer(string root)
-    {
-        // The loader retains DLLs for process lifetime; each barrier needs its own staged assembly.
-        var staging = Path.Combine(AppContext.BaseDirectory, "plan117", "analyzer-execution", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(staging);
-        var analyzer = Path.Combine(staging, "Threadsmith.SemanticFixtures.Roslyn59.dll");
-        File.Copy(Path.Combine(TestSemanticSolution.SourceRoot, "Analyzers", Path.GetFileName(analyzer)), analyzer);
-        var projectPath = Path.Combine(root, "Contracts", "Contracts.csproj");
-        var projectXml = XDocument.Load(projectPath);
-        projectXml.Descendants("Analyzer").Single(item => item.Attribute("Include")!.Value.EndsWith(Path.GetFileName(analyzer), StringComparison.Ordinal)).SetAttributeValue("Include", analyzer);
-        projectXml.Save(projectPath);
-        return analyzer;
-    }
+    private protected static string ExecutionBarrierPath(string root) =>
+        Path.Combine(root, "Contracts", "AnalyzerCases.cs.block-execution");
 }
 
 /// <summary>Exercises one independently owned semantic or model contract.</summary>
@@ -169,7 +158,6 @@ public sealed class EditAnalyzerTestsCancelledAnalyzerExecutionIsAbandonedAndNev
     {
         using var fixture = new TestSemanticSolution();
         await ConfigureFixtureAsync(fixture.Root);
-        var analyzer = StageExecutionAnalyzer(fixture.Root);
         await using var events = new DomainEventStream();
         var clock = new ObservedTimeProvider();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, timeProvider: clock);
@@ -180,7 +168,7 @@ public sealed class EditAnalyzerTestsCancelledAnalyzerExecutionIsAbandonedAndNev
         var candidate = source.WithDocumentText(document.Id, SourceText.From("public class AnalyzerBarrier {}"));
         var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var marker = analyzer + ".block-execution";
+        var marker = ExecutionBarrierPath(fixture.Root);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(marker, pipeName, TestContext.Current.CancellationToken);
         var pending = engine.AnalyzeAnalyzerCandidateAsync(source, candidate, [document.Id], new() { DiagnosticIds = ["TS1170"], BudgetMilliseconds = int.MaxValue }, false, true, cancellation.Token);

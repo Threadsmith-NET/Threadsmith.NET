@@ -16,7 +16,7 @@ public static class RoslynWorkspaceHostTests
     public static void ProductionStorageSelectionKeepsNonpersistentHostFreeOfSqlite()
     {
         var nonPersistent = RoslynWorkspaceHost.WithoutPersistentStorage;
-        Assert.Same(OperatingSystem.IsWindows() ? MefHostServices.DefaultHost : nonPersistent, RoslynWorkspaceHost.Services);
+        Assert.Equal(OperatingSystem.IsWindows(), !ReferenceEquals(nonPersistent, RoslynWorkspaceHost.Services));
 
         // Resolve the registered service contract from the pinned factory rather than asking MEF for a concrete implementation type.
         var factory = typeof(Workspace).Assembly.GetType("Microsoft.CodeAnalysis.SQLite.v2.SQLitePersistentStorageService+ServiceFactory", throwOnError: true)!;
@@ -24,9 +24,9 @@ public static class RoslynWorkspaceHostTests
         var contract = Assert.IsAssignableFrom<Type>(export.ConstructorArguments[0].Value);
         var getService = typeof(HostWorkspaceServices).GetMethod(nameof(HostWorkspaceServices.GetService))!.MakeGenericMethod(contract);
 
-        using var defaultWorkspace = new AdhocWorkspace(MefHostServices.DefaultHost);
+        using var productionWorkspace = new AdhocWorkspace(RoslynWorkspaceHost.Services);
         using var nonPersistentWorkspace = new AdhocWorkspace(nonPersistent);
-        Assert.NotNull(getService.Invoke(defaultWorkspace.Services, null));
+        Assert.Equal(OperatingSystem.IsWindows(), getService.Invoke(productionWorkspace.Services, null) is not null);
         Assert.Null(getService.Invoke(nonPersistentWorkspace.Services, null));
     }
 

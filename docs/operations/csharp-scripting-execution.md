@@ -49,6 +49,17 @@ Declare `csharp_script` as a required tool when a native skill needs it. Packagi
 - Each call runs in a fresh, single-use worker, which may already be prewarmed. Variables do not persist between calls. For either input form, the host saves a unique `.csx` execution copy in the session scratchpad and returns its path.
 - Directives, direct file/process/network/reflection/native access, dynamic code, and unsafe constructs are prohibited. Follow the specific rejection message; do not repeat the same denied operation through another API.
 
+## Calling host tools
+
+Use tools marked “Callable from C# scripts.” `Tools.Available` lists the current names. Pass ordinary tool arguments as a JSON string and await each call before the next:
+
+```csharp
+var reply = await Tools.InvokeAsync("find_symbol", "{\"query\":\"Widget\"}");
+return reply.Succeeded ? reply.ResultJson : reply.Error;
+```
+
+Check `Succeeded` and `IsTruncated` before using `ResultJson`; failures include `ErrorClassification` and `Error`. Calls use the caller's tool policy, approvals, and read scope. A listed tool can be disabled before dispatch. The exchange allows 64 attempts, 16 KiB of argument JSON per call and 8 MiB of aggregate result data per script. The script's execution deadline includes time spent waiting for nested calls. Nested activity has the `(csharp_scripting)` prefix; the outer script keeps its ordinary activity and output.
+
 ## Files and limits
 
 `Scratchpad` is supplied automatically. Relative paths resolve inside the scratchpad. For authorized repository inputs or trusted `tools:readFile:allowedFolders` grants, pass an absolute path. Prohibited paths, child scope, and link checks still apply; export write grants do not grant reads. Outputs must stay inside the scratchpad, which is cleared at session boundaries. Python script destinations are rejected.

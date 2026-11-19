@@ -13,7 +13,8 @@ internal static class ConversationToolAvailability
         RunId runId,
         ToolInvocationContext? invocationContext,
         bool toolsWithheld,
-        IReadOnlyList<ToolRegistration>? callerRegistrations = null)
+        IReadOnlyList<ToolRegistration>? callerRegistrations = null,
+        IPromptLoader? prompts = null)
     {
         if (toolsWithheld || toolPipeline is null || toolRegistry is null)
         {
@@ -29,8 +30,34 @@ internal static class ConversationToolAvailability
                     || feature.CaptureAvailability(invocationContext.RepositoryPath).Ready),
         ];
         return new ConversationToolSnapshot(
-            registrations.Select(registration => registration.Tool.Definition).ToArray(),
+            ProjectDefinitions(registrations, toolPipeline, invocationContext, prompts),
             registrations);
+    }
+
+    /// <summary>Projects descriptions without modifying the registrations used for dispatch.</summary>
+    public static ToolDefinition[] ProjectDefinitions(
+        IReadOnlyList<ToolRegistration> registrations,
+        IToolInvocationPipeline? pipeline,
+        ToolInvocationContext? context,
+        IPromptLoader? prompts)
+    {
+        var definitions = registrations.Select(item => item.Tool.Definition).ToArray();
+        if (pipeline is not ToolInvocationPipeline scriptPipeline || context is null || prompts is null
+            || !registrations.Any(item => item.Implementation is CSharpScriptTool && IsAdvertised(item.Tool.Definition, context)))
+        {
+            return definitions;
+        }
+
+        for (var index = 0; index < registrations.Count; index++)
+        {
+            if (scriptPipeline.IsScriptCallable(registrations[index], context))
+            {
+                var definition = definitions[index];
+                definitions[index] = definition with { DescriptionResolver = () => definition.Description + " " + prompts.Get(PromptFileNames.ToolScriptCallableMarker) };
+            }
+        }
+
+        return definitions;
     }
 
     /// <summary>Returns whether one enabled definition remains visible after current request policy.</summary>

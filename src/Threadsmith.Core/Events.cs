@@ -277,7 +277,8 @@ public sealed record ToolInvocationStarted(
     ToolActivitySource? Source = null,
     string? ActivityDetail = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
-    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt);
+    string? ActivityOrigin = null,
+    bool IsScriptOrigin = false) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(
@@ -294,6 +295,9 @@ public sealed record ToolInvocationCompleted(
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt)
 {
+    /// <summary>Whether the host dispatched this call on behalf of a running script.</summary>
+    public bool IsScriptOrigin { get; init; }
+
     /// <summary>Gets the exact invocation owner; default supports historical events.</summary>
     public RunId RunId { get; init; }
 

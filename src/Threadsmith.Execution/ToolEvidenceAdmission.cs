@@ -125,8 +125,15 @@ internal static class ToolEvidenceAdmission
                 var path = SourceEvidence.NormalizePath(repositoryPath, item.Identifier);
                 var digest = read is not null && comparer.Equals(SourceEvidence.NormalizePath(repositoryPath, read.Path), path)
                     ? read.FileSha256 ?? read.ContentDigest : null;
-                return new EvidenceFileDependency(path, digest, range);
+                return new EvidenceFileDependency(path, item.ReadDigest ?? digest, item.ReadRange ?? range);
             }).ToArray();
+    }
+
+    /// <summary>Retains host-observed page dependencies without keeping read bodies.</summary>
+    internal static IEnumerable<ToolProvenanceSource> GetScriptReadSources(ToolInvocationResult result, string repositoryPath)
+    {
+        return GetFileDependencies(result, repositoryPath)
+            .Select(dependency => new ToolProvenanceSource("file", dependency.Path) { ReadDigest = dependency.Sha256, ReadRange = dependency.Range });
     }
 
     private static SemanticConfidenceLevel ReadSemanticConfidence(string toolId, string content)

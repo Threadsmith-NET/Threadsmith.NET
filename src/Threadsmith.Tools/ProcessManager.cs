@@ -77,6 +77,10 @@ public sealed record ProcessExecutionRequest
     /// <summary>Gets an unused scripting process to adopt into ordinary tracked execution.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     internal ScriptWorkerProcess? ScriptWorker { get; init; }
+
+    /// <summary>Non-null only for the private worker protocol; empty grants no calls.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal IReadOnlyDictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>? ScriptHandlers { get; init; }
 }
 
 /// <summary>Normalized, sanitized child-process exit data.</summary>
@@ -259,10 +263,10 @@ public sealed class ProcessManager : IProcessManager
         CancellationToken cancellationToken)
     {
         var processId = process.Id;
-        var stdoutTask = ReadBoundedAsync(
-            process.StandardOutput,
-            request.MaximumOutputCharacters,
-            cancellationToken);
+        var stdoutTask = request.ScriptHandlers is null
+            ? ReadBoundedAsync(process.StandardOutput, request.MaximumOutputCharacters, cancellationToken)
+            : null;
+        (string Text, bool IsTruncated) scriptOutput = (string.Empty, false);
         var stderrTask = ReadBoundedAsync(
             process.StandardError,
             request.MaximumOutputCharacters,
@@ -275,7 +279,11 @@ public sealed class ProcessManager : IProcessManager
         {
             try
             {
-                if (request.StandardInput is not null)
+                if (request.ScriptHandlers is not null)
+                {
+                    scriptOutput = (await ExchangeScriptAsync(process, request, timeoutCancellation.Token), false);
+                }
+                else if (request.StandardInput is not null)
                 {
                     await process.StandardInput.WriteAsync(
                         request.StandardInput.AsMemory(),
@@ -298,7 +306,7 @@ public sealed class ProcessManager : IProcessManager
                 throw;
             }
 
-            var stdout = await stdoutTask;
+            var stdout = stdoutTask is null ? scriptOutput : await stdoutTask;
             var stderr = await stderrTask;
             var sanitizedStandardOutput = request.StandardOutputFormat switch
             {
@@ -328,6 +336,11 @@ public sealed class ProcessManager : IProcessManager
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (request.ScriptHandlers is not null)
+            {
+                await TerminateAndDrainAsync(process);
+            }
+
             _logger.LogError(
                 exception,
                 "Process {ProcessId} failed for tool invocation {ToolInvocationId}",
@@ -343,6 +356,92 @@ public sealed class ProcessManager : IProcessManager
             }
 
             // Retain unresolved termination metadata so session cleanup cannot delete live working files.
+        }
+    }
+
+    private static async Task<string> ExchangeScriptAsync(Process process, ProcessExecutionRequest request, CancellationToken cancellationToken)
+    {
+        var writer = process.StandardInput.BaseStream;
+        var reader = process.StandardOutput.BaseStream;
+        var start = request.StandardInput ?? throw new InvalidOperationException("Missing script request.");
+        await ScriptWorkerProtocol.WriteAsync(writer, ScriptFrameKind.Start, 0, start, 64 * 1024 * 1024, cancellationToken);
+        var bytesRemaining = ScriptWorkerProtocol.ResultBytes;
+        for (var sequence = 1; ; sequence++)
+        {
+            var frame = await ScriptWorkerProtocol.ReadAsync(
+                reader,
+                sequence,
+                kind => kind switch
+                {
+                    ScriptFrameKind.Request when sequence <= ScriptWorkerProtocol.Attempts => (6 * ScriptWorkerProtocol.ArgumentBytes) + 4096,
+                    ScriptFrameKind.Final => request.MaximumOutputCharacters,
+                    _ => -1,
+                },
+                cancellationToken);
+            if (frame.Kind == ScriptFrameKind.Final)
+            {
+                return frame.Payload;
+            }
+
+            var call = JsonSerializer.Deserialize<ScriptToolRequest>(frame.Payload) ?? throw new InvalidDataException("Missing tool call.");
+            var reply = new ScriptToolReply(false, null, false, "Denied", "Tool unavailable or arguments too large.");
+            if (call.ToolId is not null && call.ArgumentsJson is not null && Encoding.UTF8.GetByteCount(call.ArgumentsJson) <= ScriptWorkerProtocol.ArgumentBytes && request.ScriptHandlers?.TryGetValue(call.ToolId, out var handler) == true)
+            {
+                using var exitWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                var exit = process.WaitForExitAsync(exitWait.Token);
+                var handlerLifetime = new CancellationTokenSource();
+                Task<ScriptToolReply>? operation = null;
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    operation = handler(call.ArgumentsJson, handlerLifetime.Token);
+                    await Task.WhenAny(operation, exit);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (exit.IsCompleted)
+                    {
+                        await exit;
+                        throw new EndOfStreamException("The script worker exited during a tool call.");
+                    }
+
+                    reply = await operation;
+                }
+                finally
+                {
+                    if (operation is { IsCompleted: false })
+                    {
+                        _ = Task.WhenAll(handlerLifetime.CancelAsync(), operation).ContinueWith(
+                            static (finished, state) =>
+                            {
+                                _ = finished.Exception;
+                                (state as CancellationTokenSource)?.Dispose();
+                            },
+                            handlerLifetime,
+                            CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
+                    }
+                    else
+                    {
+                        _ = operation?.Exception;
+                        handlerLifetime.Dispose();
+                    }
+
+                    await exitWait.CancelAsync();
+                    await exit.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                }
+            }
+
+            var size = Encoding.UTF8.GetByteCount(reply.ResultJson ?? string.Empty) + (long)Encoding.UTF8.GetByteCount(reply.Error ?? string.Empty);
+            if (size > bytesRemaining)
+            {
+                reply = new(false, null, true, "OutputLimitExceeded", "Script result budget exhausted.");
+            }
+            else
+            {
+                bytesRemaining -= (int)size;
+            }
+
+            await ScriptWorkerProtocol.WriteAsync(writer, ScriptFrameKind.Reply, sequence, JsonSerializer.Serialize(reply), (6 * ScriptWorkerProtocol.ResultBytes) + 4096, cancellationToken);
         }
     }
 

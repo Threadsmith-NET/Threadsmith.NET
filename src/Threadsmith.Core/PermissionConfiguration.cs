@@ -165,6 +165,9 @@ public sealed record PermissionConfiguration
     /// <summary>Configuration shape for tools:config:csharp_script; metadata owns source admission.</summary>
     public sealed record ToolsConfigCsharpScriptSettings
     {
+        /// <summary>Default script execution budget, excluding worker acquisition.</summary>
+        public const int DefaultTimeoutMilliseconds = 30_000;
+
         /// <summary>Default platform references and imports for C# scripts. Worker API restrictions still apply.</summary>
         public const string DefaultAllowedAssemblies =
             "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography";
@@ -184,7 +187,7 @@ public sealed record PermissionConfiguration
 
         /// <summary>Configuration contract for tools:config:csharp_script:timeout_ms.</summary>
         [JsonPropertyName("timeout_ms")]
-        [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = 5000)]
+        [ConfigurationPermission(Shape = PermissionInputShape.Scalar, DefaultLimit = DefaultTimeoutMilliseconds)]
         public int? TimeoutMs { get; init; }
 
         /// <summary>Configuration contract for tools:config:csharp_script:max_output_bytes.</summary>

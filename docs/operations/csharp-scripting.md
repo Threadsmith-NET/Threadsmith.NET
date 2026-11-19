@@ -23,6 +23,8 @@ The host saves each submitted snippet as a `.csx` file in `.threadsmith/.scratch
 
 If a tracked process cannot be confirmed terminated within the shutdown backstop, cleanup stays blocked to preserve its working files. Restart Threadsmith before retrying cleanup.
 
+Scripts can call eligible read-only tools through the host, not directly through the compiler or filesystem. The [execution reference](csharp-scripting-execution.md#calling-host-tools) describes discovery, arguments, limits, and failures. The default execution budget is 30 seconds for the entire script, including nested tool calls; a shorter policy still applies.
+
 ## View and copy submitted source
 
 In the interactive terminal, each retained script completion has a collapsed **C# script** control inside its `TOOLS: csharp_script` output block. Click the heading to expand it. The preview shows at most 20 logical lines and 8,192 source characters. A notice identifies a truncated preview. If the normalized preview cannot fit transcript retention, the header says **Preview omitted: retention limits**. Under very small budgets, **[!] C# script** gives the same omission warning without adding rows or bytes to the collapsed controls. The full-source action still works. Execution output and errors remain outside the preview.

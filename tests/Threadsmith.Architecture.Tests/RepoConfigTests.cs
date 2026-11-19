@@ -124,7 +124,7 @@ public static class RepoConfigTests
         Assert.False(config.GetValue("tools:codeExplore:inspectCodeExploreOutput", true));
         Assert.Equal(30, config.GetValue("tools:runProcess:defaultTimeoutSeconds", 0));
         Assert.Equal(60, config.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
-        Assert.Equal(5000, config.GetValue("tools:config:csharp_script:timeout_ms", 0));
+        Assert.Equal(30000, config.GetValue("tools:config:csharp_script:timeout_ms", 0));
         Assert.Equal(65536, config.GetValue("tools:config:csharp_script:max_output_bytes", 0));
         Assert.Equal(
             "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography",

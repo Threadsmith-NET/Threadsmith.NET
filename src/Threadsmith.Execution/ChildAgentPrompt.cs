@@ -83,14 +83,17 @@ internal sealed class ChildAgentPrompt
 
     /// <summary>Creates exact model tool definitions from request-fenced registrations.</summary>
     public static IReadOnlyList<ModelToolDefinition> CreateToolDefinitions(
-        IReadOnlyList<ToolRegistration> registrations)
+        IReadOnlyList<ToolRegistration> registrations,
+        IToolInvocationPipeline? pipeline = null,
+        ToolInvocationContext? context = null,
+        IPromptLoader? prompts = null)
     {
-        return registrations.Select(registration => new ModelToolDefinition
+        return ConversationToolAvailability.ProjectDefinitions(registrations, pipeline, context, prompts).Select(definition => new ModelToolDefinition
         {
-            Name = registration.Tool.Definition.Id,
-            Description = registration.Tool.Definition.Description,
-            ArgumentsJsonSchema = registration.Tool.Definition.InputSchema.JsonSchema,
-            PreferStrictArguments = registration.Tool.Definition.PreferStrictArguments,
+            Name = definition.Id,
+            Description = definition.Description,
+            ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
+            PreferStrictArguments = definition.PreferStrictArguments,
         }).ToArray();
     }
 

@@ -326,7 +326,7 @@
       "csharp_script": {
         "NumberOfWarmWorkersInPool": 1,
         "WorkerCreationTimeOut": 3000,
-        "timeout_ms": 5000,
+        "timeout_ms": 30000,
         "max_output_bytes": 65536,
         "max_code_characters": 65536,
         "max_assembly_name_characters": 128,

@@ -52,7 +52,7 @@ public interface IToolInvocationPipeline
 }
 
 /// <summary>Default centralized tool invocation pipeline.</summary>
-public sealed class ToolInvocationPipeline : IToolInvocationPipeline
+public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
 {
     private static readonly ActivitySource _activitySource = new("Threadsmith.Tools");
     private static readonly Meter _meter = new("Threadsmith.Tools");
@@ -919,6 +919,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var executionStarted = _timeProvider.GetTimestamp();
         IReadOnlyList<string> observedConcepts = [];
         ToolSourceDetail? sourceDetail = null;
+        var scriptSources = new List<ToolProvenanceSource>();
         try
         {
             var remaining = executionContext.Deadline is { } expires
@@ -979,7 +980,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             if (ConfiguredTool.Unwrap(tool) is CSharpScriptTool scriptTool && input is CSharpScriptInput script)
             {
                 var prepared = await scriptTool.PrepareSourceAsync(script, executionContext, timeoutCancellation.Token);
-                executionContext = executionContext with { PreparedScriptSource = prepared };
+                executionContext = executionContext with
+                {
+                    PreparedScriptSource = prepared,
+                    Invocation = request.Context with { ScriptHandlers = CreateScriptHandlers(request, scriptSources) },
+                };
 
                 // Retain and execute the same captured string; never reread the selected path.
                 var retainSource = prepared.Code.Length <= ToolSourceDetail.MaximumCharacters;
@@ -990,6 +995,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     Availability = retainSource ? ToolSourceAvailability.Available : ToolSourceAvailability.RetentionLimitExceeded,
                     Source = retainSource ? prepared.Code : null,
                 };
+            }
+
+            if (request.Context.IsScriptOrigin && (request.ExpectedRegistration is not { } expected || !IsNormallyEnabled(expected)))
+            {
+                throw new UnauthorizedAccessException("Script tool was disabled or replaced.");
             }
 
             var execution = await tool.ExecuteAsync(
@@ -1144,7 +1154,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
                         _presentationLimits.MaximumTransientActivityDetailCharacters))
-                { RunId = request.RunId, SourceDetail = sourceDetail },
+                { RunId = request.RunId, SourceDetail = sourceDetail, IsScriptOrigin = request.Context.IsScriptOrigin },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
             request.Completion?.Record(succeeded ? ToolTelemetryStatus.Succeeded : ToolTelemetryStatus.Failed, authoritativeElapsedMilliseconds);
@@ -1159,7 +1169,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ? JsonOutputSanitizer.SanitizeJsonOrText(retained, _sanitizer) : null,
                 Concepts = observedConcepts,
                 SourceDetail = sourceDetail,
-                Sources = execution.Sources,
+                Sources = scriptSources.Count == 0 ? execution.Sources : [.. execution.Sources, .. scriptSources.Distinct()],
                 Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,
                 ErrorClassification = classification,
@@ -1409,7 +1419,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 source,
                 activityDetail,
                 transientActivityDetail,
-                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters)),
+                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters),
+                request.Context.IsScriptOrigin),
             CancellationToken.None);
     }
 
@@ -1482,7 +1493,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 Source: source,
                 ElapsedMilliseconds: elapsedMilliseconds,
                 Outcome: outcome)
-            { RunId = request.RunId, SourceDetail = sourceDetail },
+            { RunId = request.RunId, SourceDetail = sourceDetail, IsScriptOrigin = request.Context.IsScriptOrigin },
             CancellationToken.None);
         await InvokeAfterHookAsync(
             request,

@@ -178,7 +178,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     plan.Request.RunId,
                     modelContext,
                     toolsWithheld: formattingOnly,
-                    candidateRegistrations);
+                    candidateRegistrations,
+                    _prompts);
                 if (!formattingOnly && plan.Compatibility.AvailableRequiredTools.Any(toolId =>
                     !available.Definitions.Any(item => item.Id.Equals(toolId, StringComparison.OrdinalIgnoreCase))))
                 {
@@ -188,7 +189,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 var registrations = available.Registrations.ToDictionary(
                     item => item.Tool.Definition.Id,
                     StringComparer.OrdinalIgnoreCase);
-                var modelTools = BuildToolDefinitions(available.Registrations);
+                var modelTools = BuildToolDefinitions(available.Definitions);
                 var text = new StringBuilder();
                 var toolRequests = new List<ToolRequestModelOutput>();
                 var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
@@ -410,6 +411,22 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         OperationScope = operationScope,
                         RequestedBy = "model",
                         ModelVisibleToolSnapshotId = snapshotId,
+                        ScriptCaller = new ScriptCaller(
+                            _snapshots,
+                            seenCalls,
+                            Reserve: () =>
+                            {
+                                lock (seenCalls)
+                                {
+                                    if (toolCalls >= maximumToolCalls)
+                                    {
+                                        throw new InvalidOperationException("The skill tool-call budget is exhausted.");
+                                    }
+
+                                    toolCalls++;
+                                }
+                            },
+                            Normalize: json => SkillCanonicalJson.CanonicalizeValue(ModelJsonCleanup.Clean(json))),
                         ModelProfileId = modelRequest.ResolvedProfileId,
                         ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
                         ModelContextWindowTokens = profile?.ContextWindow,
@@ -747,18 +764,14 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         return false;
     }
 
-    private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolRegistration> registrations)
+    private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolDefinition> definitions)
     {
-        return registrations.Select(registration =>
+        return definitions.Select(definition => new ModelToolDefinition
         {
-            var definition = registration.Tool.Definition;
-            return new ModelToolDefinition
-            {
-                Name = definition.Id,
-                Description = definition.Description,
-                ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
-                PreferStrictArguments = definition.PreferStrictArguments,
-            };
+            Name = definition.Id,
+            Description = definition.Description,
+            ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
+            PreferStrictArguments = definition.PreferStrictArguments,
         }).ToArray();
     }
 

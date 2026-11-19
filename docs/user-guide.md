@@ -999,7 +999,7 @@ Configure it with scalar values:
       "csharp_script": {
         "NumberOfWarmWorkersInPool": "1",
         "WorkerCreationTimeOut": "3000",
-        "timeout_ms": "5000",
+        "timeout_ms": "30000",
         "max_output_bytes": "65536",
         "assembly_config_action": "merge",
         "allowed_assemblies": "System.Text.RegularExpressions"

@@ -46,6 +46,122 @@ public sealed partial class ScratchpadScriptTests : IDisposable
         Assert.Equal(expected, result.Output);
     }
 
+    /// <summary>The worker receives structured replies and uses each reply in the next call.</summary>
+    [Fact]
+    public async Task ScriptChainsSemanticCallsAndRendersTheirNormalOutput()
+    {
+        var scope = CreateScope();
+        var calls = new List<string>();
+        var handlers = new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>();
+        foreach (var (id, expected, reply) in new[] { ("find_symbol", "{}", "symbol-id"), ("find_references", "symbol-id", "source-path"), ("read_file", "source-path", "line of source") })
+        {
+            handlers.Add(id, (arguments, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                Assert.Equal(expected, arguments);
+                calls.Add(id);
+                return Task.FromResult(new ScriptToolReply(true, reply, false, "None", null));
+            });
+        }
+
+        var manager = new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance);
+        await using var engine = CreateExchangeEngine(manager);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope) with { ScriptHandlers = handlers }) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+        const string code = """
+            var symbol = await Tools.InvokeAsync("find_symbol", "{}");
+            var reference = await Tools.InvokeAsync("find_references", symbol.ResultJson);
+            return (await Tools.InvokeAsync("read_file", reference.ResultJson)).ResultJson;
+            """;
+        var result = await engine.ExecuteAsync(code, ScriptKind.Statement, context, TestContext.Current.CancellationToken);
+        Assert.True(result.Success, result.Error);
+        Assert.Equal("line of source", result.Output);
+        Assert.Equal(new[] { "find_symbol", "find_references", "read_file" }, calls);
+    }
+
+    /// <summary>A held-open host reply cannot keep a cancelled worker process alive.</summary>
+    [Fact]
+    public async Task CancellationReleasesWorkerBeforeNestedHandlerFinishes()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reply = new TaskCompletionSource<ScriptToolReply>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var manager = new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance, timeProvider: new FakeTimeProvider());
+        await using var engine = CreateExchangeEngine(manager);
+        var invocation = CreateContext(CreateScope()) with
+        {
+            ScriptHandlers = new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>
+            {
+                ["read_file"] = (_, handlerToken) =>
+                {
+                    started.SetResult(handlerToken);
+                    return reply.Task.WaitAsync(token);
+                },
+            },
+        };
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+        var running = engine.ExecuteAsync("(await Tools.InvokeAsync(\"read_file\", \"{}\")).Succeeded", ScriptKind.Expression, context, stop.Token);
+        try
+        {
+            Assert.Same(started.Task, await Task.WhenAny(started.Task, running).WaitAsync(token));
+            var handlerToken = await started.Task;
+            using var worker = System.Diagnostics.Process.GetProcessById(Assert.Single(manager.ActiveProcesses).ProcessId);
+            await stop.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running.WaitAsync(token));
+            Assert.True(handlerToken.IsCancellationRequested);
+            Assert.True(worker.HasExited);
+            Assert.Empty(manager.ActiveProcesses);
+        }
+        finally
+        {
+            reply.TrySetResult(new(true, "{}", false, null, null));
+        }
+    }
+
+    /// <summary>Caller cancellation reaches a cooperative pending handler and releases the tracked process.</summary>
+    [Fact]
+    public async Task CancellingScriptStopsPendingToolAndClosesExchange()
+    {
+        var scope = CreateScope();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlers = new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>
+        {
+            ["read_file"] = async (_, token) =>
+            {
+                started.SetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    throw new InvalidOperationException();
+                }
+                finally
+                {
+                    stopped.SetResult();
+                }
+            },
+        };
+        var manager = new ProcessManager(new PassthroughSanitizer(), NullLogger<ProcessManager>.Instance);
+        await using var engine = CreateExchangeEngine(manager);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(scope) with { ScriptHandlers = handlers }) { ExecutionTimeout = Timeout.InfiniteTimeSpan };
+        var running = engine.ExecuteAsync("(await Tools.InvokeAsync(\"read_file\", \"{}\")).Succeeded", ScriptKind.Expression, context, stop.Token);
+        Assert.Same(started.Task, await Task.WhenAny(started.Task, running));
+        await stop.CancelAsync();
+        try
+        {
+            await running;
+            Assert.Fail("Expected caller cancellation.");
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            // Cancellation must propagate after process cleanup.
+        }
+
+        await stopped.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Empty(manager.ActiveProcesses);
+    }
+
     /// <summary>Imports and namespace qualifiers do not grant access to restricted APIs.</summary>
     [Theory]
     [InlineData("Console.WriteLine(25)", null, "Console access is prohibited. Return the result as the script's final expression.")]
@@ -253,6 +369,8 @@ public sealed partial class ScratchpadScriptTests : IDisposable
             Directory.Delete(_root, true);
         }
     }
+
+    private static CSharpScriptEngine CreateExchangeEngine(ProcessManager manager) => new(manager, new ToolConfig(new ConfigurationBuilder().Build()), Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"), workerOptions: new() { NumberOfWarmWorkersInPool = 0 });
 
     private ScriptFileScope CreateScope()
     {

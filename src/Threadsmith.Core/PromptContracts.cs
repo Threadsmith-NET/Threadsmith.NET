@@ -337,6 +337,9 @@ public static class PromptFileNames
     /// <summary>Gets isolated candidate command-policy validation guidance.</summary>
     public const string ToolValidateCommandPolicyDescription = "Tool-validate_command_policy-Description.md";
 
+    /// <summary>Gets the marker appended to tools callable from C# scripts.</summary>
+    public const string ToolScriptCallableMarker = "Tool-Script-CallableMarker.md";
+
     /// <summary>Gets the stable filename for the ToolCsharpScriptDescription prompt asset.</summary>
     public const string ToolCsharpScriptDescription = "Tool-csharp_script-Description.md";
 
@@ -1136,6 +1139,7 @@ public static class PromptFileNames
         ToolAskUserDescription,
         ToolValidateCommandPolicyDescription,
         ToolCsharpScriptDescription,
+        ToolScriptCallableMarker,
         ToolCodeExploreDescription,
         ToolCallHierarchyDescription,
         ToolSymbolImpactDescription,

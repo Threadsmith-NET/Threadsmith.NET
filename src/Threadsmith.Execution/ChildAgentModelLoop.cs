@@ -122,7 +122,7 @@ internal sealed class ChildAgentModelLoop
         }
 
         var toolDefinitions = ModelToolCanonicalizer.Canonicalize(
-            ChildAgentPrompt.CreateToolDefinitions(registrations));
+            ChildAgentPrompt.CreateToolDefinitions(registrations, _tools, childToolContext, _prompts));
         var toolWireEstimate = ModelWireEstimator.EstimateTools(
             toolDefinitions,
             ToolTransportMode.Native);
@@ -143,23 +143,22 @@ internal sealed class ChildAgentModelLoop
         var boundPromptProfileId = model.ProfileId;
         IReadOnlyList<ModelToolDefinition> BindPrompts(ModelProfileId profileId)
         {
-            if (boundPromptProfileId == profileId)
+            if (boundPromptProfileId != profileId)
             {
-                return toolDefinitions;
-            }
-
-            var initial = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
-            foreach (var replacement in initial.Take(4))
-            {
-                var index = messages.FindIndex(message => message.SectionId == replacement.SectionId);
-                if (index >= 0)
+                var initial = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
+                foreach (var replacement in initial.Take(4))
                 {
-                    messages[index] = replacement;
+                    var index = messages.FindIndex(message => message.SectionId == replacement.SectionId);
+                    if (index >= 0)
+                    {
+                        messages[index] = replacement;
+                    }
                 }
+
+                boundPromptProfileId = profileId;
             }
 
-            boundPromptProfileId = profileId;
-            return toolDefinitions = ModelToolCanonicalizer.Canonicalize(ChildAgentPrompt.CreateToolDefinitions(registrations));
+            return toolDefinitions = ModelToolCanonicalizer.Canonicalize(ChildAgentPrompt.CreateToolDefinitions(registrations, _tools, childToolContext, _prompts));
         }
 
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
@@ -681,6 +680,16 @@ internal sealed class ChildAgentModelLoop
             ToolCalls = requests.Count,
             Processes = processCalls,
         });
+        var repositoryPath = childContext.RepositoryPath;
+        childContext = childContext with
+        {
+            ScriptCaller = new ScriptCaller(
+                _snapshots,
+                toolCalls,
+                Reserve: () => ledger.Charge(new AgentResourceUsage { ToolCalls = 1 }),
+                Charge: result => ChargeDelivery(ledger, result, result.ResultJson ?? result.Error ?? string.Empty, 0),
+                ReadSources: result => ToolEvidenceAdmission.GetScriptReadSources(result, repositoryPath)),
+        };
         ToolBatchRequest[] batch =
         [
             .. requests.Select((request, ordinal) =>
@@ -822,6 +831,15 @@ internal sealed class ChildAgentModelLoop
             evidenceProgress.Measure(coverageBefore));
     }
 
+    private static void ChargeDelivery(AgentBudgetLedger ledger, ToolInvocationResult result, string content, int evidenceItems)
+    {
+        var files = result.Sources.Where(source => string.Equals(source.Kind, "file", StringComparison.OrdinalIgnoreCase))
+            .Select(source => source.Identifier)
+            .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .Count();
+        ledger.Charge(new AgentResourceUsage { EvidenceItems = evidenceItems, Files = files, Bytes = Encoding.UTF8.GetByteCount(content) });
+    }
+
     private async Task<StoredToolEvidence> StoreToolEvidenceAsync(
         DelegationPlan plan,
         AgentAssignment assignment,
@@ -838,21 +856,8 @@ internal sealed class ChildAgentModelLoop
                 ?? result.Error
                 ?? _prompts.Get(PromptFileNames.ToolChildAgentToolInvocationCompleted),
             _sanitizer);
-        var bytes = Encoding.UTF8.GetByteCount(content);
         evidenceProgress.Observe(result, content);
-        var files = result.Sources
-            .Where(source => string.Equals(source.Kind, "file", StringComparison.OrdinalIgnoreCase))
-            .Select(source => source.Identifier)
-            .Distinct(OperatingSystem.IsWindows()
-                ? StringComparer.OrdinalIgnoreCase
-                : StringComparer.Ordinal)
-            .Count();
-        ledger.Charge(new AgentResourceUsage
-        {
-            EvidenceItems = 1,
-            Files = files,
-            Bytes = bytes,
-        });
+        ChargeDelivery(ledger, result, content, 1);
         var evidenceId = EvidenceId.New();
         var source = result.Sources.Count > 0 ? result.Sources[0] : default;
         await _evidence.AddAsync(

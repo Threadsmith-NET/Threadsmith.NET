@@ -668,6 +668,23 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(2, backend.RefreshCount);
     }
 
+    /// <summary>An unknown source owner retains the authoritative reload path.</summary>
+    [Fact]
+    public static async Task UnresolvedProjectAdditionUsesFullRefresh()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest(), token);
+        var path = Path.Combine(repository.Root, "Added.cs");
+        await File.WriteAllTextAsync(path, "class Added {}", token);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, path, SemanticFileChangeKind.Created), token);
+        var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, token);
+        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
+    }
+
     /// <summary>Concurrent waiters share refresh work while cancellation remains waiter-local.</summary>
     [Fact]
     public static async Task EnsureCurrentAsync_ConcurrentWaitersShareOneRefreshAndCancellationIsIsolated()

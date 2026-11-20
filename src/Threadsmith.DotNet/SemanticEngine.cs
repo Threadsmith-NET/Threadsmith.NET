@@ -142,12 +142,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SolutionPath);
-        var selectionExtension = Path.GetExtension(request.SolutionPath);
-        var isDirectProject = selectionExtension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-            || selectionExtension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
-            || selectionExtension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
         var measurement = new SemanticLoadMeasurementState(
-            isDirectProject ? "project" : "solution",
+            IsDirectProjectSelection(request.SolutionPath) ? "project" : "solution",
             Interlocked.Increment(ref _semanticLoadSequence) == 1 ? "cold" : "warm");
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var callerCancellation = cancellationToken;
@@ -1009,9 +1005,17 @@ public sealed partial class SemanticEngine : ISemanticEngine
     }
 
     /// <summary>Atomically publishes replacement text for proven existing loaded documents.</summary>
-    public async Task<SemanticLoadResult> RefreshDocumentsAsync(
+    public Task<SemanticLoadResult> RefreshDocumentsAsync(
         IReadOnlyList<SemanticDocumentRefresh> documents,
         CancellationToken cancellationToken = default)
+    {
+        return PublishDocumentsAsync(documents, null, cancellationToken);
+    }
+
+    private async Task<SemanticLoadResult> PublishDocumentsAsync(
+        IReadOnlyList<SemanticDocumentRefresh> documents,
+        ProjectSourceAddition? addition,
+        CancellationToken cancellationToken)
     {
         long ownership;
         CancellationToken ownershipToken;
@@ -1033,7 +1037,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 }
             }
 
-            return await RefreshDocumentsCoreAsync(documents, ownership, refreshLifetime.Token);
+            return await RefreshDocumentsCoreAsync(documents, addition, ownership, refreshLifetime.Token);
         }
         finally
         {
@@ -1043,6 +1047,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
     private async Task<SemanticLoadResult> RefreshDocumentsCoreAsync(
         IReadOnlyList<SemanticDocumentRefresh> documents,
+        ProjectSourceAddition? addition,
         long ownership,
         CancellationToken cancellationToken)
     {
@@ -1068,12 +1073,17 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 ?? throw new InvalidOperationException("No semantic solution has been loaded.");
         }
 
-        var replacement = solution;
+        if (addition is not null && !ReferenceEquals(addition.Base, solution))
+        {
+            throw new InvalidOperationException("The project membership evidence belongs to an obsolete solution.");
+        }
+
+        var replacement = addition?.Replacement ?? solution;
         foreach (var document in documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(document.Path);
-            var documentIds = solution.GetDocumentIdsWithFilePath(fullPath);
+            var documentIds = replacement.GetDocumentIdsWithFilePath(fullPath);
             if (!IsPathWithinRoot(fullPath, request.RepositoryPath)
                 || !IsCSharpSourcePath(fullPath)
                 || documentIds.Length == 0)
@@ -1099,7 +1109,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 throw new InvalidOperationException("The semantic preparation owner changed during refresh validation.");
             }
 
-            if (_editCandidate is { Promotable: true } candidate && ReferenceEquals(candidate.Base, solution)
+            if (addition is null && _editCandidate is { Promotable: true } candidate && ReferenceEquals(candidate.Base, solution)
                 && candidate.Endpoints.Count == documents.Count
                 && documents.All(document => candidate.Endpoints.TryGetValue(Path.GetFullPath(document.Path), out var identity)
                     && identity.Equals(document.ContentIdentity, StringComparison.OrdinalIgnoreCase)))
@@ -1143,7 +1153,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 }
 
                 // Incremental replacement retains the lifecycle owner's outstanding publication barrier.
-                // Only document text changes, so immutable refresh membership remains valid.
+                if (addition is not null)
+                {
+                    _refreshInventory = _refreshInventory with { SourceDocuments = addition.SourcePaths };
+                }
+
                 _solution = replacement;
                 _preparation = preparation;
                 _generation++;
@@ -1159,6 +1173,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     }
                     else
                     {
+                        candidate.ProjectMembershipGeneration = addition is null ? null : _solutionGeneration;
                         candidate.Result = candidate.Result with { Obsolete = true, Pending = false, Revision = candidate.Result.Revision + 1 };
                         candidate.Cancel();
                     }
@@ -1626,6 +1641,14 @@ public sealed partial class SemanticEngine : ISemanticEngine
         return OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
+    }
+
+    private static bool IsDirectProjectSelection(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+            || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPathWithinRoot(string path, string root)

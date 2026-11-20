@@ -50,6 +50,7 @@ public static class InteractiveCommandCatalog
         new("/tools", "/tools", "Browse and toggle repository tool availability"),
         new("/toolstats", "/toolstats [reset]", "Inspect or reset repository tool completion counts and durations"),
         new("/trust", "/trust [inspect|read|build|mutation|automation]", "Remember repository trust upgrades in user-owned permissions"),
+        new("/workload_resolver", "/workload_resolver [status|enable|disable]", "Configure workload resolution for repository semantic loads"),
     ];
 
     private static readonly FrozenDictionary<string, InteractiveCommandDescriptor> ByName = Entries

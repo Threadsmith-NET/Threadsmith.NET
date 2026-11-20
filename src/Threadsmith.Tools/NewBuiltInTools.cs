@@ -432,7 +432,12 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
             sources.Add(new ToolProvenanceSource("file", path));
         }
 
-        return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated);
+        var failure = output.Success
+            ? null
+            : new ToolExecutionFailure(
+                ToolErrorClassification.ExecutionFailure,
+                string.IsNullOrWhiteSpace(output.Error) ? "C# script execution failed." : output.Error);
+        return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated, Failure: failure);
     }
 
     /// <summary>Captures one immutable source after tool admission.</summary>

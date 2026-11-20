@@ -177,7 +177,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                             "A reused semantic binding requires a refresh coordinator."))
                         .PublishReusedBindingAsync(
                             request,
-                            (confidence, token) => PublishLifecyclePairAsync(workItem, confidence, token),
+                            (confidence, token) => PublishLifecyclePairAsync(workItem, confidence, null, token),
                             reusedLoad.Cancellation.Token);
                     continue;
                 }
@@ -220,7 +220,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                 var publicationToken = _activeLoads.TryGetValue(request.SessionId, out var activeLoad)
                     ? activeLoad.Cancellation.Token : _lifetimeCancellation.Token;
                 publicationToken.ThrowIfCancellationRequested();
-                await PublishLifecyclePairAsync(workItem, result.Confidence, publicationToken);
+                await PublishLifecyclePairAsync(workItem, result.Confidence, result.Timings, publicationToken);
                 publicationToken.ThrowIfCancellationRequested();
                 await _semanticLoader.CompletePublicationAsync(result, IsCurrent(workItem), publicationToken);
             }
@@ -261,7 +261,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                             request.SessionId,
                             DateTimeOffset.UtcNow,
                             request.WorkspaceId,
-                            nameof(SemanticConfidenceLevel.None)),
+                            nameof(SemanticConfidenceLevel.None)) { Timings = initialResult?.Timings },
                         _lifetimeCancellation.Token);
                 }
             }
@@ -280,6 +280,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
     private async Task PublishLifecyclePairAsync(
         SemanticLoadWorkItem workItem,
         SemanticConfidenceLevel confidence,
+        SemanticLoadTimings? timings,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -293,7 +294,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
             new SemanticConfidenceChanged(request.SessionId, DateTimeOffset.UtcNow, confidence.ToString()),
             cancellationToken);
         await _events.PublishAsync(
-            new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, confidence.ToString()),
+            new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, confidence.ToString()) { Timings = timings },
             cancellationToken);
     }
 

@@ -1518,23 +1518,25 @@ public sealed class SemanticRefreshCoordinator :
         }
     }
 
-    private async Task EnsureRefreshStartedAsync(
+    private async Task PublishRefreshActivityAsync(
         WorkspaceBinding binding,
         RefreshSequence sequence,
         CancellationToken cancellationToken)
     {
-        if (sequence.HasStarted)
+        if (sequence.PublishedMode == sequence.Mode)
         {
             return;
         }
 
-        sequence.MarkStarted(_timeProvider.GetTimestamp());
+        var isStart = !sequence.HasStarted;
+        sequence.MarkActivityPublished(_timeProvider.GetTimestamp());
         foreach (var sessionId in GetBindingSessionIds(binding))
         {
-            await PublishSafelyAsync(
-                new SemanticRefreshStarted(
+            var occurredAt = _timeProvider.GetUtcNow();
+            DomainEvent activity = isStart
+                ? new SemanticRefreshStarted(
                     sessionId,
-                    _timeProvider.GetUtcNow(),
+                    occurredAt,
                     sequence.RefreshId,
                     binding.Request.WorkspaceId,
                     sequence.Reason,
@@ -1543,8 +1545,16 @@ public sealed class SemanticRefreshCoordinator :
                     sequence.DirtyVersion)
                 {
                     TriggerPaths = CaptureTriggerPaths(binding, sequence),
-                },
-                cancellationToken);
+                }
+                : new SemanticRefreshModeChanged(
+                    sessionId,
+                    occurredAt,
+                    sequence.RefreshId,
+                    binding.Request.WorkspaceId,
+                    sequence.Reason,
+                    sequence.Mode,
+                    sequence.ChangedPaths.Count);
+            await PublishSafelyAsync(activity, cancellationToken);
         }
     }
 
@@ -1625,7 +1635,7 @@ public sealed class SemanticRefreshCoordinator :
                 SemanticRefreshMode.Full,
                 prepared.Changes,
                 batch.TargetDirtyVersion);
-            await EnsureRefreshStartedAsync(binding, sequence, cancellationToken);
+            await PublishRefreshActivityAsync(binding, sequence, cancellationToken);
             throw new InvalidDataException(
                 "Semantic refresh preparation observed an unstable filesystem snapshot.");
         }
@@ -1684,7 +1694,7 @@ public sealed class SemanticRefreshCoordinator :
         {
             // Waiting for an active run is queued work, not compiler refresh time.
             startedAt = _timeProvider.GetTimestamp();
-            await EnsureRefreshStartedAsync(binding, sequence, publicationToken);
+            await PublishRefreshActivityAsync(binding, sequence, publicationToken);
             if (batch.RestartWatcher)
             {
                 binding.RestartWatching(
@@ -1706,6 +1716,7 @@ public sealed class SemanticRefreshCoordinator :
                 projectRefresh = false;
                 mode = SemanticRefreshMode.Full;
                 sequence.RecordAttempt(reason, mode, prepared.Changes, batch.TargetDirtyVersion);
+                await PublishRefreshActivityAsync(binding, sequence, publicationToken);
             }
 
             if (mode == SemanticRefreshMode.Full)
@@ -3425,7 +3436,9 @@ public sealed class SemanticRefreshCoordinator :
 
         public long DirtyVersion { get; private set; }
 
-        public bool HasStarted { get; private set; }
+        public bool HasStarted => PublishedMode.HasValue;
+
+        public SemanticRefreshMode? PublishedMode { get; private set; }
 
         public SemanticRefreshMode Mode { get; private set; } = SemanticRefreshMode.Incremental;
 
@@ -3435,10 +3448,14 @@ public sealed class SemanticRefreshCoordinator :
 
         public long StartedTimestamp { get; private set; }
 
-        public void MarkStarted(long timestamp)
+        public void MarkActivityPublished(long timestamp)
         {
-            HasStarted = true;
-            StartedTimestamp = timestamp;
+            if (!HasStarted)
+            {
+                StartedTimestamp = timestamp;
+            }
+
+            PublishedMode = Mode;
         }
 
         public void RecordAttempt(

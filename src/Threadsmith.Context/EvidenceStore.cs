@@ -124,6 +124,11 @@ public sealed class EvidenceStore : IEvidenceStore
                         }
                     }
 
+                    if (item.FileDependencies.Count > 1 && HasConflictingFileVersions(item, pathComparers))
+                    {
+                        incoming = incoming with { IsStale = true, StaleReason = "Contains different versions of the same source file." };
+                    }
+
                     Store(incoming);
                 }
             }
@@ -296,6 +301,33 @@ public sealed class EvidenceStore : IEvidenceStore
         }
 
         return Task.FromResult(staleCount);
+    }
+
+    private static bool HasConflictingFileVersions(Evidence item, Dictionary<string, StringComparer> pathComparers)
+    {
+        var root = item.Provenance.RepositoryPath;
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        if (root is not null)
+        {
+            comparer = pathComparers[root];
+        }
+
+        var digests = new Dictionary<string, string>(comparer);
+        foreach (var dependency in item.FileDependencies)
+        {
+            if (dependency.Sha256 is not { } digest)
+            {
+                continue;
+            }
+
+            var path = root is null ? dependency.Path.Replace('\\', '/') : dependency.Path;
+            if (!digests.TryAdd(path, digest) && !string.Equals(digests[path], digest, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Called only under _gate so retained history and the live dependency index change atomically.

@@ -523,7 +523,13 @@ internal sealed class HostFoundation : IAsyncDisposable
                     new UserFileSecretProvider(paths.UserSecretsConfiguration, secretLimits),
                 ],
                 secretLimits);
-            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic, startupProgress: progress);
+            semanticEngines = new SemanticEngineRegistry(
+                events,
+                loggerFactory,
+                promptLoader,
+                resourceLimits: operationalLimits.Semantic,
+                startupProgress: progress,
+                maximumConfigurationBytes: trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024));
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
             repositoryFileObserver = new RepositoryFileObserver();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(

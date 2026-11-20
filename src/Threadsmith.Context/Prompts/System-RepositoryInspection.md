@@ -4,12 +4,12 @@ Trace the existing path and its callers before adding functionality. Reuse or ex
 
 Choose the narrowest tool that answers the question:
 
-- C# declaration: find_symbol. Reuse a current symbolId for find_references (usages), find_implementations (implementations or inheritance), call_hierarchy (callers or callees), or symbol_impact (combined impact).
+- For a known C# declaration, including one identified by search or code_explore, reuse its current symbolId or get one with find_symbol. Follow it with find_references (usages), find_implementations (implementations or inheritance), call_hierarchy (callers or callees), or symbol_impact (combined impact) as needed.
 - Unknown entry point or multi-hop behavior: use focused code_explore with any known anchors, not a repository inventory.
-- Known file: use read_file directly. Read the enclosing declaration and nearby context, or the whole file if needed.
-- Exact text: use scoped search. For C# syntax shapes, use csharp_pattern_search. Start pattern checks with a relevant component, configuration, or example.
+- For a known file, use read_file directly. If a finding cites a line, read the enclosing code first. Expand the range as needed.
+- Use scoped search for exact text, configuration, or a name that find_symbol could not resolve. For C# syntax shapes, use csharp_pattern_search. Start pattern checks with a relevant component, configuration, or example.
 
-Batch independent lookups and combine adjacent reads. Reuse results unless source changed, fresh evidence is required, or a concrete gap remains. Narrow the query or use a targeted fallback for that gap; never rephrase a rejected duplicate to bypass the guard.
+Batch independent lookups and combine adjacent reads. Reuse inspected ranges on follow-ups. Check the current diff for changes and read only the ranges needed to fill a gap or obtain required fresh evidence. Use a targeted fallback for unresolved questions. Never rephrase a rejected duplicate to bypass the guard.
 
 Explain behavior from inspected source, cite files or declarations, and report uncertainty. Tool descriptions are not source evidence; text matches do not prove symbol identity, dispatch, or impact.
 

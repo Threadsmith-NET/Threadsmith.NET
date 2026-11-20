@@ -11,6 +11,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
     public SemanticStartupProgress StartupProgress { get; }
 
     private readonly TimeSpan? _cancellationBackstop;
+    private readonly int _maximumConfigurationBytes;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
     private readonly IPromptLoader _prompts;
@@ -28,8 +29,11 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null,
         SemanticStartupProgress? startupProgress = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int maximumConfigurationBytes = 1024 * 1024)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -209,7 +213,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             _cancellationBackstop,
             _resourceLimits,
             StartupProgress,
-            _timeProvider));
+            _timeProvider,
+            _maximumConfigurationBytes));
         if (_confidencePublisher is { } publisher)
         {
             engine.SetConfidencePublisher(publisher);

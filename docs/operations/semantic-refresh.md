@@ -1,5 +1,7 @@
 # Semantic Refresh
 
+Use `/workload_resolver status` to see the saved preference. `/workload_resolver disable` and `/workload_resolver enable` write the boolean `solution.workloadResolverEnabled` to the active repository’s `.threadsmith/config.json`. An absent setting inherits the SDK default. The choice applies when the semantic workspace next opens or fully reloads. Run `/semantic_refresh` to apply it immediately. Project-level refreshes inherit the open workspace’s properties. Restore, build and publish continue using their own MSBuild settings. Keep workload resolution enabled for repositories that need workload imports, such as Android or MAUI projects.
+
 Threadsmith keeps the selected Roslyn workspace current when relevant repository files change outside the host. One workspace-scoped coordinator owns automatic background refresh, request admission, Threadsmith-owned mutation refresh, recovery, and explicit manual refresh.
 
 ## Automatic refresh
@@ -8,7 +10,9 @@ The repository monitor treats filesystem notifications as untrusted hints. It no
 
 An ordinary edit to an existing loaded C# document is eligible for incremental replacement. This includes an editor's atomic save when create/delete/rename hints settle to the same existing loaded path. The host reads the stable confined file, verifies its loaded document identity, builds one immutable replacement solution, and publishes one new semantic generation.
 
-For a newly added C# file, Threadsmith builds a reusable candidate index from project and import declarations without evaluating the solution again. An addition inside a project's directory or matching a declared input pattern makes that project a candidate. Threadsmith excludes a nonmatching project only when its declarations fit the supported stock SDK import rules. Multiple target frameworks alone do not make a project a candidate. Before and after design-time loading of the candidates, Threadsmith checks the identities of the index inputs, including whether previously absent imports have appeared under `obj`. Unverified import chains, changed or unreadable scope inputs, changed generated text inputs, and text-only workspaces use the complete-load path. The design-time loader verifies membership and project configuration before publishing additions and simultaneous text edits together. Each linked owner receives its own document. Committed edit diagnostics cover owners, their transitive dependents and retained coverage from earlier edits.
+Adding a C# file to a project in an open solution can refresh just that project. Threadsmith considers the projects containing the new paths and uses MSBuild item evaluation to check other loaded projects for linked inputs, including conditional SDK imports and wildcard imports. This membership check runs once per batch against current declarations and does not execute build targets. Before publishing the scoped update, Threadsmith uses Roslyn design-time loads to verify that projects it would retain still have the same effective configuration and inputs. It uses the open workspace's properties and project-reference identities. Membership alone is not enough: a new file can change another project's compiler options without changing its source list. Threadsmith checks non-owners first. It then overlaps independent owner loads up to the configured compilation worker limit and validates their results in project order. Owners with project references, custom targets or tasks, or potentially shared output trees load serially.
+
+A batch affecting multiple projects that cover a majority of the graph uses one shared full load. An affected multi-target project or a configuration or membership change that cannot be reconciled also uses the full loader. The scoped path checks known local inputs before and after design-time loading, including previously absent generated imports under `obj`. It verifies generated text and retained documents' logical metadata, such as linked names and folders. Verified additions and simultaneous text edits publish together. Committed edit diagnostics cover owners, their transitive dependents and retained coverage from earlier edits.
 
 Ambiguous ownership, document removals, solution/project changes, build property/target changes, package, SDK, reference, analyzer/configuration, and uncertain changes use the existing complete-load path. A completed load with compiler diagnostics may publish reduced confidence; only infrastructure or currentness failure leaves the workspace dirty.
 
@@ -29,7 +33,7 @@ Threadsmith applies these rules after it confines a notification to the active r
 | External edit or signal | Treatment |
 | --- | --- |
 | Content change or atomic replacement of an existing C# document already loaded in the selected workspace | Incremental refresh when the settled path still exists and its document identity and project membership are exact; otherwise complete refresh. |
-| Existing-on-disk `.cs` file absent from the loaded workspace | Project-scoped incremental refresh for verified additions. A full refresh handles unresolved ownership, multiple loaded target-framework instances of a candidate project, and other changes to its existing source membership or project references. |
+| Existing-on-disk `.cs` file absent from the loaded workspace | Project-scoped refresh for verified additions, including in open solutions. Broad or unresolved ownership and incompatible project changes use complete refresh. |
 | Change to a loaded additional document or analyzer-config document | Complete refresh. |
 | Change to a solution or project file, `.props`, `.targets`, `.ruleset`, `.editorconfig`, `.globalconfig`, `global.json`, `nuget.config`, `Directory.Packages.props`, or `Directory.Build.props` / `Directory.Build.targets` | Complete refresh. |
 | Change to another inventoried semantic input, such as an analyzer or reference | Complete refresh, including explicitly registered references under normally excluded directories. |
@@ -60,6 +64,8 @@ Semantic model updated (3 files, 240 ms).
 ```
 
 Watcher-recovery cycles instead begin with `External changes require semantic recovery; updating semantic model...` and use the same single completion or actionable failure projection. Duration uses the ordinary operation-duration format. Reduced-confidence completion also names the resulting confidence. The serialized console owner writes these messages without clearing, submitting, or losing an active composer draft. Threadsmith-owned mutation echoes use the same coordinator but are not mislabeled as external and do not create duplicate mutation noise.
+
+If a refresh switches from incremental to full mode, its existing activity updates before the full load starts. This does not produce a second start announcement.
 
 Once a refresh has started, failures during preparation, no-op watcher restart, publication or final completion produce a terminal failure event through the same worker owner. Failure reporting does not repeat path-policy evaluation, so a path-matching exception cannot leave the activity running after the worker exits. The failure preserves recovery state and directs the user to `/semantic_refresh`.
 

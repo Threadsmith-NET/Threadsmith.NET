@@ -127,6 +127,10 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
+    /// <summary>Reports or saves the active repository's semantic workload resolver preference.</summary>
+    public Task<bool?> WorkloadResolverAsync(WorkloadResolverCommand command, CancellationToken cancellationToken = default) =>
+        _dispatcher.DispatchAsync(command, cancellationToken);
+
     /// <summary>Forces one authoritative semantic refresh through the command boundary.</summary>
     public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
         SessionId sessionId,

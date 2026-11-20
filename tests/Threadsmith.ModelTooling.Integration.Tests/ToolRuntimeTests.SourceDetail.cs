@@ -49,6 +49,30 @@ public static partial class ToolRuntimeTests
 
         Assert.Equal(source, engine.Submitted);
         var completion = Assert.Single(completions);
+        if (outcome is "compile" or "runtime")
+        {
+            var error = $"{outcome} failed";
+            Assert.False(result.Succeeded);
+            Assert.Equal(ToolErrorClassification.ExecutionFailure, result.ErrorClassification);
+            Assert.Equal(error, result.Error);
+            Assert.False(completion.Succeeded);
+            Assert.Equal(OperationActivityOutcome.Failed, completion.Outcome);
+            Assert.Equal(error, completion.Error);
+            Assert.Equal(result.ResultJson, completion.ResultJson);
+            var payload = JsonSerializer.Deserialize<CSharpScriptOutput>(result.ResultJson!);
+            Assert.NotNull(payload);
+            Assert.False(payload.Success);
+            Assert.Equal(error, payload.Error);
+            Assert.Equal("saved.csx", payload.ScriptPath);
+            Assert.Contains(result.Sources, item => item.Kind == "file" && item.Identifier == payload.ScriptPath);
+        }
+        else if (outcome == "success")
+        {
+            Assert.True(result.Succeeded);
+            Assert.Equal(ToolErrorClassification.None, result.ErrorClassification);
+            Assert.True(completion.Succeeded);
+        }
+
         Assert.Equal(source, completion.SourceDetail!.Source);
         Assert.Equal(result.ToolInvocationId, completion.SourceDetail.ToolInvocationId);
         Assert.Equal(ToolSourceAvailability.Available, completion.SourceDetail.Availability);
@@ -98,8 +122,7 @@ public static partial class ToolRuntimeTests
                 "timeout" => throw new TimeoutException("worker timeout"),
                 "cancel" => throw new OperationCanceledException("worker cancelled"),
                 "output-limit" => Task.FromResult(new CSharpScriptOutput(true, new string('x', 8 * 1024 * 1024), null, 0, false)),
-                "compile" => Task.FromResult(new CSharpScriptOutput(false, null, "compile failed", 0, false)),
-                "runtime" => Task.FromResult(new CSharpScriptOutput(false, null, "runtime failed", 0, false)),
+                "compile" or "runtime" => Task.FromResult(new CSharpScriptOutput(false, null, $"{_outcome} failed", 0, false) { ScriptPath = "saved.csx" }),
                 _ => Task.FromResult(new CSharpScriptOutput(true, "42", null, 0, false)),
             };
         }

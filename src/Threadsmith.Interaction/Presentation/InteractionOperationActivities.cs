@@ -34,6 +34,7 @@ internal sealed class InteractionOperationActivities
             SkillWorkflowCheckpointWritten skill => Owner(skill),
             SkillInvocationProgressObserved progress when _skills.TryGetValue(progress.InvocationId, out var skill) => Owner(skill),
             SemanticRefreshStarted started => started.RefreshId,
+            SemanticRefreshModeChanged modeChanged => modeChanged.RefreshId,
             _ => null,
         };
         return key is not null && _entries.TryGetValue(key, out var entry) ? entry.Activity : null;
@@ -86,11 +87,14 @@ internal sealed class InteractionOperationActivities
                     _timeProvider)
                 {
                     SemanticWorkspaceId = started.WorkspaceId,
-                    ToolDetail = $"{started.Reason}; {started.Mode} refresh; {started.ChangedFileCount} changed file(s)",
+                    ToolDetail = FormatRefreshDetail(started.Reason, started.Mode, started.ChangedFileCount),
                     ToolProgress = started.TriggerPaths.Take(16)
                         .Select(path => new PresentationTextSegment($"Triggered by: {TerminalControlEncoder.Encode(path)}", PresentationTextRole.Muted)).ToArray(),
                 });
                 return true;
+            case SemanticRefreshModeChanged modeChanged when _entries.TryGetValue(modeChanged.RefreshId, out var refresh)
+                && refresh.Activity.SemanticWorkspaceId == modeChanged.WorkspaceId:
+                return refresh.UpdateDetail(FormatRefreshDetail(modeChanged.Reason, modeChanged.Mode, modeChanged.ChangedFileCount));
             case SemanticRefreshCompleted completed:
                 return _entries.Remove(completed.RefreshId);
             case SemanticRefreshFailed failed:
@@ -159,6 +163,11 @@ internal sealed class InteractionOperationActivities
         }
     }
 
+    private static string FormatRefreshDetail(SemanticRefreshReason reason, SemanticRefreshMode mode, int changedFileCount)
+    {
+        return $"{reason}; {mode} refresh; {changedFileCount} changed file(s)";
+    }
+
     private static object Owner(SkillWorkflowCheckpointWritten skill)
     {
         return skill.InvokingToolInvocationId is { } tool ? tool : skill.InvocationId;
@@ -179,6 +188,17 @@ internal sealed class InteractionOperationActivities
         internal IReadOnlyList<PresentationTextSegment> HostProgress { get; set; } = [];
 
         internal IReadOnlyList<PresentationTextSegment> AgentProgress { get; set; } = [];
+
+        internal bool UpdateDetail(string detail)
+        {
+            if (string.Equals(Activity.ToolDetail, detail, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            Activity = Activity with { ToolDetail = detail };
+            return true;
+        }
 
         internal void Refresh()
         {

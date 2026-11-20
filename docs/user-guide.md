@@ -286,6 +286,7 @@ After required startup choices, the TUI paints the startup modal before loading 
 | `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
 | `/resume [session-id]` | Resume an exact durable session or use the repository selector. |
+| `/workload_resolver [status\|enable\|disable]` | Show or save this repository’s workload resolver preference for semantic loads. |
 | `/semantic_refresh` | Force and await a complete semantic refresh without creating a model run. |
 | `/skills [action]` | Inspect and manage governed skills; see [skill operations](operations/skills.md). |
 | `/theme` | Select one theme in the filtered modal. |

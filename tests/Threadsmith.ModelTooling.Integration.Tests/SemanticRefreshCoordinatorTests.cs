@@ -678,11 +678,44 @@ public static class SemanticRefreshCoordinatorTests
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         await using var coordinator = CreateCoordinator(backend, events);
         await coordinator.BindAsync(repository.CreateRequest(), token);
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        var completion = new TaskCompletionSource<SemanticRefreshCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            if (item is SemanticRefreshCompleted refresh)
+            {
+                completion.TrySetResult(refresh);
+            }
+
+            return Task.CompletedTask;
+        });
+        var barrier = backend.BlockNextRefresh();
         var path = Path.Combine(repository.Root, "Added.cs");
         await File.WriteAllTextAsync(path, "class Added {}", token);
         await coordinator.ObserveChangeAsync(new(repository.SessionId, path, SemanticFileChangeKind.Created), token);
-        var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, token);
-        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
+        SemanticRefreshId refreshId;
+        try
+        {
+            await barrier.Started.Task.WaitAsync(token);
+            var started = Assert.Single(observed.OfType<SemanticRefreshStarted>());
+            var changed = Assert.Single(observed.OfType<SemanticRefreshModeChanged>());
+            Assert.Equal(SemanticRefreshMode.Incremental, started.Mode);
+            Assert.Equal(SemanticRefreshMode.Full, changed.Mode);
+            Assert.Equal(started.RefreshId, changed.RefreshId);
+            Assert.Equal(started.WorkspaceId, changed.WorkspaceId);
+            Assert.False(completion.Task.IsCompleted);
+            refreshId = changed.RefreshId;
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+        }
+
+        await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, token);
+        var completed = await completion.Task.WaitAsync(token);
+        Assert.Equal(SemanticRefreshMode.Full, completed.Mode);
+        Assert.Equal(refreshId, completed.RefreshId);
     }
 
     /// <summary>Concurrent waiters share refresh work while cancellation remains waiter-local.</summary>

@@ -1,5 +1,6 @@
 namespace Threadsmith.DotNet;
 
+using System.Buffers;
 using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
@@ -7,7 +8,6 @@ using System.Security.Cryptography;
 using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Build.Exceptions;
-using Microsoft.Build.Globbing;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
@@ -17,36 +17,11 @@ using Threadsmith.Core;
 /// <content>Project-scoped source membership refresh.</content>
 public sealed partial class SemanticEngine
 {
-    private static readonly FrozenSet<string> _compilerItems = new[] { "Compile", "AdditionalFiles", "EditorConfigFiles", "GlobalAnalyzerConfigFiles" }
-        .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+    private static readonly SearchValues<char> _unresolvedImportCharacters = SearchValues.Create("$@%*?;");
 
-    private static readonly char[] _dynamicPathCharacters = ['$', '@', '%'];
+    private readonly ConditionalWeakTable<ProjectId, FrozenDictionary<string, string?>> _projectInputScopes = [];
 
-    // Only known stock-SDK declarations can prove that an unselected project is not an owner.
-    // An unfamiliar property can redirect an implicit import, even with no local <Import>.
-    private static readonly FrozenSet<string> _scopeProperties = FrozenSet.ToFrozenSet<string>(
-        [
-            "TargetFramework", "TargetFrameworks", "LangVersion", "Nullable", "ImplicitUsings", "UseSharedCompilation",
-            "AssemblyName", "RootNamespace", "OutputType", "DefineConstants", "AllowUnsafeBlocks", "Optimize",
-            "Version", "AssemblyVersion", "FileVersion", "InformationalVersion", "GenerateAssemblyInfo",
-            "GenerateDocumentationFile", "NoWarn", "TreatWarningsAsErrors", "WarningsAsErrors", "WarningsNotAsErrors",
-            "EnableDefaultItems", "EnableDefaultCompileItems", "DefaultItemExcludes", "DefaultItemExcludesInProjectFolder",
-            "ManagePackageVersionsCentrally", "ProjectAssetsFile", "NuGetPackageRoot", "NuGetPackageFolders",
-            "NuGetProjectStyle", "NuGetToolVersion", "RestoreSuccess",
-        ],
-        StringComparer.OrdinalIgnoreCase);
-
-    private static readonly string[] _buildEnvironmentOverrides =
-    [
-        "DirectoryBuildPropsPath", "DirectoryBuildTargetsPath", "DirectoryPackagesPropsPath",
-        "MSBuildProjectExtensionsPath", "BaseIntermediateOutputPath", "UseArtifactsOutput", "ArtifactsPath",
-        "MSBuildUserExtensionsPath", "AlternateCommonTargets",
-        "UseWPF", "UseWindowsForms",
-    ];
-
-    private readonly ConditionalWeakTable<MSBuildWorkspace, ProjectScopeIndex> _projectInputScopes = new();
-
-    /// <summary>Verifies new compile items against the loaded projects before incremental publication.</summary>
+    /// <summary>Refreshes the projects affected by new compile items in the selected workspace.</summary>
     internal async Task<SemanticLoadResult?> TryRefreshProjectsAsync(
         IReadOnlyList<SemanticDocumentRefresh> documents,
         CancellationToken cancellationToken)
@@ -55,6 +30,8 @@ public sealed partial class SemanticEngine
         Solution solution;
         SemanticLoadRequest request;
         SemanticRefreshInventory inventory;
+        long ownership;
+        CancellationToken ownerToken;
         lock (_gate)
         {
             if (_workspace is null || _solution is null || _lastRequest is not { TrustLevel: >= RepositoryTrustLevel.TrustedBuild }
@@ -63,12 +40,15 @@ public sealed partial class SemanticEngine
                 return null;
             }
 
+            ownership = _preparationOwnership;
+            ownerToken = _preparationOwnerLifetime.Token;
             workspace = _workspace;
             solution = _solution;
             request = _lastRequest;
             inventory = _refreshInventory;
         }
 
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _engineLifetime.Token, ownerToken);
         var comparer = StringComparerForCurrentPlatform();
         var added = documents.Where(document => !inventory.SourceDocuments.Contains(document.Path))
             .ToDictionary(document => document.Path, comparer);
@@ -77,18 +57,19 @@ public sealed partial class SemanticEngine
             return null;
         }
 
-        var replacement = await TryResolveProjectDocumentsAsync(workspace, solution, request, added, cancellationToken);
+        var replacement = await TryResolveProjectDocumentsAsync(workspace, solution, request, added, lifetime.Token);
         if (replacement is null)
         {
             return null;
         }
 
         var addition = new ProjectSourceAddition(
+            ownership,
             solution,
             replacement,
             inventory.SourceDocuments.Concat(added.Keys).ToFrozenSet(comparer));
         var textUpdates = documents.Where(document => inventory.SourceDocuments.Contains(document.Path)).ToArray();
-        return await PublishDocumentsAsync(textUpdates, addition, cancellationToken);
+        return await PublishDocumentsAsync(textUpdates, addition, lifetime.Token);
     }
 
     // The CLR can resolve the catch filter's Microsoft.Build type before the method body runs.
@@ -115,38 +96,14 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private static ProjectScopeIndex CaptureProjectScopes(
-        Solution solution, SemanticLoadRequest request, CancellationToken cancellationToken)
+    private FrozenDictionary<string, string?> CaptureProjectInputs(
+        string projectPath, string projectDirectory, SemanticLoadRequest request, CancellationToken cancellationToken)
     {
+        // This checks known local declarations, not the SDK's full import chain.
         var comparer = StringComparerForCurrentPlatform();
         var inputs = new Dictionary<string, ScopeInput>(comparer);
-        var scopes = new List<ProjectInputScope>();
-        foreach (var path in solution.Projects.Select(project => project.FilePath).Distinct(comparer))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (path is null || !IsSemanticInputPathAllowed(path, request) || Path.GetDirectoryName(path) is not { } directory)
-            {
-                throw new InvalidOperationException("The project scope could not be confined to the repository.");
-            }
-
-            var globs = new List<IMSBuildGlob>();
-            var importsVerified = TryCaptureScope(path, directory, request, inputs, globs, cancellationToken);
-            scopes.Add(new(path, directory, importsVerified, [.. globs]));
-        }
-
-        return new([.. scopes], inputs.ToFrozenDictionary(pair => pair.Key, pair => pair.Value.Identity, comparer));
-    }
-
-    private static bool TryCaptureScope(
-        string projectPath,
-        string projectDirectory,
-        SemanticLoadRequest request,
-        Dictionary<string, ScopeInput> inputs,
-        List<IMSBuildGlob> globs,
-        CancellationToken cancellationToken)
-    {
         var pending = new Stack<string>();
-        var visited = new HashSet<string>(inputs.Comparer);
+        var visited = new HashSet<string>(comparer);
         pending.Push(projectPath);
         foreach (var name in new[] { "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props" })
         {
@@ -180,106 +137,81 @@ public sealed partial class SemanticEngine
                 continue;
             }
 
-            if (!IsPathWithinRoot(path, request.RepositoryPath))
+            if (CaptureScopeInput(path, request, inputs).Declaration is not { } declaration)
             {
-                return false;
-            }
-
-            var elements = CaptureScopeInput(path, request, inputs).Elements;
-            if (elements.Length == 0)
-            {
-                return false;
-            }
-
-            // Only the stock SDK's implicit, project-directory source scope is assumed here.
-            // Read all declared conditions (including TFM-specific ones) as possible inputs.
-            var sdk = (string?)elements[0].Attribute("Sdk");
-            if (inputs.Comparer.Equals(path, projectPath) ? sdk != "Microsoft.NET.Sdk" : sdk is not null)
-            {
-                return false;
+                continue;
             }
 
             var declaringDirectory = Path.GetDirectoryName(path) ?? projectDirectory;
-            foreach (var element in elements)
+            foreach (var element in declaration.Descendants().Where(element => element.Name.LocalName == "Import"))
             {
-                var name = element.Name.LocalName;
-
-                // A file-existence condition can change more than the membership of that file.
-                if (name == "Sdk"
-                    || (element.Parent?.Name.LocalName == "PropertyGroup" && !_scopeProperties.Contains(name))
-                    || ((string?)element.Attribute("Condition") is { } condition && condition.Contains("Exists", StringComparison.OrdinalIgnoreCase))
-                    || (name is "Output" or "ProjectReference"
-                        && HasUnknownCompilerOutput((string?)element.Attribute("ItemName") ?? (string?)element.Attribute("OutputItemType")))
-                    || (name == "OutputItemType" && HasUnknownCompilerOutput(element.Value)))
+                var import = ExpandScopePath((string?)element.Attribute("Project") ?? string.Empty, projectDirectory, declaringDirectory);
+                if (element.Attribute("Sdk") is not null || string.IsNullOrWhiteSpace(import)
+                    || import.AsSpan().ContainsAny(_unresolvedImportCharacters))
                 {
-                    return false;
-                }
-
-                if (name == "Import")
-                {
-                    var import = ExpandScopePath((string?)element.Attribute("Project") ?? string.Empty, projectDirectory, declaringDirectory);
-                    if (element.Attribute("Sdk") is not null || string.IsNullOrWhiteSpace(import)
-                        || import.IndexOfAny(_dynamicPathCharacters) >= 0 || import.Contains('*') || import.Contains('?') || import.Contains(';'))
-                    {
-                        return false;
-                    }
-
-                    pending.Push(Path.GetFullPath(import, declaringDirectory));
-                }
-
-                if (!_compilerItems.Contains(name) || (string?)element.Attribute("Include") is not { } include)
-                {
+                    // MSBuild resolves this import during evaluation. Never use this local
+                    // inventory to exclude another project.
                     continue;
                 }
 
-                var paths = ExpandScopePath(include, projectDirectory, declaringDirectory);
-                if (paths.IndexOfAny(_dynamicPathCharacters) >= 0)
-                {
-                    return false;
-                }
-
-                // Item paths are relative to the main project, unlike import paths.
-                // Excludes/conditions can only narrow these candidates and are verified on reload.
-                foreach (var pattern in paths.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    var glob = MSBuildGlob.Parse(projectDirectory, pattern);
-                    if (!glob.IsLegal)
-                    {
-                        return false;
-                    }
-
-                    globs.Add(glob);
-                }
+                pending.Push(Path.GetFullPath(import, declaringDirectory));
             }
         }
 
-        return true;
+        return inputs.ToFrozenDictionary(pair => pair.Key, pair => pair.Value.Identity, comparer);
     }
 
-    private static ScopeInput CaptureScopeInput(string path, SemanticLoadRequest request, Dictionary<string, ScopeInput> inputs)
+    private ScopeInput CaptureScopeInput(string path, SemanticLoadRequest request, Dictionary<string, ScopeInput> inputs)
     {
         if (!inputs.TryGetValue(path, out var input))
         {
-            using var stream = OpenScopeInput(path, request);
-            if (stream is null)
-            {
-                input = new(null, []);
-            }
-            else
-            {
-                // Derive the declaration and its identity from exactly the same bytes.
-                using var content = new MemoryStream();
-                stream.CopyTo(content);
-                var identity = Convert.ToHexString(SHA256.HashData(content.GetBuffer().AsSpan(0, (int)content.Length)));
-                content.Position = 0;
-                using var reader = XmlReader.Create(content);
-                input = new(identity, [.. XElement.Load(reader, LoadOptions.None).DescendantsAndSelf()]);
-            }
-
+            input = ReadScopeInput(path, request, captureDeclaration: true);
             inputs.Add(path, input);
         }
 
         return input;
+    }
+
+    private ScopeInput ReadScopeInput(string path, SemanticLoadRequest request, bool captureDeclaration)
+    {
+        using var stream = OpenScopeInput(path, request);
+        if (stream is null)
+        {
+            return default;
+        }
+
+        var length = stream.Length;
+        if (length > _resourceLimits.MaximumInventoryXmlBytes || length > Array.MaxLength)
+        {
+            throw new InvalidOperationException("A project scope input exceeds the XML inventory limit.");
+        }
+
+        var count = (int)length;
+        var buffer = ArrayPool<byte>.Shared.Rent(count);
+        try
+        {
+            var bytes = buffer.AsSpan(0, count);
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1)
+            {
+                throw new IOException("A project scope input grew during the read.");
+            }
+
+            // Derive the declaration and its identity from the same bounded read.
+            var identity = Convert.ToHexString(SHA256.HashData(bytes));
+            if (!captureDeclaration)
+            {
+                return new(identity, null);
+            }
+
+            using var content = new MemoryStream(buffer, 0, count, writable: false);
+            using var reader = XmlReader.Create(content);
+            return new(identity, XElement.Load(reader, LoadOptions.None));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     private static FileStream? OpenScopeInput(string path, SemanticLoadRequest request)
@@ -308,32 +240,14 @@ public sealed partial class SemanticEngine
         return File.OpenRead(path);
     }
 
-    private static bool ScopeInputsMatch(ProjectScopeIndex index, SemanticLoadRequest request, CancellationToken cancellationToken)
+    private bool ScopeInputsMatch(
+        FrozenDictionary<string, string?> inputs, SemanticLoadRequest request, CancellationToken cancellationToken)
     {
-        var toolset = _registeredMsBuildInstance?.MSBuildPath;
-        if (_buildEnvironmentOverrides.Any(name => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name)))
-            || HasRedirectedToolsetPath("MSBuildExtensionsPath", toolset)
-            || HasRedirectedToolsetPath("MSBuildSDKsPath", toolset is null ? null : Path.Combine(toolset, "Sdks"))
-            || Environment.GetEnvironmentVariables().Keys.OfType<string>().Any(name => name.StartsWith("Custom", StringComparison.OrdinalIgnoreCase)))
-        {
-            return false;
-        }
-
-        foreach (var (path, expected) in index.InputIdentities)
+        foreach (var (path, expected) in inputs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var stream = OpenScopeInput(path, request);
-            var actual = stream is null ? null : Convert.ToHexString(SHA256.HashData(stream));
+            var actual = ReadScopeInput(path, request, captureDeclaration: false).Identity;
             if (!string.Equals(expected, actual, StringComparison.Ordinal))
-            {
-                return false;
-            }
-        }
-
-        foreach (var scope in index.Projects)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (HasUnindexedImplicitImports(scope, request))
             {
                 return false;
             }
@@ -342,18 +256,11 @@ public sealed partial class SemanticEngine
         return true;
     }
 
-    private static bool HasRedirectedToolsetPath(string name, string? expected)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return !string.IsNullOrEmpty(value)
-            && (expected is null || !string.Equals(Path.TrimEndingDirectorySeparator(value), Path.TrimEndingDirectorySeparator(expected), PathComparison));
-    }
-
-    private static bool HasUnindexedImplicitImports(ProjectInputScope scope, SemanticLoadRequest request)
+    private static bool HasUnindexedLocalImports(string projectPath, string projectDirectory, SemanticLoadRequest request)
     {
         try
         {
-            _ = File.GetAttributes(scope.ProjectPath + ".user");
+            _ = File.GetAttributes(projectPath + ".user");
             return true;
         }
         catch (FileNotFoundException)
@@ -361,13 +268,13 @@ public sealed partial class SemanticEngine
             // No per-project user import.
         }
 
-        var extensionsDirectory = Path.Combine(scope.Directory, "obj");
+        var extensionsDirectory = Path.Combine(projectDirectory, "obj");
         if (!IsSemanticInputPathAllowed(extensionsDirectory, request))
         {
             return true;
         }
 
-        var projectName = Path.GetFileName(scope.ProjectPath);
+        var projectName = Path.GetFileName(projectPath);
         try
         {
             foreach (var path in Directory.EnumerateFiles(extensionsDirectory, projectName + ".*"))
@@ -395,9 +302,6 @@ public sealed partial class SemanticEngine
         .Replace("$(MSBuildThisFileDirectory)", declaringDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
         .Replace('\\', Path.DirectorySeparatorChar);
 
-    private static bool HasUnknownCompilerOutput(string? name) => name is not null
-        && (_compilerItems.Contains(name.Trim()) || name.IndexOfAny(_dynamicPathCharacters) >= 0);
-
     private async Task<Solution?> ResolveProjectDocumentsAsync(
         MSBuildWorkspace sourceWorkspace,
         Solution solution,
@@ -406,148 +310,186 @@ public sealed partial class SemanticEngine
         CancellationToken cancellationToken)
     {
         var comparer = StringComparerForCurrentPlatform();
-        var scopeIndex = _projectInputScopes.GetValue(sourceWorkspace, _ => CaptureProjectScopes(solution, request, cancellationToken));
-        if (!ScopeInputsMatch(scopeIndex, request, cancellationToken))
+        var projectsByPath = solution.Projects.ToLookup(project => project.FilePath, comparer);
+        var properties = sourceWorkspace.Properties;
+        var selection = FindSourceRefreshOwners(
+            projectsByPath, properties, request, added, _resourceLimits.CompilationWorkers > 1, cancellationToken);
+        if (selection is null)
         {
             return null;
         }
 
-        var paths = new HashSet<string>(comparer);
-        foreach (var scope in scopeIndex.Projects)
+        var owners = selection.Projects;
+
+        // An unchanged Compile set does not prove unchanged compiler settings. For example,
+        // another project's constants or references may depend on the existence of an added file.
+        var ownerIds = owners.Select(project => project.Id).ToHashSet();
+        var excluded = solution.Projects.Where(project => !ownerIds.Contains(project.Id));
+        var checks = new List<ProjectRefreshCheck>();
+        foreach (var project in excluded.Concat(owners))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (added.Keys.Any(path => IsPathWithinRoot(path, scope.Directory) || scope.Globs.Any(glob => glob.IsMatch(path))))
+            if (project.FilePath is not { } projectPath || Path.GetDirectoryName(projectPath) is not { } directory)
             {
-                paths.Add(scope.ProjectPath);
-            }
-            else if (!scope.ImportsVerified)
-            {
-                // Full refresh already handles arbitrary import chains; don't guess here or
-                // start a second design-time loader for every project with unverified imports.
                 return null;
             }
-        }
 
-        var projectsByPath = solution.Projects.ToLookup(project => project.FilePath, comparer);
-        var owners = paths.SelectMany(path => projectsByPath[path]).ToArray();
-        if (owners.Length == 0 || owners.Length != paths.Count || owners.Any(project => project.Language != LanguageNames.CSharp))
-        {
-            return null;
-        }
+            var inputs = _projectInputScopes.GetValue(project.Id, _ => CaptureProjectInputs(projectPath, directory, request, cancellationToken));
+            if (!LocalInputsMatch(inputs, projectPath, directory))
+            {
+                return null;
+            }
 
-        var generatedInputs = await CaptureGeneratedInputsAsync(owners, request, cancellationToken);
-        if (generatedInputs is null)
-        {
-            return null;
-        }
+            // Snapshot all existing generated text before any design-time load can replace it.
+            var generated = await CaptureGeneratedInputsAsync(project, request, cancellationToken);
+            if (generated is null)
+            {
+                return null;
+            }
 
-        var properties = sourceWorkspace.Properties;
-        if (!IsDirectProjectSelection(request.SolutionPath))
-        {
-            properties = properties.SetItem("SolutionDir", Path.GetDirectoryName(request.SolutionPath) + Path.DirectorySeparatorChar);
-        }
-
-        var evaluations = new ProjectInfo?[owners.Length];
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, owners.Length),
-            new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = _resourceLimits.CompilationWorkers },
-            async (index, token) => evaluations[index] = await LoadProjectConfigurationAsync(owners[index], projectsByPath, properties, token));
-        if (!await GeneratedInputsMatchAsync(generatedInputs, request, cancellationToken)
-            || !ScopeInputsMatch(scopeIndex, request, cancellationToken))
-        {
-            return null;
+            checks.Add(new(project, projectPath, directory, inputs, generated));
         }
 
         var replacement = solution;
-        for (var index = 0; index < owners.Length; index++)
+        var matched = new HashSet<string>(comparer);
+        var firstOwner = checks.Count - owners.Count;
+        ProjectInfo?[]? ownerConfigurations = null;
+        for (var index = 0; index < checks.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var owner = owners[index];
-            var info = evaluations[index];
-            if (info is null || !HasSameProjectConfiguration(owner, info, request))
+            if (index == firstOwner && selection.CanLoadInParallel)
+            {
+                // Check non-owners first so a mismatch falls back before loading any owners.
+                // Collect by index so completion order cannot affect validation or publication.
+                var configurations = new ProjectInfo?[owners.Count];
+                await Parallel.ForEachAsync(
+                    Enumerable.Range(0, owners.Count),
+                    new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = _resourceLimits.CompilationWorkers },
+                    async (ownerIndex, token) => configurations[ownerIndex] = await LoadProjectConfigurationAsync(owners[ownerIndex], projectsByPath, properties, token));
+                ownerConfigurations = configurations;
+            }
+
+            var project = checks[index].Project;
+            var info = ownerConfigurations is null
+                ? await LoadProjectConfigurationAsync(project, projectsByPath, properties, cancellationToken)
+                : ownerConfigurations[index - firstOwner];
+            if (info is null || !HasSameProjectConfiguration(project, info, request))
             {
                 return null;
             }
 
-            var priorDocuments = owner.Documents.Where(document => document.FilePath is not null)
-                .ToLookup(document => document.FilePath, comparer);
-            var order = ImmutableList.CreateBuilder<DocumentId>();
-            var addedCount = 0;
-            foreach (var document in info.Documents)
+            var updated = ApplyProjectMembership(replacement, project, info, request, added, matched, index >= firstOwner, cancellationToken);
+            if (updated is null)
             {
-                var path = document.FilePath;
-                var existing = priorDocuments[path];
-                if (existing.Any())
-                {
-                    if (existing.Count() != 1)
-                    {
-                        return null;
-                    }
+                return null;
+            }
 
-                    order.Add(existing.First().Id);
-                    continue;
-                }
+            replacement = updated;
+        }
 
-                if (path is null || !IsSemanticInputPathAllowed(path, request))
-                {
-                    continue;
-                }
+        foreach (var check in checks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await GeneratedInputsMatchAsync(check.Generated, request, cancellationToken)
+                || !LocalInputsMatch(check.Inputs, check.ProjectPath, check.Directory))
+            {
+                return null;
+            }
+        }
 
-                if (!added.TryGetValue(path, out var change))
+        return matched.Count == added.Count ? replacement : null;
+
+        bool LocalInputsMatch(FrozenDictionary<string, string?> inputs, string projectPath, string directory) =>
+            ScopeInputsMatch(inputs, request, cancellationToken) && !HasUnindexedLocalImports(projectPath, directory, request);
+    }
+
+    private static Solution? ApplyProjectMembership(
+        Solution replacement,
+        Project owner,
+        ProjectInfo info,
+        SemanticLoadRequest request,
+        Dictionary<string, SemanticDocumentRefresh> added,
+        HashSet<string> matched,
+        bool allowAdditions,
+        CancellationToken cancellationToken)
+    {
+        var priorDocuments = owner.Documents.Where(document => document.FilePath is not null)
+            .ToLookup(document => document.FilePath, StringComparerForCurrentPlatform());
+        var order = ImmutableList.CreateBuilder<DocumentId>();
+        var newInProject = new HashSet<string>(StringComparerForCurrentPlatform());
+        foreach (var document in info.Documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = document.FilePath;
+            var existing = priorDocuments[path];
+            if (existing.Any())
+            {
+                var retained = existing.First();
+                if (existing.Skip(1).Any() || !HasSameDocumentMetadata(document, retained))
                 {
                     return null;
                 }
 
-                var id = DocumentId.CreateNewId(owner.Id);
-                order.Add(id);
-                addedCount++;
-                replacement = replacement.AddDocument(document.WithId(id).WithTextLoader(
-                    TextLoader.From(TextAndVersion.Create(SourceText.From(change.Text, System.Text.Encoding.UTF8), VersionStamp.Create(), path))));
+                order.Add(retained.Id);
+                continue;
             }
 
-            if (order.Count != owner.DocumentIds.Count + addedCount || order.Distinct().Count() != order.Count)
+            if (path is null || !IsSemanticInputPathAllowed(path, request))
+            {
+                continue;
+            }
+
+            if (!allowAdditions || !added.TryGetValue(path, out var change) || !newInProject.Add(path))
             {
                 return null;
             }
 
-            if (addedCount > 0)
-            {
-                replacement = replacement.WithProjectDocumentsOrder(owner.Id, order.ToImmutable());
-            }
+            matched.Add(path);
+            var id = DocumentId.CreateNewId(owner.Id);
+            order.Add(id);
+            replacement = replacement.AddDocument(document.WithId(id).WithTextLoader(
+                TextLoader.From(TextAndVersion.Create(SourceText.From(change.Text, System.Text.Encoding.UTF8), VersionStamp.Create(), path))));
         }
 
-        return added.Keys.All(path => replacement.GetDocumentIdsWithFilePath(path).Length > 0) ? replacement : null;
+        if (order.Count != owner.DocumentIds.Count + newInProject.Count || order.Distinct().Count() != order.Count)
+        {
+            return null;
+        }
+
+        if (!allowAdditions)
+        {
+            return order.SequenceEqual(owner.DocumentIds) ? replacement : null;
+        }
+
+        return replacement.WithProjectDocumentsOrder(owner.Id, order.ToImmutable());
     }
 
     private static async Task<List<(string Path, SourceText Text)>?> CaptureGeneratedInputsAsync(
-        IEnumerable<Project> owners,
+        Project owner,
         SemanticLoadRequest request,
         CancellationToken cancellationToken)
     {
         // Snapshot the old Roslyn text before any design-time load can overwrite a file.
         // Existing ordinary source comes from the stable refresh batch, not from this check.
         var inputs = new List<(string Path, SourceText Text)>();
-        foreach (var owner in owners)
+        var documents = owner.Documents.Cast<TextDocument>().Concat(owner.AdditionalDocuments).Concat(owner.AnalyzerConfigDocuments);
+        foreach (var document in documents)
         {
-            var documents = owner.Documents.Cast<TextDocument>().Concat(owner.AdditionalDocuments).Concat(owner.AnalyzerConfigDocuments);
-            foreach (var document in documents)
+            cancellationToken.ThrowIfCancellationRequested();
+            if (document.FilePath is not { } path
+                || (!SemanticRefreshPathPolicy.IsIgnoredPath(request.RepositoryPath, path)
+                    && !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, path)
+                    && !(document is Document && CodeExploreGeneratedSourceClassifier.IsGeneratedPath(path))))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (document.FilePath is not { } path
-                    || (!SemanticRefreshPathPolicy.IsIgnoredPath(request.RepositoryPath, path)
-                        && !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, path)
-                        && !(document is Document && CodeExploreGeneratedSourceClassifier.IsGeneratedPath(path))))
-                {
-                    continue;
-                }
-
-                if (!IsSemanticInputPathAllowed(path, request))
-                {
-                    return null;
-                }
-
-                inputs.Add((path, await document.GetTextAsync(cancellationToken)));
+                continue;
             }
+
+            if (!IsSemanticInputPathAllowed(path, request))
+            {
+                return null;
+            }
+
+            inputs.Add((path, await document.GetTextAsync(cancellationToken)));
         }
 
         return inputs;
@@ -601,17 +543,14 @@ public sealed partial class SemanticEngine
             }
         });
         var loader = new MSBuildProjectLoader(workspace, properties) { LoadMetadataForReferencedProjects = true };
-        var map = ProjectMap.Create();
 
-        // Preserve Roslyn's choice among target frameworks for each existing reference without
-        // walking the unrelated projects again for every owner. A changed reference falls back.
-        var referencePaths = owner.ProjectReferences
-            .Select(reference => owner.Solution.GetProject(reference.ProjectId)?.FilePath)
-            .OfType<string>()
-            .Distinct(StringComparerForCurrentPlatform());
-        foreach (var project in referencePaths.SelectMany(path => projectsByPath[path]))
+        // Reuse the live IDs for referenced projects, including their target-framework variants.
+        var map = ProjectMap.Create();
+        var referencePaths = owner.ProjectReferences.Select(reference => owner.Solution.GetProject(reference.ProjectId)?.FilePath)
+            .OfType<string>().Distinct(StringComparerForCurrentPlatform());
+        foreach (var referenced in referencePaths.SelectMany(path => projectsByPath[path]))
         {
-            map.Add(project);
+            map.Add(referenced);
         }
 
         var infos = await loader.LoadProjectInfoAsync(owner.FilePath ?? throw new InvalidOperationException(), map, cancellationToken: cancellationToken);
@@ -642,22 +581,51 @@ public sealed partial class SemanticEngine
             && info.AnalyzerReferences.Select(reference => reference.FullPath).SequenceEqual(
                 project.AnalyzerReferences.Select(reference => reference.FullPath), comparer)
             && project.ProjectReferences.ToHashSet().SetEquals(info.ProjectReferences)
-            && SameDocumentPaths(info.AdditionalDocuments, project.AdditionalDocuments)
-            && SameDocumentPaths(info.AnalyzerConfigDocuments, project.AnalyzerConfigDocuments);
+            && SameDocuments(info.AdditionalDocuments, project.AdditionalDocuments)
+            && SameDocuments(info.AnalyzerConfigDocuments, project.AnalyzerConfigDocuments);
 
-        bool SameDocumentPaths(IEnumerable<DocumentInfo> reloaded, IEnumerable<TextDocument> loaded)
+        bool SameDocuments(IEnumerable<DocumentInfo> reloaded, IEnumerable<TextDocument> loaded)
         {
-            var known = loaded.Select(document => document.FilePath).ToHashSet(comparer);
-            return reloaded.All(document => known.Remove(document.FilePath) || IsRepositoryLocalSemanticInputRejected(document.FilePath, request))
-                && known.Count == 0;
+            var known = loaded.ToLookup(document => document.FilePath, comparer);
+            var remaining = known.Select(group => group.Key).ToHashSet(comparer);
+            foreach (var document in reloaded)
+            {
+                if (!remaining.Remove(document.FilePath))
+                {
+                    if (IsRepositoryLocalSemanticInputRejected(document.FilePath, request))
+                    {
+                        continue;
+                    }
+
+                    return false;
+                }
+
+                var matches = known[document.FilePath];
+                if (matches.Skip(1).Any() || !HasSameDocumentMetadata(document, matches.First()))
+                {
+                    return false;
+                }
+            }
+
+            return remaining.Count == 0;
         }
     }
 
-    private sealed record ScopeInput(string? Identity, XElement[] Elements);
+    private static bool HasSameDocumentMetadata(DocumentInfo evaluated, TextDocument retained)
+    {
+        return string.Equals(evaluated.Name, retained.Name, StringComparison.Ordinal)
+            && evaluated.Folders.SequenceEqual(retained.Folders, StringComparer.Ordinal)
+            && (retained is not Document source || evaluated.SourceCodeKind == source.SourceCodeKind);
+    }
 
-    private sealed record ProjectScopeIndex(ProjectInputScope[] Projects, FrozenDictionary<string, string?> InputIdentities);
+    private readonly record struct ScopeInput(string? Identity, XElement? Declaration);
 
-    private sealed record ProjectInputScope(string ProjectPath, string Directory, bool ImportsVerified, IMSBuildGlob[] Globs);
+    private sealed record ProjectRefreshCheck(
+        Project Project,
+        string ProjectPath,
+        string Directory,
+        FrozenDictionary<string, string?> Inputs,
+        List<(string Path, SourceText Text)> Generated);
 
-    private sealed record ProjectSourceAddition(Solution Base, Solution Replacement, IReadOnlySet<string> SourcePaths);
+    private sealed record ProjectSourceAddition(long Ownership, Solution Base, Solution Replacement, IReadOnlySet<string> SourcePaths);
 }

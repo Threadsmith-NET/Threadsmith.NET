@@ -7,6 +7,45 @@ using Xunit;
 
 public static partial class Milestone5Tests
 {
+    /// <summary>A result containing different versions of one file is historical even on first admission.</summary>
+    [Fact]
+    public static async Task EvidenceVersions_FirstMixedVersionResultIsStoredAsStale()
+    {
+        // Arrange
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var store = new EvidenceStore(events, new PassthroughSanitizer());
+        var root = AppContext.BaseDirectory;
+        var first = new EvidenceFileDependency("src/Foo.cs", "AA", new SourceRange(1, 1, 1, 2), DateTimeOffset.UnixEpoch);
+        var second = new EvidenceFileDependency(Path.Combine(root, "src", "Foo.cs"), "BB", new SourceRange(2, 1, 2, 2), DateTimeOffset.UnixEpoch.AddSeconds(1));
+        var mixed = new Evidence
+        {
+            EvidenceId = EvidenceId.New(),
+            SessionId = SessionId.New(),
+            Kind = EvidenceKind.ToolResult,
+            Content = "Two source pages",
+            CollectedAt = DateTimeOffset.UnixEpoch.AddSeconds(2),
+            Provenance = new EvidenceProvenance { Source = "tool:csharp_script", RepositoryPath = root },
+            FileDependencies = [first, second],
+        };
+        var coherent = mixed with
+        {
+            EvidenceId = EvidenceId.New(),
+            FileDependencies = [first with { Sha256 = "bb" }, second],
+        };
+
+        // Act
+        await store.AddAsync(mixed, cancellationToken);
+        var stored = Assert.Single(store.Snapshot(mixed.SessionId));
+        await store.AddAsync(coherent, cancellationToken);
+
+        // Assert
+        Assert.True(stored.IsStale);
+        Assert.NotNull(stored.StaleReason);
+        Assert.Equal(new[] { first, second with { Path = first.Path } }, stored.FileDependencies);
+        Assert.False(store.Find(mixed.SessionId, coherent.EvidenceId)!.IsStale);
+    }
+
     /// <summary>The live dependency index follows all evidence identity and staleness changes.</summary>
     [Fact]
     public static async Task EvidenceVersions_IndexTracksReplacementCopyAndInvalidation()

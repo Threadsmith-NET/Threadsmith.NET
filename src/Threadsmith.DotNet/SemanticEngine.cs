@@ -21,6 +21,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 {
     private const int MaximumSlowProjectSamples = 3;
     private static readonly Lock _msBuildGate = new();
+    private readonly int _maximumConfigurationBytes;
     private static readonly SemanticRefreshInventory EmptyRefreshInventory = new(
         FrozenSet<string>.Empty,
         FrozenSet<string>.Empty,
@@ -57,8 +58,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null,
         SemanticStartupProgress? startupProgress = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        int maximumConfigurationBytes = 1024 * 1024)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(logger);
@@ -273,13 +277,14 @@ public sealed partial class SemanticEngine : ISemanticEngine
             var textConfidence = textOnly.Length == 0
                 ? SemanticConfidenceLevel.None
                 : SemanticConfidenceLevel.TextOnly;
-            await ReplaceStateAsync(
+            var timings = await ReplaceStateAsync(
                 solution: null,
                 workspace: null,
                 compiledProjects: [],
                 projects: textOnly,
                 confidence: textConfidence,
                 normalizedRequest,
+                measurement,
                 ownership,
                 publishLoadCompleted,
                 publishConfidenceChanged,
@@ -292,11 +297,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 request.WorkspaceId,
                 Confidence,
                 textOnly,
-                ["MSBuild evaluation requires TrustedBuild; text-only project metadata was loaded."]);
+                ["MSBuild evaluation requires TrustedBuild; text-only project metadata was loaded."]) { Timings = timings };
         }
 
         var diagnostics = new ConcurrentQueue<string>();
-        var evaluationStarted = Stopwatch.GetTimestamp();
+        var evaluationTimer = Stopwatch.StartNew();
         using var evaluationProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.OpenWorkspace, cancellationToken);
         (MSBuildWorkspace Workspace, Solution Solution) load;
         MSBuildWorkspace? provisionalWorkspace = null;
@@ -315,7 +320,10 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         LogSemanticToolchainVersionFacts();
                     }
 
-                    var workspace = MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
+                    var resolver = RepositoryWorkloadResolverSetting.Read(repositoryPath, _maximumConfigurationBytes);
+                    var workspace = resolver.HasValue
+                        ? MSBuildWorkspace.Create(new Dictionary<string, string> { ["MSBuildEnableWorkloadResolver"] = resolver.Value ? "true" : "false" }, RoslynWorkspaceHost.Services)
+                        : MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
                     provisionalWorkspace = workspace;
                     workspace.LoadMetadataForReferencedProjects = true;
                     workspace.RegisterWorkspaceFailedHandler(eventArgs =>
@@ -359,6 +367,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            evaluationTimer.Stop();
+            measurement.EvaluationDuration = evaluationTimer.Elapsed;
             evaluationProgress?.Dispose();
             measurement.EnsureWorkspaceFailure();
             _logger.LogWarning(
@@ -377,13 +387,14 @@ public sealed partial class SemanticEngine : ISemanticEngine
             var degradedConfidence = degradedProjects.Length == 0
                 ? SemanticConfidenceLevel.None
                 : SemanticConfidenceLevel.TextOnly;
-            await ReplaceStateAsync(
+            var timings = await ReplaceStateAsync(
                 solution: null,
                 workspace: null,
                 compiledProjects: [],
                 projects: degradedProjects,
                 confidence: degradedConfidence,
                 normalizedRequest,
+                measurement,
                 ownership,
                 publishLoadCompleted,
                 publishConfidenceChanged,
@@ -395,11 +406,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 request.WorkspaceId,
                 degradedConfidence,
                 degradedProjects,
-                diagnostics.ToArray());
+                diagnostics.ToArray()) { Timings = timings };
         }
         finally
         {
-            measurement.EvaluationDuration = Stopwatch.GetElapsedTime(evaluationStarted);
+            measurement.EvaluationDuration = evaluationTimer.Elapsed;
         }
 
         using var workspaceLease = new WorkspaceLease(load.Workspace, RetireCompilerWorkspace);
@@ -577,12 +588,13 @@ public sealed partial class SemanticEngine : ISemanticEngine
         }
 
         var aggregate = Confidence;
+        measurement.CompilationDuration = Stopwatch.GetElapsedTime(compilationStarted);
         var initialFailures = _preparationFailures;
         var result = new SemanticLoadResult(
             request.WorkspaceId,
             aggregate,
             Projects,
-            diagnostics.Concat(_preparationDiagnostics).ToArray());
+            diagnostics.Concat(_preparationDiagnostics).ToArray()) { Timings = measurement.CaptureTimings() };
         lock (_gate)
         {
             if (ownership != _preparationOwnership)
@@ -603,7 +615,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
             if (publishLoadCompleted)
             {
-                await _events.PublishAsync(new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, aggregate.ToString()), cancellationToken);
+                await _events.PublishAsync(new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, aggregate.ToString()) { Timings = result.Timings }, cancellationToken);
                 await CompleteInitialPublicationAsync(result, succeeded: true, cancellationToken);
             }
             else if (publishConfidenceChanged)
@@ -619,7 +631,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
             throw;
         }
 
-        measurement.CompilationDuration = Stopwatch.GetElapsedTime(compilationStarted);
         measurement.Outcome = "completed";
         measurement.LoadedProjects = loadedProjects.Count;
         measurement.CompiledProjects = result.Projects.Count(info => info.Confidence == SemanticConfidenceLevel.FullSemantic);
@@ -1073,7 +1084,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 ?? throw new InvalidOperationException("No semantic solution has been loaded.");
         }
 
-        if (addition is not null && !ReferenceEquals(addition.Base, solution))
+        if (addition is not null && (addition.Ownership != ownership || !ReferenceEquals(addition.Base, solution)))
         {
             throw new InvalidOperationException("The project membership evidence belongs to an obsolete solution.");
         }
@@ -2028,13 +2039,14 @@ public sealed partial class SemanticEngine : ISemanticEngine
             StringSplitOptions.RemoveEmptyEntries)];
     }
 
-    private async Task ReplaceStateAsync(
+    private async Task<SemanticLoadTimings> ReplaceStateAsync(
         Solution? solution,
         MSBuildWorkspace? workspace,
         HashSet<ProjectId> compiledProjects,
         IReadOnlyList<SemanticProjectInfo> projects,
         SemanticConfidenceLevel confidence,
         SemanticLoadRequest request,
+        SemanticLoadMeasurementState measurement,
         long ownership,
         bool publishLoadCompleted,
         bool publishConfidenceChanged,
@@ -2091,6 +2103,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             RetireCompilerWorkspace(previousWorkspace);
         }
 
+        var timings = measurement.CaptureTimings();
         if (publishConfidenceChanged && previousConfidence != confidence)
         {
             await _events.PublishAsync(
@@ -2108,9 +2121,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     request.SessionId,
                     DateTimeOffset.UtcNow,
                     request.WorkspaceId,
-                    confidence.ToString()),
+                    confidence.ToString()) { Timings = timings },
                 cancellationToken);
         }
+
+        return timings;
     }
 
 #pragma warning restore SA1202
@@ -2320,6 +2335,12 @@ public sealed partial class SemanticEngine : ISemanticEngine
         public TimeSpan EvaluationDuration { get; set; }
 
         public int WorkspaceFailureCount => Volatile.Read(ref _workspaceFailureCount);
+
+        public SemanticLoadTimings CaptureTimings() => new(
+            Stopwatch.GetElapsedTime(TotalStarted).TotalMilliseconds,
+            EvaluationDuration.TotalMilliseconds,
+            ConfinementDuration.TotalMilliseconds,
+            CompilationDuration.TotalMilliseconds);
 
         public void EnsureWorkspaceFailure()
         {

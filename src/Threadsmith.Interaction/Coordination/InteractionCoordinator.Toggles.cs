@@ -165,7 +165,7 @@ public sealed partial class InteractionCoordinator
         var rows = catalog.ToDictionary(extension => extension.GenerationId?.ToString() ?? extension.ExtensionId, StringComparer.Ordinal);
         return surface.SelectTogglesAsync(
             new InteractionToggleRequest("Extensions - checked means loaded", rows.Select(row => new InteractionToggleOption(
-                row.Key, $"{row.Value.Name} ({row.Value.Version})", "Extensions", row.Value.IsLoaded, Reason: $"{row.Value.ExtensionId} — {row.Value.State}")).ToArray()),
+                row.Key, $"{row.Value.Name} ({row.Value.Version})", "Extensions", row.Value.IsLoaded, Reason: FormatExtensionChoice(row.Value))).ToArray()),
             async (id, enabled, token) =>
             {
                 var selected = rows[id];

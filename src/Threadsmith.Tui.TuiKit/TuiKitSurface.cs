@@ -650,6 +650,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             ToggleMouse = () => _app.ToggleMouseCapture(),
             CopyRequested = Copy,
         };
+        if (request.OpenReview)
+        {
+            modal.OpenReview();
+        }
+
         modal.PasteRequested = () => RequestPaste(modal, () => modal.FilterText);
         Task<string?>? result = null;
         await EnqueueAsync(

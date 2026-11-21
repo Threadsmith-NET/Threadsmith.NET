@@ -51,6 +51,50 @@ public sealed class ExtensionReviewRemediationTests
         Assert.Equal(ApprovalLevel.None, noneProxy.Definition.RequiredApproval);
     }
 
+    /// <summary>A staged manifest cannot lower the permission-derived floor supplied by the caller.</summary>
+    [Fact]
+    public static async Task LoadAsync_RejectsCallerPermissionFloorBeforeTypeDiscovery()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            var package = Directory.CreateDirectory(Path.Combine(root, "package")).FullName;
+
+            // This is a valid assembly without an extension type. Discovery would fail with a different error.
+            var entryAssembly = typeof(SessionId).Assembly.Location;
+            File.Copy(entryAssembly, Path.Combine(package, Path.GetFileName(entryAssembly)));
+            await File.WriteAllTextAsync(
+                Path.Combine(package, "threadsmith.extension.json"),
+                """{"Id":"threadsmith.tests.permission-floor","Name":"Permission floor fixture","Permissions":[]}""",
+                token);
+            var host = new ExtensionHost(new RecordingEventStream(), NullLogger<ExtensionHost>.Instance);
+            var request = new ExtensionLoadRequest
+            {
+                ExtensionDirectory = package,
+                ShadowStagingRoot = Path.Combine(root, "staging"),
+                EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                SessionId = SessionId.New(),
+                Manifest = new ExtensionManifest
+                {
+                    Id = "threadsmith.tests.permission-floor",
+                    Name = "Permission floor fixture",
+                    EntryAssembly = Path.GetFileName(entryAssembly),
+                    Permissions = ["secret-access"],
+                },
+            };
+
+            var failure = await Assert.ThrowsAsync<ExtensionIncompatibleException>(() => host.LoadAsync(request, token));
+
+            Assert.Contains(nameof(RepositoryTrustLevel.FullyTrustedAutomation), failure.Message, StringComparison.Ordinal);
+            Assert.Empty(host.Generations);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static async Task<ExtensionGeneration> LoadConstructionCountGenerationAsync()
     {
         var events = new RecordingEventStream();

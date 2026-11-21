@@ -168,13 +168,7 @@ internal sealed class ChoiceModal : Modal
             _details = !_details;
             if (_details)
             {
-                _detail = new TranscriptView(_limits) { ResolveStyle = ResolveStyle };
-                var selectedDetail = _matches.Length > 0
-                    ? "\n\nSelected option: " + (_matches[_selected].Group is { } group ? group + " / " : string.Empty) + _matches[_selected].Label
-                    : string.Empty;
-                var reviewDetails = _reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails;
-                _detail.Present(new PresentationBatch([new PresentationTextItem([new(_title + reviewDetails + selectedDetail, PresentationTextRole.Default)])]));
-                _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
+                OpenReview();
             }
             else
             {
@@ -339,6 +333,23 @@ internal sealed class ChoiceModal : Modal
             (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, indent, row, prefix, style);
             GetOptionRun(option).Draw(view, indent + (selected ? _selectionPrefixWidth : 2), row, option.Label, style);
         }
+    }
+
+    /// <summary>Shows the complete review using the existing scrollable details view.</summary>
+    internal void OpenReview()
+    {
+        var selected = _matches.Length > 0 ? _matches[_selected] : default;
+        var selectedDetail = selected.Label is null ? string.Empty : "\n\nSelected option: " + (selected.Group is null ? string.Empty : selected.Group + " / ") + selected.Label;
+        var text = _title + (_reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails) + selectedDetail;
+        var limits = _reviewDetails is { Length: <= 16384 } ? _limits with
+        {
+            MaximumTranscriptBytes = Math.Max(_limits.MaximumTranscriptBytes, Encoding.UTF8.GetByteCount(text) * 4),
+            MaximumTranscriptLines = Math.Max(_limits.MaximumTranscriptLines, text.Length + 1),
+        } : _limits;
+        _details = true;
+        _detail = new TranscriptView(limits) { ResolveStyle = ResolveStyle };
+        _detail.Present(new PresentationBatch([new PresentationTextItem([new(text, PresentationTextRole.Default)])]));
+        _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
     }
 
     private void CopySource(string text)

@@ -87,4 +87,6 @@ Static MCP OAuth client-secret references use the resolver. MCP and Codex access
 
 ## Future providers
 
+An explicitly loaded extension can consume a declared reference during an admitted tool invocation. The host uses the shared resolver with a user-owned minimum source trust. See [Extension tool contracts](../extension-authoring/tool-contracts.md#extension-secret-access).
+
 A future trusted adapter can implement `ISecretProvider` without changing consumers. Provider registration remains compiled and host-owned; repositories, models, tools, skills, extensions, MCP servers, and hooks cannot register one. Network providers must additionally enforce bounded transport, endpoint policy, cancellation, safe failures, SDK isolation, and non-cyclic authentication bootstrap.

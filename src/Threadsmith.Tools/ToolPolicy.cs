@@ -8,6 +8,12 @@ public sealed record ToolPolicyDecision(
     ApprovalLevel RequiredApproval,
     string Reason)
 {
+    /// <summary>Gets the validated references for the authorized call.</summary>
+    internal SecretDeclaration? AdmittedSecrets { get; init; }
+
+    /// <summary>Identifies the registered implementation, validated input, and policy context that own these references.</summary>
+    internal sealed record SecretDeclaration(ITool Tool, object Input, ToolInvocationContext Context, IReadOnlySet<string> References);
+
     /// <summary>Gets the exact host-prepared process input, never projected to the model.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     internal RunProcessInput? PreparedRun { get; init; }
@@ -173,15 +179,18 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
+        HashSet<string>? references = null;
         foreach (var secretReference in tool.GetSecretReferences(input))
         {
-            if (!SecretReference.TryParse(secretReference, out _))
+            if (!SecretReference.TryParse(secretReference, out var parsed) || parsed is null)
             {
                 return new ToolPolicyDecision(
                     false,
                     requiredApproval,
                     "The tool declared an invalid secret reference.");
             }
+
+            (references ??= new(StringComparer.Ordinal)).Add(parsed.CanonicalName);
         }
 
         var networkHosts = tool.GetNetworkHosts(input);
@@ -268,7 +277,10 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        return new ToolPolicyDecision(true, requiredApproval, "Allowed by repository trust and tool policy.");
+        return new ToolPolicyDecision(true, requiredApproval, "Allowed by repository trust and tool policy.")
+        {
+            AdmittedSecrets = references is null ? null : new(ConfiguredTool.Unwrap(tool), input, context, references),
+        };
     }
 
     private static bool IsEligibleScratchpadAccess(ITool tool, object input, ToolInvocationContext context)

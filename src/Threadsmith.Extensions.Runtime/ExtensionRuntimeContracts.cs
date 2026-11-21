@@ -107,6 +107,18 @@ public sealed class ExtensionGeneration
     /// <summary>The per-extension invocation budget for the current turn (plan-16, §17.15, §22.2).</summary>
     public ExtensionInvocationBudget? Budget { get; internal set; }
 
+    /// <summary>Gets the resolver only for a generation granted secret access.</summary>
+    internal Threadsmith.Tools.ISecretResolver? SecretResolver { get; init; }
+
+    /// <summary>Gets the effective floor for tools from this generation.</summary>
+    internal RepositoryTrustLevel MinimumTrust { get; init; }
+
+    /// <summary>Protects results and retained loggers across concurrent calls.</summary>
+    internal ExtensionSecretProtection SecretProtection { get; } = new();
+
+    /// <summary>Revokes access after draining and before deactivation.</summary>
+    internal CancellationTokenSource SecretRetirement { get; } = new();
+
     /// <summary>The repository identity captured with this generation's configuration.</summary>
     internal string? RepositoryPath { get; init; }
 

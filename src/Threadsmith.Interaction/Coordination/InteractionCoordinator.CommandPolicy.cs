@@ -103,6 +103,12 @@ public sealed partial class InteractionCoordinator
                 PolicyApprovalChoice.Always => "Approve Always Going Forward",
                 _ => "Deny",
             }).ToArray();
+            if (request.ReviewDetails is { } details)
+            {
+                var reviewedChoice = await _surface.SelectAsync(request.Summary, labels, details, openReview: true, cancellationToken);
+                return new PolicyApprovalResponse(request.RequestId, reviewedChoice >= 0 && reviewedChoice < request.Choices.Length ? request.Choices[reviewedChoice] : PolicyApprovalChoice.Deny);
+            }
+
             var selected = await _surface.SelectAsync(
                 request.Summary + "\nRequester: " + request.Requester + "\nRules: " + string.Join(", ", request.RuleIds)
                 + "\nRemembered approval covers only this exact command, targets, arguments, directory, environment and policy. Identity: " + request.ContextFingerprint,

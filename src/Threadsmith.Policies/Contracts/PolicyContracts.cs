@@ -150,7 +150,12 @@ public sealed record PolicyApprovalRequest(
     string AuthorityFingerprint,
     long SessionEpoch,
     ImmutableArray<string> RuleIds,
-    ImmutableArray<PolicyApprovalChoice> Choices);
+    ImmutableArray<PolicyApprovalChoice> Choices)
+{
+    /// <summary>Transient complete statement review for one extension invocation.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? ReviewDetails { get; init; }
+}
 
 /// <summary>Returns a selection, not an authorization token.</summary>
 public sealed record PolicyApprovalResponse(Guid RequestId, PolicyApprovalChoice Choice);

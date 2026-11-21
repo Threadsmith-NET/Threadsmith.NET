@@ -297,6 +297,12 @@ internal sealed class ConfiguredTool : ITool
         return Inner.ExecuteAsync(input, context, cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<ToolExecutionEnvelope> ExecuteExternalWriteAsync(object input, ToolExecutionContext context, Action markDispatched, CancellationToken cancellationToken = default)
+    {
+        return Inner.ExecuteExternalWriteAsync(input, context, markDispatched, cancellationToken);
+    }
+
     /// <summary>Returns the implementation that owns tool-specific policy and output behavior.</summary>
     internal static ITool Unwrap(ITool tool)
     {

@@ -540,6 +540,11 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
 
         if (request.Completion is { } completion)
         {
+            if ((registration ?? request.ExpectedRegistration)?.Tool.Definition.SideEffect == ToolSideEffect.WritesExternalData)
+            {
+                completion.ExternalWriteDispatched = false;
+            }
+
             completion.ToolId = registration?.Tool.Definition.Id ?? request.ExpectedRegistration?.Tool.Definition.Id ?? request.ToolId;
         }
 
@@ -741,6 +746,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         {
             RequireExactDiffReview = exactMutationAuthorization && policyDecision.RequiredApproval != ApprovalLevel.None,
         };
+        var reviewedExtension = false;
         if (policyDecision.RequiredApproval != ApprovalLevel.None && !exactMutationAuthorization)
         {
             var approvalId = ApprovalId.New();
@@ -826,7 +832,36 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 }
                 else
                 {
-                    approved = await _approvalPolicy.IsApprovedAsync(action, policyDecision.RequiredApproval, cancellationToken);
+                    var details = (ConfiguredTool.Unwrap(tool) as IToolStatementReview)?.CreateReview(input, _sanitizer);
+                    if (details is not null)
+                    {
+                        if (details.Length > IToolStatementReview.MaximumCharacters || _sanitizer.Sanitize(details) != details)
+                        {
+                            throw new InvalidOperationException("A complete safe approval preview is unavailable.");
+                        }
+
+                        var review = new Threadsmith.Policies.Contracts.PolicyApprovalRequest(
+                            invocationId.Value,
+                            request.Context.RequestedBy,
+                            action,
+                            string.Empty,
+                            string.Empty,
+                            0,
+                            [],
+                            [Threadsmith.Policies.Contracts.PolicyApprovalChoice.Deny, Threadsmith.Policies.Contracts.PolicyApprovalChoice.Once])
+                        {
+                            ReviewDetails = tool.Definition.SideEffect == ToolSideEffect.WritesExternalData
+                                ? "External data can change. Source rollback cannot undo this operation.\n" + details
+                                : details,
+                        };
+                        var response = await _approvalPolicy.RequestApprovalAsync(review, cancellationToken);
+                        approved = response.RequestId == review.RequestId && response.Choice == Threadsmith.Policies.Contracts.PolicyApprovalChoice.Once;
+                        reviewedExtension = approved;
+                    }
+                    else if (tool.Definition.SideEffect != ToolSideEffect.WritesExternalData)
+                    {
+                        approved = await _approvalPolicy.IsApprovedAsync(action, policyDecision.RequiredApproval, cancellationToken);
+                    }
                 }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or InvalidDataException or JsonException)
@@ -942,7 +977,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 var current = _registry.GetRegistration(request.ToolId, request.Context);
                 if (registration is null || !ToolRegistrationIdentity.Matches(current, registration))
                 {
-                    throw new InvalidOperationException("The tool registration changed while awaiting clarification.");
+                    throw new InvalidOperationException("The tool registration changed before execution.");
                 }
             }
 
@@ -1007,10 +1042,27 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             // The exact byte-capture time is not exposed for every read mode. Use an earlier
             // boundary so post-read decoding, redaction, or paging cannot make old bytes current.
             DateTimeOffset? observationBoundary = request.Context.IsScriptOrigin || isFileRead ? _timeProvider.GetUtcNow() : null;
-            var execution = await tool.ExecuteAsync(
-                input,
-                executionContext,
-                timeoutCancellation.Token);
+            if (source.Kind == ToolActivitySourceKind.Extension && policyDecision.AdmittedSecrets is { } secrets
+                && ReferenceEquals(secrets.Tool, ConfiguredTool.Unwrap(tool))
+                && ReferenceEquals(secrets.Input, input) && ReferenceEquals(secrets.Context, request.Context))
+            {
+                Revalidate();
+                executionContext.AdmitSecretReferences(secrets.Tool, input, secrets.References);
+            }
+
+            if (reviewedExtension)
+            {
+                Revalidate();
+            }
+
+            timeoutCancellation.Token.ThrowIfCancellationRequested();
+            var externalWrite = tool.Definition.SideEffect == ToolSideEffect.WritesExternalData;
+            var execution = externalWrite
+                ? await admission.AwaitExternalWriteAsync(
+                    (markDispatched, token) => tool.ExecuteExternalWriteAsync(input, executionContext, markDispatched, token),
+                    request.Completion,
+                    timeoutCancellation.Token)
+                : await tool.ExecuteAsync(input, executionContext, timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
@@ -1037,7 +1089,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 };
             }
 
-            var serializationCancellationToken = execution.Failure?.Classification == ToolErrorClassification.Cancelled
+            var serializationCancellationToken = externalWrite || execution.Failure?.Classification == ToolErrorClassification.Cancelled
                 ? CancellationToken.None
                 : timeoutCancellation.Token;
             await using var resultStream = new MemoryStream();
@@ -1488,6 +1540,19 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 classification.ToString()));
         }
 
+        string? resultJson = null;
+        if (request.Completion?.ExternalWriteDispatched is { } dispatched)
+        {
+            if (dispatched)
+            {
+                const string warning = " External write outcome unknown. Verify external state before retrying.";
+                sanitizedError += warning;
+                returnedError += warning;
+            }
+
+            resultJson = JsonSerializer.Serialize(new { outcome = dispatched ? "unknown" : "notStarted", phase = dispatched ? "execution" : "admission", error = sanitizedError });
+        }
+
         var outcome = GetOutcome(classification);
         await _events.PublishAsync(
             new ToolInvocationCompleted(
@@ -1495,6 +1560,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 _timeProvider.GetUtcNow(),
                 invocationId,
                 false,
+                ResultJson: resultJson,
                 Error: sanitizedError,
                 IsTruncated: isTruncated,
                 Source: source,
@@ -1518,6 +1584,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             IsTruncated = isTruncated,
             ErrorClassification = classification,
             Error = returnedError,
+            ResultJson = resultJson,
             Duration = duration,
         };
     }

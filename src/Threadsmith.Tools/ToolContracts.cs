@@ -44,6 +44,9 @@ public enum ToolCategory
 
     /// <summary>Ordinary tools supporting governed native skill procedures.</summary>
     NativeSkillTools,
+
+    /// <summary>Operations on an external service, including database queries and schema inspection.</summary>
+    ExternalService,
 }
 
 /// <summary>Whether a tool can change externally visible state.</summary>
@@ -60,6 +63,9 @@ public enum ToolSideEffect
 
     /// <summary>Changes only explicit repository-local memory state.</summary>
     WritesRepositoryMemory,
+
+    /// <summary>May commit changes to an external system.</summary>
+    WritesExternalData,
 }
 
 /// <summary>Whether retrying an identical tool call is safe.</summary>
@@ -693,6 +699,19 @@ public interface ITool
         object input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Executes an external write, calling <paramref name="markDispatched"/> immediately before handing off to the executor.</summary>
+    /// <remarks>Host adapters that perform their own admission must complete it before calling the marker. If the marker throws, do not invoke the executor.</remarks>
+    Task<ToolExecutionEnvelope> ExecuteExternalWriteAsync(
+        object input,
+        ToolExecutionContext context,
+        Action markDispatched,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(markDispatched);
+        markDispatched();
+        return ExecuteAsync(input, context, cancellationToken);
+    }
 }
 
 /// <summary>One normalized scheduling claim derived by the host after typed validation.</summary>
@@ -708,6 +727,23 @@ public sealed record ToolExecutionContext(
     RunId RunId,
     ToolInvocationContext Invocation)
 {
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ToolExecutionContext, SecretAdmission> _admissions = [];
+
+    /// <summary>Consumes the exact execution grant issued by the pipeline for this tool and input.</summary>
+    public IReadOnlySet<string>? TakeSecretReferences(ITool tool, object input)
+    {
+        if (_admissions.TryGetValue(this, out var admission)
+            && ReferenceEquals(tool, admission.Tool) && ReferenceEquals(input, admission.Input)
+            && _admissions.Remove(this))
+        {
+            return admission.References;
+        }
+
+        return null;
+    }
+
+    private sealed record SecretAdmission(ITool Tool, object Input, IReadOnlySet<string> References);
+
     /// <summary>Host-forwarded invocation identity for durable effect deduplication.</summary>
     public string? InvocationKey { get; init; }
 
@@ -751,6 +787,12 @@ public sealed record ToolExecutionContext(
     /// <summary>Captured scripting input, excluded from durable and model output.</summary>
     [JsonIgnore]
     internal PreparedCSharpScriptSource? PreparedScriptSource { get; init; }
+
+    /// <summary>Binds one admission to this exact execution context.</summary>
+    internal void AdmitSecretReferences(ITool tool, object input, IReadOnlySet<string> references)
+    {
+        _admissions.Add(this, new(tool, input, references));
+    }
 
     /// <summary>Live active-time owner, excluded from durable and model output.</summary>
     [JsonIgnore]
@@ -938,7 +980,7 @@ public abstract class Tool<TInput, TOutput> : ITool
         var accessMode = Definition.SideEffect switch
         {
             ToolSideEffect.ReadOnly => ToolAccessMode.Read,
-            ToolSideEffect.WritesFiles or ToolSideEffect.WritesRepositoryMemory => ToolAccessMode.Write,
+            ToolSideEffect.WritesFiles or ToolSideEffect.WritesRepositoryMemory or ToolSideEffect.WritesExternalData => ToolAccessMode.Write,
             _ => ToolAccessMode.Execute,
         };
         var claims = GetResourcePaths((TInput)input, context)

@@ -30,6 +30,62 @@ internal sealed class ToolExecutionAdmission : IDisposable
         _lease = await _limiter.AcquireAsync(_source, _maximumConcurrency, cancellationToken);
     }
 
+    /// <summary>Bounds even synchronous external dispatch and retains source admission until the work finishes.</summary>
+    public async Task<ToolExecutionEnvelope> AwaitExternalWriteAsync(
+        Func<Action, CancellationToken, Task<ToolExecutionEnvelope>> invoke,
+        ToolSuspensionCompletion? completion,
+        CancellationToken cancellationToken)
+    {
+        const int pending = 0;
+        const int dispatched = 1;
+        const int closed = 2;
+        var dispatchState = pending;
+        var operation = Task.Run(DispatchAsync, cancellationToken);
+        try
+        {
+            return await operation.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            var retainedLease = _lease;
+            _lease = null;
+            _ = operation.ContinueWith(
+                static (completed, state) =>
+                {
+                    _ = completed.Exception;
+                    (state as IDisposable)?.Dispose();
+                },
+                retainedLease,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            throw;
+        }
+        finally
+        {
+            var started = Interlocked.Exchange(ref dispatchState, closed) == dispatched;
+            completion?.ExternalWriteDispatched = started;
+        }
+
+        Task<ToolExecutionEnvelope> DispatchAsync()
+        {
+            _validate();
+            cancellationToken.ThrowIfCancellationRequested();
+            return invoke(MarkDispatched, cancellationToken);
+        }
+
+        void MarkDispatched()
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // The terminal path closes this gate before it reports that the operation did not start.
+            if (Interlocked.CompareExchange(ref dispatchState, dispatched, pending) != pending)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+        }
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

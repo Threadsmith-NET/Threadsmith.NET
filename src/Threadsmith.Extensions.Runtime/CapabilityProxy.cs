@@ -9,8 +9,9 @@ using Threadsmith.Tools;
 /// <summary>Host-owned <see cref="ITool"/> proxy that adapts an extension <see cref="IToolCapability"/> (strategy §17.14, §7.1).
 /// The proxy guarantees no extension implementation type crosses the boundary: it holds the capability, acquires an
 /// invocation lease, runs the extension's JSON-in/JSON-out contract, and normalizes the result to host-owned DTOs.</summary>
-public sealed class CapabilityProxy : ITool
+public sealed class CapabilityProxy : ITool, IToolStatementReview
 {
+    private readonly ExtensionStatementReview? _review;
     private readonly IToolCapability _capability;
     private readonly CapabilityId _capabilityId;
     private readonly ExtensionGeneration _generation;
@@ -39,11 +40,20 @@ public sealed class CapabilityProxy : ITool
         _generation = generation;
         _leaseAuthority = leaseAuthority;
         _logger = logger;
-        Definition = MapDefinition(capability.Definition, generation.Descriptor.Name);
+        var metadata = capability.Definition;
+        _review = metadata.StatementReview;
+        var definition = MapDefinition(metadata, generation.Descriptor.Name);
+        Definition = definition.RequiredTrust < generation.MinimumTrust ? definition with { RequiredTrust = generation.MinimumTrust } : definition;
     }
 
     /// <inheritdoc />
     public ToolDefinition Definition { get; }
+
+    /// <inheritdoc />
+    public string? CreateReview(object input, IOutputSanitizer sanitizer)
+    {
+        return _review is null ? null : ExtensionStatementPreview.Create(_review, _generation.Descriptor.Id, Definition.Id, GenerationId, ((ExtensionToolArguments)input).Json, sanitizer, _generation.SecretProtection);
+    }
 
     /// <summary>The immutable extension generation that owns this proxy.</summary>
     public ExtensionGenerationId GenerationId => _generation.GenerationId;
@@ -64,35 +74,78 @@ public sealed class CapabilityProxy : ITool
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
-        return _capability.GetResourcePaths(((ExtensionToolArguments)input).Json, MapContext(context));
+
+        // Enabling the package grants its disk access. These host path-policy claims apply to host tools.
+        return [];
     }
 
     /// <inheritdoc />
     public IReadOnlyList<string> GetSecretReferences(object input)
     {
         ArgumentNullException.ThrowIfNull(input);
-        return _capability.GetSecretReferences(((ExtensionToolArguments)input).Json);
+
+        // Copy the extension-owned collection inside the boundary; enumeration can also run extension code.
+        return ReadAdmissionClaim(
+            () => _capability.GetSecretReferences(((ExtensionToolArguments)input).Json).ToArray(),
+            references => references.Any(_generation.SecretProtection.Contains));
     }
 
     /// <inheritdoc />
     public string? GetExecutable(object input)
     {
         ArgumentNullException.ThrowIfNull(input);
-        return _capability.GetExecutable(((ExtensionToolArguments)input).Json);
+        return ReadAdmissionClaim(
+            () => _capability.GetExecutable(((ExtensionToolArguments)input).Json),
+            _generation.SecretProtection.Contains);
     }
 
     /// <inheritdoc />
     public IReadOnlyList<string> GetNetworkHosts(object input)
     {
         ArgumentNullException.ThrowIfNull(input);
-        return _capability.GetNetworkHosts(((ExtensionToolArguments)input).Json);
+
+        // The enabled extension owns its outbound connections, including redirects and discovered peers.
+        return [];
     }
 
     /// <inheritdoc />
-    public async Task<ToolExecutionEnvelope> ExecuteAsync(
+    public Task<ToolExecutionEnvelope> ExecuteAsync(
         object input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
+    {
+        return ExecuteCoreAsync(input, context, markDispatched: null, cancellationToken);
+    }
+
+    Task<ToolExecutionEnvelope> ITool.ExecuteExternalWriteAsync(
+        object input,
+        ToolExecutionContext context,
+        Action markDispatched,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(markDispatched);
+        return ExecuteCoreAsync(input, context, markDispatched, cancellationToken);
+    }
+
+    /// <summary>Maps the extension trust requirement to the host repository level.</summary>
+    internal static RepositoryTrustLevel MapTrust(ExtensionTrustRequirement trust)
+    {
+        return trust switch
+        {
+            ExtensionTrustRequirement.None => RepositoryTrustLevel.UntrustedInspection,
+            ExtensionTrustRequirement.RepositoryRead => RepositoryTrustLevel.TrustedRead,
+            ExtensionTrustRequirement.RepositoryBuild => RepositoryTrustLevel.TrustedBuild,
+            ExtensionTrustRequirement.RepositoryMutation => RepositoryTrustLevel.TrustedMutation,
+            ExtensionTrustRequirement.FullyTrustedAutomation => RepositoryTrustLevel.FullyTrustedAutomation,
+            _ => throw new ExtensionIncompatibleException("Unsupported extension trust requirement."),
+        };
+    }
+
+    private async Task<ToolExecutionEnvelope> ExecuteCoreAsync(
+        object input,
+        ToolExecutionContext context,
+        Action? markDispatched,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
@@ -114,23 +167,49 @@ public sealed class CapabilityProxy : ITool
             GetLeaseTimeout());
         try
         {
-            var result = await _capability.ExecuteAsync(
-                argumentsJson,
-                MapContext(context.Invocation),
-                cancellationToken);
+            var references = context.TakeSecretReferences(this, input);
+            ExtensionToolResult result;
+            ExtensionSecretAccess? secrets = null;
+            if (references is not null && _generation.SecretResolver is { } resolver && context.Invocation.TrustLevel >= RepositoryTrustLevel.FullyTrustedAutomation)
+            {
+                secrets = new ExtensionSecretAccess(resolver, references, context, _generation.SecretProtection, _generation.Descriptor.Id, _generation.SecretRetirement.Token, cancellationToken);
+            }
+
+            using (secrets)
+            {
+                var extensionContext = MapContext(context.Invocation) with { Secrets = secrets };
+                markDispatched?.Invoke();
+                result = await _capability.ExecuteAsync(argumentsJson, extensionContext, cancellationToken);
+            }
+
             object value = result.ResultJson is null
                 ? new { succeeded = result.Succeeded }
-                : JsonDocument.Parse(result.ResultJson).RootElement.Clone();
+                : JsonSerializer.Deserialize<JsonElement>(result.ResultJson);
             var sources = result.Sources
                 .Select(s => new ToolProvenanceSource(s.Kind, s.Identifier, s.Range))
                 .ToArray();
-            return new ToolExecutionEnvelope(value, sources, result.IsTruncated);
+            var protection = _generation.SecretProtection;
+            if (protection.HasValues && ((value is JsonElement json && protection.Contains(json))
+                || sources.Any(source => protection.Contains(source.Kind) || protection.Contains(source.Identifier) || protection.Contains(source.Range))))
+            {
+                throw new InvalidOperationException("ExtensionSecretInOutput");
+            }
+
+            var failure = result.Succeeded
+                ? null
+                : new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, protection.SafeMessage(result.Error ?? "ExtensionToolExecutionFailed"));
+            return new ToolExecutionEnvelope(value, sources, result.IsTruncated, Failure: failure);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            if (_generation.SecretProtection.HasValues)
+            {
+                throw new InvalidOperationException("ExtensionToolExecutionFailed");
+            }
+
             _logger.LogError(
                 "Extension tool {ToolId} for generation {GenerationId} failed: {Error}",
-                _capability.Definition.Id,
+                Definition.Id,
                 _generation.GenerationId,
                 exception.Message);
             throw;
@@ -141,10 +220,30 @@ public sealed class CapabilityProxy : ITool
         }
     }
 
+    private T ReadAdmissionClaim<T>(Func<T> read, Func<T, bool> containsSecret)
+    {
+        T claim;
+        try
+        {
+            claim = read();
+        }
+        catch (Exception) when (_generation.SecretProtection.HasValues)
+        {
+            throw new UnauthorizedAccessException("An extension admission callback failed.");
+        }
+
+        if (containsSecret(claim))
+        {
+            throw new UnauthorizedAccessException("An extension admission claim contained a protected value.");
+        }
+
+        return claim;
+    }
+
     private TimeSpan GetLeaseTimeout()
     {
-        return _capability.Definition.Timeout > TimeSpan.Zero
-                ? _capability.Definition.Timeout
+        return Definition.Timeout > TimeSpan.Zero
+                ? Definition.Timeout
                 : InvocationLeaseAuthority.DefaultLeaseTimeout;
     }
 
@@ -197,19 +296,8 @@ public sealed class CapabilityProxy : ITool
             ExtensionToolCategory.SemanticSearch => ToolCategory.SemanticSearch,
             ExtensionToolCategory.GitInspection => ToolCategory.GitInspection,
             ExtensionToolCategory.ProcessExecution => ToolCategory.ProcessExecution,
-            _ => ToolCategory.RepositoryInspection,
-        };
-    }
-
-    private static RepositoryTrustLevel MapTrust(ExtensionTrustRequirement trust)
-    {
-        return trust switch
-        {
-            ExtensionTrustRequirement.None => RepositoryTrustLevel.UntrustedInspection,
-            ExtensionTrustRequirement.RepositoryRead => RepositoryTrustLevel.TrustedRead,
-            ExtensionTrustRequirement.RepositoryBuild => RepositoryTrustLevel.TrustedBuild,
-            ExtensionTrustRequirement.RepositoryMutation => RepositoryTrustLevel.TrustedMutation,
-            _ => RepositoryTrustLevel.UntrustedInspection,
+            ExtensionToolCategory.ExternalService => ToolCategory.ExternalService,
+            _ => throw new ArgumentOutOfRangeException(nameof(category), category, "Unknown extension tool category."),
         };
     }
 
@@ -230,7 +318,8 @@ public sealed class CapabilityProxy : ITool
         {
             ExtensionToolSideEffect.ReadOnly => ToolSideEffect.ReadOnly,
             ExtensionToolSideEffect.ExecutesCode => ToolSideEffect.ExecutesCode,
-            _ => ToolSideEffect.ReadOnly,
+            ExtensionToolSideEffect.WritesExternalData => ToolSideEffect.WritesExternalData,
+            _ => throw new ArgumentOutOfRangeException(nameof(sideEffect)),
         };
     }
 

@@ -105,8 +105,7 @@ internal sealed class MyToolCapability : IToolCapability
 }
 ```
 
-Resource paths, secret references, executables, and network hosts you declare here are enforced by
-the host policy pipeline (plan-08, ADR-11). Declare them truthfully.
+Enabling an extension grants it disk and network access under the operating-system account running Threadsmith. This includes files outside the repository and network destinations discovered at runtime. The host checks declared secret references and executables through the normal tool pipeline.
 
 ## 4. Model-preference contributors (advisory)
 
@@ -128,9 +127,12 @@ id without loading the assembly:
   "HostApiVersion": "current",
   "EntryAssembly": "MyExtension.dll",
   "Capabilities": [ "tool-provider" ],
-  "Permissions": [ "repository-read" ]
+  "Permissions": [ "repository-read" ],
+  "AccessTypes": [ "disk-read", "network-access" ]
 }
 ```
+
+Use the optional `AccessTypes` array to disclose operations such as `disk-read`, `disk-write`, `network-access`, `database-read`, or `database-write`. Use short descriptions appropriate for the package. The manager shows these alongside permission names before load. An activated descriptor can supply additional descriptions. Access types are informational and do not change the trust requirement. A package without declarations shows “unspecified”.
 
 Manifest property names are PascalCase (the host deserializes with the default JSON options). Set
 `CopyToOutputDirectory="PreserveNewest"` on the manifest so it lands in the extension output.
@@ -139,6 +141,17 @@ The host shadow-copies the package, loads it into a collectible ALC, activates i
 its capabilities. At runtime, `/extensions` opens a navigable list to browse, load, and unload
 extensions. Review executable extension code before loading it. Repository `autoLoad` requests
 are refused before discovery or construction. Selection is not execution authority.
+
+### Repository trust
+
+Declare `RequiredTrust` in `threadsmith.extension.json` to show the minimum level in the extension manager.
+Use `None`, `RepositoryRead`, `RepositoryBuild`, `RepositoryMutation`, or `FullyTrustedAutomation`.
+The host checks the manifest before constructing the extension. The descriptor can also set `RequiredTrust`.
+The higher requirement applies. Each declared permission also sets a minimum level.
+For example, `repository-read` requires trusted read access, `network-access` requires build trust,
+and `secret-access` requires fully trusted automation (the `/trust automation` option). Existing extensions can keep their permission declarations.
+The normal manager uses the open session's repository trust and the host policy ceiling.
+A tool can require more trust than its package. Its execution always uses current invocation policy.
 
 ### Repository settings
 
@@ -161,8 +174,7 @@ A settings section uses the stable descriptor ID. IDs and setting keys are case-
 must be JSON strings or null. Each activation receives only its own section through
 `context.Configuration` and the repository root through `context.HostInformation.RepositoryPath`.
 Validate your extension's key names, types and required values. Store logical references, not
-passwords. Settings are not expanded during loading and do not grant secret access. The current
-extension invocation contract does not yet expose host secret resolution.
+passwords. The host resolves a reference only during an admitted tool call. See [Tool contracts](tool-contracts.md#extension-secret-access).
 
 Each generation keeps an immutable snapshot. File edits take effect only after explicit unload/load
 or hot replacement. In-flight old-generation calls retain their original view. Failed or cancelled

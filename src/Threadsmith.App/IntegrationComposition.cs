@@ -30,6 +30,8 @@ internal static class IntegrationComposition
         IConfiguration? configuration = null,
         SessionPolicyBinding? policyBinding = null,
         Func<string, Task>? reportDiagnostic = null,
+        ISecretResolver? secrets = null,
+        Func<SessionId, CancellationToken, Task<RepositoryTrustLevel>>? repositoryTrust = null,
         CancellationToken cancellationToken = default)
     {
         var extensionHost = new ExtensionHost(
@@ -42,7 +44,9 @@ internal static class IntegrationComposition
             leaseAuthority: leaseAuthority,
             extensionLoggerFactory: loggerFactory,
             repositoryPath: repositoryRoot,
-            policyBinding: policyBinding);
+            policyBinding: policyBinding,
+            secrets: secrets,
+            repositoryTrust: repositoryTrust);
         var selectionPath = Path.Combine(repositoryRoot, ".threadsmith", "extensions.json");
         var selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
         extensionHost.SetDiscoveryDirectory(

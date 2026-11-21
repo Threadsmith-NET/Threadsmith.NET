@@ -45,6 +45,12 @@ public sealed record ExtensionSummary
     /// <summary>The loaded generation id, including retired generations, or null when not loaded.</summary>
     public ExtensionGenerationId? GenerationId { get; init; }
 
+    /// <summary>Gets the declared repository trust floor when available.</summary>
+    public RepositoryTrustLevel? RequiredTrust { get; init; }
+
+    /// <summary>Access types disclosed by the package for operator review.</summary>
+    public IReadOnlyList<string> AccessTypes { get; init; } = [];
+
     /// <summary>The display name.</summary>
     public required string Name { get; init; }
 

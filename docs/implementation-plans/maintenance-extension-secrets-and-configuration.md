@@ -1,6 +1,6 @@
 # Extension secrets and configuration
 
-**Status:** Active. Configuration slice implemented; validation and review recorded below. Execution-time secret access is not implemented.
+**Status:** Implementation and local validation recorded in Section 17.
 **Delivery track:** Maintenance.
 **Prerequisites:** [Planning governance](planning-governance.md), [shared context](00-shared-context.md), C# guardrails, ADRs 19–24 and ADR-48. The initial proposal is `.inbox/extension-secrets-and-configuration-plan.md` in the author's checkout.
 
@@ -15,7 +15,7 @@ Extend the existing extension host, shared activation/replacement core, tool pip
 ## 3. Scope
 
 - Bounded repository settings, manual load, explicit reload, and replacement snapshots.
-- Later: execution-only secret contract, captured admission handoff, host resolver adapter, independent revocation, and output protection.
+- Execution-only secret contract, captured admission handoff, host resolver adapter, independent revocation, and output protection.
 - Contract, composition, lifecycle, pipeline, and security tests for each delivered slice.
 
 ## 4. Non-scope
@@ -28,9 +28,9 @@ Neo4j functionality, new secret stores, secret editing, secret access during act
 - `ExtensionHost` snapshots explicit settings before its first await and resolves repository settings by the activated descriptor ID in the existing load core. App composition binds the host to the repository root.
 - `ExtensionConfiguration` copies its input into an ordinal frozen dictionary.
 - `HotReplacementCoordinator` already uses that same load core. Publication checks activation cancellation before switching registrations.
-- Secret investigation found that `DefaultPolicyEngine` validates declarations but discards the admitted set. `ToolExecutionContext` is publicly constructible. It does not prove admission.
-- Invocation leases track unload ownership but are not active timeout/revocation signals. Forced retirement needs an explicit, reliable revocation boundary.
-- The existing output sanitizer is pattern-based. Arbitrary resolved credentials need exact-value protection at results, logs, and exception boundaries before exposure.
+- `DefaultPolicyEngine` captures the admitted references. The pipeline binds them to one tool, input and execution context after admission.
+- Invocation leases track unload ownership. Forced retirement also cancels outstanding secret access.
+- The generation records resolved values before reveal. The host checks tool output and extension diagnostics for these values.
 
 ## 6. Design
 
@@ -46,11 +46,11 @@ The composed host shares the existing live session policy binding. Its discovery
 
 Each load or replacement resolves fresh settings. An active generation never rereads them. Failed or cancelled activation must not publish settings or tools. Publication is the cancellation commit boundary; activation-completion notification is published without the cancelled caller token after that boundary. Normal replacement lets old calls finish on their own view.
 
-### Secret slice — pending
+### Execution-time secrets
 
 Capture and validate declarations once during policy admission. Freeze the exact references, input and host-assigned identity. Carry opaque, host-created, non-serialized admission authority to the existing execution boundary only after policy, hooks, approval, budget, scheduling, deadline and registration checks. A copied context, direct proxy call, stale proxy, or changed declaration cannot mint authority. Custom policy engines which do not capture declarations must fail closed for secret access.
 
-The execution-only adapter uses the shared `ISecretResolver`, `UserOwned` minimum source trust, host-selected identity/purpose/repository/provider restrictions and timeout. Preserve existing reference parsing and comparison semantics. Reject undeclared or unpermitted references before calling a provider. Do not expose provider controls or host implementation types through extension contracts. Normal manager loading currently grants only `TrustedRead`; do not silently raise trust to grant secret permission.
+The execution-only adapter uses the shared `ISecretResolver`, `UserOwned` minimum source trust, host-selected identity/purpose/repository/provider restrictions and timeout. Preserve existing reference parsing and comparison semantics. Reject undeclared or unpermitted references before calling a provider. Do not expose provider controls or host implementation types through extension contracts. The normal manager uses the active session’s repository trust, capped by live host policy. A package declares its minimum trust in its manifest and descriptor. Permissions set an additional floor. Secret access requires `FullyTrustedAutomation`.
 
 Use an optional invocation-context member, narrow `IExtensionSecretAccess`, explicit safe value wrapper and stable safe failure shape. Keep values/services out of serialization and activation/policy contexts. Revoke on completion, cancellation, absolute deadline and forced retirement. Discard late non-cooperative results. Ordinary draining must not revoke already admitted old-generation calls. A copied string cannot be erased by revocation.
 
@@ -60,13 +60,13 @@ Register exact resolved-value output protection before revealing a credential. C
 
 Configuration uses the existing extension configuration interface. No change to `Threadsmith.Extensions.Abstractions` in this slice. `ExtensionLoadRequest.Configuration` is nullable to distinguish repository selection from an explicit empty override. The runtime host accepts an optional repository path; it never infers settings identity from process working directory.
 
-Pending secret names and failures remain proposals. Follow the additive-major-version policy. Test a genuinely separately compiled old extension before claiming binary compatibility; rebuilding current fixtures is not that test.
+`ExtensionToolInvocationContext.Secrets` is optional and excluded from JSON. `IExtensionSecretAccess.ResolveAsync` returns an `ExtensionSecretValue` with an explicit `Reveal()` method. Existing major-version contracts remain loadable.
 
 ## 8. Project and file changes
 
 Current owners: `ExtensionSelectionConfig`, `ExtensionHost`, `ExtensionHostFacades`, `ExtensionRuntimeContracts`, App `IntegrationComposition`, extension settings fixture/tests, authoring/security docs, and Scenario D.
 
-Later owners: `CapabilityProxy`, `CapabilityRegistry`, tool admission contracts/pipeline, secret output protection and resolver composition, generation retirement, architecture and tool/application tests.
+Secret-access owners: `CapabilityProxy`, `CapabilityRegistry`, tool admission contracts/pipeline, secret output protection and resolver composition, generation retirement, architecture and tool/application tests.
 
 ## 9. Tasks
 
@@ -75,12 +75,12 @@ Later owners: `CapabilityProxy`, `CapabilityRegistry`, tool admission contracts/
 - [x] Extend normal manual load and shared replacement with immutable settings.
 - [x] Add real loaded-fixture settings and cancellation tests.
 - [x] Validate configuration source with scoped build/tests/analyzers and adversarially review it; record results and remaining release-wide checks below.
-- [ ] Define opaque admitted-reference handoff and explicit retirement revocation.
-- [ ] Add failing secret denial, stale/replay, cancellation and leak tests.
-- [ ] Implement narrow contract and shared-resolver adapter through normal admission/proxy paths.
-- [ ] Test effective permissions without silently raising normal manual-load trust.
-- [ ] Close affected raw log/exception/result leaks and test exact-value protection.
-- [ ] Test normal-manager secret resolution, replacement races, collectible unload and old-binary compatibility.
+- [x] Define opaque admitted-reference handoff and explicit retirement revocation.
+- [x] Add secret denial, stale/replay, cancellation and leak tests.
+- [x] Implement narrow contract and shared-resolver adapter through normal admission/proxy paths.
+- [x] Test effective permissions without silently raising normal manual-load trust.
+- [x] Close affected raw log/exception/result leaks and test exact-value protection.
+- [x] Test normal-manager secret resolution, replacement races, collectible unload and old-binary compatibility.
 - [ ] Complete whole-plan validation and secret documentation before starting Neo4j implementation.
 
 ## 10. Testing
@@ -89,7 +89,7 @@ Later owners: `CapabilityProxy`, `CapabilityRegistry`, tool admission contracts/
 
 Follow `CONTRIBUTING.md` and current `.github/workflows/build.yml`: restore; stage pinned ripgrep; Debug solution build; solution tests; formatting and suggestion-level analyzer checks; packaged-documentation preflight. Run extension and architecture tests explicitly. Record commands and limitations, never infer cross-platform results from Windows validation.
 
-Pending secret tests must prove every admission-denial path calls no provider, declarations cannot broaden after approval, direct/copied/stale authority fails, caller/deadline/completion/forced-retirement access expires, late results are discarded, concurrent invocation scopes remain isolated, and distinctive credentials stay out of host results/events/logs/serialization. Use explicit barriers and runner cancellation, not functional completion deadlines.
+Secret tests cover these boundaries and must prove every admission-denial path calls no provider, declarations cannot broaden after approval, direct/copied/stale authority fails, caller/deadline/completion/forced-retirement access expires, late results are discarded, concurrent invocation scopes remain isolated, and distinctive credentials stay out of host results/events/logs/serialization. Use explicit barriers and runner cancellation, not functional completion deadlines.
 
 ## 11. Security and permissions
 
@@ -101,17 +101,17 @@ Reuse load and activation events and the existing tool activity stream. Configur
 
 ## 13. Migration and compatibility
 
-No files are automatically rewritten. Existing explicit configuration callers retain their values through copied snapshots. Missing configuration remains empty. Changes take effect only on explicit unload/load or replacement. No extension contract interface changed in the configuration slice; old-binary secret-contract testing remains pending.
+No files are automatically rewritten. Existing explicit configuration callers retain their values through copied snapshots. Missing configuration remains empty. Changes take effect only on explicit unload/load or replacement. Contract 1.1 adds an optional secret service to tool execution. A separately compiled 1.0 sample ran on the new host. Section 17 records the unload results.
 
 ## 14. Acceptance criteria
 
 - [x] Configuration slice passes final solution build, affected suites/analyzers and clean-context adversarial source review.
 - [ ] Complete remaining release-wide validation listed below.
-- [ ] A normally invoked extension resolves only admitted secrets through the shared resolver.
+- [x] A normally invoked extension resolves only admitted secrets through the shared resolver.
 - [ ] Every denial path prevents provider access; undeclared/expired access fails closed.
-- [ ] No resolved secret enters host-owned durable state or normal diagnostic output in tested paths.
-- [ ] Replacement preserves invocation/settings ownership; repository selection never grants autoload.
-- [ ] Compatibility and dependency direction remain valid.
+- [x] No resolved secret enters host-owned durable state or normal diagnostic output in tested paths.
+- [x] Replacement preserves invocation/settings ownership; repository selection never grants autoload.
+- [x] Compatibility and dependency direction remain valid.
 - [ ] Relevant compiler/analyzer, test and documentation checks pass, with platform limits explicit.
 
 ## 15. Risks
@@ -120,13 +120,13 @@ Mutable declarations, retained secret services, late provider results, raw early
 
 ## 16. Documentation
 
-Configuration behavior is documented in `docs/extension-authoring/authoring-guide.md` and the operations security-policy catalog. Update the owning secret-management/tool-contract docs when secret access is implemented, not before. Do not add completion history to frozen milestone contracts.
+Configuration behavior is documented in `docs/extension-authoring/authoring-guide.md` and the operations security-policy catalog. The extension tool contract and secret-discovery guide document execution-time access and repository trust. Do not add completion history to frozen milestone contracts.
 
 ## 17. Open decisions and validation
 
-Resolved: repository-only first version; bounds/failure policy and explicit override semantics above. Pending: secret API failure shape, unforgeable admission design, effective-secret-permission normal-load path, forced-retirement revocation and exact-value output-protection lifetime.
+Resolved: repository-only first version; bounds/failure policy and explicit override semantics above. Execution-time access uses a one-use grant bound to the actual context, tool, and input. Generation-scoped output protection covers concurrent and retained callers. Revocation follows invocation completion, cancellation, absolute deadlines, and forced retirement.
 
-### Configuration-slice results
+### Historical configuration-slice results
 
 Branch: `feature/extension-secrets-and-configuration`, based on `971b05226c2306330dcd9357e27af95c09d51b0e`. Work remains uncommitted; no push or PR was requested. The full proposal is not complete.
 
@@ -145,11 +145,33 @@ Clean-context security, correctness and test reviews inspected actual diffs/curr
 
 Fixture cleanup now deletes and asserts removal of test-owned configuration data. Shadow staging is separate and remains owned by the existing runtime unload lifecycle. `UnloadBlocked` staging is explicitly reported in test output; tests do not claim guaranteed deletion of JIT-retained mapped DLLs within the same process.
 
-### Outstanding validation and limitations
+### Historical configuration-slice limitations
 
 - `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4` timed out; no full-solution test success is claimed. A later TRX-report attempt ran zero tests because the test host rejected the handshake; the supported CTRF runs above subsequently passed.
 - Whole-solution native `dotnet_format_check` timed out while reporting existing formatting issues in unchanged repository-intelligence, delegation and other files. The extension-project format check also reported pre-existing missing final newlines in unchanged test files. These unrelated files were not reformatted. Final changed-file whitespace checking passed.
 - Suggestion-level analyzer checking of the new parser/tests/fixture passed before the last fixture-cleanup repair. The broader information-level check reported existing suggestions in unchanged portions of touched files. Final build and separately invoked analyzer checks passed, but a final full information-level format/analyzer pass is not claimed.
 - `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1` passed earlier in the session. Later documentation changed, and the host rejected the repeated identical invocation; the final documentation preflight remains outstanding. `eng/Test-PrSubmission.ps1`, manual terminal procedures, macOS/Linux checks and CI were not run. No release/PR-readiness claim is made.
 - Tests drive the existing shared repository policy binding directly; review separately traced its production `/open` publication. They do not simulate the entire interactive command loop.
-- Execution-time secret access, independent revocation, exact-value output protection and separately compiled old-binary compatibility remain pending. No extension contract API or secret store was added by this slice.
+- At the end of the configuration slice, secret resolution and old-binary verification were still outstanding. The following record supersedes that status.
+
+### Secret access and package trust
+
+Branch `feature/complete-extension-secret-access` implements the host prerequisite. Set `RequiredTrust` in the package manifest to advertise a minimum level before load. The descriptor and declared permissions can raise that level. The manager shows the effective requirement it can determine during discovery. The host checks repository trust during load and before publication. Each tool inherits the package minimum. Existing extensions can use their current permissions. The manager also displays manifest `AccessTypes` and declared permissions. Enabling the package grants its disk and network I/O under the Threadsmith process account. The host applies no per-path or per-destination checks to extension I/O.
+
+The manager test exercises insufficient repository trust, denied and successful credential requests, safe output, and replacement during provider resolution. The admission test checks context copies, changed input and replay. The lifetime and logger tests cover retirement, an absolute deadline, late provider results, and escaped values. The tests use test credentials and an in-process provider double.
+
+A separately compiled echo extension loaded and executed against contract 1.1. Its unload reported `UnloadBlocked` on both the archived host and the new host. A separately compiled clean-unload extension loaded and unloaded on the new host.
+
+Local validation used Windows x64 and .NET 10. Restore, pinned ripgrep staging, and the Debug solution build passed. The verification commands below use the repository test runner. Full-suite and cross-platform CI, interactive terminal verification, and live secret-store verification remain outside these results.
+
+```powershell
+dotnet restore src/Threadsmith.sln
+pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot artifacts/test-ripgrep
+dotnet build src/Threadsmith.sln -c Debug --no-restore --verbosity quiet
+dotnet test --project tests/Threadsmith.Extensions.Tests/Threadsmith.Extensions.Tests.csproj -c Debug --no-build -- --filter-class "*ExtensionSecretAccessTests" --filter-class "*ExtensionSettingsTests" --filter-class "*CapabilityRegistryTests"
+dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj -c Debug --no-build -- --filter-class "*ExtensionSecretAdmissionTests"
+dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj -c Debug --no-build -- --filter-class "*ExtensionAutoloadPolicyTests" --filter-class "*DependencyDirectionTests"
+pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1
+```
+
+The filtered test groups passed 15, 1 and 55 cases respectively. The documentation preflight, changed-file whitespace check, and `git diff --check HEAD` passed. The suggestion-level analyzer check on the touched C# files reported 108 diagnostics. All diagnostic locations fell on unchanged lines. Release-wide verification remains open.

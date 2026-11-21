@@ -4,6 +4,8 @@ An explicit trusted `tools.allow: []` excludes all model tools, including checke
 
 Threadsmith resolves application authorization separately from ordinary configuration. `DefaultPolicyEngine` and the existing mutation, fetch, MCP, hook, skill and secret validators remain the enforcement paths. This is not an OS sandbox: admitted shells, builds, tests, extensions and local servers retain the user's ambient OS authority, including access to same-user policy files and network destinations beyond typed-tool checks.
 
+Explicitly enabling an extension at its required repository trust grants the extension disk and network access with the Threadsmith process account. Approved roots, prohibited path patterns, network tool lists, and outbound host lists govern host tools. The extension manager displays package-declared access types before load. Tool selection, repository trust, executable checks, secret admission, and operation-specific approval still apply to extension tool calls.
+
 ## Sources and presence
 
 The [repository permissions guide](repository-permissions.md) defines configuration ownership, exact file format, source order and effective-policy behavior. Permission metadata on configuration properties drives the common loader and writer. Repository preferences are filtered before merging; repository files cannot grant authority.

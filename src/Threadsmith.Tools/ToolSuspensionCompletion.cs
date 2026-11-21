@@ -26,6 +26,9 @@ internal sealed class ToolSuspensionCompletion
     /// <summary>Canonical identity resolved before terminal selection.</summary>
     internal string ToolId { get; set; }
 
+    /// <summary>Whether an external write was dispatched. Null for other tools.</summary>
+    internal bool? ExternalWriteDispatched { get; set; }
+
     /// <summary>Execution measurement retained across the suspended user wait.</summary>
     internal long? SuspendedElapsedMilliseconds { get; set; }
 

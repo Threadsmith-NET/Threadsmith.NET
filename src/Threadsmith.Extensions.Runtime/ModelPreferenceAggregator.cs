@@ -53,8 +53,8 @@ public sealed class ModelPreferenceAggregator : IModelPreferenceAggregator
     public IReadOnlyList<ModelPreferenceContributorSnapshot> Contributors => _registry.ModelPreferenceContributors
         .Select(c => new ModelPreferenceContributorSnapshot
         {
-            CapabilityId = c.Contributor.Descriptor.Id,
-            DisplayName = c.Contributor.Descriptor.DisplayName,
+            CapabilityId = c.Protection.SafeMessage(c.Contributor.Descriptor.Id),
+            DisplayName = c.Protection.SafeMessage(c.Contributor.Descriptor.DisplayName),
             ExtensionId = c.ExtensionId.Value.ToString(),
         })
         .OrderBy(s => s.CapabilityId, StringComparer.Ordinal)
@@ -73,15 +73,17 @@ public sealed class ModelPreferenceAggregator : IModelPreferenceAggregator
             {
                 var hints =
                     await registration.Contributor.GetHintsAsync(workloadName, cancellationToken);
-                all.AddRange(hints);
+                all.AddRange(hints.Where(hint => !registration.Protection.Contains(hint.WorkloadName)
+                    && !registration.Protection.Contains(hint.PreferredProfileName)
+                    && !registration.Protection.Contains(hint.Rationale)));
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
                 _logger.LogWarning(
                     "Model-preference contributor {ContributorId} failed for workload {Workload}: {Error}",
-                    registration.Contributor.Descriptor.Id,
+                    registration.Protection.SafeMessage(registration.Contributor.Descriptor.Id),
                     workloadName,
-                    exception.Message);
+                    registration.Protection.SafeMessage(exception.Message));
             }
         }
 

@@ -30,3 +30,7 @@ Child processes use tokenized arguments without shell interpolation, a filtered 
 ## Direct-editing amendment (2026-10-05)
 
 `edit_source` uses the existing tool invocation pipeline. Its exact mutation review supplies write authorization, avoiding a second generic approval prompt for the same edit. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
+
+## Extension I/O amendment (2026-11-21)
+
+Explicit enablement at the required repository trust grants an extension disk and network I/O with the process account. The package can disclose access types for review before enablement. The shared pipeline continues to check tool authority, executables and secret references. Path and network target checks in this decision govern host-managed I/O.

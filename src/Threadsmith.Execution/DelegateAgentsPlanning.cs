@@ -232,7 +232,7 @@ public sealed class DelegateAgentsPlanFactory
                     || (definition.Category is not ToolCategory.Workflow
                         and not ToolCategory.ProcessExecution
                         and not ToolCategory.CodeExecution
-                        && (definition.Category is not ToolCategory.ExternalSearch
+                        && (definition.Category is not (ToolCategory.ExternalSearch or ToolCategory.ExternalService)
                             || definition.ReadOnlySubagentNetworkAvailable)
                         && definition.SideEffect == ToolSideEffect.ReadOnly
                         && definition.RequiredApproval == ApprovalLevel.None)))

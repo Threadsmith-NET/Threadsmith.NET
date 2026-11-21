@@ -8,7 +8,7 @@ namespace Threadsmith.Extensions.Abstractions;
 public static class ExtensionContractVersion
 {
     /// <summary>The current contract version string.</summary>
-    public const string Current = "1.0";
+    public const string Current = "1.1";
 }
 
 /// <summary>Host-owned data describing one extension (strategy §17.5).</summary>
@@ -18,6 +18,9 @@ public static class ExtensionContractVersion
 /// </remarks>
 public sealed record ExtensionDescriptor
 {
+    /// <summary>Minimum repository trust for this extension, in addition to its permission requirements.</summary>
+    public ExtensionTrustRequirement RequiredTrust { get; init; }
+
     /// <summary>Stable extension identity, typically the manifest id.</summary>
     public required string Id { get; init; }
 
@@ -32,6 +35,9 @@ public sealed record ExtensionDescriptor
 
     /// <summary>Capability kind names the extension contributes.</summary>
     public IReadOnlyList<string> Capabilities { get; init; } = [];
+
+    /// <summary>Optional descriptive access types, such as disk-read, disk-write, or database-write.</summary>
+    public IReadOnlyList<string> AccessTypes { get; init; } = [];
 
     /// <summary>Permission names the extension requests.</summary>
     public IReadOnlyList<string> Permissions { get; init; } = [];
@@ -88,8 +94,8 @@ public enum ExtensionLifecycleState
 
 /// <summary>Permissions an extension may request (strategy §17.23).</summary>
 /// <remarks>
-/// These are advisory requests; the host grants an effective subset and every invocation still
-/// passes through normal host policy. Extension permission approval is never a bypass.
+/// Permission declarations contribute to the package trust requirement. Enabling the extension
+/// grants its own disk and network I/O under the operating-system account running Threadsmith.
 /// </remarks>
 [Flags]
 public enum ExtensionPermission
@@ -139,6 +145,9 @@ public enum ExtensionTrustRequirement
 
     /// <summary>Requires mutation-level repository trust (file changes).</summary>
     RepositoryMutation,
+
+    /// <summary>Requires fully trusted repository automation.</summary>
+    FullyTrustedAutomation,
 }
 
 /// <summary>Approval level an extension capability requires after policy permits it.</summary>
@@ -157,6 +166,10 @@ public enum ExtensionApprovalRequirement
 /// <summary>Optional extension manifest declared alongside the entry assembly (strategy §17.8).</summary>
 public sealed record ExtensionManifest
 {
+    /// <summary>Minimum repository trust checked before extension construction.</summary>
+    [System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<ExtensionTrustRequirement>))]
+    public ExtensionTrustRequirement RequiredTrust { get; init; }
+
     /// <summary>Stable extension identity.</summary>
     public required string Id { get; init; }
 
@@ -180,6 +193,9 @@ public sealed record ExtensionManifest
 
     /// <summary>Permission names the extension requests.</summary>
     public IReadOnlyList<string> Permissions { get; init; } = [];
+
+    /// <summary>Descriptive access types shown to the operator before enabling the extension.</summary>
+    public IReadOnlyList<string> AccessTypes { get; init; } = [];
 
     /// <summary>Optional integrity hash over the entry assembly.</summary>
     public string? Sha256 { get; init; }

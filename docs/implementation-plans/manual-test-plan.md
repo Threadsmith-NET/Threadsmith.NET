@@ -1661,6 +1661,14 @@ Expected: only the exact immutable handler/eligible pre-point/allowlisted code b
 
 Expected: no shell interpolation, command-line secret, ambient environment inheritance, orphan process, automatic redirect, secret forwarding to a changed origin, unbounded body, or leaked canary exists. Retries remain bounded and cancellation kills/stops waiting.
 
+### MTP-EXT-SECRETS — Repository trust and invocation-scoped credentials
+
+Use a disposable repository, a reviewed test package that declares `secret-access`, and a synthetic user-owned credential.
+Open the extension manager at read trust. Verify the displayed trust requirement and the rejected load.
+Grant the required repository trust through the normal repository workflow. Explicitly load the same package.
+Invoke a tool with its declared reference. Check its safe response and the host completion event.
+Attempt an undeclared reference. Confirm failure without disclosure. Unload the package and verify its tool leaves the catalog.
+
 ### MTP-EXT-SETTINGS — Repository extension settings snapshots
 
 Prerequisites: use a disposable repository and a reviewed extension that exposes non-secret configuration in an observable test operation. Use its stable descriptor ID. Never put a real password in settings.

@@ -68,7 +68,9 @@ public static class SemanticToolchainArchitectureTests
                     continue;
                 }
 
-                if (id != "Microsoft.Build.Framework"
+                var isSemanticEvaluationReference = id == "Microsoft.Build"
+                    && projectPath == Path.Combine(RepositoryRoot, "src", "Threadsmith.DotNet", "Threadsmith.DotNet.csproj");
+                if ((id != "Microsoft.Build.Framework" && !isSemanticEvaluationReference)
                     || reference.Attribute("ExcludeAssets")?.Value != "runtime"
                     || reference.Attribute("PrivateAssets")?.Value != "all")
                 {

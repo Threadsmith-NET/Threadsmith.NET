@@ -24,16 +24,6 @@
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Mcp\Threadsmith.Mcp.csproj" />
-    <ProjectReference Include="..\Threadsmith.Mcp.TestServer\Threadsmith.Mcp.TestServer.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
-  <Target Name="StageMcpServerFixture" AfterTargets="Build">
-    <ItemGroup>
-      <McpServerFixtureFiles Include="$(MSBuildThisFileDirectory)..\Threadsmith.Mcp.TestServer\bin\$(Configuration)\$(TargetFramework)\**\*" />
-    </ItemGroup>
-    <Error Condition="'@(McpServerFixtureFiles)' == ''" Text="The MCP server fixture was not built." />
-    <Copy SourceFiles="@(McpServerFixtureFiles)"
-          DestinationFiles="@(McpServerFixtureFiles->'$(OutDir)fixtures/mcp-server/%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
-  </Target>
 </Project>

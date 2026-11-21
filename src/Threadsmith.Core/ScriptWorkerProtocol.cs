@@ -1,5 +1,6 @@
 namespace Threadsmith.Core;
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
 
@@ -40,6 +41,7 @@ public static class ScriptWorkerProtocol
     /// <summary>Maximum nested calls, including rejected requests.</summary>
     public const int Attempts = 64;
 
+    private const int _bufferBytes = 16 * 1024;
     private static readonly UTF8Encoding _encoding = new(false, true);
 
     /// <summary>Writes one complete frame before yielding the pipe to the peer.</summary>
@@ -58,7 +60,28 @@ public static class ScriptWorkerProtocol
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(2), sequence);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(6), length);
         await stream.WriteAsync(header, cancellationToken);
-        await stream.WriteAsync(_encoding.GetBytes(payload), cancellationToken);
+        if (length > 0)
+        {
+            var bufferLength = Math.Min(length, _bufferBytes);
+            var bytes = ArrayPool<byte>.Shared.Rent(bufferLength);
+            try
+            {
+                var encoder = _encoding.GetEncoder();
+                var offset = 0;
+                while (offset < payload.Length)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    encoder.Convert(payload.AsSpan(offset), bytes.AsSpan(0, bufferLength), true, out var charsUsed, out var bytesUsed, out _);
+                    offset += charsUsed;
+                    await stream.WriteAsync(bytes.AsMemory(0, bytesUsed), cancellationToken);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(bytes, clearArray: true);
+            }
+        }
+
         await stream.FlushAsync(cancellationToken);
     }
 
@@ -86,12 +109,76 @@ public static class ScriptWorkerProtocol
             throw new InvalidDataException("Invalid script protocol version, sequence, kind, or length.");
         }
 
-        var bytes = new byte[length];
-        if (await stream.ReadAtLeastAsync(bytes, length, throwOnEndOfStream: false, cancellationToken) != length)
+        if (length == 0)
+        {
+            return new ScriptFrame(kind, string.Empty);
+        }
+
+        var bytes = ArrayPool<byte>.Shared.Rent(Math.Min(length, _bufferBytes));
+        try
+        {
+            if (length <= _bufferBytes)
+            {
+                await ReadPayloadChunkAsync(stream, bytes, length, cancellationToken);
+                return new ScriptFrame(kind, _encoding.GetString(bytes.AsSpan(0, length)));
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes, clearArray: true);
+        }
+
+        var payload = await ReadLargePayloadAsync(stream, length, cancellationToken);
+        return new ScriptFrame(kind, payload);
+    }
+
+    private static async Task<string> ReadLargePayloadAsync(Stream stream, int length, CancellationToken cancellationToken)
+    {
+        var segments = new List<(byte[] Bytes, int Count)>();
+        var decoder = _encoding.GetDecoder();
+        var chars = ArrayPool<char>.Shared.Rent(_encoding.GetMaxCharCount(_bufferBytes));
+        try
+        {
+            var remaining = length;
+            var charCount = 0;
+            while (remaining > 0)
+            {
+                var count = Math.Min(remaining, _bufferBytes);
+                var bytes = ArrayPool<byte>.Shared.Rent(count);
+                segments.Add((bytes, count));
+                await ReadPayloadChunkAsync(stream, bytes, count, cancellationToken);
+                remaining -= count;
+                charCount += decoder.GetChars(bytes.AsSpan(0, count), chars, flush: remaining == 0);
+            }
+
+            // Retain bounded byte segments, not a second UTF-16 copy of the entire frame.
+            decoder.Reset();
+            return string.Create(charCount, (segments, decoder, cancellationToken), static (target, state) =>
+            {
+                for (var index = 0; index < state.segments.Count; index++)
+                {
+                    state.cancellationToken.ThrowIfCancellationRequested();
+                    var (bytes, count) = state.segments[index];
+                    var decoded = state.decoder.GetChars(bytes.AsSpan(0, count), target, flush: index == state.segments.Count - 1);
+                    target = target[decoded..];
+                }
+            });
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(chars, clearArray: true);
+            foreach (var (bytes, _) in segments)
+            {
+                ArrayPool<byte>.Shared.Return(bytes, clearArray: true);
+            }
+        }
+    }
+
+    private static async Task ReadPayloadChunkAsync(Stream stream, byte[] bytes, int count, CancellationToken cancellationToken)
+    {
+        if (await stream.ReadAtLeastAsync(bytes.AsMemory(0, count), count, throwOnEndOfStream: false, cancellationToken) != count)
         {
             throw new InvalidDataException("Incomplete script frame payload.");
         }
-
-        return new ScriptFrame(kind, _encoding.GetString(bytes));
     }
 }

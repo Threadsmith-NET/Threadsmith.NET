@@ -1002,6 +1002,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 throw new UnauthorizedAccessException("Script tool was disabled or replaced.");
             }
 
+            DateTimeOffset? observationStartedAt = request.Context.IsScriptOrigin ? _timeProvider.GetUtcNow() : null;
             var execution = await tool.ExecuteAsync(
                 input,
                 executionContext,
@@ -1171,6 +1172,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 Concepts = observedConcepts,
                 SourceDetail = sourceDetail,
                 ReadObservedAt = readObservedAt,
+                ObservationStartedAt = observationStartedAt,
                 Sources = scriptSources.Count == 0 ? execution.Sources : [.. execution.Sources, .. scriptSources.Distinct()],
                 Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,

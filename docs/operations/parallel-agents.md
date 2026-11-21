@@ -146,26 +146,6 @@ This path does not automatically partition, apply, or merge parallel worktree ch
 - Child tool unavailable: compare `readOnly` versus `inherit`, then check the parent's actual advertised tools and current approval, trust, path, executable/network, phase, and sensitivity policy. A role or its context cannot widen policy. Remote fetch requires an enabled ordinary tool such as `run_process` under those same permissions; there is no hidden acquisition path.
 - Cancelled run: use the durable delegation ID to confirm queued and running children reached terminal cancellation; late results from the cancelled generation are not authoritative.
 
-## Live role evaluation
-
-From a source checkout, the explicit `SubagentRoleLiveTests.SelectedRoleRecordsProviderOutcome` check runs one role and fixture variant through normal `ModelComposition.CreateAsync` and provider-instruction resolution. It uses synthetic files and existing Threadsmith provider authentication. Repeat the command with the role and variant you want to compare.
-
-The harness uses the trusted user catalog's default profile unless `THREADSMITH_LIVE_AGENT_PROFILE` names another existing profile ID. Provider selection is derived from that catalog unless `THREADSMITH_LIVE_AGENT_PROVIDER` is set. For a native Codex profile supplied outside the user provider catalog, set the profile ID and `THREADSMITH_LIVE_AGENT_PROVIDER=openai-codex`; the explicit provider is required because the user catalog cannot derive that binding. No separate credential import is needed.
-
-```powershell
-$env:THREADSMITH_LIVE_AGENT_ROLE = 'explorer'
-$env:THREADSMITH_LIVE_AGENT_VARIANT = 'issue'
-$env:THREADSMITH_LIVE_AGENT_REPORT_DIRECTORY = Join-Path $env:TEMP 'threadsmith-role-reports'
-# For an existing native Codex profile, also set THREADSMITH_LIVE_AGENT_PROFILE
-# to its profile GUID and THREADSMITH_LIVE_AGENT_PROVIDER to 'openai-codex'.
-dotnet build tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj
-dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj --no-build --explicit only --filter-method 'Threadsmith.Architecture.Tests.SubagentRoleLiveTests.SelectedRoleRecordsProviderOutcome' --timeout 55s --show-live-output on
-```
-
-Use `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, `architectureReviewer`, or `bugReviewer` with `issue` or `control`. The runner bounds each invocation at 55 seconds. The check verifies successful completion and join, trusted model routing, and read-only fixture integrity. Reports save final responses, synthetic tool evidence, effective routing, request and tool counts, repeated calls, token usage, elapsed time, and observations for manual review.
-
-Manually evaluate saved responses for correctness, relevance, omissions, unsupported claims, and useful proposed fixes or assertions. Where a response supplies citations, inspect their support; citations are not a required format. Compare efficiency only across comparable tasks and useful answers, not merely shorter or cheaper runs. These small cases are not a guarantee that a model will review arbitrary repositories correctly. Keep live tests separate from the normal offline suite; selecting a remote provider can consume provider usage.
-
 ## Partition and integration failures
 
 For callers of the existing worker APIs, parallel mutation falls back to serial execution when ownership is unproven or intersects another assignment by file, containing directory, symbol, project, generated output, or shared configuration surface. Worker integration fails closed for:

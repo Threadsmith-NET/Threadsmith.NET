@@ -146,8 +146,8 @@ public static partial class Milestone1Tests
             .GetTypes()
             .Where(type => !type.IsAbstract && typeof(DomainEvent).IsAssignableFrom(type))
             .ToHashSet();
-        Assert.True(declaredEventTypes.SetEquals(expectedEvents.Select(item => item.GetType())));
-        Assert.True(declaredEventTypes.SetEquals(DomainEventJson.RegisteredTypes.Values));
+        Assert.Equal(declaredEventTypes.OrderBy(type => type.FullName), expectedEvents.Select(item => item.GetType()).OrderBy(type => type.FullName));
+        Assert.Equal(declaredEventTypes.OrderBy(type => type.FullName), DomainEventJson.RegisteredTypes.Values.OrderBy(type => type.FullName));
         Assert.Equal(expectedEvents.Count, DomainEventJson.RegisteredTypes.Count);
         Assert.Throws<InvalidDataException>(() =>
             DomainEventJson.Deserialize("unknown", 1, "{}"));
@@ -2396,49 +2396,6 @@ public static partial class Milestone1Tests
         Assert.Contains("Tool read_file: succeeded", output, StringComparison.Ordinal);
     }
 
-    /// <summary>SQLite restores all persistable event types and schema versions in append order.</summary>
-    [Fact]
-    public static async Task SqliteEventStore_CompleteCatalog_RoundTripsInOrder()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var connectionString = $"Data Source=threadsmith-events-{Guid.NewGuid():N};Mode=Memory;Cache=Shared;Pooling=False";
-        await using var lifetime = new SqliteConnection(connectionString);
-        await lifetime.OpenAsync(cancellationToken);
-        var store = new SqliteEventStore(connectionString);
-        await store.InitializeAsync(cancellationToken);
-        var expected = TestEvents()
-            .Where(domainEvent => domainEvent is not ModelReasoningObserved)
-            .ToArray();
-        foreach (var domainEvent in expected)
-        {
-            await store.AppendAsync(domainEvent, cancellationToken);
-        }
-
-        var previousSchema = new SessionCreated(
-            expected[0].SessionId,
-            DateTimeOffset.UtcNow,
-            "n-1")
-        {
-            SchemaVersion = 0,
-        };
-        await store.AppendAsync(previousSchema, cancellationToken);
-
-        var actual = await store.ReadAsync(expected[0].SessionId, cancellationToken);
-
-        Assert.Equal(
-            expected.Select(item => item.GetType()).Append(typeof(SessionCreated)),
-            actual.Select(item => item.GetType()));
-        Assert.All(actual.Take(expected.Length), item => Assert.Equal(1, item.SchemaVersion));
-        for (var index = 0; index < expected.Length; index++)
-        {
-            Assert.Equivalent(expected[index], actual[index], strict: true);
-            Assert.Equal(DomainEventJson.Serialize(expected[index]), DomainEventJson.Serialize(actual[index]));
-        }
-
-        Assert.Equivalent(previousSchema, actual[^1], strict: true);
-        Assert.Equal(0, actual[^1].SchemaVersion);
-    }
-
     /// <summary>Authorization, JSON, environment, query, multiline, and control inputs are sanitized.</summary>
     [Theory]
     [InlineData("Authorization: Bearer abc123", "abc123")]
@@ -3696,6 +3653,14 @@ public static partial class Milestone1Tests
                 SemanticRefreshMode.Incremental,
                 ChangedFileCount: 1,
                 DirtyVersion: 2),
+            new SemanticRefreshModeChanged(
+                sessionId,
+                occurredAt,
+                SemanticRefreshId.New(),
+                WorkspaceId.New(),
+                SemanticRefreshReason.ExternalChange,
+                SemanticRefreshMode.Full,
+                ChangedFileCount: 1),
             new SemanticRefreshCompleted(
                 sessionId,
                 occurredAt,

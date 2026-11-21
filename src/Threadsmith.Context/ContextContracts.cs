@@ -120,6 +120,9 @@ public sealed record Evidence
     /// <summary>All source file dependencies; missing digests are not verified baseline evidence.</summary>
     public IReadOnlyList<EvidenceFileDependency> FileDependencies { get; init; } = [];
 
+    /// <summary>Earliest host observation boundary of the semantic results used by this evidence.</summary>
+    public DateTimeOffset? SemanticObservedAt { get; init; }
+
     /// <summary>Keys whose invalidation makes this evidence stale.</summary>
     public IReadOnlyList<string> InvalidationKeys { get; init; } = [];
 

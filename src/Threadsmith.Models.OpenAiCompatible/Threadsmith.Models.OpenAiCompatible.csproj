@@ -13,7 +13,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.ModelTooling.Tests" />
-    <InternalsVisibleTo Include="Threadsmith.ModelTooling.Integration.Tests" />
   </ItemGroup>
 
 </Project>

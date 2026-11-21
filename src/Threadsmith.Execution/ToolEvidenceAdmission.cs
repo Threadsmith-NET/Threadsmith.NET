@@ -91,6 +91,7 @@ internal static class ToolEvidenceAdmission
                 Relevance = result.Succeeded ? 0.8 : 1,
                 EstimatedTokens = checked(Math.Max(1, (content.Length + 3) / 4) + result.Images.Sum(ModelImages.EstimateTokens)),
                 InvalidationKeys = GetInvalidationKeys(result),
+                SemanticObservedAt = GetSemanticObservation(result),
             },
             cancellationToken);
         return evidenceId;
@@ -134,7 +135,7 @@ internal static class ToolEvidenceAdmission
     {
         if (IsSemanticEvidenceTool(result.ToolId))
         {
-            return [new ToolProvenanceSource("semantic", result.ToolId)];
+            return [new ToolProvenanceSource("semantic", result.ToolId) { NestedReadAt = result.ObservationStartedAt }];
         }
 
         var observedAt = result.ReadObservedAt ?? DateTimeOffset.UtcNow;
@@ -155,6 +156,10 @@ internal static class ToolEvidenceAdmission
             ? ["repository", "semantic"]
             : ["repository"];
     }
+
+    /// <summary>Returns the earliest semantic observation used by the outer result.</summary>
+    internal static DateTimeOffset? GetSemanticObservation(ToolInvocationResult result) => result.Sources
+        .Where(source => source.Kind == "semantic").Min(source => source.NestedReadAt);
 
     private static SemanticConfidenceLevel ReadSemanticConfidence(string toolId, string content)
     {

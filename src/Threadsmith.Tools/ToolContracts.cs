@@ -627,6 +627,10 @@ public sealed record ToolInvocationResult
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
 
+    /// <summary>Conservative host observation boundary, before execution and its lifecycle notifications.</summary>
+    [JsonIgnore]
+    internal DateTimeOffset? ObservationStartedAt { get; init; }
+
     /// <summary>When read_file produced the result, before tool lifecycle notifications and evidence admission.</summary>
     [JsonIgnore]
     internal DateTimeOffset? ReadObservedAt { get; init; }

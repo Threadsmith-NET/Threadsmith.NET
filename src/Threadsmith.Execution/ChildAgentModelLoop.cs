@@ -890,6 +890,7 @@ internal sealed class ChildAgentModelLoop
                     ? EvidenceSensitivity.Sensitive
                     : EvidenceSensitivity.None,
                 InvalidationKeys = ToolEvidenceAdmission.GetInvalidationKeys(result),
+                SemanticObservedAt = ToolEvidenceAdmission.GetSemanticObservation(result),
             },
             cancellationToken);
         var modelContent = JsonSerializer.Serialize(new

@@ -348,10 +348,11 @@ public sealed partial class SemanticEngine
             }
 
             var documents = previous.AppliedEndpoints.Keys.SelectMany(path => _solution.GetDocumentIdsWithFilePath(path)).ToHashSet();
-            var projectScoped = previous.ProjectMembershipGeneration == _solutionGeneration;
+            var scoped = previous.ScopedProjectRefresh;
+            var projectScoped = scoped?.Generation == _solutionGeneration;
             var omissions = GraphReplacementOmissions.Skip(projectScoped ? 1 : 0).ToList();
-            var (projects, projectsOmitted) = projectScoped
-                ? GetEditProjectScope(_solution, documents.Select(id => id.ProjectId), omissions)
+            var (projects, projectsOmitted) = scoped is not null && projectScoped
+                ? GetEditProjectScope(_solution, documents.Select(id => id.ProjectId).Concat(scoped.ChangedOptions), omissions)
                 : (_solution.ProjectIds.ToArray(), 0);
             documents.UnionWith(_editedDocumentPaths.SelectMany(path => _solution.GetDocumentIdsWithFilePath(path))
                 .Where(id => projects.Contains(id.ProjectId)));
@@ -1138,7 +1139,7 @@ public sealed partial class SemanticEngine
 
         public bool AnalyzerInitialKnown { get; init; }
 
-        public long? ProjectMembershipGeneration { get; set; }
+        public ScopedProjectRefresh? ScopedProjectRefresh { get; set; }
 
         public long? VerifiedGraphGeneration { get; set; }
 

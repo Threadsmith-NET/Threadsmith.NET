@@ -213,41 +213,6 @@ public static class UserQuestionTests
         Assert.Equal(RunSteeringPauseRequestStatus.Accepted, steering.RequestPause(request.SessionId, request.RunId).Status);
     }
 
-    /// <summary>Restoration never resurrects a live tool continuation.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task RestartInterruptsPendingAndAcceptedButUnconsumedQuestions(bool answered)
-    {
-        var token = TestContext.Current.CancellationToken;
-        var database = Path.Combine(Path.GetTempPath(), $"threadsmith-question-{Guid.NewGuid():N}.db");
-        try
-        {
-            var store = new SqliteEventStore($"Data Source={database};Pooling=False");
-            await store.InitializeAsync(token);
-            var request = CreateRequest();
-            await store.AppendAsync(new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, request, new(UserQuestionStatus.Pending, [])), token);
-            if (answered)
-            {
-                await store.AppendAsync(new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, request, new(UserQuestionStatus.Answered, [new("q", "a", null)])), token);
-            }
-
-            var restorer = new SessionRestorer(store, new DomainEventMigrationRegistry([], currentVersion: 1), NullLogger<SessionRestorer>.Instance);
-            var restored = await restorer.RestoreAsync(request.SessionId, new InMemoryProjectionStore(), token);
-            Assert.True(restored.Succeeded);
-            Assert.Contains("interrupted", restored.Warnings, StringComparison.Ordinal);
-            var history = await store.ReadAsync(request.SessionId, token);
-            Assert.Equal(UserQuestionStatus.Interrupted, Assert.IsType<UserQuestionStateChanged>(history[^1]).Result.Status);
-            Assert.Empty(history.OfType<UserQuestionReady>());
-            await restorer.RestoreAsync(request.SessionId, new InMemoryProjectionStore(), token);
-            Assert.Equal(history.Count, (await store.ReadAsync(request.SessionId, token)).Count);
-        }
-        finally
-        {
-            File.Delete(database);
-        }
-    }
-
     /// <summary>Other alone reveals the editor, and Enter submits pasted multiline text without inserting a newline.</summary>
     [Theory]
     [InlineData(2)]

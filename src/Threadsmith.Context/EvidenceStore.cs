@@ -11,7 +11,8 @@ public sealed class EvidenceStore : IEvidenceStore
 
     // Case-insensitive candidate lookup is a superset; supersession still uses the repository comparer.
     private readonly Dictionary<SessionId, Dictionary<string, HashSet<EvidenceId>>> _dependencies = [];
-    private readonly Queue<(SessionId SessionId, string Key, string Reason, DateTimeOffset ChangedAt)> _invalidations = new();
+    private readonly Queue<(SessionId SessionId, Invalidation Change)> _invalidations = new();
+    private readonly Dictionary<SessionId, Dictionary<string, Invalidation>> _invalidationWatermarks = [];
     private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="EvidenceStore"/> class.</summary>
@@ -64,6 +65,7 @@ public sealed class EvidenceStore : IEvidenceStore
         var pathComparers = prepared.Select(item => item.Provenance.RepositoryPath)
             .OfType<string>().Distinct(StringComparer.Ordinal)
             .ToDictionary(root => root, RepositoryPathPolicy.GetPathComparer, StringComparer.Ordinal);
+        var observations = prepared.Select(item => PrepareObservations(item, pathComparers)).ToArray();
         var commitState = 0;
         bool TryCommitBatch()
         {
@@ -80,56 +82,29 @@ public sealed class EvidenceStore : IEvidenceStore
 
             lock (_gate)
             {
-                foreach (var item in prepared)
+                for (var index = 0; index < prepared.Length; index++)
                 {
-                    const string superseded = "Superseded by a different source file version.";
-                    var incoming = item;
-                    if (item.Provenance.RepositoryPath is { } root
-                        && item.FileDependencies.Any(dependency => dependency.Sha256 is not null)
-                        && _dependencies.TryGetValue(item.SessionId, out var paths))
+                    var item = prepared[index];
+                    var (byPath, conflicting) = observations[index];
+                    if (conflicting)
                     {
-                        HashSet<EvidenceId> affected = [];
-                        foreach (var dependency in item.FileDependencies.Where(dependency => dependency.Sha256 is not null))
-                        {
-                            if (paths.TryGetValue(dependency.Path, out var identities))
-                            {
-                                affected.UnionWith(identities);
-                            }
-                        }
+                        item = item with { IsStale = true, StaleReason = "Contains different versions of the same source file." };
+                    }
 
-                        foreach (var identity in affected)
+                    if (!item.IsStale && (item.SemanticObservedAt is not null || item.FileDependencies.Any(file => file.ObservedAt is not null))
+                        && _invalidationWatermarks.TryGetValue(item.SessionId, out var watermarks))
+                    {
+                        foreach (var change in watermarks.Values)
                         {
-                            var previous = _items[(item.SessionId, identity)];
-                            var supersedesPrevious = false;
-                            foreach (var current in item.FileDependencies.Where(dependency => dependency.Sha256 is not null))
+                            if (Invalidates(item, change))
                             {
-                                foreach (var old in previous.FileDependencies.Where(old => pathComparers[root].Equals(old.Path, current.Path)
-                                    && !string.Equals(old.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase)))
-                                {
-                                    if ((current.ObservedAt ?? item.CollectedAt) >= (old.ObservedAt ?? previous.CollectedAt))
-                                    {
-                                        supersedesPrevious = true;
-                                    }
-                                    else if (old.Sha256 is not null)
-                                    {
-                                        incoming = incoming with { IsStale = true, StaleReason = superseded };
-                                    }
-                                }
-                            }
-
-                            if (supersedesPrevious)
-                            {
-                                Store(previous with { IsStale = true, StaleReason = superseded });
+                                item = item with { IsStale = true, StaleReason = change.Reason };
+                                break;
                             }
                         }
                     }
 
-                    if (item.FileDependencies.Count > 1 && HasConflictingFileVersions(item, pathComparers))
-                    {
-                        incoming = incoming with { IsStale = true, StaleReason = "Contains different versions of the same source file." };
-                    }
-
-                    Store(incoming);
+                    Store(ReconcileObservations(item, byPath));
                 }
             }
 
@@ -242,7 +217,18 @@ public sealed class EvidenceStore : IEvidenceStore
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
         lock (_gate)
         {
-            _invalidations.Enqueue((sessionId, key, reason, changedAt));
+            var change = new Invalidation(key, reason, changedAt);
+            _invalidations.Enqueue((sessionId, change));
+            if (!_invalidationWatermarks.TryGetValue(sessionId, out var watermarks))
+            {
+                watermarks = new(StringComparer.Ordinal);
+                _invalidationWatermarks.Add(sessionId, watermarks);
+            }
+
+            if (!watermarks.TryGetValue(key, out var previous) || previous.ChangedAt <= changedAt)
+            {
+                watermarks[key] = change;
+            }
         }
     }
 
@@ -273,19 +259,7 @@ public sealed class EvidenceStore : IEvidenceStore
                         continue;
                     }
 
-                    var root = evidence.Provenance.RepositoryPath;
-                    var normalizedKey = root is null ? invalidation.Key.Replace('\\', '/').TrimEnd('/') : SourceEvidence.NormalizePath(root, invalidation.Key);
-                    var comparer = root is null ? (OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) : RepositoryPathPolicy.GetPathComparer(root);
-                    var matchesPath = SourceEvidence.Dependencies(evidence).Any(dependency =>
-                    {
-                        var path = root is null ? dependency.Path.Replace('\\', '/') : SourceEvidence.NormalizePath(root, dependency.Path);
-                        return comparer.Equals(path, normalizedKey)
-                            || (path.Length > normalizedKey.Length && path[normalizedKey.Length] == '/' && comparer.Equals(path[..normalizedKey.Length], normalizedKey));
-                    });
-                    var matchesKey = evidence.InvalidationKeys.Contains(
-                        invalidation.Key,
-                        StringComparer.OrdinalIgnoreCase);
-                    if (evidence.IsStale || evidence.CollectedAt > invalidation.ChangedAt || (!matchesPath && !matchesKey))
+                    if (evidence.IsStale || !Invalidates(evidence, invalidation.Change))
                     {
                         continue;
                     }
@@ -293,7 +267,7 @@ public sealed class EvidenceStore : IEvidenceStore
                     Store(evidence with
                     {
                         IsStale = true,
-                        StaleReason = invalidation.Reason,
+                        StaleReason = invalidation.Change.Reason,
                     });
                     staleCount++;
                 }
@@ -303,16 +277,56 @@ public sealed class EvidenceStore : IEvidenceStore
         return Task.FromResult(staleCount);
     }
 
-    private static bool HasConflictingFileVersions(Evidence item, Dictionary<string, StringComparer> pathComparers)
+    private static bool Invalidates(Evidence evidence, Invalidation change)
     {
-        var root = item.Provenance.RepositoryPath;
-        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
-        if (root is not null)
+        var dependencies = SourceEvidence.Dependencies(evidence);
+        if (evidence.InvalidationKeys.Contains(change.Key, StringComparer.OrdinalIgnoreCase))
         {
-            comparer = pathComparers[root];
+            var observed = evidence.SemanticObservedAt ?? evidence.CollectedAt;
+            if (change.Key.Equals("repository", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var file in dependencies)
+                {
+                    if (file.ObservedAt is { } at && at < observed)
+                    {
+                        observed = at;
+                    }
+                }
+            }
+
+            if (observed <= change.ChangedAt)
+            {
+                return true;
+            }
         }
 
-        var digests = new Dictionary<string, string>(comparer);
+        var root = evidence.Provenance.RepositoryPath;
+        var normalized = root is null ? change.Key.Replace('\\', '/').TrimEnd('/') : SourceEvidence.NormalizePath(root, change.Key);
+        var comparer = root is null ? DefaultPathComparer() : RepositoryPathPolicy.GetPathComparer(root);
+        foreach (var dependency in dependencies)
+        {
+            if ((dependency.ObservedAt ?? evidence.CollectedAt) > change.ChangedAt)
+            {
+                continue;
+            }
+
+            var path = root is null ? dependency.Path.Replace('\\', '/') : SourceEvidence.NormalizePath(root, dependency.Path);
+            if (comparer.Equals(path, normalized)
+                || (path.Length > normalized.Length && path[normalized.Length] == '/' && comparer.Equals(path[..normalized.Length], normalized)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static (Dictionary<string, FileObservation>? ByPath, bool Conflicting) PrepareObservations(
+        Evidence item, Dictionary<string, StringComparer> pathComparers)
+    {
+        var root = item.Provenance.RepositoryPath;
+        Dictionary<string, FileObservation>? byPath = null;
+        var conflicting = false;
         foreach (var dependency in item.FileDependencies)
         {
             if (dependency.Sha256 is not { } digest)
@@ -321,14 +335,85 @@ public sealed class EvidenceStore : IEvidenceStore
             }
 
             var path = root is null ? dependency.Path.Replace('\\', '/') : dependency.Path;
-            if (!digests.TryAdd(path, digest) && !string.Equals(digests[path], digest, StringComparison.OrdinalIgnoreCase))
+            var at = dependency.ObservedAt ?? item.CollectedAt;
+            byPath ??= new(root is null ? DefaultPathComparer() : pathComparers[root]);
+            if (!byPath.TryGetValue(path, out var previous))
             {
-                return true;
+                byPath.Add(path, new(digest, at, at));
+            }
+            else if (string.Equals(previous.Digest, digest, StringComparison.OrdinalIgnoreCase))
+            {
+                byPath[path] = new(digest, at < previous.Earliest ? at : previous.Earliest, at > previous.Latest ? at : previous.Latest);
+            }
+            else
+            {
+                conflicting = true;
+                if (at >= previous.Latest)
+                {
+                    byPath[path] = new(digest, at, at);
+                }
             }
         }
 
-        return false;
+        return (root is null ? null : byPath, conflicting);
     }
+
+    private static StringComparer DefaultPathComparer() => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private Evidence ReconcileObservations(Evidence incoming, Dictionary<string, FileObservation>? byPath)
+    {
+        if (byPath is null || !_dependencies.TryGetValue(incoming.SessionId, out var paths))
+        {
+            return incoming;
+        }
+
+        const string superseded = "Superseded by a different source file version.";
+        HashSet<EvidenceId> affected = [];
+        foreach (var path in byPath.Keys)
+        {
+            if (paths.TryGetValue(path, out var identities))
+            {
+                affected.UnionWith(identities);
+            }
+        }
+
+        foreach (var identity in affected)
+        {
+            var previous = _items[(incoming.SessionId, identity)];
+            var supersedesPrevious = false;
+            foreach (var old in previous.FileDependencies)
+            {
+                if (!byPath.TryGetValue(old.Path, out var current)
+                    || string.Equals(old.Sha256, current.Digest, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var at = old.ObservedAt ?? previous.CollectedAt;
+                supersedesPrevious |= current.Latest >= at;
+                if (!incoming.IsStale && old.Sha256 is not null && current.Earliest < at)
+                {
+                    incoming = incoming with { IsStale = true, StaleReason = superseded };
+                }
+
+                if (supersedesPrevious && incoming.IsStale)
+                {
+                    break;
+                }
+            }
+
+            if (supersedesPrevious)
+            {
+                Store(previous with { IsStale = true, StaleReason = superseded });
+            }
+        }
+
+        return incoming;
+    }
+
+    private readonly record struct Invalidation(string Key, string Reason, DateTimeOffset ChangedAt);
+
+    private readonly record struct FileObservation(string Digest, DateTimeOffset Earliest, DateTimeOffset Latest);
 
     // Called only under _gate so retained history and the live dependency index change atomically.
     private void Store(Evidence evidence)

@@ -57,17 +57,22 @@ public sealed partial class SemanticEngine
             return null;
         }
 
-        var replacement = await TryResolveProjectDocumentsAsync(workspace, solution, request, added, lifetime.Token);
-        if (replacement is null)
+        if (await TryResolveProjectDocumentsAsync(workspace, solution, request, added, lifetime.Token) is not { } resolved)
         {
             return null;
         }
 
+        var changedOptions = resolved.Solution.GetChanges(solution).GetProjectChanges()
+            .Where(change => !Equals(change.OldProject.ParseOptions, change.NewProject.ParseOptions)
+                || !Equals(change.OldProject.CompilationOptions, change.NewProject.CompilationOptions))
+            .Select(change => change.ProjectId).ToImmutableArray();
         var addition = new ProjectSourceAddition(
             ownership,
             solution,
-            replacement,
-            inventory.SourceDocuments.Concat(added.Keys).ToFrozenSet(comparer));
+            resolved.Solution,
+            resolved.Inputs,
+            inventory.SourceDocuments.Concat(added.Keys).ToFrozenSet(comparer),
+            changedOptions);
         var textUpdates = documents.Where(document => inventory.SourceDocuments.Contains(document.Path)).ToArray();
         return await PublishDocumentsAsync(textUpdates, addition, lifetime.Token);
     }
@@ -75,7 +80,7 @@ public sealed partial class SemanticEngine
     // The CLR can resolve the catch filter's Microsoft.Build type before the method body runs.
     // Do not enter this boundary until a trusted workspace has registered the MSBuild locator.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private async Task<Solution?> TryResolveProjectDocumentsAsync(
+    private async Task<ResolvedProjectDocuments?> TryResolveProjectDocumentsAsync(
         MSBuildWorkspace workspace,
         Solution solution,
         SemanticLoadRequest request,
@@ -154,7 +159,12 @@ public sealed partial class SemanticEngine
                     continue;
                 }
 
-                pending.Push(Path.GetFullPath(import, declaringDirectory));
+                // The resolved-import baseline verifies external declarations without reopening them.
+                var importPath = Path.GetFullPath(import, declaringDirectory);
+                if (IsPathWithinRoot(importPath, request.RepositoryPath))
+                {
+                    pending.Push(importPath);
+                }
             }
         }
 
@@ -240,13 +250,60 @@ public sealed partial class SemanticEngine
         return File.OpenRead(path);
     }
 
+    private static string? ReadRestoreIdentity(string path, SemanticLoadRequest request, CancellationToken cancellationToken)
+    {
+        using var stream = OpenScopeInput(path, request);
+        if (stream is null)
+        {
+            return null;
+        }
+
+        // Assets are not XML inventory. Hash a fixed-length read in small chunks so
+        // a large lock file, or one growing concurrently, does not require a large buffer.
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var remaining = stream.Length;
+        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        try
+        {
+            while (remaining != 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var count = (int)Math.Min(remaining, buffer.Length);
+                var chunk = buffer.AsSpan(0, count);
+                stream.ReadExactly(chunk);
+                hash.AppendData(chunk);
+                remaining -= count;
+            }
+
+            if (stream.ReadByte() != -1)
+            {
+                throw new IOException("The NuGet assets file grew during the read.");
+            }
+
+            return Convert.ToHexString(hash.GetHashAndReset());
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
     private bool ScopeInputsMatch(
-        FrozenDictionary<string, string?> inputs, SemanticLoadRequest request, CancellationToken cancellationToken)
+        FrozenDictionary<string, string?> inputs,
+        SemanticLoadRequest request,
+        CancellationToken cancellationToken,
+        Dictionary<string, string?>? identities = null,
+        bool restoreAssets = false)
     {
         foreach (var (path, expected) in inputs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var actual = ReadScopeInput(path, request, captureDeclaration: false).Identity;
+            if (identities?.TryGetValue(path, out var actual) != true)
+            {
+                actual = restoreAssets ? ReadRestoreIdentity(path, request, cancellationToken) : ReadScopeInput(path, request, captureDeclaration: false).Identity;
+                identities?.Add(path, actual);
+            }
+
             if (!string.Equals(expected, actual, StringComparison.Ordinal))
             {
                 return false;
@@ -302,7 +359,7 @@ public sealed partial class SemanticEngine
         .Replace("$(MSBuildThisFileDirectory)", declaringDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
         .Replace('\\', Path.DirectorySeparatorChar);
 
-    private async Task<Solution?> ResolveProjectDocumentsAsync(
+    private async Task<ResolvedProjectDocuments?> ResolveProjectDocumentsAsync(
         MSBuildWorkspace sourceWorkspace,
         Solution solution,
         SemanticLoadRequest request,
@@ -312,21 +369,54 @@ public sealed partial class SemanticEngine
         var comparer = StringComparerForCurrentPlatform();
         var projectsByPath = solution.Projects.ToLookup(project => project.FilePath, comparer);
         var properties = sourceWorkspace.Properties;
-        var selection = FindSourceRefreshOwners(
-            projectsByPath, properties, request, added, _resourceLimits.CompilationWorkers > 1, cancellationToken);
-        if (selection is null)
+        if (!_resolvedImportBaselines.TryGetValue(sourceWorkspace, out var importBaseline)
+            || projectsByPath.Any(group => group.Key is null || !importBaseline.Projects.ContainsKey(group.Key)))
         {
-            return null;
+            return RequireGraphLoad("Resolved project imports were not verified for the published graph");
+        }
+
+        // A changed operand explained by an added source still selects its known owner(s).
+        // Other changes may come from an external build in an unwatched directory.
+        var existsBeforeLoad = CaptureExistsStates(
+            importBaseline.ExistsByProject.Values.SelectMany(project => project.Keys).Distinct(comparer), request, cancellationToken);
+        foreach (var (path, operands) in importBaseline.ExistsByProject)
+        {
+            if (operands.Any(pair => existsBeforeLoad[pair.Key] != pair.Value && !TouchesAddition(pair.Key, added.Keys)))
+            {
+                return RequireGraphLoad($"Literal MSBuild Exists state changed outside the source batch for '{path}'");
+            }
+        }
+
+        var untouched = new HashSet<string>(comparer);
+        var identities = new Dictionary<string, string?>(comparer);
+        if (!RestoreInputsMatch(importBaseline, identities, request, cancellationToken))
+        {
+            return RequireGraphLoad("NuGet restore inputs changed");
+        }
+
+        foreach (var (path, conventional) in importBaseline.Conventional)
+        {
+            if (!ConventionalInputsMatch(path, conventional, identities, request, cancellationToken))
+            {
+                return RequireGraphLoad($"Conventional project inputs changed for '{path}'");
+            }
+
+            if (Path.GetDirectoryName(path) is { } directory && !TouchesAddition(directory, added.Keys))
+            {
+                untouched.Add(path);
+            }
+        }
+
+        var selection = FindSourceRefreshOwners(
+            projectsByPath, properties, importBaseline, request, added, untouched, _resourceLimits.CompilationWorkers > 1, _logger, cancellationToken);
+        if (selection is null || selection.FallbackReason is not null)
+        {
+            return RequireGraphLoad(selection?.FallbackReason ?? "Project ownership or target framework coverage could not be verified");
         }
 
         var owners = selection.Projects;
-
-        // An unchanged Compile set does not prove unchanged compiler settings. For example,
-        // another project's constants or references may depend on the existence of an added file.
-        var ownerIds = owners.Select(project => project.Id).ToHashSet();
-        var excluded = solution.Projects.Where(project => !ownerIds.Contains(project.Id));
         var checks = new List<ProjectRefreshCheck>();
-        foreach (var project in excluded.Concat(owners))
+        foreach (var project in solution.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (project.FilePath is not { } projectPath || Path.GetDirectoryName(projectPath) is not { } directory)
@@ -334,73 +424,123 @@ public sealed partial class SemanticEngine
                 return null;
             }
 
-            var inputs = _projectInputScopes.GetValue(project.Id, _ => CaptureProjectInputs(projectPath, directory, request, cancellationToken));
-            if (!LocalInputsMatch(inputs, projectPath, directory))
+            var inputs = importBaseline.Conventional.TryGetValue(projectPath, out var conventional)
+                ? conventional.Local
+                : _projectInputScopes.GetValue(project.Id, _ => CaptureProjectInputs(projectPath, directory, request, cancellationToken));
+            if (conventional is null && !LocalInputsMatch(inputs, projectPath, directory))
             {
-                return null;
+                return RequireGraphLoad($"Project scope inputs changed for '{projectPath}'");
             }
 
-            // Snapshot all existing generated text before any design-time load can replace it.
+            // The watcher excludes these inputs. An independent build can change them even
+            // if none of the selected design-time builds can write to their directories.
             var generated = await CaptureGeneratedInputsAsync(project, request, cancellationToken);
             if (generated is null)
             {
-                return null;
+                return RequireGraphLoad($"Generated inputs could not be verified for '{projectPath}'");
             }
 
-            checks.Add(new(project, projectPath, directory, inputs, generated));
+            checks.Add(new(projectPath, directory, inputs, generated));
         }
 
         var replacement = solution;
         var matched = new HashSet<string>(comparer);
-        var firstOwner = checks.Count - owners.Count;
         ProjectInfo?[]? ownerConfigurations = null;
-        for (var index = 0; index < checks.Count; index++)
+        if (selection.CanLoadInParallel)
+        {
+            // Collect by index so completion order cannot affect validation or publication.
+            var configurations = new ProjectInfo?[owners.Count];
+            await Parallel.ForEachAsync(
+                Enumerable.Range(0, owners.Count),
+                new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = _resourceLimits.CompilationWorkers },
+                async (index, token) => configurations[index] = await LoadProjectConfigurationAsync(owners[index], projectsByPath, properties, token));
+            ownerConfigurations = configurations;
+        }
+
+        for (var index = 0; index < owners.Count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (index == firstOwner && selection.CanLoadInParallel)
-            {
-                // Check non-owners first so a mismatch falls back before loading any owners.
-                // Collect by index so completion order cannot affect validation or publication.
-                var configurations = new ProjectInfo?[owners.Count];
-                await Parallel.ForEachAsync(
-                    Enumerable.Range(0, owners.Count),
-                    new ParallelOptions { CancellationToken = cancellationToken, MaxDegreeOfParallelism = _resourceLimits.CompilationWorkers },
-                    async (ownerIndex, token) => configurations[ownerIndex] = await LoadProjectConfigurationAsync(owners[ownerIndex], projectsByPath, properties, token));
-                ownerConfigurations = configurations;
-            }
-
-            var project = checks[index].Project;
+            var project = owners[index];
             var info = ownerConfigurations is null
                 ? await LoadProjectConfigurationAsync(project, projectsByPath, properties, cancellationToken)
-                : ownerConfigurations[index - firstOwner];
-            if (info is null || !HasSameProjectConfiguration(project, info, request))
+                : ownerConfigurations[index];
+            if (info is null || ApplyProjectCompilerOptions(replacement, project, info, request) is not { } configured)
             {
-                return null;
+                return RequireGraphLoad($"Project configuration could not be reconciled for '{project.FilePath}'");
             }
 
-            var updated = ApplyProjectMembership(replacement, project, info, request, added, matched, index >= firstOwner, cancellationToken);
+            var updated = ApplyProjectMembership(configured, project, info, request, added, matched, cancellationToken);
             if (updated is null)
             {
-                return null;
+                return RequireGraphLoad($"Project source membership could not be reconciled for '{project.FilePath}'");
             }
 
             replacement = updated;
+        }
+
+        identities.Clear();
+        if (!RestoreInputsMatch(importBaseline, identities, request, cancellationToken))
+        {
+            return RequireGraphLoad("NuGet restore inputs changed while loading scoped projects");
+        }
+
+        foreach (var (path, conventional) in importBaseline.Conventional)
+        {
+            if (!ConventionalInputsMatch(path, conventional, identities, request, cancellationToken))
+            {
+                return RequireGraphLoad($"Conventional project inputs changed while loading '{path}'");
+            }
         }
 
         foreach (var check in checks)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!await GeneratedInputsMatchAsync(check.Generated, request, cancellationToken)
-                || !LocalInputsMatch(check.Inputs, check.ProjectPath, check.Directory))
+                || (!importBaseline.Conventional.ContainsKey(check.ProjectPath) && !LocalInputsMatch(check.Inputs, check.ProjectPath, check.Directory)))
             {
-                return null;
+                return RequireGraphLoad($"Local or generated inputs changed while loading '{check.ProjectPath}'");
             }
         }
 
-        return matched.Count == added.Count ? replacement : null;
+        var evaluatedPaths = importBaseline.Projects.Keys.Where(path => !untouched.Contains(path));
+        if (TryCaptureResolvedImports(evaluatedPaths, properties, request, cancellationToken: cancellationToken) is not { } finalImports
+            || !importBaseline.CoversImports(finalImports))
+        {
+            return RequireGraphLoad("Resolved project imports changed while loading scoped projects");
+        }
+
+        if (!importBaseline.CoversRestoreInputs(finalImports))
+        {
+            return RequireGraphLoad("Effective NuGet restore inputs changed while loading scoped projects");
+        }
+
+        if (finalImports.ExistsByProject.Values.SelectMany(project => project)
+            .Any(pair => !existsBeforeLoad.TryGetValue(pair.Key, out var expected) || pair.Value != expected))
+        {
+            return RequireGraphLoad("Literal MSBuild Exists state changed while loading scoped projects");
+        }
+
+        var updatedBaseline = importBaseline with
+        {
+            ExistsByProject = importBaseline.ExistsByProject.Select(pair => KeyValuePair.Create(pair.Key, finalImports.ExistsByProject.GetValueOrDefault(pair.Key, pair.Value)))
+                .ToFrozenDictionary(comparer),
+        };
+        return matched.Count == added.Count
+            ? new ResolvedProjectDocuments(replacement, updatedBaseline)
+            : RequireGraphLoad("Not all added sources matched loaded projects");
+
+        ResolvedProjectDocuments? RequireGraphLoad(string reason)
+        {
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                _logger.LogDebug("Project-scoped refresh requires a graph load: {ProjectRefreshFallbackReason}", reason);
+            }
+
+            return null;
+        }
 
         bool LocalInputsMatch(FrozenDictionary<string, string?> inputs, string projectPath, string directory) =>
-            ScopeInputsMatch(inputs, request, cancellationToken) && !HasUnindexedLocalImports(projectPath, directory, request);
+            ScopeInputsMatch(inputs, request, cancellationToken, identities) && !HasUnindexedLocalImports(projectPath, directory, request);
     }
 
     private static Solution? ApplyProjectMembership(
@@ -410,7 +550,6 @@ public sealed partial class SemanticEngine
         SemanticLoadRequest request,
         Dictionary<string, SemanticDocumentRefresh> added,
         HashSet<string> matched,
-        bool allowAdditions,
         CancellationToken cancellationToken)
     {
         var priorDocuments = owner.Documents.Where(document => document.FilePath is not null)
@@ -439,7 +578,7 @@ public sealed partial class SemanticEngine
                 continue;
             }
 
-            if (!allowAdditions || !added.TryGetValue(path, out var change) || !newInProject.Add(path))
+            if (!added.TryGetValue(path, out var change) || !newInProject.Add(path))
             {
                 return null;
             }
@@ -456,12 +595,9 @@ public sealed partial class SemanticEngine
             return null;
         }
 
-        if (!allowAdditions)
-        {
-            return order.SequenceEqual(owner.DocumentIds) ? replacement : null;
-        }
-
-        return replacement.WithProjectDocumentsOrder(owner.Id, order.ToImmutable());
+        return order.SequenceEqual(owner.DocumentIds)
+            ? replacement
+            : replacement.WithProjectDocumentsOrder(owner.Id, order.ToImmutable());
     }
 
     private static async Task<List<(string Path, SourceText Text)>?> CaptureGeneratedInputsAsync(
@@ -553,36 +689,52 @@ public sealed partial class SemanticEngine
             map.Add(referenced);
         }
 
-        var infos = await loader.LoadProjectInfoAsync(owner.FilePath ?? throw new InvalidOperationException(), map, cancellationToken: cancellationToken);
+        var ownerPath = owner.FilePath ?? throw new InvalidOperationException();
+        var progress = new ProjectLoadProgressCollector(_logger);
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            _logger.LogDebug("Opening semantic scoped project {ScopedProjectLoadPath}", ownerPath);
+        }
+
+        var infos = await loader.LoadProjectInfoAsync(ownerPath, map, progress, cancellationToken: cancellationToken);
         return infos.Length == 1 && Volatile.Read(ref failed) == 0 ? infos[0] : null;
     }
 
-    private static bool HasSameProjectConfiguration(Microsoft.CodeAnalysis.Project project, ProjectInfo info, SemanticLoadRequest request)
+    private static Solution? ApplyProjectCompilerOptions(
+        Solution solution, Project project, ProjectInfo info, SemanticLoadRequest request)
     {
         var comparer = StringComparerForCurrentPlatform();
-        var options = project.CompilationOptions;
-        if (options is null || info.CompilationOptions is not { } evaluated
-            || !evaluated.SpecificDiagnosticOptions.ToHashSet().SetEquals(options.SpecificDiagnosticOptions))
+        if (project.CompilationOptions is not { } options || info.CompilationOptions is not { } evaluated
+            || info.ParseOptions is not { } parseOptions
+            || !comparer.Equals(info.OutputFilePath, project.OutputFilePath)
+            || !string.Equals(info.AssemblyName, project.AssemblyName, StringComparison.Ordinal)
+            || !info.MetadataReferences.Select(reference => (reference.Display, reference.Properties)).SequenceEqual(
+                project.MetadataReferences.Select(reference => (reference.Display, reference.Properties)))
+            || !info.AnalyzerReferences.Select(reference => reference.FullPath).SequenceEqual(
+                project.AnalyzerReferences.Select(reference => reference.FullPath), comparer)
+            || !project.ProjectReferences.ToHashSet().SetEquals(info.ProjectReferences)
+            || !SameDocuments(info.AdditionalDocuments, project.AdditionalDocuments)
+            || !SameDocuments(info.AnalyzerConfigDocuments, project.AnalyzerConfigDocuments))
         {
-            return false;
+            return null;
         }
 
-        // These resolvers belong to the individual Roslyn workspace. Compare the evaluated
-        // references and analyzer configuration separately before retaining the live services.
-        var comparable = evaluated.WithSyntaxTreeOptionsProvider(options.SyntaxTreeOptionsProvider)
-            .WithMetadataReferenceResolver(options.MetadataReferenceResolver)
-            .WithSpecificDiagnosticOptions(options.SpecificDiagnosticOptions);
-        return Equals(comparable, options)
-            && comparer.Equals(info.OutputFilePath, project.OutputFilePath)
-            && Equals(info.ParseOptions, project.ParseOptions)
-            && string.Equals(info.AssemblyName, project.AssemblyName, StringComparison.Ordinal)
-            && info.MetadataReferences.Select(reference => (reference.Display, reference.Properties)).SequenceEqual(
-                project.MetadataReferences.Select(reference => (reference.Display, reference.Properties)))
-            && info.AnalyzerReferences.Select(reference => reference.FullPath).SequenceEqual(
-                project.AnalyzerReferences.Select(reference => reference.FullPath), comparer)
-            && project.ProjectReferences.ToHashSet().SetEquals(info.ProjectReferences)
-            && SameDocuments(info.AdditionalDocuments, project.AdditionalDocuments)
-            && SameDocuments(info.AnalyzerConfigDocuments, project.AnalyzerConfigDocuments);
+        // Retain live workspace services after verifying the references and analyzer inputs above.
+        var compilationOptions = evaluated.WithSyntaxTreeOptionsProvider(options.SyntaxTreeOptionsProvider)
+            .WithMetadataReferenceResolver(options.MetadataReferenceResolver);
+        if (compilationOptions.SpecificDiagnosticOptions.ToHashSet().SetEquals(options.SpecificDiagnosticOptions))
+        {
+            compilationOptions = compilationOptions.WithSpecificDiagnosticOptions(options.SpecificDiagnosticOptions);
+        }
+
+        if (!Equals(compilationOptions, options))
+        {
+            solution = solution.WithProjectCompilationOptions(project.Id, compilationOptions);
+        }
+
+        return Equals(parseOptions, project.ParseOptions)
+            ? solution
+            : solution.WithProjectParseOptions(project.Id, parseOptions);
 
         bool SameDocuments(IEnumerable<DocumentInfo> reloaded, IEnumerable<TextDocument> loaded)
         {
@@ -621,11 +773,20 @@ public sealed partial class SemanticEngine
     private readonly record struct ScopeInput(string? Identity, XElement? Declaration);
 
     private sealed record ProjectRefreshCheck(
-        Project Project,
         string ProjectPath,
         string Directory,
         FrozenDictionary<string, string?> Inputs,
         List<(string Path, SourceText Text)> Generated);
 
-    private sealed record ProjectSourceAddition(long Ownership, Solution Base, Solution Replacement, IReadOnlySet<string> SourcePaths);
+    private sealed record ResolvedProjectDocuments(Solution Solution, ResolvedImportSnapshot Inputs);
+
+    private sealed record ProjectSourceAddition(
+        long Ownership,
+        Solution Base,
+        Solution Replacement,
+        ResolvedImportSnapshot Inputs,
+        IReadOnlySet<string> SourcePaths,
+        ImmutableArray<ProjectId> ChangedOptions);
+
+    private sealed record ScopedProjectRefresh(long Generation, ImmutableArray<ProjectId> ChangedOptions);
 }

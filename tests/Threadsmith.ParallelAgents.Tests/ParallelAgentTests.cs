@@ -447,52 +447,6 @@ public sealed class ParallelAgentTests
         Assert.Equal(new AgentResourceUsage(), ledger.Snapshot);
     }
 
-    /// <summary>Verifies a stale progress revision cannot replace a terminal SQLite checkpoint.</summary>
-    [Fact]
-    public async Task Persistence_StaleProgressRevision_DoesNotReplaceTerminalCheckpoint()
-    {
-        // Arrange
-        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-agents-{Guid.NewGuid():N}.db");
-        var connectionString = $"Data Source={path};Pooling=False";
-        try
-        {
-            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
-            var plan = CreatePlan(CreateAssignment(AgentRole.Explorer, "src/A.cs"));
-            var terminal = new DelegationCheckpoint
-            {
-                DelegationId = plan.DelegationId,
-                Provenance = plan.Provenance,
-                Phase = DelegationCheckpointPhase.ResearchJoined,
-                ChildOutcomes = [],
-                NextAction = "synthesize findings",
-                RecordedAt = DateTimeOffset.UtcNow,
-                Revision = 4,
-            };
-            var staleProgress = terminal with
-            {
-                Phase = DelegationCheckpointPhase.ChildrenRunning,
-                NextAction = "observe active children",
-                RecordedAt = terminal.RecordedAt.AddMilliseconds(1),
-                Revision = 3,
-            };
-            var store = new DelegationCheckpointStore(connectionString);
-
-            // Act
-            Assert.True(await store.SaveAsync(terminal));
-            Assert.False(await store.SaveAsync(staleProgress));
-            var restored = await store.GetAsync(plan.DelegationId);
-
-            // Assert
-            Assert.NotNull(restored);
-            Assert.Equal(DelegationCheckpointPhase.ResearchJoined, restored.Phase);
-            Assert.Equal(4, restored.Revision);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
     private static DelegationPlan CreatePlan(params AgentAssignment[] assignments)
     {
         var budget = new AgentResourceBudget

@@ -321,9 +321,18 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     }
 
                     var resolver = RepositoryWorkloadResolverSetting.Read(repositoryPath, _maximumConfigurationBytes);
-                    var workspace = resolver.HasValue
-                        ? MSBuildWorkspace.Create(new Dictionary<string, string> { ["MSBuildEnableWorkloadResolver"] = resolver.Value ? "true" : "false" }, RoslynWorkspaceHost.Services)
-                        : MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
+                    var loadProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (resolver.HasValue)
+                    {
+                        loadProperties.Add("MSBuildEnableWorkloadResolver", resolver.Value ? "true" : "false");
+                    }
+
+                    if (!isDirectProject)
+                    {
+                        loadProperties.Add("SolutionDir", Path.TrimEndingDirectorySeparator(Path.GetDirectoryName(solutionPath) ?? repositoryPath) + Path.DirectorySeparatorChar);
+                    }
+
+                    var workspace = MSBuildWorkspace.Create(loadProperties, RoslynWorkspaceHost.Services);
                     provisionalWorkspace = workspace;
                     workspace.LoadMetadataForReferencedProjects = true;
                     workspace.RegisterWorkspaceFailedHandler(eventArgs =>
@@ -335,12 +344,23 @@ public sealed partial class SemanticEngine : ISemanticEngine
                             measurement.IncrementWorkspaceFailure();
                         }
                     });
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("Opening semantic MSBuild graph {GraphLoadPath}", solutionPath);
+                    }
+
+                    using var importCapture = new GraphInputCapture(this, workspace.Properties, normalizedRequest, measurement.Progress, operationToken);
+                    foreach (var entry in metadata)
+                    {
+                        importCapture.Capture(entry.FilePath);
+                    }
+
                     Solution solution;
                     if (isDirectProject)
                     {
                         var project = await workspace.OpenProjectAsync(
                             solutionPath,
-                            measurement.Progress,
+                            importCapture,
                             operationToken);
                         solution = project.Solution;
                     }
@@ -348,8 +368,20 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     {
                         solution = await workspace.OpenSolutionAsync(
                             solutionPath,
-                            measurement.Progress,
+                            importCapture,
                             operationToken);
+                    }
+
+                    // Compare pre-build evidence against only the projects Roslyn actually opened.
+                    var opened = solution.Projects.Select(project => project.FilePath).OfType<string>()
+                        .Where(path => IsPathWithinRoot(path, repositoryPath)).ToHashSet(pathComparer);
+                    if (VerifyGraphImportBaseline(importCapture.Snapshot(opened), opened, workspace.Properties, normalizedRequest, operationToken) is { } baseline)
+                    {
+                        _resolvedImportBaselines.Add(workspace, baseline);
+                    }
+                    else if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug("No resolved import baseline was established for {SolutionPath}", solutionPath);
                     }
 
                     return (Workspace: workspace, Solution: solution);
@@ -1166,6 +1198,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 // Incremental replacement retains the lifecycle owner's outstanding publication barrier.
                 if (addition is not null)
                 {
+                    if (_workspace is { } workspace)
+                    {
+                        _resolvedImportBaselines.AddOrUpdate(workspace, addition.Inputs);
+                    }
+
                     _refreshInventory = _refreshInventory with { SourceDocuments = addition.SourcePaths };
                 }
 
@@ -1184,7 +1221,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     }
                     else
                     {
-                        candidate.ProjectMembershipGeneration = addition is null ? null : _solutionGeneration;
+                        candidate.ScopedProjectRefresh = addition is null ? null : new(_solutionGeneration, addition.ChangedOptions);
                         candidate.Result = candidate.Result with { Obsolete = true, Pending = false, Revision = candidate.Result.Revision + 1 };
                         candidate.Cancel();
                     }
@@ -2356,6 +2393,12 @@ public sealed partial class SemanticEngine : ISemanticEngine
     private sealed class ProjectLoadProgressCollector : IProgress<ProjectLoadProgress>
     {
         private readonly ConcurrentDictionary<ProjectLoadOperation, int> _operations = new();
+        private readonly ILogger? _scopedLoadLogger;
+
+        public ProjectLoadProgressCollector(ILogger? scopedLoadLogger = null)
+        {
+            _scopedLoadLogger = scopedLoadLogger;
+        }
 
         public string Summary => string.Join(
             ",",
@@ -2366,6 +2409,10 @@ public sealed partial class SemanticEngine : ISemanticEngine
         public void Report(ProjectLoadProgress value)
         {
             _operations.AddOrUpdate(value.Operation, 1, static (_, count) => count + 1);
+            if (value.Operation == ProjectLoadOperation.Build && _scopedLoadLogger is { } logger && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug("Built semantic scoped project {ScopedProjectBuildPath}", value.FilePath);
+            }
         }
     }
 

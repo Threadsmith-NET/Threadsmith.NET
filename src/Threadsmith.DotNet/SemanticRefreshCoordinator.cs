@@ -1234,7 +1234,8 @@ public sealed class SemanticRefreshCoordinator :
             return;
         }
 
-        if (change.Kind == SemanticFileChangeKind.Changed && Directory.Exists(fullPath))
+        var directoryExists = Directory.Exists(fullPath);
+        if (change.Kind == SemanticFileChangeKind.Changed && directoryExists)
         {
             return;
         }
@@ -1252,10 +1253,8 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             binding.DirtyVersion++;
-            if (change.Source != SemanticRefreshReason.Recovery && change.Kind is (SemanticFileChangeKind.Created
-                or SemanticFileChangeKind.Deleted
-                or SemanticFileChangeKind.Renamed
-                or SemanticFileChangeKind.Uncertain))
+            if (change.Source != SemanticRefreshReason.Recovery
+                && SemanticRefreshPathPolicy.RequiresWatcherRestart(change.Kind, directoryExists, binding.WatchesDirectory(fullPath)))
             {
                 binding.WatcherRestartRequired = true;
             }
@@ -2485,7 +2484,9 @@ public sealed class SemanticRefreshCoordinator :
                 : SemanticChangeClassification.Irrelevant;
         }
 
-        if (input != SemanticInputKind.Source || change.Kind == SemanticFileChangeKind.Uncertain || !File.Exists(path))
+        // Preparation decides whether a file is missing from the stable read. A
+        // rename in progress can make a separate existence probe stale.
+        if (input != SemanticInputKind.Source || change.Kind == SemanticFileChangeKind.Uncertain)
         {
             return SemanticChangeClassification.Full;
         }
@@ -3319,13 +3320,14 @@ public sealed class SemanticRefreshCoordinator :
             WatcherTopology after,
             Action<SemanticFileChange> changed)
         {
-            if (!before.Entries.SetEquals(after.Entries))
+            foreach (var path in after.Entries.Except(before.Entries, PathComparer))
             {
-                changed(new SemanticFileChange(
-                    Request.SessionId,
-                    Request.RepositoryPath,
-                    SemanticFileChangeKind.Uncertain,
-                    SemanticRefreshReason.ExternalChange));
+                changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Created));
+            }
+
+            foreach (var path in before.Entries.Except(after.Entries, PathComparer))
+            {
+                changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Deleted));
             }
 
             // File membership and monitoring topology have different consequences. Compare
@@ -3478,15 +3480,7 @@ public sealed class SemanticRefreshCoordinator :
             DirtyVersion = Math.Max(DirtyVersion, dirtyVersion);
         }
 
-        public void RecordNoOp(RefreshBatch batch)
-        {
-            foreach (var change in batch.Changes)
-            {
-                ChangedPaths.Add(change.Path);
-            }
-
-            DirtyVersion = Math.Max(DirtyVersion, batch.TargetDirtyVersion);
-        }
+        public void RecordNoOp(RefreshBatch batch) => DirtyVersion = Math.Max(DirtyVersion, batch.TargetDirtyVersion);
 
         public void RecordSuccess(SemanticConfidenceLevel confidence)
         {

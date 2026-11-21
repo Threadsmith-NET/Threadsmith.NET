@@ -132,6 +132,8 @@ id without loading the assembly:
 }
 ```
 
+`EntryAssembly` is relative to the package directory. If the assembly contains more than one concrete extension, set `EntryClass` to the exact namespace-qualified name of the class to activate. Use `HostApiVersion` to pin the host API major version, or `current` to target the running host.
+
 Use the optional `AccessTypes` array to disclose operations such as `disk-read`, `disk-write`, `network-access`, `database-read`, or `database-write`. Use short descriptions appropriate for the package. The manager shows these alongside permission names before load. An activated descriptor can supply additional descriptions. Access types are informational and do not change the trust requirement. A package without declarations shows “unspecified”.
 
 Manifest property names are PascalCase (the host deserializes with the default JSON options). Set

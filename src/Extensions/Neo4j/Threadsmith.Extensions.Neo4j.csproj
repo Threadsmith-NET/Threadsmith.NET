@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Neo4j extension for Threadsmith.NET.</Description>
+    <ThreadsmithExtension>true</ThreadsmithExtension>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Threadsmith.Extensions.Abstractions/Threadsmith.Extensions.Abstractions.csproj"
+                      Private="false" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+  <Import Project="../../Threadsmith.Extensions.Abstractions/build/Threadsmith.Extensions.Abstractions.targets" />
+</Project>

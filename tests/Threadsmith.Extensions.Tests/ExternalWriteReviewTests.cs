@@ -83,6 +83,37 @@ public static class ExternalWriteReviewTests
         Assert.DoesNotContain(Statement, JsonSerializer.Serialize(fixture.Events.Published), StringComparison.Ordinal);
     }
 
+    /// <summary>Both tool and repository policy can request one-time review without a statement.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task NonStatementExternalWrite_RequestsOneTimeApproval(bool repositoryRequiresReview)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var fixture = new Fixture(repositoryRequiresReview ? ExtensionApprovalRequirement.None : ExtensionApprovalRequirement.User, statementReview: false);
+        var request = repositoryRequiresReview
+            ? fixture.Request with { Context = fixture.Request.Context with { RequireApprovalToolIds = [fixture.Request.ToolId] } }
+            : fixture.Request;
+        fixture.Tool.Release.SetResult(new ExtensionToolResult { Succeeded = true });
+        PolicyApprovalRequest? seen = null;
+        using var attachment = fixture.Coordinator.Attach((review, _) =>
+        {
+            seen = review;
+            Assert.Equal(0, fixture.Tool.Calls);
+            return Task.FromResult(new PolicyApprovalResponse(review.RequestId, PolicyApprovalChoice.Once));
+        });
+
+        var result = await fixture.Pipeline.InvokeAsync(request, token);
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotNull(seen);
+        Assert.Contains(request.ToolId, seen.Summary, StringComparison.Ordinal);
+        Assert.Contains("Source rollback cannot undo", seen.ReviewDetails, StringComparison.Ordinal);
+        Assert.DoesNotContain("fixture-private-value", seen.ReviewDetails, StringComparison.Ordinal);
+        Assert.Equal([PolicyApprovalChoice.Deny, PolicyApprovalChoice.Once], seen.Choices);
+        Assert.Equal(1, fixture.Tool.Calls);
+    }
+
     /// <summary>A registered proxy that cannot acquire its generation lease has not called the writer.</summary>
     [Fact]
     public static async Task DrainingExternalWrite_ReportsNotStarted()
@@ -140,15 +171,70 @@ public static class ExternalWriteReviewTests
         }
     }
 
+    /// <summary>A cancelled queued write records the same not-started receipt in its batch result and terminal event.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public static async Task QueuedExternalWriteCancellation_RecordsNotStarted(bool callerCancels, bool invalidArguments)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var fixture = new Fixture(ExtensionApprovalRequirement.None, parallelOptions: new() { FailureMode = ToolBatchFailureMode.CancelBatchOnFailure });
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var queuedRequest = invalidArguments ? fixture.Request with { ArgumentsJson = "{" } : fixture.Request;
+        ToolBatchRequest[] requests = [new(0, "first", fixture.Request), new(1, "queued", queuedRequest)];
+
+        // The batch starts each wave's prerequisite wait before returning this task. Until
+        // the first writer is released or cancelled, the second wave cannot leave that wait.
+        var pending = fixture.Pipeline.InvokeBatchAsync(requests, caller.Token);
+        try
+        {
+            await Task.WhenAny(pending, fixture.Tool.Entered.Task).WaitAsync(token);
+            Assert.True(fixture.Tool.Entered.Task.IsCompletedSuccessfully);
+            IReadOnlyList<ToolBatchResult> results;
+            if (callerCancels)
+            {
+                await caller.CancelAsync();
+                var cancellation = await Assert.ThrowsAsync<ToolBatchCancelledException>(() => pending.WaitAsync(token));
+                results = cancellation.Results;
+            }
+            else
+            {
+                fixture.Tool.Release.SetResult(new ExtensionToolResult { Succeeded = false, Error = "First write failed." });
+                results = await pending.WaitAsync(token);
+            }
+
+            var queued = Assert.Single(results, item => item.CorrelationId == "queued").Result;
+            Assert.Equal(ToolErrorClassification.Cancelled, queued.ErrorClassification);
+            using var receipt = JsonDocument.Parse(queued.ResultJson!);
+            Assert.Equal("notStarted", receipt.RootElement.GetProperty("outcome").GetString());
+            Assert.DoesNotContain("Verify external state", queued.Error, StringComparison.Ordinal);
+            var started = Assert.Single(fixture.Events.Published.OfType<ToolInvocationStarted>(), item => item.ToolInvocationId == queued.ToolInvocationId);
+            var completed = Assert.Single(fixture.Events.Published.OfType<ToolInvocationCompleted>(), item => item.ToolInvocationId == queued.ToolInvocationId);
+            Assert.Equal(fixture.Source, started.Source);
+            Assert.Equal(started.Source, completed.Source);
+            Assert.Equal(OperationActivityOutcome.Cancelled, completed.Outcome);
+            Assert.Equal(queued.ResultJson, completed.ResultJson);
+            Assert.Equal(1, fixture.Tool.Calls);
+        }
+        finally
+        {
+            fixture.Tool.Release.TrySetResult(new ExtensionToolResult { Succeeded = true });
+        }
+    }
+
     private sealed class Fixture
     {
-        internal Fixture(ExtensionApprovalRequirement approval = ExtensionApprovalRequirement.User)
+        internal Fixture(
+            ExtensionApprovalRequirement approval = ExtensionApprovalRequirement.User,
+            bool statementReview = true,
+            ToolParallelOptions? parallelOptions = null)
         {
-            Tool = new WriteTool(approval);
+            Tool = new WriteTool(approval, statementReview);
             Leases = new InvocationLeaseAuthority(NullLogger.Instance, Clock);
             Proxy = NewProxy();
             Registry.RegisterOrReplace(Proxy, Source);
-            Pipeline = new ToolInvocationPipeline(Registry, new DefaultPolicyEngine(), Coordinator, Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: Clock, prompts: TestPromptLoader.Instance);
+            Pipeline = new ToolInvocationPipeline(Registry, new DefaultPolicyEngine(), Coordinator, Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: Clock, parallelOptions: parallelOptions, prompts: TestPromptLoader.Instance);
         }
 
         internal FakeTimeProvider Clock { get; } = new();
@@ -186,7 +272,7 @@ public static class ExternalWriteReviewTests
         }
     }
 
-    private sealed class WriteTool(ExtensionApprovalRequirement approval) : IToolCapability
+    private sealed class WriteTool(ExtensionApprovalRequirement approval, bool statementReview) : IToolCapability
     {
         public CapabilityDescriptor Descriptor { get; } = new() { Id = "fixture_write", Kind = CapabilityKind.Tool };
 
@@ -201,7 +287,7 @@ public static class ExternalWriteReviewTests
             SideEffect = ExtensionToolSideEffect.WritesExternalData,
             RequiredApproval = approval,
             Idempotency = ExtensionToolIdempotency.NonIdempotent,
-            StatementReview = new("graph.example", "fixture", "cypher", "parameters"),
+            StatementReview = statementReview ? new("graph.example", "fixture", "cypher", "parameters") : null,
             Timeout = TimeSpan.FromMinutes(1),
         };
 

@@ -414,20 +414,20 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
     private async Task<ToolBatchResult> InvokeAfterWaveAsync(
         PlannedToolInvocation planned, Task prerequisite, bool usePreparedSnapshot, DateTimeOffset admittedAt, CancellationTokenSource batchCancellation)
     {
-        var invocation = usePreparedSnapshot ? planned.Request.Invocation
-            : planned.Request.Invocation with { ExpectedRegistration = planned.Registration };
-        invocation = invocation with
-        {
-            Completion = new ToolSuspensionCompletion(
-                _toolTelemetry,
-                invocation.StorageBinding,
-                planned.Registration?.Tool.Definition.Id ?? invocation.ToolId,
-                _timeProvider),
-        };
+        var readyRegistration = planned.PreparationError is null ? planned.Registration : null;
+        var invocation = usePreparedSnapshot
+            ? planned.Request.Invocation
+            : planned.Request.Invocation with { ExpectedRegistration = readyRegistration };
+        var completion = new ToolSuspensionCompletion(
+            _toolTelemetry,
+            invocation.StorageBinding,
+            planned.Registration?.Tool.Definition.Id ?? invocation.ToolId,
+            _timeProvider);
+        invocation = invocation with { Completion = completion };
         try
         {
             batchCancellation.Token.ThrowIfCancellationRequested();
-            var deadline = AdmissionDeadline(planned.Registration?.Tool.Definition, admittedAt);
+            var deadline = AdmissionDeadline(readyRegistration?.Tool.Definition, admittedAt);
             if (deadline is { } expires)
             {
                 var remaining = expires - _timeProvider.GetUtcNow();
@@ -445,19 +445,46 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         {
             // Enter the normal pipeline to publish one correlated expired result, without execution.
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (batchCancellation.IsCancellationRequested)
         {
-            invocation.Completion?.Record(ToolTelemetryStatus.Failed, null);
-            return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, new ToolInvocationResult
-            {
-                ToolInvocationId = ToolInvocationId.New(),
-                ToolId = invocation.ToolId,
-                ErrorClassification = ToolErrorClassification.Cancelled,
-                Error = "Skipped because the tool batch was cancelled.",
-            });
+            // Handle cancellation below even if it races a completed or expired prerequisite.
         }
 
-        var result = await InvokeCoreAsync(invocation, planned.PreparationError, usePreparedSnapshot ? planned.Registration : null, returnCancellationResult: true, admittedAt, batchCancellation.Token);
+        if (batchCancellation.IsCancellationRequested)
+        {
+            const string reason = "Skipped because the tool batch was cancelled.";
+            var invocationId = ToolInvocationId.New();
+            ToolInvocationResult skipped;
+            if (planned.Registration is { Tool.Definition.SideEffect: ToolSideEffect.WritesExternalData } registration)
+            {
+                completion.ExternalWriteDispatched = false;
+                var startedAt = _timeProvider.GetUtcNow();
+                await PublishStartedAsync(invocation, invocationId, startedAt, registration.Source, activityDetail: null);
+                skipped = await CompleteFailureAsync(
+                    invocation,
+                    invocationId,
+                    ToolErrorClassification.Cancelled,
+                    reason,
+                    startedAt,
+                    source: registration.Source,
+                    skippedBeforeAdmission: true);
+            }
+            else
+            {
+                completion.Record(ToolTelemetryStatus.Failed, null);
+                skipped = new ToolInvocationResult
+                {
+                    ToolInvocationId = invocationId,
+                    ToolId = invocation.ToolId,
+                    ErrorClassification = ToolErrorClassification.Cancelled,
+                    Error = reason,
+                };
+            }
+
+            return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, skipped);
+        }
+
+        var result = await InvokeCoreAsync(invocation, planned.PreparationError, usePreparedSnapshot ? readyRegistration : null, returnCancellationResult: true, admittedAt, batchCancellation.Token);
         if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
             && result.Suspension is null && !result.Succeeded && result.ErrorClassification != ToolErrorClassification.Cancelled)
         {
@@ -833,6 +860,12 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 else
                 {
                     var details = (ConfiguredTool.Unwrap(tool) as IToolStatementReview)?.CreateReview(input, _sanitizer);
+                    var writesExternalData = tool.Definition.SideEffect == ToolSideEffect.WritesExternalData;
+                    if (writesExternalData && details is null)
+                    {
+                        details = "This tool does not provide a statement preview. Approve only if you intend this tool to change external data.";
+                    }
+
                     if (details is not null)
                     {
                         if (details.Length > IToolStatementReview.MaximumCharacters || _sanitizer.Sanitize(details) != details)
@@ -850,7 +883,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                             [],
                             [Threadsmith.Policies.Contracts.PolicyApprovalChoice.Deny, Threadsmith.Policies.Contracts.PolicyApprovalChoice.Once])
                         {
-                            ReviewDetails = tool.Definition.SideEffect == ToolSideEffect.WritesExternalData
+                            ReviewDetails = writesExternalData
                                 ? "External data can change. Source rollback cannot undo this operation.\n" + details
                                 : details,
                         };
@@ -858,7 +891,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                         approved = response.RequestId == review.RequestId && response.Choice == Threadsmith.Policies.Contracts.PolicyApprovalChoice.Once;
                         reviewedExtension = approved;
                     }
-                    else if (tool.Definition.SideEffect != ToolSideEffect.WritesExternalData)
+                    else
                     {
                         approved = await _approvalPolicy.IsApprovedAsync(action, policyDecision.RequiredApproval, cancellationToken);
                     }
@@ -1505,7 +1538,8 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         long? elapsedMilliseconds = null,
         string? transientError = null,
         IReadOnlyList<string>? concepts = null,
-        ToolSourceDetail? sourceDetail = null)
+        ToolSourceDetail? sourceDetail = null,
+        bool skippedBeforeAdmission = false)
     {
         request.Completion?.Record(ToolTelemetryStatus.Failed, elapsedMilliseconds);
         var metacharacterDenial = ShellCommandPreparation.TryGetUnquotedMetacharacter(error, out var metacharacter);
@@ -1525,9 +1559,13 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         var duration = elapsedMilliseconds is { } measured
             ? TimeSpan.FromMilliseconds(measured)
             : TimeSpan.Zero;
-        Activity.Current?.SetTag("threadsmith.tool.succeeded", false);
-        Activity.Current?.SetTag("threadsmith.tool.error_classification", classification.ToString());
-        Activity.Current?.SetStatus(ActivityStatusCode.Error, classification.ToString());
+        if (!skippedBeforeAdmission)
+        {
+            Activity.Current?.SetTag("threadsmith.tool.succeeded", false);
+            Activity.Current?.SetTag("threadsmith.tool.error_classification", classification.ToString());
+            Activity.Current?.SetStatus(ActivityStatusCode.Error, classification.ToString());
+        }
+
         _latency.Record(duration.TotalMilliseconds, new KeyValuePair<string, object?>(
             "threadsmith.tool.id",
             request.ToolId));
@@ -1573,7 +1611,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             invocationId,
             succeeded: false,
             classification.ToString(),
-            request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
+            skippedBeforeAdmission || request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
         return new ToolInvocationResult
         {
             SourceDetail = sourceDetail,

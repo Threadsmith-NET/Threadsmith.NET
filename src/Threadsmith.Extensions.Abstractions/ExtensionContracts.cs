@@ -182,6 +182,9 @@ public sealed record ExtensionManifest
     /// <summary>Entry assembly file name relative to the extension package directory.</summary>
     public string EntryAssembly { get; init; } = string.Empty;
 
+    /// <summary>Optional exact, namespace-qualified name of the extension class in the entry assembly.</summary>
+    public string EntryClass { get; init; } = string.Empty;
+
     /// <summary>Contract version the extension was authored against.</summary>
     public string HostApiVersion { get; init; } = ExtensionContractVersion.Current;
 

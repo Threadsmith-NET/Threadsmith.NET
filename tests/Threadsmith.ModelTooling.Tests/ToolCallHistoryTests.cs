@@ -157,6 +157,64 @@ public static class ToolCallHistoryTests
         }
     }
 
+    /// <summary>Post-read processing cannot advance the observation time of captured bytes.</summary>
+    [Fact]
+    public static async Task ReadFile_ObservationPrecedesPostReadSanitization()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = Directory.CreateTempSubdirectory("threadsmith-read-observation-");
+        var started = DateTimeOffset.UnixEpoch;
+        var clock = new FakeTimeProvider(started);
+        var readSanitizer = new PostReadClockSanitizer(clock);
+        var sanitizer = new SecretOutputSanitizer();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root.FullName, "source.txt"), "captured source", cancellationToken);
+            var tool = new ReadFileTool(TestPromptLoader.Instance, readSanitizer);
+            var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+            var request = new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = tool.Definition.Id,
+                ArgumentsJson = "{\"path\":\"source.txt\"}",
+                Context = new ToolInvocationContext { RepositoryPath = root.FullName, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" },
+            };
+
+            var result = await pipeline.InvokeAsync(request, cancellationToken);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.Contains("captured source", result.ResultJson, StringComparison.Ordinal);
+            Assert.Equal(started.AddSeconds(1), clock.GetUtcNow());
+            Assert.Equal(started, result.ReadObservedAt);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
     private static Dictionary<(string ToolName, string ArgumentsJson), int> Counts(ToolCallHistory history)
         => Assert.IsType<Dictionary<(string ToolName, string ArgumentsJson), int>>(typeof(ToolCallHistory).GetField("_counts", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(history));
+
+    private sealed class PostReadClockSanitizer : IOutputSanitizer
+    {
+        private readonly FakeTimeProvider _clock;
+
+        public PostReadClockSanitizer(FakeTimeProvider clock)
+        {
+            _clock = clock;
+        }
+
+        public string Sanitize(string value)
+        {
+            if (value == "captured source")
+            {
+                _clock.Advance(TimeSpan.FromSeconds(1));
+            }
+
+            return value;
+        }
+    }
 }

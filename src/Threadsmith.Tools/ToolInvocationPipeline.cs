@@ -1002,12 +1002,15 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 throw new UnauthorizedAccessException("Script tool was disabled or replaced.");
             }
 
-            DateTimeOffset? observationStartedAt = request.Context.IsScriptOrigin ? _timeProvider.GetUtcNow() : null;
+            var isFileRead = tool.Definition.Id == "read_file";
+
+            // The exact byte-capture time is not exposed for every read mode. Use an earlier
+            // boundary so post-read decoding, redaction, or paging cannot make old bytes current.
+            DateTimeOffset? observationBoundary = request.Context.IsScriptOrigin || isFileRead ? _timeProvider.GetUtcNow() : null;
             var execution = await tool.ExecuteAsync(
                 input,
                 executionContext,
                 timeoutCancellation.Token);
-            DateTimeOffset? readObservedAt = tool.Definition.Id == "read_file" ? _timeProvider.GetUtcNow() : null;
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
@@ -1171,8 +1174,8 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                     ? JsonOutputSanitizer.SanitizeJsonOrText(retained, _sanitizer) : null,
                 Concepts = observedConcepts,
                 SourceDetail = sourceDetail,
-                ReadObservedAt = readObservedAt,
-                ObservationStartedAt = observationStartedAt,
+                ReadObservedAt = isFileRead ? observationBoundary : null,
+                ObservationStartedAt = request.Context.IsScriptOrigin ? observationBoundary : null,
                 Sources = scriptSources.Count == 0 ? execution.Sources : [.. execution.Sources, .. scriptSources.Distinct()],
                 Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,

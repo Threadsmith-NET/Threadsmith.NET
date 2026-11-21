@@ -631,7 +631,7 @@ public sealed record ToolInvocationResult
     [JsonIgnore]
     internal DateTimeOffset? ObservationStartedAt { get; init; }
 
-    /// <summary>When read_file produced the result, before tool lifecycle notifications and evidence admission.</summary>
+    /// <summary>Conservative file observation boundary, before read_file captures bytes or processes the result.</summary>
     [JsonIgnore]
     internal DateTimeOffset? ReadObservedAt { get; init; }
 

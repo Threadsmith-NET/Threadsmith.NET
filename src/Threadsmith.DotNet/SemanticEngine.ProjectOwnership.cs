@@ -66,7 +66,19 @@ public sealed partial class SemanticEngine
 
             if (singleProject)
             {
-                return group.Skip(1).Any() ? null : new([group.First()], CanLoadInParallel: false);
+                if (group.Skip(1).Any())
+                {
+                    return null;
+                }
+
+                if (IsDirectProjectSelection(request.SolutionPath))
+                {
+                    return new([group.First()], CanLoadInParallel: false);
+                }
+
+                // Ownership is unambiguous, but a solution still requires confined design-time outputs.
+                owners.Add(group.First());
+                continue;
             }
 
             var (impact, detail) = InspectProjectImpact(directory, group, evaluated, evaluation, baseline, declarationImpacts, request, added, cancellationToken);

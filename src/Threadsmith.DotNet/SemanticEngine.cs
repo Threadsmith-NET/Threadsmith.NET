@@ -372,16 +372,27 @@ public sealed partial class SemanticEngine : ISemanticEngine
                             operationToken);
                     }
 
-                    // Compare pre-build evidence against only the projects Roslyn actually opened.
-                    var opened = solution.Projects.Select(project => project.FilePath).OfType<string>()
-                        .Where(path => IsPathWithinRoot(path, repositoryPath)).ToHashSet(pathComparer);
-                    if (VerifyGraphImportBaseline(importCapture.Snapshot(opened), opened, workspace.Properties, normalizedRequest, operationToken) is { } baseline)
+                    // The baseline authorizes scoped reloads; it is not required to use the opened graph.
+                    try
                     {
-                        _resolvedImportBaselines.Add(workspace, baseline);
+                        var opened = solution.Projects.Select(project => project.FilePath).OfType<string>()
+                            .Where(path => IsPathWithinRoot(path, repositoryPath)).ToHashSet(pathComparer);
+                        if (VerifyGraphImportBaseline(importCapture.Snapshot(opened), opened, workspace.Properties, normalizedRequest, operationToken) is { } baseline)
+                        {
+                            _resolvedImportBaselines.Add(workspace, baseline);
+                        }
+                        else if (_logger.IsEnabled(LogLevel.Debug))
+                        {
+                            _logger.LogDebug("No resolved import baseline was established for {SolutionPath}", solutionPath);
+                        }
                     }
-                    else if (_logger.IsEnabled(LogLevel.Debug))
+                    catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        _logger.LogDebug("No resolved import baseline was established for {SolutionPath}", solutionPath);
+                        operationToken.ThrowIfCancellationRequested();
+                        if (_logger.IsEnabled(LogLevel.Debug))
+                        {
+                            _logger.LogDebug(exception, "Could not verify the resolved import baseline for {SolutionPath}; keeping the opened workspace", solutionPath);
+                        }
                     }
 
                     return (Workspace: workspace, Solution: solution);

@@ -2471,7 +2471,12 @@ public sealed class SemanticRefreshCoordinator :
         var repositoryPath = request.RepositoryPath;
         var path = change.Path;
         var input = SemanticRefreshPathPolicy.Classify(repositoryPath, path, inventory);
-        if (input == SemanticInputKind.None || Directory.Exists(path) || binding.WatchesDirectory(path))
+
+        // A watcher can still cover a directory that has been replaced by a file. Retire
+        // the watcher as usual, but retain source-addition eligibility if no inputs were lost.
+        var wasWatchedDirectory = binding.WatchesDirectory(path);
+        if (input == SemanticInputKind.None || Directory.Exists(path)
+            || (wasWatchedDirectory && (binding.HasCompilerDescendants(path, inventory) || !File.Exists(path))))
         {
             if (change.Kind == SemanticFileChangeKind.Uncertain && PathComparer.Equals(path, repositoryPath))
             {

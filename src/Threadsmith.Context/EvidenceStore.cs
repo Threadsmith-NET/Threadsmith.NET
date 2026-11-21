@@ -12,7 +12,7 @@ public sealed class EvidenceStore : IEvidenceStore
     // Case-insensitive candidate lookup is a superset; supersession still uses the repository comparer.
     private readonly Dictionary<SessionId, Dictionary<string, HashSet<EvidenceId>>> _dependencies = [];
     private readonly Queue<(SessionId SessionId, Invalidation Change)> _invalidations = new();
-    private readonly Dictionary<SessionId, Dictionary<string, Invalidation>> _invalidationWatermarks = [];
+    private readonly Dictionary<SessionId, InvalidationWatermarks> _invalidationWatermarks = [];
     private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="EvidenceStore"/> class.</summary>
@@ -66,6 +66,7 @@ public sealed class EvidenceStore : IEvidenceStore
             .OfType<string>().Distinct(StringComparer.Ordinal)
             .ToDictionary(root => root, RepositoryPathPolicy.GetPathComparer, StringComparer.Ordinal);
         var observations = prepared.Select(item => PrepareObservations(item, pathComparers)).ToArray();
+        var invalidationPaths = prepared.Select(item => PrepareInvalidationPaths(item, pathComparers)).ToArray();
         var commitState = 0;
         bool TryCommitBatch()
         {
@@ -91,17 +92,11 @@ public sealed class EvidenceStore : IEvidenceStore
                         item = item with { IsStale = true, StaleReason = "Contains different versions of the same source file." };
                     }
 
-                    if (!item.IsStale && (item.SemanticObservedAt is not null || item.FileDependencies.Any(file => file.ObservedAt is not null))
-                        && _invalidationWatermarks.TryGetValue(item.SessionId, out var watermarks))
+                    if (!item.IsStale && invalidationPaths[index] is { } paths
+                        && _invalidationWatermarks.TryGetValue(item.SessionId, out var watermarks)
+                        && watermarks.FindMatch(item, paths) is { } change)
                     {
-                        foreach (var change in watermarks.Values)
-                        {
-                            if (Invalidates(item, change))
-                            {
-                                item = item with { IsStale = true, StaleReason = change.Reason };
-                                break;
-                            }
-                        }
+                        item = item with { IsStale = true, StaleReason = change.Reason };
                     }
 
                     Store(ReconcileObservations(item, byPath));
@@ -215,20 +210,18 @@ public sealed class EvidenceStore : IEvidenceStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        var pathKey = NormalizeInvalidationPath(key);
         lock (_gate)
         {
             var change = new Invalidation(key, reason, changedAt);
             _invalidations.Enqueue((sessionId, change));
             if (!_invalidationWatermarks.TryGetValue(sessionId, out var watermarks))
             {
-                watermarks = new(StringComparer.Ordinal);
+                watermarks = new();
                 _invalidationWatermarks.Add(sessionId, watermarks);
             }
 
-            if (!watermarks.TryGetValue(key, out var previous) || previous.ChangedAt <= changedAt)
-            {
-                watermarks[key] = change;
-            }
+            watermarks.Record(change, pathKey);
         }
     }
 
@@ -280,24 +273,10 @@ public sealed class EvidenceStore : IEvidenceStore
     private static bool Invalidates(Evidence evidence, Invalidation change)
     {
         var dependencies = SourceEvidence.Dependencies(evidence);
-        if (evidence.InvalidationKeys.Contains(change.Key, StringComparer.OrdinalIgnoreCase))
+        if (evidence.InvalidationKeys.Contains(change.Key, StringComparer.OrdinalIgnoreCase)
+            && ObserveKeyAt(evidence, change.Key) <= change.ChangedAt)
         {
-            var observed = evidence.SemanticObservedAt ?? evidence.CollectedAt;
-            if (change.Key.Equals("repository", StringComparison.OrdinalIgnoreCase))
-            {
-                foreach (var file in dependencies)
-                {
-                    if (file.ObservedAt is { } at && at < observed)
-                    {
-                        observed = at;
-                    }
-                }
-            }
-
-            if (observed <= change.ChangedAt)
-            {
-                return true;
-            }
+            return true;
         }
 
         var root = evidence.Provenance.RepositoryPath;
@@ -319,6 +298,91 @@ public sealed class EvidenceStore : IEvidenceStore
         }
 
         return false;
+    }
+
+    private static DateTimeOffset ObserveKeyAt(Evidence evidence, string key)
+    {
+        var observed = evidence.SemanticObservedAt ?? evidence.CollectedAt;
+        if (key.Equals("repository", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var file in evidence.FileDependencies)
+            {
+                if (file.ObservedAt is { } at && at < observed)
+                {
+                    observed = at;
+                }
+            }
+        }
+
+        return observed;
+    }
+
+    private static Dictionary<string, DateTimeOffset>? PrepareInvalidationPaths(
+        Evidence evidence, Dictionary<string, StringComparer> pathComparers)
+    {
+        if (evidence.IsStale || (evidence.SemanticObservedAt is null && !evidence.FileDependencies.Any(file => file.ObservedAt is not null)))
+        {
+            return null;
+        }
+
+        var root = evidence.Provenance.RepositoryPath;
+        var paths = new Dictionary<string, DateTimeOffset>(root is null ? DefaultPathComparer() : pathComparers[root]);
+        foreach (var dependency in SourceEvidence.Dependencies(evidence))
+        {
+            var observedAt = dependency.ObservedAt ?? evidence.CollectedAt;
+            var path = root is null ? NormalizeInvalidationPath(dependency.Path) : SourceEvidence.NormalizePath(root, dependency.Path);
+            while (true)
+            {
+                RecordEarliest(path);
+                if (root is not null)
+                {
+                    RecordEarliest(NormalizeInvalidationPath(Path.GetFullPath(path, root)));
+                }
+
+                var separator = path.LastIndexOf('/');
+                if (separator <= 0)
+                {
+                    break;
+                }
+
+                path = path[..separator];
+            }
+
+            void RecordEarliest(string candidate)
+            {
+                if (!paths.TryGetValue(candidate, out var earlier) || observedAt < earlier)
+                {
+                    paths[candidate] = observedAt;
+                }
+            }
+        }
+
+        return paths;
+    }
+
+    private static string NormalizeInvalidationPath(string key)
+    {
+        var path = key.Replace('\\', '/');
+        if (Path.IsPathFullyQualified(path))
+        {
+            return Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+        }
+
+        // Relative keys must not be resolved against the process working directory.
+        var segments = new List<string>();
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".." && segments.Count != 0 && segments[^1] != "..")
+            {
+                segments.RemoveAt(segments.Count - 1);
+            }
+            else if (segment != ".")
+            {
+                segments.Add(segment);
+            }
+        }
+
+        return segments.Count == 0 ? "." : string.Join('/', segments);
     }
 
     private static (Dictionary<string, FileObservation>? ByPath, bool Conflicting) PrepareObservations(
@@ -409,6 +473,50 @@ public sealed class EvidenceStore : IEvidenceStore
         }
 
         return incoming;
+    }
+
+    private sealed class InvalidationWatermarks
+    {
+        private readonly Dictionary<string, Invalidation> _keys = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Invalidation> _paths = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Invalidation> _caseInsensitivePaths = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Record(Invalidation change, string path)
+        {
+            RecordLatest(_keys, change.Key, change);
+            RecordLatest(_paths, path, change);
+            RecordLatest(_caseInsensitivePaths, path, change);
+        }
+
+        public Invalidation? FindMatch(Evidence evidence, Dictionary<string, DateTimeOffset> paths)
+        {
+            foreach (var key in evidence.InvalidationKeys)
+            {
+                if (_keys.TryGetValue(key, out var change) && ObserveKeyAt(evidence, key) <= change.ChangedAt)
+                {
+                    return change;
+                }
+            }
+
+            var pathIndex = paths.Comparer == StringComparer.OrdinalIgnoreCase ? _caseInsensitivePaths : _paths;
+            foreach (var (path, observedAt) in paths)
+            {
+                if (pathIndex.TryGetValue(path, out var change) && observedAt <= change.ChangedAt)
+                {
+                    return change;
+                }
+            }
+
+            return null;
+        }
+
+        private static void RecordLatest(Dictionary<string, Invalidation> index, string key, Invalidation change)
+        {
+            if (!index.TryGetValue(key, out var previous) || previous.ChangedAt <= change.ChangedAt)
+            {
+                index[key] = change;
+            }
+        }
     }
 
     private readonly record struct Invalidation(string Key, string Reason, DateTimeOffset ChangedAt);

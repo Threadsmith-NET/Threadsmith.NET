@@ -7,6 +7,87 @@ using Xunit;
 
 public static partial class Milestone5Tests
 {
+    /// <summary>Refresh completion fences older semantic observations even without a confidence event.</summary>
+    [Fact]
+    public static async Task SemanticRefresh_InvalidatesOlderScriptEvidenceWithoutConfidenceChange()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var sanitizer = new PassthroughSanitizer();
+        var store = new EvidenceStore(events, sanitizer);
+        var observer = new ContextLifecycleObserver(store, new PromptAppendLoader(sanitizer));
+        var refreshedAt = DateTimeOffset.UnixEpoch.AddSeconds(1);
+        var old = new Evidence
+        {
+            EvidenceId = EvidenceId.New(),
+            SessionId = SessionId.New(),
+            Kind = EvidenceKind.ToolResult,
+            Content = "Script symbol lookup",
+            CollectedAt = refreshedAt.AddSeconds(2),
+            Provenance = new EvidenceProvenance { Source = "tool:csharp_script" },
+            InvalidationKeys = ["repository", "semantic"],
+            SemanticObservedAt = refreshedAt.AddSeconds(-1),
+        };
+        var late = old with { EvidenceId = EvidenceId.New() };
+        var current = old with { EvidenceId = EvidenceId.New(), SemanticObservedAt = refreshedAt.AddSeconds(1) };
+        await store.AddAsync(old, cancellationToken);
+
+        var refreshed = new SemanticRefreshCompleted(
+            old.SessionId,
+            refreshedAt,
+            SemanticRefreshId.New(),
+            WorkspaceId.New(),
+            SemanticRefreshReason.ExternalChange,
+            SemanticRefreshMode.Incremental,
+            ChangedFileCount: 1,
+            DirtyVersion: 1,
+            AppliedVersion: 1,
+            SemanticConfidenceLevel.FullSemantic,
+            ElapsedMilliseconds: 0);
+        await observer.ObserveAsync(refreshed, cancellationToken);
+        Assert.Equal(1, await store.ApplyInvalidationsAsync(old.SessionId, cancellationToken));
+        await store.AddBatchAsync([late, current], cancellationToken);
+
+        Assert.True(store.Find(old.SessionId, old.EvidenceId)!.IsStale);
+        Assert.True(store.Find(old.SessionId, late.EvidenceId)!.IsStale);
+        Assert.False(store.Find(old.SessionId, current.EvidenceId)!.IsStale);
+    }
+
+    /// <summary>Late reads use only matching file and ancestor watermarks and retain their observation times.</summary>
+    [Fact]
+    public static async Task EvidenceAdmission_MatchesPathWatermarksAtDependencyBoundaries()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var store = new EvidenceStore(events, new PassthroughSanitizer());
+        var root = AppContext.BaseDirectory;
+        var changedAt = DateTimeOffset.UnixEpoch.AddSeconds(1);
+        var old = new Evidence
+        {
+            EvidenceId = EvidenceId.New(),
+            SessionId = SessionId.New(),
+            Kind = EvidenceKind.ToolResult,
+            Content = "File read",
+            CollectedAt = changedAt.AddSeconds(2),
+            Provenance = new EvidenceProvenance { Source = "tool:read_file", RepositoryPath = root },
+            FileDependencies = [new("src/Example.cs", null, ObservedAt: changedAt.AddSeconds(-1))],
+        };
+        var other = old with { EvidenceId = EvidenceId.New(), FileDependencies = [old.FileDependencies[0] with { Path = "src-other/Example.cs" }] };
+        var exact = old with { EvidenceId = EvidenceId.New(), FileDependencies = [old.FileDependencies[0] with { Path = "tests/Test.cs" }] };
+        var newer = old with { EvidenceId = EvidenceId.New(), FileDependencies = [old.FileDependencies[0] with { ObservedAt = changedAt.AddSeconds(1) }] };
+        store.QueueInvalidation(old.SessionId, Path.Combine(root, "src"), "Ancestor changed", changedAt);
+        store.QueueInvalidation(old.SessionId, "tests\\nested\\..\\Test.cs", "File changed", changedAt);
+        store.QueueInvalidation(old.SessionId, Path.Combine(root, "src"), "Older notification", changedAt.AddSeconds(-2));
+        await store.ApplyInvalidationsAsync(old.SessionId, cancellationToken);
+
+        await store.AddBatchAsync([old, other, exact, newer], cancellationToken);
+
+        Assert.Equal("Ancestor changed", store.Find(old.SessionId, old.EvidenceId)!.StaleReason);
+        Assert.Equal("File changed", store.Find(old.SessionId, exact.EvidenceId)!.StaleReason);
+        Assert.False(store.Find(old.SessionId, other.EvidenceId)!.IsStale);
+        Assert.False(store.Find(old.SessionId, newer.EvidenceId)!.IsStale);
+    }
+
     /// <summary>A result containing different versions of one file is historical even on first admission.</summary>
     [Fact]
     public static async Task EvidenceVersions_FirstMixedVersionResultIsStoredAsStale()

@@ -11,32 +11,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $required = @{
-    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Real_stdio_server_connects_imports_invokes_and_disconnects' = 1
-    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Hung_stdio_server_process_is_killed_within_drain_timeout' = 1
-    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.Failed_stdio_handshake_terminates_spawned_process' = 1
-    'Threadsmith.McpTransports.Tests.SdkStdioTransportTests.StopAsync_RemainingDeadlineOverridesOriginalSdkShutdownTimeout' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.ToolRuntimeTests.SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.WriteFileTests.Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.ShellScriptPolicyTests.RequiredPlatformScriptsUseGovernedFileInvocations' = 1
-    'Threadsmith.Architecture.Tests.SecurityPolicyConfigurationTests.AlwaysScriptApprovalDoesNotFollowShadowsArgumentsOrInterpreterForms' = 1
     'Threadsmith.ParallelAgents.Tests.Plan91DelegationToolTests.IntelligenceInvestigators_AreNarrowAndCannotSupplyParentReceipts' = 1
-    'Threadsmith.NativeTools.Tests.Plan41InventoryToolTests.GitQueries_LogicalRootAlias_PreservesWorktreeBoundary' = 2
-    'Threadsmith.ModelTooling.Integration.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryIsRepositoryConfined' = 1
-    'Threadsmith.ModelTooling.Integration.Tests.Milestone3TestsSemanticFixtures_BuildOutputLocksRemainLocalToOwner.SemanticFixtures_BuildOutputLocksRemainLocalToOwner' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.ApplicationCompositionContext_NoLongerExists' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.ApplicationCompositionInputs_HasFiveCohesiveSubRecords' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.InputBundles_AreImmutableSealedRecordsWithInitOnlyProperties' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.InputBundles_DoNotImplementDisposal' = 1
     'Threadsmith.Architecture.Tests.CompositionBoundariesTests.InputBundles_DoNotExposeServiceLocatorTypes' = 1
     'Threadsmith.SessionStatus.Tests.SessionStatusTests.UsageProjection_Overflow_Saturates' = 1
-    'Threadsmith.Extensions.Tests.ExtensionRuntimeTests.LoadAsync_loads_sample_extension_and_collects_capabilities' = 1
-    'Threadsmith.Extensions.Tests.UnloadTests.Clean_extension_unloads_and_the_ALC_is_dead' = 1
-    'Threadsmith.Extensions.Tests.UnloadTests.Leaking_extension_is_diagnosed_as_UnloadBlocked_and_host_remains_functional' = 1
 }
 if ($RunnerOS -eq 'Windows') {
-    $required['Threadsmith.RepositoryLifecycle.Tests.RepositoryLifecycleTests.OpenRepository_WindowsReservedNameEntry_SkipsEntryAndFindsSolution'] = 1
     $required['Threadsmith.SecretResolution.Tests.SecretResolutionTests.UserProvider_AcceptsSharedWindowsAclWithoutChangingItAsync'] = 1
     $required['Threadsmith.SecretResolution.Tests.SecretResolutionTests.UserProvider_RespectsWindowsReadDenialAsync'] = 1
 }
@@ -46,17 +29,14 @@ else {
         'Threadsmith.SecretResolution.Tests.SecretResolutionTests.UserProvider_AcceptsSharedUnixModeWithoutChangingItAsync',
         'Threadsmith.SecretResolution.Tests.SecretResolutionTests.RepositoryProvider_UsesHostPathCaseSemanticsAsync',
         'Threadsmith.SecretResolution.Tests.SecretResolutionTests.RepositoryProvider_RejectsLinkReplacementAfterValidationAsync',
-        'Threadsmith.McpOAuth.Tests.McpOAuthFlowTests.Token_cache_file_has_private_unix_permissions',
         'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ClaudeCatalog_Activate_RejectsNestedDirectoryLink',
         'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ClaudeCatalog_Activate_RejectsLinkedResourceFile',
-        'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ActiveModels_LinkedSettingsDirectory_IsRejected',
-        'Threadsmith.ModelTooling.Integration.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryRejectsLinkedDirectory'
+        'Threadsmith.Skills.Tests.Milestone17CompatibilityTests.ActiveModels_LinkedSettingsDirectory_IsRejected'
     )) {
         $required[$method] = 1
     }
 }
 if ($RunnerOS -eq 'macOS') {
-    $required['Threadsmith.Architecture.Tests.SecurityPolicyConfigurationTests.MacVolumesEnforceProhibitionsAcrossCaseBoundaries'] = 2
     $required['Threadsmith.ModelTooling.Tests.MacFileHandlePathTests.GetPath_FollowsHeldFileAfterRenameAsync'] = 1
 }
 if ($RunnerOS -eq 'Linux') {
@@ -76,8 +56,8 @@ foreach ($report in $reports) {
                 -not [double]::IsFinite($seconds) -or $seconds -lt 0) {
                 $failures.Add("$($case.name) has an invalid xUnit duration: '$($case.time)'.")
             }
-            elseif ($seconds -gt 60) {
-                Write-Warning "$($case.name) took $($case.time) seconds, exceeding the 60-second target."
+            elseif ($seconds -ge 60) {
+                $failures.Add("$($case.name) took $($case.time) seconds. Every test must finish in under 60 seconds.")
             }
         }
 

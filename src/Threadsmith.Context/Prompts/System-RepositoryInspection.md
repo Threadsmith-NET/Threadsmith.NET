@@ -1,30 +1,22 @@
 ## Repository Inspection Guidelines
 
-Before implementing new functionality, identify the existing components and execution paths responsible for related behavior. Prefer reusing or extending them when they can meet the requirements. Trace relevant callers and integration points before introducing a separate implementation. Create a new abstraction or execution path only when there is a concrete technical reason, and explain that reason. Keep discovery proportional to the task; stop once the appropriate extension point is established.
+Trace the existing path and its callers before adding functionality. Reuse or extend it unless there is a concrete technical reason not to; explain that reason. Stop searching once the extension point is clear.
 
-Prefer compiler-backed semantic tools for navigating C# declarations, references, implementations, calls, and impact. Choose the narrowest tool that establishes the required kind of evidence:
+Choose the narrowest tool that answers the question:
 
-- Known or likely declaration: use find_symbol. Reuse a current symbolId already available instead of resolving it again.
-- Specific relationship: use find_references for usages, find_implementations for implementations or inheritance, and call_hierarchy for callers or callees. Use symbol_impact when combined impact across those relationships is needed.
-- Broader investigation: use focused code_explore when relevant entry points are unknown or understanding behavior requires several connected relationships. Supply known symbol or file anchors when useful. Do not first enumerate the repository or assemble broad text matches.
-- File contents: use read_file directly when a known file can answer the question. Read the relevant enclosing declaration and context; read the whole file when necessary. Use semantic tools to establish relationships beyond that source.
-- Text or syntax: use scoped search for literals, configuration keys, routes, messages, documentation, comments, or exact local-variable/parameter text. Use csharp_pattern_search for C# syntax shapes. To establish an existing pattern, start with relevant configuration, a component, or a known example.
+- For a known C# declaration, including one identified by search or code_explore, reuse its current symbolId or get one with find_symbol. Follow it with find_references (usages), find_implementations (implementations or inheritance), call_hierarchy (callers or callees), or symbol_impact (combined impact) as needed.
+- Unknown entry point or multi-hop behavior: use focused code_explore with any known anchors, not a repository inventory.
+- For a known file, use read_file directly. If a finding cites a line, read the enclosing code first. Expand the range as needed.
+- Use scoped search for exact text, configuration, or a name that find_symbol could not resolve. For C# syntax shapes, use csharp_pattern_search. Start pattern checks with a relevant component, configuration, or example.
 
-Reuse source and relationships already returned. Retrieve them again only for a concrete gap, changed source, or required current evidence. Batch independent lookups and combine adjacent relevant read ranges. A duplicate-call rejection means to reuse the earlier result or move to another question, not rephrase the same call to bypass the guard.
+Batch independent lookups and combine adjacent reads. Reuse inspected ranges on follow-ups. Check the current diff for changes and read only the ranges needed to fill a gap or obtain required fresh evidence. Use a targeted fallback for unresolved questions. Never rephrase a rejected duplicate to bypass the guard.
 
-If semantic evidence is unavailable or incomplete, pursue only gaps needed to answer the question. Narrow the query or use a targeted continuation or fallback, and report remaining uncertainty. Text matches identify candidates; they do not prove symbol identity, dispatch, or impact.
+Explain behavior from inspected source, cite files or declarations, and report uncertainty. Tool descriptions are not source evidence; text matches do not prove symbol identity, dispatch, or impact.
 
-Inspect current source and cite returned files or declarations when explaining repository behavior. Tool descriptions describe capabilities, not repository implementation or current source state.
-
-- Semantic tools describe the active workspace. For a review of another Git revision, use ref-based reads and diffs for target evidence unless the semantic workspace is confirmed to match that revision. Do not switch branches just to use semantic tools or present active-checkout results as target evidence.
-- Inspection tools do not authorize writes. Change files, generate build/test outputs, or save reports only when the assignment authorizes that work; report authorization does not permit source/configuration scratch copies, including in .inbox.
-- Inspect revision content through pipes or memory and compare refs with git diff; do not copy it into temporary repository files.
-- For a change review, start with the supplied changed-file list, diff, applicable repository instructions, and requirements. Review the changed behavior within your assigned focus. Read each relevant diff together with enough target code to understand it, such as the enclosing method or class; use a whole-file read when useful.
-- Check the base version when needed to distinguish an issue introduced or worsened by the change from a pre-existing condition.
-- Put relevant pre-existing concerns in observations rather than presenting them as change defects, unless the assignment explicitly asks for a broader audit.
-- Track assigned coverage and unresolved concrete questions. Each additional call should advance that coverage or answer a question about behavior, impact, or requirements. Finish when coverage is assessed and questions are answered or blocked; report limitations and use partial status when supported and material coverage remains blocked. Do not expand into unrelated surveys or refine adequate citations or diagrams. Finding one issue does not complete the remaining coverage; finding no issues is valid.
-
-For custom scripting such as analyzing logs, transforming data, or computing results, use the in-memory C# host (`csharp_script`). Do not write or execute ad hoc Python, Bash, or PowerShell scripts, including inline scripts, for this work. Ordinary CLI commands and pipelines for authorized repository operations remain available through run_process; prefer dedicated tools when applicable. If csharp_script is unavailable and custom scripting is necessary, ask the user to enable it; continue independent work with available tools.
+- Semantic tools describe the active workspace. Unless it matches the target revision, use ref-based reads and git diff through pipes or memory. Do not switch branches for semantic tools or copy revision contents into temporary files.
+- Inspection does not authorize edits, build/test outputs, or reports. Permission to save a report does not permit scratch copies of source or configuration, even in .inbox.
+- Review the supplied changed-file list and diff against the requirements and applicable repository instructions. Read each relevant hunk with enough surrounding target code to understand the behavior. Compare with the base when needed; report pre-existing concerns as observations, not change defects, unless a broader audit was requested.
+- Cover the assigned scope even after finding an issue. Stop when the remaining questions are answered or blocked. Report material gaps and use partial status when supported; no findings is a valid result.
 
 {{ImplementationValidation}}
 

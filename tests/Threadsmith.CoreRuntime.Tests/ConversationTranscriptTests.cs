@@ -26,6 +26,46 @@ public static class ConversationTranscriptTests
             output);
     }
 
+    /// <summary>Script failure diagnostics use the error role without restyling the tool header or progress.</summary>
+    [Fact]
+    public static void FailedScriptDiagnosticUsesErrorRole()
+    {
+        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "csharp_script");
+        const string error = "CS1525: Invalid expression term";
+        var completed = new ToolInvocationCompleted(
+            started.SessionId,
+            started.OccurredAt,
+            started.ToolInvocationId,
+            false,
+            Error: error,
+            Outcome: OperationActivityOutcome.Failed);
+        PresentationTextSegment[] progress = [new("Script tool call completed", PresentationTextRole.Status)];
+        var segments = new List<PresentationTextSegment>();
+
+        transcript.Apply(started);
+        Assert.True(transcript.Apply(completed, progress));
+        InteractionEventSegments.Append(segments, completed, transcript.Text, toolProgress: progress);
+
+        Assert.Collection(
+            segments,
+            header =>
+            {
+                Assert.Equal(PresentationTextRole.ToolFailure, header.Role);
+                Assert.Contains("csharp_script - failed", header.Text, StringComparison.Ordinal);
+            },
+            diagnostic =>
+            {
+                Assert.Equal(PresentationTextRole.Error, diagnostic.Role);
+                Assert.Contains(error, diagnostic.Text, StringComparison.Ordinal);
+            },
+            entry =>
+            {
+                Assert.Equal(PresentationTextRole.Status, entry.Role);
+                Assert.Contains(progress[0].Text, entry.Text, StringComparison.Ordinal);
+            });
+    }
+
     /// <summary>Only successes for the same exact file and completed approval batch are combined.</summary>
     [Fact]
     public static void AppliedMutationsAreGroupedByExactFileAndApprovalBatch()

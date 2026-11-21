@@ -90,7 +90,8 @@ internal static class ToolEvidenceAdmission
                 CollectedAt = DateTimeOffset.UtcNow,
                 Relevance = result.Succeeded ? 0.8 : 1,
                 EstimatedTokens = checked(Math.Max(1, (content.Length + 3) / 4) + result.Images.Sum(ModelImages.EstimateTokens)),
-                InvalidationKeys = IsSemanticEvidenceTool(result.ToolId) ? ["repository", "semantic"] : ["repository"],
+                InvalidationKeys = GetInvalidationKeys(result),
+                SemanticObservedAt = GetSemanticObservation(result),
             },
             cancellationToken);
         return evidenceId;
@@ -125,9 +126,40 @@ internal static class ToolEvidenceAdmission
                 var path = SourceEvidence.NormalizePath(repositoryPath, item.Identifier);
                 var digest = read is not null && comparer.Equals(SourceEvidence.NormalizePath(repositoryPath, read.Path), path)
                     ? read.FileSha256 ?? read.ContentDigest : null;
-                return new EvidenceFileDependency(path, digest, range);
+                return new EvidenceFileDependency(path, item.ReadDigest ?? digest, item.ReadRange ?? range, item.NestedReadAt ?? result.ReadObservedAt);
             }).ToArray();
     }
+
+    /// <summary>Retains host-observed page dependencies without keeping read bodies.</summary>
+    internal static IEnumerable<ToolProvenanceSource> GetScriptReadSources(ToolInvocationResult result, string repositoryPath)
+    {
+        if (IsSemanticEvidenceTool(result.ToolId))
+        {
+            return [new ToolProvenanceSource("semantic", result.ToolId) { NestedReadAt = result.ObservationStartedAt }];
+        }
+
+        var observedAt = result.ReadObservedAt ?? DateTimeOffset.UtcNow;
+        return result.ToolId == "read_file"
+            ? GetFileDependencies(result, repositoryPath).Select(dependency => new ToolProvenanceSource("file", dependency.Path)
+            {
+                ReadDigest = dependency.Sha256,
+                ReadRange = dependency.Range,
+                NestedReadAt = observedAt,
+            })
+            : [];
+    }
+
+    /// <summary>Includes semantic invalidation for direct and script-mediated lookups, even empty ones.</summary>
+    internal static string[] GetInvalidationKeys(ToolInvocationResult result)
+    {
+        return IsSemanticEvidenceTool(result.ToolId) || result.Sources.Any(source => source.Kind == "semantic")
+            ? ["repository", "semantic"]
+            : ["repository"];
+    }
+
+    /// <summary>Returns the earliest semantic observation used by the outer result.</summary>
+    internal static DateTimeOffset? GetSemanticObservation(ToolInvocationResult result) => result.Sources
+        .Where(source => source.Kind == "semantic").Min(source => source.NestedReadAt);
 
     private static SemanticConfidenceLevel ReadSemanticConfidence(string toolId, string content)
     {

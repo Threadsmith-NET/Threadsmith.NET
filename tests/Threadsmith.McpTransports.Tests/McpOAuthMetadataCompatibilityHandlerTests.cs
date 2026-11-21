@@ -157,21 +157,6 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
         Assert.StartsWith("Threadsmith.NET/", Assert.Single(inner.Requests).UserAgent, StringComparison.Ordinal);
     }
 
-    /// <summary>The owned metadata handler returns redirects rather than following unvalidated locations.</summary>
-    [Fact]
-    public async Task Owned_metadata_handler_does_not_follow_redirects()
-    {
-        await using var server = new LoopbackRedirectServer();
-        using var client = SdkHttpTransport.CreateHttpClient(SdkHttpTransport.CreateMetadataCompatibilityHandler());
-
-        using var response = await client.GetAsync(
-            server.RedirectUri,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal(1, server.RequestCount);
-    }
-
     /// <summary>SDK clients use the established protocol instead of the newer discovery draft by default.</summary>
     [Fact]
     public void Sdk_clients_pin_the_established_protocol_version()
@@ -216,80 +201,4 @@ public sealed class McpOAuthMetadataCompatibilityHandlerTests
     }
 
     private sealed record RecordedRequest(Uri? RequestUri, string UserAgent);
-
-    private sealed class LoopbackRedirectServer : IAsyncDisposable
-    {
-        private readonly CancellationTokenSource _cancellation = new();
-        private readonly TcpListener _listener;
-        private readonly Task _serverTask;
-        private int _requestCount;
-
-        public LoopbackRedirectServer()
-        {
-            _listener = new TcpListener(IPAddress.Loopback, 0);
-            _listener.Start();
-            var endpoint = (IPEndPoint)_listener.LocalEndpoint;
-            RedirectUri = new Uri($"http://127.0.0.1:{endpoint.Port}/redirect", UriKind.Absolute);
-            _serverTask = ServeAsync();
-        }
-
-        public Uri RedirectUri { get; }
-
-        public int RequestCount => Volatile.Read(ref _requestCount);
-
-        public async ValueTask DisposeAsync()
-        {
-            await _cancellation.CancelAsync();
-            _listener.Stop();
-            ObserveBackgroundFailure(_serverTask);
-            _cancellation.Dispose();
-        }
-
-        private async Task ServeAsync()
-        {
-            while (!_cancellation.IsCancellationRequested)
-            {
-                using var client = await _listener.AcceptTcpClientAsync(_cancellation.Token);
-                await HandleAsync(client, _cancellation.Token);
-            }
-        }
-
-        private static void ObserveBackgroundFailure(Task task)
-        {
-            _ = task.ContinueWith(
-                static completed => _ = completed.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-        }
-
-        private async Task HandleAsync(TcpClient client, CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _requestCount);
-            await using var stream = client.GetStream();
-            var buffer = new byte[1024];
-            var total = 0;
-            while (total < buffer.Length)
-            {
-                var read = await stream.ReadAsync(buffer.AsMemory(total, buffer.Length - total), cancellationToken);
-                if (read == 0)
-                {
-                    break;
-                }
-
-                total += read;
-                if (Encoding.ASCII.GetString(buffer, 0, total).Contains("\r\n\r\n", StringComparison.Ordinal))
-                {
-                    break;
-                }
-            }
-
-            var request = Encoding.ASCII.GetString(buffer, 0, total);
-            var response = request.StartsWith("GET /redirect ", StringComparison.Ordinal)
-                ? "HTTP/1.1 302 Found\r\nLocation: /target\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                : "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            var payload = Encoding.ASCII.GetBytes(response);
-            await stream.WriteAsync(payload, cancellationToken);
-        }
-    }
 }

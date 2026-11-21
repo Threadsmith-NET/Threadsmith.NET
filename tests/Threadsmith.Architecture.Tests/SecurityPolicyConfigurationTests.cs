@@ -1,5 +1,8 @@
 namespace Threadsmith.Architecture.Tests;
 
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Schema;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.App;
 using Threadsmith.Core;
@@ -171,6 +174,26 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"writeFile":{"allowedFolders":["exports"]}}}""");
         File.WriteAllText(_paths.MachineConfiguration, """{"enforced":{"tools":{"writeFile":{"allowedFolders":["exports/reports","exports-sibling"]}}}}""");
         Assert.Equal([Path.Combine(_paths.RepositoryRoot, "exports", "reports")], Load().WriteFolders);
+    }
+
+    /// <summary>The scripting reference describes the wire shape, not the tool input naming conventions.</summary>
+    [Theory]
+    [InlineData("`find_symbol` and `find_references`", typeof(IReadOnlyList<SymbolResult>))]
+    [InlineData("`find_symbol` and `find_references`", typeof(IReadOnlyList<ReferenceResult>))]
+    [InlineData("`read_file`", typeof(ReadFileOutput))]
+    public static void ScriptingReferenceSchemasMatchResults(string heading, Type resultType)
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "ThreadsmithDocs", "docs", "operations", "csharp-scripting-execution.md");
+        var lines = File.ReadAllLines(path);
+        var section = Array.IndexOf(lines, "### " + heading);
+        Assert.True(section >= 0, heading);
+        var block = Array.IndexOf(lines, "```json", section);
+        Assert.True(block > section, heading);
+        var end = Array.IndexOf(lines, "```", block + 1);
+        Assert.True(end > block, heading);
+        var documented = JsonNode.Parse(string.Join('\n', lines[(block + 1)..end]));
+        var actual = JsonSerializerOptions.Default.GetJsonSchemaAsNode(resultType);
+        Assert.True(JsonNode.DeepEquals(actual, documented), actual.ToJsonString());
     }
 
     /// <summary>The installed reference is readable from unrelated repositories for parents and children.</summary>

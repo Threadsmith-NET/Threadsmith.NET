@@ -48,11 +48,11 @@ Common editing rules:
 | System prompts | 24 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 28 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **304** | Complete deployed catalog. |
+| **Total** | **305** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -458,6 +458,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Tool-Script-CallableMarker.md` | Marks tools the caller can invoke from a C# script. | None |
 | `Tool-csharp_script-Description.md` | Exclusive inline/file source selection, scratchpad/repository path resolution, returned-path reruns during the session while the saved copy remains available, script kind, and on-demand execution reference including native packaged scripts for `csharp_script`. | [`CSharpScriptingReferencePath`](#placeholder-csharpscriptingreferencepath) |
 
 #### `ask_user` family

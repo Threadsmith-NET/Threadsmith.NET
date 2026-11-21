@@ -173,21 +173,7 @@ public sealed partial class SemanticEngine
                 }
             }
 
-            var graph = source.GetProjectDependencyGraph();
-            var affected = owners.Concat(owners.SelectMany(graph.GetProjectsThatTransitivelyDependOnThisProject)).Distinct().ToArray();
-            var carried = _editedProjects.Where(id => source.GetProject(id) is not null && !affected.Contains(id)).ToArray();
-            var carryLimit = Math.Max(0, EditProjectCacheLimit - affected.Length);
-            var scope = affected.Concat(carried.Take(carryLimit)).ToArray();
-            if (carried.Length > carryLimit)
-            {
-                omissions.Add(_prompts.Render(
-                    PromptFileNames.ContextSourceEditOmittedProjectCoverage,
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["ProjectCount"] = (carried.Length - carryLimit).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    }));
-            }
-
+            var (scope, projectsOmitted) = GetEditProjectScope(source, owners, omissions);
             if (_editOptions.Analyzers.Enabled)
             {
                 // Recheck earlier applied documents against this final snapshot as well.
@@ -211,7 +197,7 @@ public sealed partial class SemanticEngine
                     CandidateInputsComplete = promotable,
                     Pending = scope.Length > 0,
                     ProjectsInScope = scope.Length,
-                    ProjectsOmitted = Math.Max(0, carried.Length - carryLimit),
+                    ProjectsOmitted = projectsOmitted,
                     Omissions = omissions.Distinct(StringComparer.Ordinal).Take(_editOptions.MaximumOmissions).ToArray(),
                 },
                 _editOptions.CandidateLifetimeMilliseconds,
@@ -361,17 +347,23 @@ public sealed partial class SemanticEngine
                 return;
             }
 
-            // Graph changes can alter ownership and references. The evaluated graph is the conservative scope.
+            var documents = previous.AppliedEndpoints.Keys.SelectMany(path => _solution.GetDocumentIdsWithFilePath(path)).ToHashSet();
+            var scoped = previous.ScopedProjectRefresh;
+            var projectScoped = scoped?.Generation == _solutionGeneration;
+            var omissions = GraphReplacementOmissions.Skip(projectScoped ? 1 : 0).ToList();
+            var (projects, projectsOmitted) = scoped is not null && projectScoped
+                ? GetEditProjectScope(_solution, documents.Select(id => id.ProjectId).Concat(scoped.ChangedOptions), omissions)
+                : (_solution.ProjectIds.ToArray(), 0);
+            documents.UnionWith(_editedDocumentPaths.SelectMany(path => _solution.GetDocumentIdsWithFilePath(path))
+                .Where(id => projects.Contains(id.ProjectId)));
             replacement = new(
                 previous.Command,
                 previous.RepositoryPath,
                 _solution,
                 _solution,
                 [],
-                [.. previous.AppliedEndpoints.Keys.Select(path => Path.GetFullPath(path, previous.RepositoryPath))
-                    .Concat(_editedDocumentPaths).SelectMany(path => _solution.GetDocumentIdsWithFilePath(path))
-                    .Where(id => _solution.GetDocument(id) is not null).Distinct()],
-                [.. _solution.ProjectIds],
+                documents,
+                projects,
                 false,
                 new SourceEditAnalysis
                 {
@@ -380,8 +372,9 @@ public sealed partial class SemanticEngine
                     CommittedGeneration = _solutionGeneration,
                     Revision = previous.Result.Revision + 1,
                     Pending = true,
-                    ProjectsInScope = _solution.ProjectIds.Count,
-                    Omissions = GraphReplacementOmissions.Take(_editOptions.MaximumOmissions).ToArray(),
+                    ProjectsInScope = projects.Length,
+                    ProjectsOmitted = projectsOmitted,
+                    Omissions = omissions.Take(_editOptions.MaximumOmissions).ToArray(),
                 },
                 _editOptions.CandidateLifetimeMilliseconds,
                 _analyzerTimeProvider,
@@ -390,10 +383,10 @@ public sealed partial class SemanticEngine
                 Applied = true,
                 CommittedOnly = true,
                 AppliedEndpoints = previous.AppliedEndpoints,
-                PreviouslyEdited = [.. _solution.ProjectIds],
+                PreviouslyEdited = [.. projects],
             };
             _editCandidate = replacement;
-            _editedProjects.UnionWith(_solution.ProjectIds);
+            _editedProjects.UnionWith(projects);
             RememberAppliedAnalyzerDocuments(replacement);
         }
 
@@ -402,6 +395,27 @@ public sealed partial class SemanticEngine
         {
             replacement.AnalyzerWork = AnalyzeAutomaticEditAnalyzersAsync(replacement);
         }
+    }
+
+    private (ProjectId[] Scope, int Omitted) GetEditProjectScope(Solution source, IEnumerable<ProjectId> owners, List<string> omissions)
+    {
+        var graph = source.GetProjectDependencyGraph();
+        var distinctOwners = owners.ToHashSet();
+        var affected = distinctOwners.Concat(distinctOwners.SelectMany(graph.GetProjectsThatTransitivelyDependOnThisProject)).ToHashSet();
+        var carried = _editedProjects.Where(id => source.GetProject(id) is not null && !affected.Contains(id)).ToArray();
+        var carryLimit = Math.Max(0, EditProjectCacheLimit - affected.Count);
+        var omitted = Math.Max(0, carried.Length - carryLimit);
+        if (omitted > 0)
+        {
+            omissions.Add(_prompts.Render(
+                PromptFileNames.ContextSourceEditOmittedProjectCoverage,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ProjectCount"] = omitted.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }));
+        }
+
+        return ([.. affected.Concat(carried.Take(carryLimit))], omitted);
     }
 
     private async Task AnalyzeEditCandidateAsync(EditCandidate candidate)
@@ -1124,6 +1138,8 @@ public sealed partial class SemanticEngine
         public bool CommittedOnly { get; init; }
 
         public bool AnalyzerInitialKnown { get; init; }
+
+        public ScopedProjectRefresh? ScopedProjectRefresh { get; set; }
 
         public long? VerifiedGraphGeneration { get; set; }
 

@@ -57,7 +57,12 @@ public static class Program
             await Console.Out.FlushAsync();
         }
 
-        var requestJson = await Console.In.ReadToEndAsync();
+        await using var input = Console.OpenStandardInput();
+        await using var outputPipe = Console.OpenStandardOutput();
+        var start = await ScriptWorkerProtocol.ReadAsync(input, 0, kind => kind == ScriptFrameKind.Start ? 64 * 1024 * 1024 : -1, CancellationToken.None);
+        var requestJson = start.Payload;
+        ScriptTools? tools = null;
+        var maximumFinalBytes = 4096;
         ScriptWorkerResult result;
         var stopwatch = Stopwatch.StartNew();
         try
@@ -78,7 +83,9 @@ public static class Program
 
             var scope = request.FileScope ?? throw new InvalidOperationException("Scratchpad file authority is required.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(request.TimeoutMilliseconds));
-            var globals = new ScriptGlobals(scope, deadline.Token);
+            maximumFinalBytes = checked((request.MaximumOutputBytes * 6) + 4096);
+            tools = new ScriptTools(request.Available, input, outputPipe, deadline.Token);
+            var globals = new ScriptGlobals(scope, tools, deadline.Token);
 
             // Warm workers start without invocation-specific environment or working directory.
             Directory.SetCurrentDirectory(scope.ScratchpadPath);
@@ -128,12 +135,16 @@ public static class Program
                     var typeName = (symbol as INamedTypeSymbol ?? symbol.ContainingType)
                         ?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
                     if (namespaceName.StartsWith("Threadsmith", StringComparison.Ordinal)
-                        && !(symbol is IPropertySymbol { Name: "Scratchpad", ContainingType.Name: "ScriptGlobals" }
+                        && !(symbol is IPropertySymbol { Name: "Scratchpad" or "Tools", ContainingType.Name: "ScriptGlobals" }
+                            || symbol is IPropertySymbol { Name: "Available", ContainingType.Name: "ScriptTools" }
+                            || symbol is IMethodSymbol { Name: "InvokeAsync", ContainingType.Name: "ScriptTools" }
+                            || symbol is IParameterSymbol { ContainingSymbol: IMethodSymbol { Name: "InvokeAsync", ContainingType.Name: "ScriptTools" } }
+                            || symbol is IPropertySymbol { Name: "Succeeded" or "ResultJson" or "IsTruncated" or "ErrorClassification" or "Error", ContainingType.Name: "ScriptToolReply" }
                             || symbol is IMethodSymbol { MethodKind: MethodKind.Ordinary, ContainingType.Name: "ScratchpadFiles" }
                             || symbol is IParameterSymbol { ContainingSymbol: IMethodSymbol { MethodKind: MethodKind.Ordinary, ContainingType.Name: "ScratchpadFiles" } }
-                            || symbol is INamedTypeSymbol { Name: "ScratchpadFiles" }))
+                            || symbol is INamedTypeSymbol { Name: "ScratchpadFiles" or "ScriptToolReply" or "ScriptTools" }))
                     {
-                        throw new InvalidOperationException("Scripts may use only the supplied Scratchpad API, not host implementation types.");
+                        throw new InvalidOperationException("Scripts may use only the supplied Scratchpad and Tools APIs, not host implementation types.");
                     }
 
                     if (typeName == "System.Console")
@@ -221,7 +232,14 @@ public static class Program
                 false);
         }
 
-        await Console.Out.WriteAsync(JsonSerializer.Serialize(result));
+        var finalSequence = tools?.Close() ?? 1;
+        var finalJson = JsonSerializer.Serialize(result);
+        if (Encoding.UTF8.GetByteCount(finalJson) > maximumFinalBytes)
+        {
+            finalJson = JsonSerializer.Serialize(result with { Success = false, Output = null, Error = "Worker result exceeded its output limit.", IsTruncated = true });
+        }
+
+        await ScriptWorkerProtocol.WriteAsync(outputPipe, ScriptFrameKind.Final, finalSequence, finalJson, maximumFinalBytes, CancellationToken.None);
         return 0;
     }
 
@@ -259,7 +277,7 @@ public static class Program
         var platformAssemblies = trustedPlatformAssemblies
             .GroupBy(path => Path.GetFileNameWithoutExtension(path), StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        var references = new List<Assembly> { typeof(object).Assembly, typeof(ScriptGlobals).Assembly };
+        var references = new List<Assembly> { typeof(object).Assembly, typeof(ScriptGlobals).Assembly, typeof(ScriptToolReply).Assembly };
         foreach (var assemblyName in allowedAssemblies.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (string.IsNullOrWhiteSpace(assemblyName)
@@ -290,6 +308,8 @@ public static class Program
 
     private sealed record ScriptWorkerRequest
     {
+        public IReadOnlyList<string> Available { get; init; } = [];
+
         public required string Code { get; init; }
 
         public required string Kind { get; init; }
@@ -298,7 +318,7 @@ public static class Program
 
         public ScriptFileScope? FileScope { get; init; }
 
-        public int TimeoutMilliseconds { get; init; } = 5000;
+        public int TimeoutMilliseconds { get; init; } = PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultTimeoutMilliseconds;
 
         public int MaximumCodeCharacters { get; init; } = 65536;
 

@@ -58,6 +58,62 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer);
     }
 
+    /// <summary>A same-profile child continuation drops a stale script marker without gaining registrations.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChildRequestsRefreshScriptMarkersWithoutChangingProfile(bool removeScript)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var prompts = TestPromptLoader.Instance;
+        var tool = new InspectMetadataTool();
+        var read = new ReadFileTool(prompts, sanitizer);
+        var script = new CSharpScriptTool(new UnusedScriptEngine(), prompts);
+        var registry = new ToolRegistry([tool, read, script]);
+        string[] ids = [tool.Definition.Id, read.Definition.Id, script.Definition.Id];
+        var profile = CreateProfile();
+        var assignment = CreateAssignment(profile.Id, ids);
+        assignment = assignment with { Policy = assignment.Policy with { TrustCeiling = RepositoryTrustLevel.FullyTrustedAutomation } };
+        var plan = CreatePlan(assignment);
+        var parent = CreateParentContext(plan, ids);
+        parent = parent with
+        {
+            Invocation = parent.Invocation with
+            {
+                TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+                Scratchpad = new() { IsActive = true, RootPath = Path.Combine(parent.Invocation.RepositoryPath, ".threadsmith", ".scratchpad"), DisabledReason = ScratchpadDisabledReason.None },
+            },
+        };
+        var provider = new ToolThenFindingProvider(tool.Definition.Id, firstRequest: () =>
+        {
+            ITool removed = removeScript ? script : read;
+            Assert.True(registry.Remove(removed.Definition.Id, removed));
+            registry.RegisterOrReplace(new InspectMetadataTool(toolId: "outside_snapshot"), new ToolActivitySource(ToolActivitySourceKind.BuiltIn));
+        });
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            new EvidenceStore(events, sanitizer),
+            sanitizer,
+            profile,
+            parent,
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment, TestContext.Current.CancellationToken);
+
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.All(provider.Requests, request =>
+        {
+            Assert.Equal(profile.Id, request.ResolvedProfileId);
+            Assert.DoesNotContain(request.Tools, item => item.Name == "outside_snapshot");
+        });
+        var scriptDescription = Assert.Single(provider.Requests[0].Tools, item => item.Name == read.Definition.Id).Description;
+        Assert.Equal(read.Definition.Description + " Callable from C# scripts.", scriptDescription);
+        Assert.Equal(read.Definition.Description, Assert.Single(provider.Requests[1].Tools, item => item.Name == read.Definition.Id).Description);
+    }
+
     /// <summary>Structured child tool output is embedded as JSON instead of an escaped JSON string.</summary>
     [Theory]
     [InlineData(false)]
@@ -1332,10 +1388,17 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
     }
 
+    private sealed class UnusedScriptEngine : ICSharpScriptEngine
+    {
+        public Task<CSharpScriptOutput> ExecuteAsync(string code, ScriptKind kind, ToolExecutionContext context, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("This fixture inspects the advertised tools; it must not start a worker.");
+    }
+
     private sealed class ToolThenFindingProvider(
         string toolId,
         bool retrieveEvidence = false,
-        bool emitReplayEnvelope = false) : IModelProvider
+        bool emitReplayEnvelope = false,
+        Action? firstRequest = null) : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -1348,6 +1411,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             await Task.Yield();
             if (Requests.Count == 1)
             {
+                firstRequest?.Invoke();
                 if (emitReplayEnvelope)
                 {
                     yield return new ModelChunk

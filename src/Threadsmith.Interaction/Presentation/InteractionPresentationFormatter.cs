@@ -83,7 +83,7 @@ internal static partial class InteractionPresentationFormatter
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(timeProvider);
         var label = started.Source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS";
-        var identity = GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
+        var identity = GetToolHeadingIdentity(started, started.Source);
         return CreateOperationActivity(label, identity, GetToolDetail(started, null, started.Source) ?? NoToolDetail, timeProvider, showOperationDurations);
     }
 
@@ -201,7 +201,7 @@ internal static partial class InteractionPresentationFormatter
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
                 source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS",
-                GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
+                GetToolHeadingIdentity(started, source),
                 GetOutcomeText(completed),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 PresentationTextRole.ToolSuccess,
@@ -1229,6 +1229,12 @@ internal static partial class InteractionPresentationFormatter
         var content = line.TrimStart('\r', '\n');
         return (content.StartsWith('+') && !content.StartsWith("+++", StringComparison.Ordinal))
             || (content.StartsWith('-') && !content.StartsWith("---", StringComparison.Ordinal));
+    }
+
+    private static string GetToolHeadingIdentity(ToolInvocationStarted started, ToolActivitySource? source)
+    {
+        return GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy)
+            + (started.IsScriptOrigin ? "(csharp_scripting) " : string.Empty) + GetToolIdentity(started.ToolName, source);
     }
 
     private static string GetToolIdentity(string toolName, ToolActivitySource? source)

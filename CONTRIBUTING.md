@@ -112,9 +112,9 @@ Use `--include` with the changed file paths to focus whitespace and analyzer che
 
 ## Testing changes
 
-Use small, isolated unit tests for business rules, validation, mapping, and state transitions. Keep them under 50 ms and use in-memory inputs with fakes at external boundaries. Use integration tests when the behavior depends on a real database, subprocess, network boundary, or evaluated workspace. Aim to keep each integration case under 60 seconds by limiting the fixture and exercising one distinct behavior per case.
+Use small, isolated unit tests for business rules, validation, mapping, and state transitions. Keep them under 50 ms and use in-memory inputs with fakes at external boundaries.
 
-Keep repository traversal and repeated inference benchmarks out of Test Explorer. CI warns when an executed case exceeds the 60-second target in its xUnit report. Duration alone does not fail a test or the pipeline; failed tests and missing required cases still fail CI.
+Every test case must finish in under 60 seconds. CI fails when a completed test reaches that limit in its xUnit report. Rework or remove slow tests. Keep live provider checks and other integration scenarios out of automated test discovery.
 
 Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
 
@@ -137,18 +137,6 @@ pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1
 
 This validates the actual release documentation catalog. Relative links to excluded source material, including implementation plans, break installed help; use source-repository URLs for those references.
 
-Stage the pinned ripgrep fixture before running tests. The real-ripgrep tests require
-the staged executable and fail if it is missing; CI stages the same verified
-asset and requires all four integration cases to pass on every platform.
-
-```powershell
-$ripgrepRoot = Join-Path $PWD 'artifacts/test-ripgrep'
-pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot $ripgrepRoot
-$env:THREADSMITH_TEST_RIPGREP = Join-Path $ripgrepRoot ('stage/tools/rg' + $(if ($IsWindows) { '.exe' } else { '' }))
-```
-
-Visual Studio Test Explorer automatically uses the same repository-owned fixture at `artifacts/test-ripgrep/stage/tools/rg.exe` on Windows (`rg` on Unix). Stage it once with the command above, then build and run tests normally; no Visual Studio process environment change or restart is needed. `THREADSMITH_TEST_RIPGREP` remains the explicit override for CI or a custom staging directory. An invalid explicit path fails instead of silently falling back, and a missing local fixture still fails with staging instructions. Tests never download an executable or search machine-installed tools.
-
 For product changes, validate the final code revision with:
 
 ```powershell
@@ -163,7 +151,7 @@ For the fast model/tool contract suite, run:
 dotnet test --project tests/Threadsmith.ModelTooling.Tests/Threadsmith.ModelTooling.Tests.csproj --configuration Debug --no-build
 ```
 
-The target is under 30 seconds for test execution after building. Real shell, scripting-worker, PDF, and MSBuild/Roslyn workspace checks live in `tests/Threadsmith.ModelTooling.Integration.Tests`. Run that project for changes to those integration paths. Both projects remain in the solution and run in the normal CI test step; the fast command does not replace integration validation. Test timing reports are diagnostic evidence, not per-test timeout assertions.
+The target is under 30 seconds for test execution after building.
 
 Also run checks owned by the area you changed:
 
@@ -173,7 +161,7 @@ Also run checks owned by the area you changed:
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
 
-Test fixtures remain parallel and own their mutable resources. The semantic workspace omits Roslyn 5.9's optional SQLite service on all platforms. This keeps the mitigation for the non-Windows process-shared write cache documented in the [Roslyn 5.6 source](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs) and removes the optional native storage path from Windows as a precaution. Roslyn's built-in nonpersistent fallback preserves semantic queries without reusing persisted symbol indexes between runs. Composition and concurrent-query tests exercise the production host on every platform; this does not change Threadsmith's own SQLite storage.
+Test fixtures remain parallel and own their mutable resources. The semantic workspace omits Roslyn 5.9's optional SQLite service on all platforms. This keeps the mitigation for the non-Windows process-shared write cache documented in the [Roslyn 5.6 source](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs) and removes the optional native storage path from Windows as a precaution. Roslyn's built-in nonpersistent fallback preserves semantic queries without reusing persisted symbol indexes between runs. Threadsmith uses its own SQLite storage separately.
 
 ## Commits
 

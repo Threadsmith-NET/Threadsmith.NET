@@ -685,7 +685,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Tools/NewBuiltInTools.c
 |---|---:|---|
 | `NumberOfWarmWorkersInPool` | `1` | Unused workers prepared in the background; `0` disables pooling. Startup preference, not a permission grant. |
 | `WorkerCreationTimeOut` | `3000` | Worker creation/acquisition timeout in milliseconds, separate from script execution. Startup preference. |
-| `timeout_ms` | `5000` | Worker execution deadline in milliseconds. |
+| `timeout_ms` | `30000` | Script execution deadline in milliseconds. An explicit shorter setting such as `5000` still applies. |
 | `max_output_bytes` | `65536` | Maximum worker output bytes. |
 | `max_code_characters` | `65536` | Maximum submitted C# code characters. |
 | `max_assembly_name_characters` | `128` | Maximum assembly-name characters. |

@@ -22,7 +22,7 @@ public enum SemanticRefreshReason
 /// <summary>Semantic refresh implementation selected by host policy.</summary>
 public enum SemanticRefreshMode
 {
-    /// <summary>Replace text for proven existing loaded C# documents.</summary>
+    /// <summary>Publish verified C# source changes within the loaded project graph.</summary>
     Incremental,
 
     /// <summary>Reload the selected solution or project through MSBuild.</summary>

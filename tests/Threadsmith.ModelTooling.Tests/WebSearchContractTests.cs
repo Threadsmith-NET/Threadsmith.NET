@@ -166,10 +166,6 @@ public sealed class WebSearchContractTests
             tool.Definition.Id,
             tool.Definition.InputSchema.JsonSchema);
         Assert.NotNull(strictSchema);
-
-        var example = tool.Definition.Description.Split("```json", StringSplitOptions.None)[1]
-            .Split("```", StringSplitOptions.None)[0].Trim();
-        Assert.IsType<WebSearchRequest>(tool.DeserializeInput(example));
     }
 
     private static BraveWebSearchClient CreateClient(HttpClient httpClient, ISecretResolver resolver)

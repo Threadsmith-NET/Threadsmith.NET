@@ -21,6 +21,7 @@ public sealed class RepositoryLifecycle :
     ICommandHandler<InitializeRepositoryCommand, RepositoryInitializationResult>,
     ICommandHandler<OpenRepositoryCommand, RepositoryOpenResult>,
     ICommandHandler<SelectSolutionCommand, SolutionSelectionResult>,
+    ICommandHandler<WorkloadResolverCommand, bool?>,
     ICommandHandler<RecordBaselineCommand, WorkspaceBaseline>
 {
     private static readonly Histogram<double> _baselineDuration =
@@ -197,8 +198,10 @@ public sealed class RepositoryLifecycle :
             throw new InvalidDataException("Repository configuration exceeds the configured byte limit.");
         }
 
+        var repositorySettings = ConfigurationDocument.Read(configPath, _maximumConfigurationBytes);
+        var workloadResolverPreference = RepositoryWorkloadResolverSetting.Read(repositorySettings);
         var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(ConfigurationDocument.Flatten(ConfigurationDocument.Read(configPath, _maximumConfigurationBytes), projectPreferencesOnly: _policyBinding is not null))
+            .AddInMemoryCollection(ConfigurationDocument.Flatten(repositorySettings, projectPreferencesOnly: _policyBinding is not null))
             .Build();
         var configuredSolution = configuration["solution:path"];
         string[] approvedRoots = [.. configuration.GetSection("editableRoots")
@@ -368,8 +371,30 @@ public sealed class RepositoryLifecycle :
             environment,
             solutionFiles)
         {
+            SemanticWorkloadResolverEnabled = workloadResolverPreference ?? GetSdkWorkloadResolverDefault(environment),
             Warnings = _repositoryOpenWarnings?.Invoke() ?? [],
         };
+    }
+
+    /// <inheritdoc />
+    public async Task<bool?> HandleAsync(WorkloadResolverCommand command, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RepositorySession session;
+        lock (_sessionGate)
+        {
+            session = _sessions.GetValueOrDefault(command.WorkspaceId)
+                ?? throw new InvalidOperationException("Open a repository first.");
+        }
+
+        ValidateSessionPolicy(session);
+        if (command.Enabled is { } enabled)
+        {
+            await RepositoryWorkloadResolverSetting.SaveAsync(session.RepositoryPath, enabled, _maximumConfigurationBytes, cancellationToken);
+            return enabled;
+        }
+
+        return RepositoryWorkloadResolverSetting.Read(session.RepositoryPath, _maximumConfigurationBytes);
     }
 
     /// <inheritdoc />
@@ -875,6 +900,18 @@ public sealed class RepositoryLifecycle :
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
+
+    private static bool? GetSdkWorkloadResolverDefault(MsBuildEnvironmentSnapshot? environment)
+    {
+        if (Environment.GetEnvironmentVariable("MSBuildEnableWorkloadResolver") is { Length: > 0 } value)
+        {
+            return value.Equals("true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return environment?.SdkBasePath is { } sdkPath
+            ? !File.Exists(Path.Combine(sdkPath, "DisableWorkloadResolver.sentinel"))
+            : null;
+    }
 
     private async Task PersistSolutionPreferenceAsync(
         string repositoryPath,

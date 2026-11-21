@@ -384,8 +384,19 @@ public sealed partial class InteractionCoordinator
         }
 
         startupStatus.AppendLine($"  Semantic confidence: {semanticStatus}")
-            .AppendLine("  Mode: Interactive")
-            .AppendLine();
+            .AppendLine("  Mode: Interactive");
+        if (activeRepository?.Repository is { } resolverRepository)
+        {
+            var resolverStatus = resolverRepository.SemanticWorkloadResolverEnabled switch
+            {
+                true => "Enabled",
+                false => "Disabled",
+                null => "SDK default (SDK unavailable)",
+            };
+            startupStatus.AppendLine($"  Semantic workload resolver: {resolverStatus}");
+        }
+
+        startupStatus.AppendLine();
         await _surface.WriteAsync(
             startupStatus.ToString(),
             PresentationTextRole.Status,
@@ -440,6 +451,7 @@ public sealed partial class InteractionCoordinator
                     var refreshWorkspace = domainEvent switch
                     {
                         SemanticRefreshStarted started => (WorkspaceId?)started.WorkspaceId,
+                        SemanticRefreshModeChanged modeChanged => modeChanged.WorkspaceId,
                         SemanticRefreshCompleted refreshCompleted => refreshCompleted.WorkspaceId,
                         SemanticRefreshFailed failed => failed.WorkspaceId,
                         _ => null,
@@ -1596,6 +1608,32 @@ public sealed partial class InteractionCoordinator
                     && (commandText.Length == 10 || char.IsWhiteSpace(commandText[10])))
                 {
                     await HandleReasoningCommandAsync(commandText, lifetime.Token);
+                    continue;
+                }
+
+                if (InteractiveCommandRouter.TryParse(commandText, out var resolverCommand)
+                    && resolverCommand is { Descriptor.Name: "/workload_resolver" })
+                {
+                    try
+                    {
+                        var workspaceId = activeRepository?.Repository?.WorkspaceId ?? throw new InvalidOperationException("Open a repository first.");
+                        bool? choice = resolverCommand.Argument.ToLowerInvariant() switch
+                        {
+                            "" or "status" => null,
+                            "enable" => true,
+                            "disable" => false,
+                            _ => throw new ArgumentException(resolverCommand.Descriptor.Usage),
+                        };
+                        var saved = await _presenter.WorkloadResolverAsync(new(workspaceId, choice), lifetime.Token);
+                        var state = saved switch { true => "enabled", false => "disabled", null => "SDK default" };
+                        var effect = choice.HasValue ? " Applies on the next full semantic load." : string.Empty;
+                        await _surface.WriteAsync($"Repository semantic workload resolver: {state}.{effect}\n", PresentationTextRole.Status, lifetime.Token);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        await _surface.WriteAsync(FormatStatusError(exception) + Environment.NewLine, PresentationTextRole.Error, lifetime.Token);
+                    }
+
                     continue;
                 }
 

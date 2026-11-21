@@ -658,7 +658,7 @@
         }
       },
       "csharp_script": {
-        "timeout_ms": "5000",
+        "timeout_ms": "30000",
         "max_output_bytes": "65536",
         "assembly_config_action": "merge",
         "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography"

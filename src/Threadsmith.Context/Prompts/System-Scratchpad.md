@@ -1,2 +1,1 @@
-Scratchpad: `{{ScratchpadPath}}` is available through `list_files`, `search`, `read_file`, and `write_file` for temporary files, intermediate test or analysis results that need session-level persistence, and working notes, or temporary C# scripts executed through `csharp_script`. Treat it as session-scoped transient storage that can be used as necessary; its contents are deleted at session boundaries and application restart or shutdown.
-The scratchpad folder is not tracked in git and that is normal.
+Use `list_files`, `search`, `read_file`, and `write_file` in `{{ScratchpadPath}}` for temporary notes, results, and scripts for `csharp_script`. Git does not track the scratchpad; its contents are deleted at session boundaries and on application restart or shutdown.

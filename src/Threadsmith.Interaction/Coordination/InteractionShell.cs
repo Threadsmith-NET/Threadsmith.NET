@@ -127,6 +127,10 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
+    /// <summary>Reports or saves the active repository's semantic workload resolver preference.</summary>
+    public Task<bool?> WorkloadResolverAsync(WorkloadResolverCommand command, CancellationToken cancellationToken = default) =>
+        _dispatcher.DispatchAsync(command, cancellationToken);
+
     /// <summary>Forces one authoritative semantic refresh through the command boundary.</summary>
     public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
         SessionId sessionId,
@@ -893,7 +897,7 @@ public class InteractionPresenter
                     ? string.Empty
                     : $"\n{tool.ResultPreview}\n";
                 var origin = tool.ActivityOrigin is null ? string.Empty : $" [{tool.ActivityOrigin}]";
-                return $"Tool {tool.ToolName} ({tool.RequestedBy}){origin}: {status}{error}{result}\n";
+                return $"Tool {tool.ToolName} ({tool.RequestedBy}){(tool.IsScriptOrigin ? " (csharp_scripting)" : string.Empty)}{origin}: {status}{error}{result}\n";
             }) ?? [];
         var approvals = state?.PendingApprovals.Select(approval =>
             $"Approval pending: {approval.Action}\n") ?? [];

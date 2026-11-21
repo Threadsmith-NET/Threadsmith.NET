@@ -206,6 +206,10 @@ public sealed record ToolSchedulingDescriptor
 /// <summary>Static metadata and policy requirements for one tool.</summary>
 public sealed record ToolDefinition
 {
+    /// <summary>Whether this tool may be offered to a script after caller-specific admission.</summary>
+    [JsonIgnore]
+    public bool VisibleToScriptingHost { get; init; }
+
     /// <summary>Native concept metadata does not distinguish otherwise identical operational requests.</summary>
     public bool ConceptsAreHints { get; init; }
 
@@ -440,6 +444,18 @@ public sealed record ToolInvocationContext
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
 
+    /// <summary>Caller-owned nested admission and result accounting.</summary>
+    [JsonIgnore]
+    internal ScriptCaller? ScriptCaller { get; init; }
+
+    /// <summary>Invocation-local handlers supplied to the script engine.</summary>
+    [JsonIgnore]
+    internal IReadOnlyDictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>? ScriptHandlers { get; init; }
+
+    /// <summary>Host-only attribution; never changes the requester.</summary>
+    [JsonIgnore]
+    internal bool IsScriptOrigin { get; init; }
+
     /// <summary>Bounded parent-run validation observations; never inherited as child verification.</summary>
     [JsonIgnore]
     internal ConversationReceiptChecks? ReceiptChecks { get; init; }
@@ -500,7 +516,20 @@ public sealed record ToolInvocationRequest
 public sealed record ToolProvenanceSource(
     string Kind,
     string Identifier,
-    string? Range = null);
+    string? Range = null)
+{
+    /// <summary>Digest observed by a nested read and retained for outer evidence.</summary>
+    [JsonIgnore]
+    public string? ReadDigest { get; init; }
+
+    /// <summary>Time of the originating nested read, not the enclosing script completion.</summary>
+    [JsonIgnore]
+    public DateTimeOffset? NestedReadAt { get; init; }
+
+    /// <summary>Observed text page, when available.</summary>
+    [JsonIgnore]
+    public SourceRange? ReadRange { get; init; }
+}
 
 /// <summary>A terminal failure that retains the tool's bounded diagnostic output.</summary>
 public sealed record ToolExecutionFailure(ToolErrorClassification Classification, string Message);
@@ -597,6 +626,14 @@ public sealed record ToolInvocationResult
 
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
+
+    /// <summary>Conservative host observation boundary, before execution and its lifecycle notifications.</summary>
+    [JsonIgnore]
+    internal DateTimeOffset? ObservationStartedAt { get; init; }
+
+    /// <summary>Conservative file observation boundary, before read_file captures bytes or processes the result.</summary>
+    [JsonIgnore]
+    internal DateTimeOffset? ReadObservedAt { get; init; }
 
     /// <summary>Captured effective output ceiling for a live continuation.</summary>
     [JsonIgnore]

@@ -201,7 +201,7 @@ internal static class InteractionEventSegments
         switch (domainEvent)
         {
             case ToolInvocationCompleted completed:
-                AppendToolCompletionBlock(segments, text, GetToolCompletionRole(completed), toolProgress);
+                AppendToolCompletionBlock(segments, text, completed, toolProgress);
                 return;
             case SkillWorkflowCheckpointWritten skill:
                 var skillRole = skill.Status switch
@@ -290,10 +290,14 @@ internal static class InteractionEventSegments
     private static void AppendToolCompletionBlock(
         IList<PresentationTextSegment> segments,
         string text,
-        PresentationTextRole outcomeRole,
+        ToolInvocationCompleted completed,
         IReadOnlyList<PresentationTextSegment>? progress)
     {
         // FormatToolCompletion emits a header, one detail line, then progress lines in order.
+        var outcomeRole = GetToolCompletionRole(completed);
+        var detailRole = !completed.Succeeded && !string.IsNullOrWhiteSpace(completed.Error)
+            ? PresentationTextRole.Error
+            : PresentationTextRole.Muted;
         var contentLine = 0;
         AppendLines(segments, text, line =>
         {
@@ -305,7 +309,7 @@ internal static class InteractionEventSegments
             var role = contentLine switch
             {
                 0 => outcomeRole,
-                1 => PresentationTextRole.Muted,
+                1 => detailRole,
                 _ when progress is not null && contentLine - 2 < progress.Count => progress[contentLine - 2].Role,
                 _ => PresentationTextRole.Muted,
             };

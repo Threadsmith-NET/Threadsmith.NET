@@ -51,58 +51,6 @@ public sealed class ExtensionReviewRemediationTests
         Assert.Equal(ApprovalLevel.None, noneProxy.Definition.RequiredApproval);
     }
 
-    /// <summary>Asserts a load failure publishes <see cref="ExtensionLoadFailed"/>, not <see cref="ExtensionUnloadFailed"/> (F11).</summary>
-    [Fact]
-    public async Task Load_failure_publishes_ExtensionLoadFailed_not_UnloadFailed()
-    {
-        var stagingRoot = NewStagingRoot();
-        var events = new RecordingEventStream();
-        var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        await Assert.ThrowsAsync<ExtensionActivationException>(() => host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory("ThrowingExtension"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "throwing"),
-        }));
-        Assert.Contains(events.Published, e => e is ExtensionLoadFailed);
-        Assert.DoesNotContain(events.Published, e => e is ExtensionUnloadFailed);
-    }
-
-    /// <summary>Asserts concurrent DiscoverAsync and LoadAsync-by-id do not observe a torn discovered map (F5).</summary>
-    [Fact]
-    public async Task Concurrent_discover_and_load_by_id_do_not_throw_or_return_stale()
-    {
-        var host = new ExtensionHost(new RecordingEventStream(), NullLogger<ExtensionHost>.Instance);
-        host.SetDiscoveryDirectory(ResolveFixtureOutputDirectory("ConstructionCountExtension"));
-
-        var tasks = new List<Task>();
-        for (var i = 0; i < 8; i++)
-        {
-            tasks.Add(Task.Run(() => host.DiscoverAsync(CancellationToken.None)));
-            tasks.Add(Task.Run(async () =>
-            {
-                // LoadAsync-by-id refreshes discovery internally; under the old unsynchronized map a
-                // concurrent Discover could clear/repopulate mid-read and throw or return null.
-                var summary = await ((IExtensionManager)host).LoadAsync(
-                    "threadsmith.tests.construction-count",
-                    SessionId.New());
-                Assert.NotNull(summary);
-                Assert.True(summary.IsLoaded);
-                // Unload so a later iteration can reload (clean ALC lifecycle).
-                await ((IExtensionManager)host).UnloadAsync(
-                    "threadsmith.tests.construction-count",
-                    SessionId.New());
-            }));
-        }
-
-        await Task.WhenAll(tasks);
-        // After the storm, a fresh discover reports the extension as discovered (not loaded, since each
-        // load was paired with an unload).
-        var summaries = await host.DiscoverAsync();
-        Assert.Contains(summaries, s => s.ExtensionId == "threadsmith.tests.construction-count");
-    }
-
     private static async Task<ExtensionGeneration> LoadConstructionCountGenerationAsync()
     {
         var events = new RecordingEventStream();

@@ -102,6 +102,10 @@ public sealed class HeadlessShell
         return _dispatcher.DispatchAsync(new GetActiveSessionCommand(), cancellationToken);
     }
 
+    /// <summary>Reports or saves the repository preference for workload resolution in semantic loads.</summary>
+    public Task<bool?> WorkloadResolverAsync(WorkspaceId workspaceId, bool? enabled = null, CancellationToken cancellationToken = default) =>
+        _dispatcher.DispatchAsync(new WorkloadResolverCommand(workspaceId, enabled), cancellationToken);
+
     /// <summary>Forces and waits for one complete semantic refresh without creating a model run.</summary>
     public Task<SemanticRefreshResult> ForceSemanticRefreshAsync(
         SessionId sessionId,
@@ -929,7 +933,7 @@ public sealed class HeadlessShell
                 ? tool.Succeeded ? "succeeded" : "failed"
                 : "running";
             await _output.WriteLineAsync(
-                $"Tool {tool.ToolName}: {status}".AsMemory(),
+                $"Tool {tool.ToolName}{(tool.IsScriptOrigin ? " (csharp_scripting)" : string.Empty)}: {status}".AsMemory(),
                 cancellationToken);
             if (tool.ResultPreview is not null)
             {

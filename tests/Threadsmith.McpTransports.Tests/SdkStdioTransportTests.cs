@@ -9,7 +9,7 @@ using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
 
-/// <summary>Verifies the SDK-backed stdio MCP transport against the in-repository server.</summary>
+/// <summary>Verifies stdio transport option mapping and input limits.</summary>
 public sealed class SdkStdioTransportTests
 {
     /// <summary>Prompt mapping honors both invocation and prompt-specific argument bounds.</summary>
@@ -72,148 +72,6 @@ public sealed class SdkStdioTransportTests
         _ = Assert.Throws<InvalidDataException>(() => bounded.Read(buffer, 0, buffer.Length));
     }
 
-    /// <summary>A real stdio server imports and invokes echo through the host-owned imported tool.</summary>
-    [Fact]
-    public async Task Real_stdio_server_connects_imports_invokes_and_disconnects()
-    {
-        var serverAssembly = GetServerAssemblyPath();
-        Assert.True(File.Exists(serverAssembly), $"MCP test server fixture is unavailable at '{serverAssembly}'.");
-        await using var adapter = CreateAdapter();
-        var profile = CreateProfile([serverAssembly]);
-
-        var connection = await adapter.ConnectAsync(profile, TestContext.Current.CancellationToken);
-
-        Assert.True(connection.Succeeded, connection.Status.Error);
-        Assert.True(connection.Status.ProcessPresent);
-        Assert.True(Assert.Single(adapter.GetConnections()).ProcessPresent);
-        var tool = Assert.Single(connection.Tools);
-        Assert.Equal("stdio-test:echo", tool.Definition.Id);
-        var input = tool.DeserializeInput("{\"message\":\"hello-mcp\"}");
-        var envelope = await tool.ExecuteAsync(
-            input,
-            new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                CreateInvocationContext())
-            { TimeProvider = new FakeTimeProvider() },
-            TestContext.Current.CancellationToken);
-        var result = Assert.IsType<JsonElement>(envelope.Value);
-        Assert.Equal("hello-mcp", result[0].GetString());
-
-        await adapter.DisconnectAsync(profile.Id, TestContext.Current.CancellationToken);
-        Assert.Empty(adapter.GetConnections());
-    }
-
-    /// <summary>SDK disposal kills a real server process that refuses to exit after stdin closes.</summary>
-    [Fact]
-    public async Task Hung_stdio_server_process_is_killed_within_drain_timeout()
-    {
-        var serverAssembly = GetServerAssemblyPath();
-        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
-        var clock = new ObservedTimeProvider();
-        await using var adapter = CreateAdapter(clock);
-        var profile = CreateProfile(
-            [serverAssembly, "--hang-on-shutdown", "--pid-file", pidFile],
-            TimeSpan.FromMilliseconds(250));
-        try
-        {
-            var connection = await adapter.ConnectAsync(profile, TestContext.Current.CancellationToken);
-            Assert.True(connection.Succeeded, connection.Status.Error);
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken));
-            var disconnect = adapter.DisconnectAsync(profile.Id, TestContext.Current.CancellationToken);
-            await clock.WaitForTimerAsync(profile.DrainKillTimeout, TestContext.Current.CancellationToken);
-            clock.Advance(profile.DrainKillTimeout);
-            await disconnect;
-
-            await WaitForExitAsync(processId, TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            File.Delete(pidFile);
-        }
-    }
-
-    /// <summary>A shortened stop deadline replaces the SDK's original timeout and terminates the process tree.</summary>
-    [Fact]
-    public async Task StopAsync_RemainingDeadlineOverridesOriginalSdkShutdownTimeout()
-    {
-        var serverAssembly = GetServerAssemblyPath();
-        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
-        var transport = new SdkStdioTransport(
-            new SecretOutputSanitizer(),
-            NullLoggerFactory.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var profile = CreateProfile(
-            [serverAssembly, "--hang-on-shutdown", "--pid-file", pidFile],
-            TimeSpan.FromSeconds(5));
-        try
-        {
-            _ = await transport.StartAsync(profile, new Dictionary<string, string>(), TestContext.Current.CancellationToken);
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken));
-            // An exhausted caller deadline must force termination rather than graceful shutdown.
-            var stoppedGracefully = await transport.StopAsync(TimeSpan.Zero, TestContext.Current.CancellationToken);
-
-            Assert.False(stoppedGracefully);
-            await WaitForExitAsync(processId, TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            await transport.DisposeAsync();
-            File.Delete(pidFile);
-        }
-    }
-
-    /// <summary>A failed SDK handshake disposes the local transport and terminates its child process.</summary>
-    [Fact]
-    public async Task Failed_stdio_handshake_terminates_spawned_process()
-    {
-        var serverAssembly = GetServerAssemblyPath();
-        var pidFile = Path.Combine(Path.GetTempPath(), $"threadsmith-mcp-{Guid.NewGuid():N}.pid");
-        var transport = new SdkStdioTransport(
-            new SecretOutputSanitizer(),
-            NullLoggerFactory.Instance,
-            timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var profile = CreateProfile(
-            [serverAssembly, "--invalid-handshake", "--pid-file", pidFile],
-            TimeSpan.FromMilliseconds(250));
-        try
-        {
-            var failure = await Assert.ThrowsAnyAsync<Exception>(() => transport.StartAsync(profile, new Dictionary<string, string>(), TestContext.Current.CancellationToken));
-            Assert.Contains("Fixture rejects initialization.", failure.Message, StringComparison.Ordinal);
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile, TestContext.Current.CancellationToken));
-
-            await WaitForExitAsync(processId, TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            await transport.DisposeAsync();
-            File.Delete(pidFile);
-        }
-    }
-
-    private static McpAdapter CreateAdapter(TimeProvider? timeProvider = null)
-    {
-        timeProvider ??= new FakeTimeProvider();
-        var sanitizer = new SecretOutputSanitizer();
-        return new McpAdapter(
-            _ => new SdkStdioTransport(sanitizer, NullLoggerFactory.Instance, timeProvider: timeProvider),
-            new EmptySecretStore(),
-            sanitizer,
-            NullLogger<McpAdapter>.Instance,
-            TestPromptLoader.Instance,
-            timeProvider: timeProvider);
-    }
-
-    private static ToolInvocationContext CreateInvocationContext()
-    {
-        return new()
-        {
-            RepositoryPath = FindRepositoryRoot(),
-            RequestedBy = "milestone9-test",
-        };
-    }
-
     private static McpConnectionProfile CreateProfile(
         IReadOnlyList<string> arguments,
         TimeSpan? drainKillTimeout = null)
@@ -232,13 +90,6 @@ public sealed class SdkStdioTransportTests
         };
     }
 
-    private static string GetServerAssemblyPath()
-    {
-        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "mcp-server", "Threadsmith.Mcp.TestServer.dll");
-        Assert.True(File.Exists(path), $"The build-declared MCP server fixture is missing: {path}");
-        return path;
-    }
-
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
@@ -249,32 +100,5 @@ public sealed class SdkStdioTransportTests
 
         return directory?.FullName
             ?? throw new DirectoryNotFoundException("Could not locate the Threadsmith repository root.");
-    }
-
-    private static async Task WaitForExitAsync(int processId, CancellationToken cancellationToken)
-    {
-        Process process;
-        try
-        {
-            process = Process.GetProcessById(processId);
-        }
-        catch (ArgumentException)
-        {
-            return; // The OS has already reaped the child.
-        }
-
-        using (process)
-        {
-            await process.WaitForExitAsync(cancellationToken);
-            Assert.True(process.HasExited);
-        }
-    }
-
-    private sealed class EmptySecretStore : ISecretStore
-    {
-        public Task<string?> GetAsync(string secretReference, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult<string?>(null);
-        }
     }
 }

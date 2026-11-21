@@ -50,6 +50,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(SemanticConfidenceChanged), "semanticConfidenceChanged")]
 [JsonDerivedType(typeof(SemanticLoadCompleted), "semanticLoadCompleted")]
 [JsonDerivedType(typeof(SemanticRefreshStarted), "semanticRefreshStarted")]
+[JsonDerivedType(typeof(SemanticRefreshModeChanged), "semanticRefreshModeChanged")]
 [JsonDerivedType(typeof(SemanticRefreshCompleted), "semanticRefreshCompleted")]
 [JsonDerivedType(typeof(SemanticRefreshFailed), "semanticRefreshFailed")]
 [JsonDerivedType(typeof(RunTransitioned), "runTransitioned")]
@@ -277,7 +278,8 @@ public sealed record ToolInvocationStarted(
     ToolActivitySource? Source = null,
     string? ActivityDetail = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
-    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt);
+    string? ActivityOrigin = null,
+    bool IsScriptOrigin = false) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(
@@ -294,6 +296,9 @@ public sealed record ToolInvocationCompleted(
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt)
 {
+    /// <summary>Whether the host dispatched this call on behalf of a running script.</summary>
+    public bool IsScriptOrigin { get; init; }
+
     /// <summary>Gets the exact invocation owner; default supports historical events.</summary>
     public RunId RunId { get; init; }
 
@@ -559,6 +564,9 @@ public sealed record SemanticLoadCompleted : DomainEvent
         Confidence = confidence;
     }
 
+    /// <summary>Engine phase durations when the lifecycle performed a measured load.</summary>
+    public SemanticLoadTimings? Timings { get; init; }
+
     /// <summary>Workspace whose semantic load completed.</summary>
     public WorkspaceId WorkspaceId { get; init; }
 
@@ -580,6 +588,16 @@ public sealed record SemanticRefreshStarted(
     /// <summary>Gets a bounded list of repository-relative inputs that triggered this refresh.</summary>
     public IReadOnlyList<string> TriggerPaths { get; init; } = [];
 }
+
+/// <summary>An active semantic refresh switched to a different load mode.</summary>
+public sealed record SemanticRefreshModeChanged(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SemanticRefreshId RefreshId,
+    WorkspaceId WorkspaceId,
+    SemanticRefreshReason Reason,
+    SemanticRefreshMode Mode,
+    int ChangedFileCount) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A coalesced semantic refresh published current state.</summary>
 public sealed record SemanticRefreshCompleted(
@@ -986,6 +1004,7 @@ public static class DomainEventJson
             ["semanticConfidenceChanged"] = typeof(SemanticConfidenceChanged),
             ["semanticLoadCompleted"] = typeof(SemanticLoadCompleted),
             ["semanticRefreshStarted"] = typeof(SemanticRefreshStarted),
+            ["semanticRefreshModeChanged"] = typeof(SemanticRefreshModeChanged),
             ["semanticRefreshCompleted"] = typeof(SemanticRefreshCompleted),
             ["semanticRefreshFailed"] = typeof(SemanticRefreshFailed),
             ["runTransitioned"] = typeof(RunTransitioned),

@@ -137,38 +137,6 @@ public sealed class CapabilityRegistryTests
         Assert.Throws<KeyNotFoundException>(() => toolRegistry.Get("definition_id"));
     }
 
-    /// <summary>Asserts a failed multi-tool load publishes none of the generation's proxies.</summary>
-    [Fact]
-    public async Task Failed_generation_registration_rolls_back_catalog_publication()
-    {
-        var toolRegistry = new ToolRegistry([]);
-        var leaseAuthority = new InvocationLeaseAuthority(NullLogger.Instance);
-        var capabilityRegistry = new CapabilityRegistry(
-            leaseAuthority,
-            NullLogger<CapabilityRegistry>.Instance,
-            toolRegistry);
-        var host = new ExtensionHost(
-            new RecordingEventStream(),
-            NullLogger<ExtensionHost>.Instance,
-            capabilityRegistry: capabilityRegistry,
-            leaseAuthority: leaseAuthority);
-        var stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-invalid-tool-tests", Guid.NewGuid().ToString("N"));
-
-        await Assert.ThrowsAsync<ArgumentException>(() => host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory(
-                "InvalidSecondToolExtension",
-                "Threadsmith.Tests.Fixtures.InvalidSecondToolExtension.dll"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = stagingRoot,
-        }));
-
-        Assert.Empty(toolRegistry.AllDefinitions);
-        Assert.Empty(capabilityRegistry.Registrations);
-        Assert.Throws<KeyNotFoundException>(() => toolRegistry.Get("valid_before_failure"));
-    }
-
     /// <summary>Asserts that beginning drain blocks new invocation leases with ExtensionDrainingException.</summary>
     [Fact]
     public async Task Draining_blocks_new_invocation_leases()

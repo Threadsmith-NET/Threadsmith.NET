@@ -15,13 +15,3 @@ To regenerate offline, provide the exact authorized reference engine source and 
 The utility verifies the source hash before compilation and asset hashes before inference, links the original source unchanged, and writes provenance with the vectors. `production-reference-texts.json` owns the synthetic input list; `ReferenceFixtureGenerator.cs.template` only inspects original token tensors and records the engine's finished results. Changing goldens requires reviewing source, package, asset and transformation identities. The former Python/Hugging Face reference fixture is superseded by this production reference.
 
 `retrieval-fixture.json` version 1 freezes eight notes and twenty requests, split into nine calibration and eleven held-out examples. Calibration supports the default semantic minimum of 0.47; it is not a mandatory user cutoff. The adaptation evaluates that default on calibration: minimize twice false inclusions plus missed relevant memories, then minimize misses. The current optimum plateau is 0.46–0.53. The report also records the previous highest-threshold tie-break result, 0.53, as an alternative, not the runtime selection. Raising the cutoff to that alternative would miss the held-out FindSymbolAsync paraphrase (cosine about 0.518). The held-out and larger realistic-note fixtures evaluate the retained cutoff; neither selects it. This policy refinement and the alternative result are explicit so the adaptation is not presented as a new blind threshold selection.
-
-Normal test discovery uses local assets. Set `THREADSMITH_EMBEDDING_INTEGRATION=1` to enable offline native parity checks. To evaluate retrieval quality, stage the pinned assets, then run the explicit calibration check from the repository root.
-
-```powershell
-$env:THREADSMITH_EMBEDDING_REPORT = Join-Path ([IO.Path]::GetTempPath()) 'threadsmith-embedding-quality.json'
-dotnet build tests/Threadsmith.Embeddings.Local.Tests/Threadsmith.Embeddings.Local.Tests.csproj
-dotnet test --project tests/Threadsmith.Embeddings.Local.Tests/Threadsmith.Embeddings.Local.Tests.csproj --no-build --explicit only --filter-method 'Threadsmith.Embeddings.Local.Tests.RealEmbeddingQualityTests.FrozenRetrievalFixtureRetainsCalibratedMinimum' --timeout 55s
-```
-
-The optional report contains the calibration candidates, the retained and highest equivalent cutoffs, and the held-out scores and rankings. The frozen fixture includes one Git-permission query whose relevant note qualifies lexically and scores below the semantic cutoff. Automatic recall excludes that note under mandatory semantic admission. The report counts this as a held-out miss, and the check requires the remaining relevant notes to be recalled. Collect latency separately when evaluating performance.

@@ -31,7 +31,17 @@ public sealed class ContextLifecycleObserver
             _evidenceStore.QueueInvalidation(
                 confidence.SessionId,
                 "semantic",
-                $"Semantic confidence changed to {confidence.Confidence}.");
+                $"Semantic confidence changed to {confidence.Confidence}.",
+                confidence.OccurredAt);
+        }
+
+        if (domainEvent is SemanticRefreshCompleted refresh)
+        {
+            _evidenceStore.QueueInvalidation(
+                refresh.SessionId,
+                "semantic",
+                "The semantic workspace was refreshed.",
+                refresh.OccurredAt);
         }
 
         if (domainEvent is RepositoryOpened repository)

@@ -79,7 +79,7 @@ public sealed record EvidenceProvenance
 }
 
 /// <summary>File version and optional range on which source evidence depends.</summary>
-public sealed record EvidenceFileDependency(string Path, string? Sha256, SourceRange? Range = null);
+public sealed record EvidenceFileDependency(string Path, string? Sha256, SourceRange? Range = null, DateTimeOffset? ObservedAt = null);
 
 /// <summary>One governed evidence item with provenance, relevance, and invalidation state.</summary>
 public sealed record Evidence
@@ -119,6 +119,9 @@ public sealed record Evidence
 
     /// <summary>All source file dependencies; missing digests are not verified baseline evidence.</summary>
     public IReadOnlyList<EvidenceFileDependency> FileDependencies { get; init; } = [];
+
+    /// <summary>Earliest host observation boundary of the semantic results used by this evidence.</summary>
+    public DateTimeOffset? SemanticObservedAt { get; init; }
 
     /// <summary>Keys whose invalidation makes this evidence stale.</summary>
     public IReadOnlyList<string> InvalidationKeys { get; init; } = [];

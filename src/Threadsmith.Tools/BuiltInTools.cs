@@ -312,6 +312,8 @@ public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             TimeSpan.FromSeconds(10),
             (int)Math.Min(int.MaxValue, outputBytes)) with
         {
+            VisibleToScriptingHost = true,
+
             // The same range can contain new source after a host or external edit.
             NumberOfExactToolInvocationsPerTurn = int.MaxValue,
         };
@@ -1525,7 +1527,7 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024);
+            256 * 1024) with { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1610,7 +1612,7 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024);
+            256 * 1024) with { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1993,7 +1995,7 @@ internal static class ToolDefinitionFactory
             && conceptSchema["properties"]?["concepts"] is JsonObject concepts)
         {
             concepts["maxItems"] = MemoryConcepts.MaximumPerInput;
-            concepts["description"] = $"Optional applicability hints: at most {MemoryConcepts.MaximumPerInput} single words or hyphenated terms, each 1–{MemoryConcepts.MaximumConceptRunes} characters using Unicode letters/digits and single internal hyphens. No spaces or other punctuation. Use csharp and dotnet for C# and .NET. Examples: caching, theme-catalog, workspace-identity. Omit concepts when unnecessary.";
+            concepts["description"] = "Optional applicability hints. Use Unicode letters or digits, with single internal hyphens only.";
 
             // Keep Unicode category validation in MemoryConcepts.Normalize: provider JSON Schema
             // validators do not consistently support Unicode property escapes in regex patterns.

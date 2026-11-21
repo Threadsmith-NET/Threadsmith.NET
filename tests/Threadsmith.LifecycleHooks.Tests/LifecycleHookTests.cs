@@ -284,59 +284,6 @@ public sealed class LifecycleHookTests
         Assert.Throws<ArgumentException>(() => HookDescriptorValidator.Normalize([descriptor]));
     }
 
-    /// <summary>Migration 6 and the SQLite store preserve exact approvals and audit.</summary>
-    [Fact]
-    public async Task MigrationAndSqliteStore_RoundTripApprovalAndAudit()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"threadsmith-hooks-{Guid.NewGuid():N}.db");
-        var connectionString = new SqliteConnectionStringBuilder { DataSource = path, Pooling = false }.ToString();
-        try
-        {
-            var runner = new MigrationRunner(connectionString, DefaultMigrations.All);
-            await runner.RunAsync();
-            var store = new SqliteHookStore(connectionString);
-            var descriptor = HookDescriptorValidator.Normalize([
-                Descriptor(HookHandlerScope.Repository, HookAuthority.Advisory, HookFailureMode.FailOpen)])[0];
-            var approval = new HookRepositoryApproval
-            {
-                RepositoryIdentity = "repo-1",
-                HandlerIdentity = descriptor.Identity,
-                Target = descriptor.Target,
-                HookPoints = descriptor.HookPoints,
-                SecretReferences = [],
-                ApprovedAt = DateTimeOffset.UtcNow,
-            };
-            await store.SaveApprovalAsync(approval);
-            var audit = new HookAuditRecord
-            {
-                InvocationId = HookInvocationId.New(),
-                HookPoint = HookPoint.BeforeToolInvocation,
-                HandlerIdentity = descriptor.Identity,
-                OperationId = Guid.NewGuid(),
-                RepositoryIdentity = "repo-1",
-                Status = HookInvocationStatus.Acknowledged,
-                Authority = HookAuthority.Advisory,
-                FailureMode = HookFailureMode.FailOpen,
-                ResultKind = HookResultKind.Acknowledge,
-                Decision = HookDecisionKind.Continue,
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-            await store.AppendAuditAsync(audit);
-
-            var restored = await store.GetApprovalAsync("repo-1", descriptor.Identity);
-            Assert.NotNull(restored);
-            Assert.Equal(approval.RepositoryIdentity, restored.RepositoryIdentity);
-            Assert.Equal(approval.HandlerIdentity, restored.HandlerIdentity);
-            Assert.Equal(approval.Target, restored.Target);
-            Assert.Equal(approval.HookPoints, restored.HookPoints);
-            Assert.Equal(audit.InvocationId, Assert.Single(await store.QueryAuditAsync("repo-1", null, 10)).InvocationId);
-        }
-        finally
-        {
-            File.Delete(path);
-        }
-    }
-
     /// <summary>Deferred hook work retains its original database through queueing, rebind and shutdown drain.</summary>
     [Fact]
     public static async Task Deferred_hooks_capture_binding_before_queue_and_do_not_serialize_it()

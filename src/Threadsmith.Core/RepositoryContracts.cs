@@ -86,6 +86,9 @@ public sealed record RepositoryOpenResult(
     MsBuildEnvironmentSnapshot? Environment,
     IReadOnlyList<string> SolutionCandidates)
 {
+    /// <summary>Workload resolver setting at startup, including SDK defaults when known.</summary>
+    public bool? SemanticWorkloadResolverEnabled { get; init; }
+
     /// <summary>Bounded host warnings produced while binding repository-scoped services.</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
@@ -241,6 +244,11 @@ public sealed record SelectSolutionCommand(
     SessionId SessionId,
     WorkspaceId WorkspaceId,
     string SolutionPath) : ICommand<SolutionSelectionResult>;
+
+/// <summary>Reports or saves the semantic workload resolver preference for an open workspace.</summary>
+/// <param name="WorkspaceId">The active repository workspace.</param>
+/// <param name="Enabled">An explicit choice to save, or null to report the saved preference.</param>
+public sealed record WorkloadResolverCommand(WorkspaceId WorkspaceId, bool? Enabled) : ICommand<bool?>;
 
 /// <summary>Captures an immutable content-hash baseline for an opened repository.</summary>
 /// <param name="SessionId">Owning session.</param>

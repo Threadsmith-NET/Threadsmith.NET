@@ -456,7 +456,8 @@ public sealed partial class SessionApplication
             registration.SessionId,
             runId,
             invocationContext,
-            toolsWithheld: false);
+            toolsWithheld: false,
+            prompts: _conversationToolSnapshots is null ? null : _prompts);
         var conversationDefinitions = conversationTools.Definitions;
         ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, conversationTools);
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
@@ -1409,7 +1410,14 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
-        var invocationContext = round.InvocationContext;
+        var invocationContext = round.InvocationContext with
+        {
+            ScriptCaller = new ScriptCaller(
+                _conversationToolSnapshots,
+                loopState.InvokedToolCalls,
+                Accepted: id => loopState.SemanticToolAttempted |= SemanticFirstSearchPolicy.IsSemanticInspectionTool(id),
+                ReadSources: result => ToolEvidenceAdmission.GetScriptReadSources(result, round.InvocationContext.RepositoryPath)),
+        };
         if (invocationContext.ModelContextWindowTokens is { } contextWindow
             && round.ModelRequest.WireEstimate is { } wireEstimate)
         {

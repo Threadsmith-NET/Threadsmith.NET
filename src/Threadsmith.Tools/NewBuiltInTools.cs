@@ -172,7 +172,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(code);
         ArgumentNullException.ThrowIfNull(context);
-        var timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", 5000);
+        var timeoutMilliseconds = _toolConfig.Get("csharp_script", "timeout_ms", PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultTimeoutMilliseconds);
         var maximumOutputBytes = _toolConfig.Get("csharp_script", "max_output_bytes", 65536);
         var maximumCodeCharacters = _toolConfig.Get("csharp_script", "max_code_characters", 65536);
         var maximumAssemblyNameCharacters = _toolConfig.Get("csharp_script", "max_assembly_name_characters", 128);
@@ -240,6 +240,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
         timeoutMilliseconds = executionTimeout == Timeout.InfiniteTimeSpan ? -1 : checked((int)Math.Ceiling(executionTimeout.TotalMilliseconds));
         var workerRequest = new ScriptWorkerRequest
         {
+            Available = context.Invocation.ScriptHandlers?.Keys.ToArray() ?? [],
             Code = code,
             FileScope = scope,
             TimeoutMilliseconds = timeoutMilliseconds,
@@ -257,6 +258,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
                 ToolInvocationId = context.ToolInvocationId,
                 RunId = context.RunId,
                 ScriptWorker = worker,
+                ScriptHandlers = context.Invocation.ScriptHandlers ?? new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>(),
                 WorkingDirectory = scope.ScratchpadPath,
                 EnvironmentVariables = ScriptFilePolicy.TemporaryEnvironment(scope.ScratchpadPath, scope.RepositoryPath),
                 Timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds),
@@ -276,10 +278,10 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
             { ScriptPath = scriptPath };
         }
 
-        if (result.ExitCode != 0 || result.StandardOutputTruncated)
+        if (result.ExitCode != 0 || result.StandardOutputTruncated || result.StandardOutput.Length == 0)
         {
             var error = string.IsNullOrWhiteSpace(result.StandardError)
-                ? $"The C# scripting worker exited with code {result.ExitCode}."
+                ? $"The C# scripting worker exited with code {result.ExitCode} without a usable final result."
                 : result.StandardError;
             return new CSharpScriptOutput(
                 false,
@@ -338,6 +340,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
 
     private sealed record ScriptWorkerRequest
     {
+        public required IReadOnlyList<string> Available { get; init; }
+
         public required string Code { get; init; }
 
         public required string Kind { get; init; }
@@ -381,7 +385,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
                 RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovalLevel.None,
                 ToolSideEffect.ExecutesCode,
-                TimeSpan.FromSeconds(5),
+                TimeSpan.FromMilliseconds(PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultTimeoutMilliseconds),
                 7 * 1024 * 1024) with
             {
                 DisplayName = "C# Script",
@@ -428,7 +432,12 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
             sources.Add(new ToolProvenanceSource("file", path));
         }
 
-        return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated);
+        var failure = output.Success
+            ? null
+            : new ToolExecutionFailure(
+                ToolErrorClassification.ExecutionFailure,
+                string.IsNullOrWhiteSpace(output.Error) ? "C# script execution failed." : output.Error);
+        return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated, Failure: failure);
     }
 
     /// <summary>Captures one immutable source after tool admission.</summary>

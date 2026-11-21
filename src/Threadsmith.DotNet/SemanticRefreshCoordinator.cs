@@ -1234,7 +1234,8 @@ public sealed class SemanticRefreshCoordinator :
             return;
         }
 
-        if (change.Kind == SemanticFileChangeKind.Changed && Directory.Exists(fullPath))
+        var directoryExists = Directory.Exists(fullPath);
+        if (change.Kind == SemanticFileChangeKind.Changed && directoryExists)
         {
             return;
         }
@@ -1252,10 +1253,8 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             binding.DirtyVersion++;
-            if (change.Source != SemanticRefreshReason.Recovery && change.Kind is (SemanticFileChangeKind.Created
-                or SemanticFileChangeKind.Deleted
-                or SemanticFileChangeKind.Renamed
-                or SemanticFileChangeKind.Uncertain))
+            if (change.Source != SemanticRefreshReason.Recovery
+                && SemanticRefreshPathPolicy.RequiresWatcherRestart(change.Kind, directoryExists, binding.WatchesDirectory(fullPath)))
             {
                 binding.WatcherRestartRequired = true;
             }
@@ -1518,23 +1517,25 @@ public sealed class SemanticRefreshCoordinator :
         }
     }
 
-    private async Task EnsureRefreshStartedAsync(
+    private async Task PublishRefreshActivityAsync(
         WorkspaceBinding binding,
         RefreshSequence sequence,
         CancellationToken cancellationToken)
     {
-        if (sequence.HasStarted)
+        if (sequence.PublishedMode == sequence.Mode)
         {
             return;
         }
 
-        sequence.MarkStarted(_timeProvider.GetTimestamp());
+        var isStart = !sequence.HasStarted;
+        sequence.MarkActivityPublished(_timeProvider.GetTimestamp());
         foreach (var sessionId in GetBindingSessionIds(binding))
         {
-            await PublishSafelyAsync(
-                new SemanticRefreshStarted(
+            var occurredAt = _timeProvider.GetUtcNow();
+            DomainEvent activity = isStart
+                ? new SemanticRefreshStarted(
                     sessionId,
-                    _timeProvider.GetUtcNow(),
+                    occurredAt,
                     sequence.RefreshId,
                     binding.Request.WorkspaceId,
                     sequence.Reason,
@@ -1543,8 +1544,16 @@ public sealed class SemanticRefreshCoordinator :
                     sequence.DirtyVersion)
                 {
                     TriggerPaths = CaptureTriggerPaths(binding, sequence),
-                },
-                cancellationToken);
+                }
+                : new SemanticRefreshModeChanged(
+                    sessionId,
+                    occurredAt,
+                    sequence.RefreshId,
+                    binding.Request.WorkspaceId,
+                    sequence.Reason,
+                    sequence.Mode,
+                    sequence.ChangedPaths.Count);
+            await PublishSafelyAsync(activity, cancellationToken);
         }
     }
 
@@ -1625,7 +1634,7 @@ public sealed class SemanticRefreshCoordinator :
                 SemanticRefreshMode.Full,
                 prepared.Changes,
                 batch.TargetDirtyVersion);
-            await EnsureRefreshStartedAsync(binding, sequence, cancellationToken);
+            await PublishRefreshActivityAsync(binding, sequence, cancellationToken);
             throw new InvalidDataException(
                 "Semantic refresh preparation observed an unstable filesystem snapshot.");
         }
@@ -1663,7 +1672,9 @@ public sealed class SemanticRefreshCoordinator :
             return;
         }
 
-        var mode = prepared.ForceFull || prepared.Changes.Any(change => change.RequiresFullRefresh)
+        var projectRefresh = !prepared.ForceFull && prepared.Changes.Any(change => change.IsSourceAddition)
+            && prepared.Changes.All(change => !change.RequiresFullRefresh || change.IsSourceAddition);
+        var mode = prepared.ForceFull || (!projectRefresh && prepared.Changes.Any(change => change.RequiresFullRefresh))
             ? SemanticRefreshMode.Full
             : SemanticRefreshMode.Incremental;
         var manualForce = batch.TargetForceVersion > binding.ForceAppliedVersion;
@@ -1682,12 +1693,29 @@ public sealed class SemanticRefreshCoordinator :
         {
             // Waiting for an active run is queued work, not compiler refresh time.
             startedAt = _timeProvider.GetTimestamp();
-            await EnsureRefreshStartedAsync(binding, sequence, publicationToken);
+            await PublishRefreshActivityAsync(binding, sequence, publicationToken);
             if (batch.RestartWatcher)
             {
                 binding.RestartWatching(
                     change => QueueChange(binding, change),
                     () => QueueRecovery(binding, restartWatcher: true));
+            }
+
+            if (projectRefresh)
+            {
+                var result = await _backend.TryRefreshProjectsAsync(
+                    binding.Request.WorkspaceId,
+                    prepared.Changes.Select(change => change.ToDocument()).ToArray(),
+                    publicationToken);
+                if (result is not null)
+                {
+                    return result;
+                }
+
+                projectRefresh = false;
+                mode = SemanticRefreshMode.Full;
+                sequence.RecordAttempt(reason, mode, prepared.Changes, batch.TargetDirtyVersion);
+                await PublishRefreshActivityAsync(binding, sequence, publicationToken);
             }
 
             if (mode == SemanticRefreshMode.Full)
@@ -1708,16 +1736,7 @@ public sealed class SemanticRefreshCoordinator :
                     publicationToken);
             }
 
-            var documents = prepared.Changes.Select(change =>
-            {
-                var text = change.Content.Text
-                    ?? throw new InvalidOperationException(
-                        "Incremental semantic refresh requires current document text.");
-                return new SemanticDocumentRefresh(
-                    change.Path,
-                    text,
-                    change.Content.Identity);
-            }).ToArray();
+            var documents = prepared.Changes.Select(change => change.ToDocument()).ToArray();
             return await _backend.RefreshIncrementalAsync(
                 binding.Request.WorkspaceId,
                 documents,
@@ -1761,7 +1780,18 @@ public sealed class SemanticRefreshCoordinator :
                 cancellationToken);
         }
 
-        if (mode == SemanticRefreshMode.Full)
+        if (projectRefresh)
+        {
+            confirmedPreparedInputs = await ConfirmPreparedInputIdentitiesAsync(
+                binding,
+                prepared.Changes,
+                [],
+                _backend.GetRefreshInventory(binding.Request.WorkspaceId),
+                confirmedCurrentInputs,
+                cancellationToken);
+        }
+
+        if (mode == SemanticRefreshMode.Full || projectRefresh)
         {
             var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
                 .GroupBy(pair => pair.Key, PathComparer)
@@ -1913,13 +1943,14 @@ public sealed class SemanticRefreshCoordinator :
                     && hostIdentities.Contains(content.Identity)
                     ? SemanticRefreshReason.HostMutation
                     : change.Source;
-                var requiresFullRefresh = classification == SemanticChangeClassification.Full
+                var requiresFullRefresh = classification != SemanticChangeClassification.Incremental
                     || content.Text is null;
                 prepared.Add(new PreparedChange(
                     change.Path,
                     source,
                     requiresFullRefresh,
-                    content));
+                    content,
+                    classification == SemanticChangeClassification.SourceAddition && content.Text is not null));
             }
         }
 
@@ -2440,7 +2471,12 @@ public sealed class SemanticRefreshCoordinator :
         var repositoryPath = request.RepositoryPath;
         var path = change.Path;
         var input = SemanticRefreshPathPolicy.Classify(repositoryPath, path, inventory);
-        if (input == SemanticInputKind.None || Directory.Exists(path) || binding.WatchesDirectory(path))
+
+        // A watcher can still cover a directory that has been replaced by a file. Retire
+        // the watcher as usual, but retain source-addition eligibility if no inputs were lost.
+        var wasWatchedDirectory = binding.WatchesDirectory(path);
+        if (input == SemanticInputKind.None || Directory.Exists(path)
+            || (wasWatchedDirectory && (binding.HasCompilerDescendants(path, inventory) || !File.Exists(path))))
         {
             if (change.Kind == SemanticFileChangeKind.Uncertain && PathComparer.Equals(path, repositoryPath))
             {
@@ -2453,12 +2489,16 @@ public sealed class SemanticRefreshCoordinator :
                 : SemanticChangeClassification.Irrelevant;
         }
 
-        return input == SemanticInputKind.Source
-            && inventory.SourceDocuments.Contains(path)
-            && File.Exists(path)
-            && change.Kind != SemanticFileChangeKind.Uncertain
+        // Preparation decides whether a file is missing from the stable read. A
+        // rename in progress can make a separate existence probe stale.
+        if (input != SemanticInputKind.Source || change.Kind == SemanticFileChangeKind.Uncertain)
+        {
+            return SemanticChangeClassification.Full;
+        }
+
+        return inventory.SourceDocuments.Contains(path)
             ? SemanticChangeClassification.Incremental
-            : SemanticChangeClassification.Full;
+            : SemanticChangeClassification.SourceAddition;
     }
 
     private static bool DirectoryContainsCompilerInputs(SemanticLoadRequest request, string directory, SemanticRefreshInventory inventory, CancellationToken cancellationToken)
@@ -2927,6 +2967,7 @@ public sealed class SemanticRefreshCoordinator :
     private enum SemanticChangeClassification
     {
         Irrelevant,
+        SourceAddition,
         Incremental,
         Full,
     }
@@ -3284,13 +3325,14 @@ public sealed class SemanticRefreshCoordinator :
             WatcherTopology after,
             Action<SemanticFileChange> changed)
         {
-            if (!before.Entries.SetEquals(after.Entries))
+            foreach (var path in after.Entries.Except(before.Entries, PathComparer))
             {
-                changed(new SemanticFileChange(
-                    Request.SessionId,
-                    Request.RepositoryPath,
-                    SemanticFileChangeKind.Uncertain,
-                    SemanticRefreshReason.ExternalChange));
+                changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Created));
+            }
+
+            foreach (var path in before.Entries.Except(after.Entries, PathComparer))
+            {
+                changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Deleted));
             }
 
             // File membership and monitoring topology have different consequences. Compare
@@ -3364,7 +3406,12 @@ public sealed class SemanticRefreshCoordinator :
         string Path,
         SemanticRefreshReason Source,
         bool RequiresFullRefresh,
-        StableFileContent Content);
+        StableFileContent Content,
+        bool IsSourceAddition = false)
+    {
+        public SemanticDocumentRefresh ToDocument() =>
+            new(Path, Content.Text ?? throw new InvalidOperationException("A source document requires text."), Content.Identity);
+    }
 
     private sealed record StableFileContent(
         bool Exists,
@@ -3396,7 +3443,9 @@ public sealed class SemanticRefreshCoordinator :
 
         public long DirtyVersion { get; private set; }
 
-        public bool HasStarted { get; private set; }
+        public bool HasStarted => PublishedMode.HasValue;
+
+        public SemanticRefreshMode? PublishedMode { get; private set; }
 
         public SemanticRefreshMode Mode { get; private set; } = SemanticRefreshMode.Incremental;
 
@@ -3406,10 +3455,14 @@ public sealed class SemanticRefreshCoordinator :
 
         public long StartedTimestamp { get; private set; }
 
-        public void MarkStarted(long timestamp)
+        public void MarkActivityPublished(long timestamp)
         {
-            HasStarted = true;
-            StartedTimestamp = timestamp;
+            if (!HasStarted)
+            {
+                StartedTimestamp = timestamp;
+            }
+
+            PublishedMode = Mode;
         }
 
         public void RecordAttempt(
@@ -3432,15 +3485,7 @@ public sealed class SemanticRefreshCoordinator :
             DirtyVersion = Math.Max(DirtyVersion, dirtyVersion);
         }
 
-        public void RecordNoOp(RefreshBatch batch)
-        {
-            foreach (var change in batch.Changes)
-            {
-                ChangedPaths.Add(change.Path);
-            }
-
-            DirtyVersion = Math.Max(DirtyVersion, batch.TargetDirtyVersion);
-        }
+        public void RecordNoOp(RefreshBatch batch) => DirtyVersion = Math.Max(DirtyVersion, batch.TargetDirtyVersion);
 
         public void RecordSuccess(SemanticConfidenceLevel confidence)
         {
@@ -3516,6 +3561,11 @@ internal interface ISemanticRefreshBackend
     Task<IReadOnlyList<SemanticDocumentRefresh>> GetLoadedDocumentsAsync(
         WorkspaceId workspaceId,
         CancellationToken cancellationToken);
+
+    /// <summary>Resolves evaluated project membership or requests the authoritative reload fallback.</summary>
+    Task<SemanticLoadResult?> TryRefreshProjectsAsync(
+        WorkspaceId workspaceId, IReadOnlyList<SemanticDocumentRefresh> documents, CancellationToken cancellationToken)
+        => Task.FromResult<SemanticLoadResult?>(null);
 
     /// <summary>Publishes a prepared incremental replacement.</summary>
     Task<SemanticLoadResult> RefreshIncrementalAsync(
@@ -3610,6 +3660,11 @@ internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend
         return _semanticEngines.GetEngine(workspaceId)
             .GetLoadedDocumentsAsync(retainText: false, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<SemanticLoadResult?> TryRefreshProjectsAsync(
+        WorkspaceId workspaceId, IReadOnlyList<SemanticDocumentRefresh> documents, CancellationToken cancellationToken)
+        => _semanticEngines.GetEngine(workspaceId).TryRefreshProjectsAsync(documents, cancellationToken);
 
     /// <inheritdoc />
     public Task<SemanticLoadResult> RefreshIncrementalAsync(

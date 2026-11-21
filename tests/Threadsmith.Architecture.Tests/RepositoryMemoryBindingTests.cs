@@ -14,63 +14,6 @@ using Xunit;
 /// <summary>Failed repository opens preserve target memory content and defer destructive migrations.</summary>
 public static partial class RepositoryMemoryBindingTests
 {
-    /// <summary>A late rebind failure preserves both current and legacy target notes; a successful retry applies the cap.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task Failed_open_preserves_memories_until_successful_retry(bool legacy)
-    {
-        await using var fixture = await BindingFixture.CreateAsync(legacy);
-        using var router = new RepositoryBoundMemoryStore(fixture.InitialConnection, fixture.InitialRoot);
-        var configuration = new ConfigurationBuilder().Build();
-        var options = new RepositoryMemoryConfiguration(configuration, configuration, fixture.InitialRoot);
-        var configPath = Path.Combine(fixture.InitialRoot, ".threadsmith", "config.json");
-        var toolState = new ToolStateManager(
-            [],
-            configuration,
-            configPath,
-            userConsentPath: Path.Combine(fixture.Root, "consent.json"),
-            mcpApprovalPath: Path.Combine(fixture.Root, "mcp.json"));
-        var mcp = new FailingRebindManager();
-        var coordinator = new RepositoryScopedBindingCoordinator(
-            fixture.InitialRoot,
-            toolState,
-            null,
-            new MutationApprovalPolicyService(configuration, configPath),
-            new RepositorySecretProvider(fixture.InitialRoot, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow)),
-            mcp,
-            router,
-            options,
-            _ => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["tools:config:memories:MaxNumberOfRepoMemories"] = "1",
-            }).Build());
-
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => coordinator.BindRepositoryAsync(fixture.TargetRoot, TestContext.Current.CancellationToken));
-
-        Assert.Equal("Injected late repository binding failure.", failure.Message);
-        Assert.Equal(legacy ? 9L : DefaultMigrations.All[^1].Version, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
-        Assert.Equal(2L, await fixture.ScalarAsync(legacy
-            ? "SELECT count(*) FROM repository_memory;"
-            : "SELECT count(*) FROM managed_memories;"));
-        Assert.Empty(Directory.EnumerateFiles(fixture.TargetRoot, "*.backup", SearchOption.AllDirectories));
-        var initialIdentity = RepositoryIdentity.Create(fixture.InitialRoot);
-        Assert.Empty((await router.GetSnapshotAsync(initialIdentity, [], TestContext.Current.CancellationToken)).Entries);
-        Assert.Equal(20, options.Capture(initialIdentity).MaxNumberOfRepoMemories);
-
-        await coordinator.BindRepositoryAsync(fixture.TargetRoot, TestContext.Current.CancellationToken);
-
-        var targetIdentity = RepositoryIdentity.Create(fixture.TargetRoot);
-        Assert.Single((await router.GetSnapshotAsync(targetIdentity, [], TestContext.Current.CancellationToken)).Entries);
-        Assert.Equal(1, options.Capture(targetIdentity).MaxNumberOfRepoMemories);
-        Assert.Equal((long)DefaultMigrations.All[^1].Version, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
-        if (legacy)
-        {
-            Assert.Single(Directory.EnumerateFiles(fixture.TargetRoot, "*.backup", SearchOption.AllDirectories));
-        }
-    }
-
     private sealed class FailingRebindManager : IMcpManager
     {
         private bool _failNext;

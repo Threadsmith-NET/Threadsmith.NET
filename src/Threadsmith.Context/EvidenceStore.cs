@@ -11,7 +11,8 @@ public sealed class EvidenceStore : IEvidenceStore
 
     // Case-insensitive candidate lookup is a superset; supersession still uses the repository comparer.
     private readonly Dictionary<SessionId, Dictionary<string, HashSet<EvidenceId>>> _dependencies = [];
-    private readonly Queue<(SessionId SessionId, string Key, string Reason, DateTimeOffset ChangedAt)> _invalidations = new();
+    private readonly Queue<(SessionId SessionId, Invalidation Change)> _invalidations = new();
+    private readonly Dictionary<SessionId, InvalidationWatermarks> _invalidationWatermarks = [];
     private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="EvidenceStore"/> class.</summary>
@@ -64,6 +65,8 @@ public sealed class EvidenceStore : IEvidenceStore
         var pathComparers = prepared.Select(item => item.Provenance.RepositoryPath)
             .OfType<string>().Distinct(StringComparer.Ordinal)
             .ToDictionary(root => root, RepositoryPathPolicy.GetPathComparer, StringComparer.Ordinal);
+        var observations = prepared.Select(item => PrepareObservations(item, pathComparers)).ToArray();
+        var invalidationPaths = prepared.Select(item => PrepareInvalidationPaths(item, pathComparers)).ToArray();
         var commitState = 0;
         bool TryCommitBatch()
         {
@@ -80,34 +83,23 @@ public sealed class EvidenceStore : IEvidenceStore
 
             lock (_gate)
             {
-                foreach (var item in prepared)
+                for (var index = 0; index < prepared.Length; index++)
                 {
-                    if (item.Provenance.RepositoryPath is { } root
-                        && item.FileDependencies.Any(dependency => dependency.Sha256 is not null)
-                        && _dependencies.TryGetValue(item.SessionId, out var paths))
+                    var item = prepared[index];
+                    var (byPath, conflicting) = observations[index];
+                    if (conflicting)
                     {
-                        HashSet<EvidenceId> affected = [];
-                        foreach (var dependency in item.FileDependencies.Where(dependency => dependency.Sha256 is not null))
-                        {
-                            if (paths.TryGetValue(dependency.Path, out var identities))
-                            {
-                                affected.UnionWith(identities);
-                            }
-                        }
-
-                        foreach (var identity in affected)
-                        {
-                            var previous = _items[(item.SessionId, identity)];
-                            if (previous.CollectedAt <= item.CollectedAt && previous.FileDependencies.Any(old => item.FileDependencies.Any(current =>
-                                pathComparers[root].Equals(old.Path, current.Path)
-                                && current.Sha256 is not null && !string.Equals(old.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase))))
-                            {
-                                Store(previous with { IsStale = true, StaleReason = "Superseded by a different source file version." });
-                            }
-                        }
+                        item = item with { IsStale = true, StaleReason = "Contains different versions of the same source file." };
                     }
 
-                    Store(item);
+                    if (!item.IsStale && invalidationPaths[index] is { } paths
+                        && _invalidationWatermarks.TryGetValue(item.SessionId, out var watermarks)
+                        && watermarks.FindMatch(item, paths) is { } change)
+                    {
+                        item = item with { IsStale = true, StaleReason = change.Reason };
+                    }
+
+                    Store(ReconcileObservations(item, byPath));
                 }
             }
 
@@ -218,9 +210,18 @@ public sealed class EvidenceStore : IEvidenceStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        var pathKey = NormalizeInvalidationPath(key);
         lock (_gate)
         {
-            _invalidations.Enqueue((sessionId, key, reason, changedAt));
+            var change = new Invalidation(key, reason, changedAt);
+            _invalidations.Enqueue((sessionId, change));
+            if (!_invalidationWatermarks.TryGetValue(sessionId, out var watermarks))
+            {
+                watermarks = new();
+                _invalidationWatermarks.Add(sessionId, watermarks);
+            }
+
+            watermarks.Record(change, pathKey);
         }
     }
 
@@ -251,19 +252,7 @@ public sealed class EvidenceStore : IEvidenceStore
                         continue;
                     }
 
-                    var root = evidence.Provenance.RepositoryPath;
-                    var normalizedKey = root is null ? invalidation.Key.Replace('\\', '/').TrimEnd('/') : SourceEvidence.NormalizePath(root, invalidation.Key);
-                    var comparer = root is null ? (OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal) : RepositoryPathPolicy.GetPathComparer(root);
-                    var matchesPath = SourceEvidence.Dependencies(evidence).Any(dependency =>
-                    {
-                        var path = root is null ? dependency.Path.Replace('\\', '/') : SourceEvidence.NormalizePath(root, dependency.Path);
-                        return comparer.Equals(path, normalizedKey)
-                            || (path.Length > normalizedKey.Length && path[normalizedKey.Length] == '/' && comparer.Equals(path[..normalizedKey.Length], normalizedKey));
-                    });
-                    var matchesKey = evidence.InvalidationKeys.Contains(
-                        invalidation.Key,
-                        StringComparer.OrdinalIgnoreCase);
-                    if (evidence.IsStale || evidence.CollectedAt > invalidation.ChangedAt || (!matchesPath && !matchesKey))
+                    if (evidence.IsStale || !Invalidates(evidence, invalidation.Change))
                     {
                         continue;
                     }
@@ -271,7 +260,7 @@ public sealed class EvidenceStore : IEvidenceStore
                     Store(evidence with
                     {
                         IsStale = true,
-                        StaleReason = invalidation.Reason,
+                        StaleReason = invalidation.Change.Reason,
                     });
                     staleCount++;
                 }
@@ -280,6 +269,259 @@ public sealed class EvidenceStore : IEvidenceStore
 
         return Task.FromResult(staleCount);
     }
+
+    private static bool Invalidates(Evidence evidence, Invalidation change)
+    {
+        var dependencies = SourceEvidence.Dependencies(evidence);
+        if (evidence.InvalidationKeys.Contains(change.Key, StringComparer.OrdinalIgnoreCase)
+            && ObserveKeyAt(evidence, change.Key) <= change.ChangedAt)
+        {
+            return true;
+        }
+
+        var root = evidence.Provenance.RepositoryPath;
+        var normalized = root is null ? change.Key.Replace('\\', '/').TrimEnd('/') : SourceEvidence.NormalizePath(root, change.Key);
+        var comparer = root is null ? DefaultPathComparer() : RepositoryPathPolicy.GetPathComparer(root);
+        foreach (var dependency in dependencies)
+        {
+            if ((dependency.ObservedAt ?? evidence.CollectedAt) > change.ChangedAt)
+            {
+                continue;
+            }
+
+            var path = root is null ? dependency.Path.Replace('\\', '/') : SourceEvidence.NormalizePath(root, dependency.Path);
+            if (comparer.Equals(path, normalized)
+                || (path.Length > normalized.Length && path[normalized.Length] == '/' && comparer.Equals(path[..normalized.Length], normalized)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static DateTimeOffset ObserveKeyAt(Evidence evidence, string key)
+    {
+        var observed = evidence.SemanticObservedAt ?? evidence.CollectedAt;
+        if (key.Equals("repository", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var file in evidence.FileDependencies)
+            {
+                if (file.ObservedAt is { } at && at < observed)
+                {
+                    observed = at;
+                }
+            }
+        }
+
+        return observed;
+    }
+
+    private static Dictionary<string, DateTimeOffset>? PrepareInvalidationPaths(
+        Evidence evidence, Dictionary<string, StringComparer> pathComparers)
+    {
+        if (evidence.IsStale || (evidence.SemanticObservedAt is null && !evidence.FileDependencies.Any(file => file.ObservedAt is not null)))
+        {
+            return null;
+        }
+
+        var root = evidence.Provenance.RepositoryPath;
+        var paths = new Dictionary<string, DateTimeOffset>(root is null ? DefaultPathComparer() : pathComparers[root]);
+        foreach (var dependency in SourceEvidence.Dependencies(evidence))
+        {
+            var observedAt = dependency.ObservedAt ?? evidence.CollectedAt;
+            var path = root is null ? NormalizeInvalidationPath(dependency.Path) : SourceEvidence.NormalizePath(root, dependency.Path);
+            while (true)
+            {
+                RecordEarliest(path);
+                if (root is not null)
+                {
+                    RecordEarliest(NormalizeInvalidationPath(Path.GetFullPath(path, root)));
+                }
+
+                var separator = path.LastIndexOf('/');
+                if (separator <= 0)
+                {
+                    break;
+                }
+
+                path = path[..separator];
+            }
+
+            void RecordEarliest(string candidate)
+            {
+                if (!paths.TryGetValue(candidate, out var earlier) || observedAt < earlier)
+                {
+                    paths[candidate] = observedAt;
+                }
+            }
+        }
+
+        return paths;
+    }
+
+    private static string NormalizeInvalidationPath(string key)
+    {
+        var path = key.Replace('\\', '/');
+        if (Path.IsPathFullyQualified(path))
+        {
+            return Path.GetFullPath(path).Replace('\\', '/').TrimEnd('/');
+        }
+
+        // Relative keys must not be resolved against the process working directory.
+        var segments = new List<string>();
+        foreach (var segment in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".." && segments.Count != 0 && segments[^1] != "..")
+            {
+                segments.RemoveAt(segments.Count - 1);
+            }
+            else if (segment != ".")
+            {
+                segments.Add(segment);
+            }
+        }
+
+        return segments.Count == 0 ? "." : string.Join('/', segments);
+    }
+
+    private static (Dictionary<string, FileObservation>? ByPath, bool Conflicting) PrepareObservations(
+        Evidence item, Dictionary<string, StringComparer> pathComparers)
+    {
+        var root = item.Provenance.RepositoryPath;
+        Dictionary<string, FileObservation>? byPath = null;
+        var conflicting = false;
+        foreach (var dependency in item.FileDependencies)
+        {
+            if (dependency.Sha256 is not { } digest)
+            {
+                continue;
+            }
+
+            var path = root is null ? dependency.Path.Replace('\\', '/') : dependency.Path;
+            var at = dependency.ObservedAt ?? item.CollectedAt;
+            byPath ??= new(root is null ? DefaultPathComparer() : pathComparers[root]);
+            if (!byPath.TryGetValue(path, out var previous))
+            {
+                byPath.Add(path, new(digest, at, at));
+            }
+            else if (string.Equals(previous.Digest, digest, StringComparison.OrdinalIgnoreCase))
+            {
+                byPath[path] = new(digest, at < previous.Earliest ? at : previous.Earliest, at > previous.Latest ? at : previous.Latest);
+            }
+            else
+            {
+                conflicting = true;
+                if (at >= previous.Latest)
+                {
+                    byPath[path] = new(digest, at, at);
+                }
+            }
+        }
+
+        return (root is null ? null : byPath, conflicting);
+    }
+
+    private static StringComparer DefaultPathComparer() => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    private Evidence ReconcileObservations(Evidence incoming, Dictionary<string, FileObservation>? byPath)
+    {
+        if (byPath is null || !_dependencies.TryGetValue(incoming.SessionId, out var paths))
+        {
+            return incoming;
+        }
+
+        const string superseded = "Superseded by a different source file version.";
+        HashSet<EvidenceId> affected = [];
+        foreach (var path in byPath.Keys)
+        {
+            if (paths.TryGetValue(path, out var identities))
+            {
+                affected.UnionWith(identities);
+            }
+        }
+
+        foreach (var identity in affected)
+        {
+            var previous = _items[(incoming.SessionId, identity)];
+            var supersedesPrevious = false;
+            foreach (var old in previous.FileDependencies)
+            {
+                if (!byPath.TryGetValue(old.Path, out var current)
+                    || string.Equals(old.Sha256, current.Digest, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var at = old.ObservedAt ?? previous.CollectedAt;
+                supersedesPrevious |= current.Latest >= at;
+                if (!incoming.IsStale && old.Sha256 is not null && current.Earliest < at)
+                {
+                    incoming = incoming with { IsStale = true, StaleReason = superseded };
+                }
+
+                if (supersedesPrevious && incoming.IsStale)
+                {
+                    break;
+                }
+            }
+
+            if (supersedesPrevious)
+            {
+                Store(previous with { IsStale = true, StaleReason = superseded });
+            }
+        }
+
+        return incoming;
+    }
+
+    private sealed class InvalidationWatermarks
+    {
+        private readonly Dictionary<string, Invalidation> _keys = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, Invalidation> _paths = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, Invalidation> _caseInsensitivePaths = new(StringComparer.OrdinalIgnoreCase);
+
+        public void Record(Invalidation change, string path)
+        {
+            RecordLatest(_keys, change.Key, change);
+            RecordLatest(_paths, path, change);
+            RecordLatest(_caseInsensitivePaths, path, change);
+        }
+
+        public Invalidation? FindMatch(Evidence evidence, Dictionary<string, DateTimeOffset> paths)
+        {
+            foreach (var key in evidence.InvalidationKeys)
+            {
+                if (_keys.TryGetValue(key, out var change) && ObserveKeyAt(evidence, key) <= change.ChangedAt)
+                {
+                    return change;
+                }
+            }
+
+            var pathIndex = paths.Comparer == StringComparer.OrdinalIgnoreCase ? _caseInsensitivePaths : _paths;
+            foreach (var (path, observedAt) in paths)
+            {
+                if (pathIndex.TryGetValue(path, out var change) && observedAt <= change.ChangedAt)
+                {
+                    return change;
+                }
+            }
+
+            return null;
+        }
+
+        private static void RecordLatest(Dictionary<string, Invalidation> index, string key, Invalidation change)
+        {
+            if (!index.TryGetValue(key, out var previous) || previous.ChangedAt <= change.ChangedAt)
+            {
+                index[key] = change;
+            }
+        }
+    }
+
+    private readonly record struct Invalidation(string Key, string Reason, DateTimeOffset ChangedAt);
+
+    private readonly record struct FileObservation(string Digest, DateTimeOffset Earliest, DateTimeOffset Latest);
 
     // Called only under _gate so retained history and the live dependency index change atomically.
     private void Store(Evidence evidence)

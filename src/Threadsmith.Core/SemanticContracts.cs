@@ -77,12 +77,23 @@ public sealed record SemanticLoadRequest(
     RepositoryTrustLevel TrustLevel,
     IReadOnlyList<string>? ProhibitedPaths = null);
 
+/// <summary>Elapsed milliseconds through initial semantic readiness, including the measured load phases.</summary>
+public sealed record SemanticLoadTimings(
+    double TotalMilliseconds,
+    double EvaluationMilliseconds,
+    double ConfinementMilliseconds,
+    double CompilationMilliseconds);
+
 /// <summary>Host-owned result of semantic workspace loading.</summary>
 public sealed record SemanticLoadResult(
     WorkspaceId WorkspaceId,
     SemanticConfidenceLevel Confidence,
     IReadOnlyList<SemanticProjectInfo> Projects,
-    IReadOnlyList<string> Diagnostics);
+    IReadOnlyList<string> Diagnostics)
+{
+    /// <summary>Engine measurements when this result came from a timed load.</summary>
+    public SemanticLoadTimings? Timings { get; init; }
+}
 
 /// <summary>Screening decision for a proposed mutation set before user approval.</summary>
 public enum PreMutationGateDecision

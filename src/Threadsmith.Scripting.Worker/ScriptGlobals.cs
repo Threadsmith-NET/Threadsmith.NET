@@ -10,10 +10,21 @@ public sealed class ScriptGlobals
     public ScriptGlobals(ScriptFileScope scope, CancellationToken cancellationToken)
     {
         Scratchpad = new ScratchpadFiles(scope, cancellationToken);
+        Tools = new ScriptTools([], null, null, cancellationToken);
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ScriptGlobals"/> class for a live exchange.</summary>
+    internal ScriptGlobals(ScriptFileScope scope, ScriptTools tools, CancellationToken cancellationToken)
+    {
+        Scratchpad = new ScratchpadFiles(scope, cancellationToken);
+        Tools = tools;
     }
 
     /// <summary>Gets file access to authorized inputs and transient outputs.</summary>
     public ScratchpadFiles Scratchpad { get; }
+
+    /// <summary>Gets the tools available to this invocation's caller.</summary>
+    public ScriptTools Tools { get; }
 }
 
 /// <summary>Streams authorized input and writes only beneath the active scratchpad.</summary>

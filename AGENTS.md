@@ -46,7 +46,7 @@ This file defines repository-wide rules for AI coding agents.
 - **Default to pure unit tests:** Test business logic, mapping, validation, and state transitions using plain C# classes with zero I/O, zero DI container startup, and zero network/disk access. Each unit test must execute in under 50ms.
 - **Ban heavy hosts by default:** Do NOT use `WebApplicationFactory`, `TestServer`, `Testcontainers`, or real database connections unless the task explicitly asks for an integration test.
 - **Keep dependencies lightweight:** Mock or fake only external boundaries (HTTP clients, clocks via `TimeProvider`, file system, repositories). Do not mock internal domain classes or DTOs.
-- Under NO circumstance can a test take more than 60 seconds to complete.
+- **Strict runtime limit:** Every individual test, including each theory case and integration test, must finish in under 60 seconds. If a test cannot meet the limit after reworking it, remove it. Do not add a timeout or retries to make a slow test appear compliant.
 
 ### Volume & Signal
 - **Write minimal, high-signal tests:** Add only the tests needed to prove the new behavior and critical boundary conditions. Do not generate exhaustive input permutations.

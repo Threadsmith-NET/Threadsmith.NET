@@ -31,6 +31,7 @@
 
     <!-- Roslyn + MSBuild (strategy Â§6; ADR-4). Microsoft.Build.Locator registers the MSBuild host for MSBuildWorkspace. -->
     <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
+    <PackageVersion Include="Microsoft.Build" Version="17.11.48" />
     <PackageVersion Include="Microsoft.Build.Framework" Version="17.11.48" />
     <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="5.9.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />

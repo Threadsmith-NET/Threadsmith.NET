@@ -107,6 +107,18 @@ public sealed class ExtensionGeneration
     /// <summary>The per-extension invocation budget for the current turn (plan-16, §17.15, §22.2).</summary>
     public ExtensionInvocationBudget? Budget { get; internal set; }
 
+    /// <summary>Gets the resolver only for a generation granted secret access.</summary>
+    internal Threadsmith.Tools.ISecretResolver? SecretResolver { get; init; }
+
+    /// <summary>Gets the effective floor for tools from this generation.</summary>
+    internal RepositoryTrustLevel MinimumTrust { get; init; }
+
+    /// <summary>Protects results and retained loggers across concurrent calls.</summary>
+    internal ExtensionSecretProtection SecretProtection { get; } = new();
+
+    /// <summary>Revokes access after draining and before deactivation.</summary>
+    internal CancellationTokenSource SecretRetirement { get; } = new();
+
     /// <summary>The repository identity captured with this generation's configuration.</summary>
     internal string? RepositoryPath { get; init; }
 
@@ -170,7 +182,7 @@ public sealed class DuplicateContractAssemblyException : Exception
 }
 
 /// <summary>The extension's contract version is incompatible with the host.</summary>
-public sealed class ExtensionIncompatibleException : Exception
+public sealed class ExtensionIncompatibleException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionIncompatibleException"/> class.</summary>
     public ExtensionIncompatibleException()
@@ -191,7 +203,7 @@ public sealed class ExtensionIncompatibleException : Exception
 }
 
 /// <summary>Loading or reflecting the extension entry assembly failed.</summary>
-public sealed class ExtensionLoadException : Exception
+public sealed class ExtensionLoadException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionLoadException"/> class.</summary>
     public ExtensionLoadException()
@@ -212,7 +224,7 @@ public sealed class ExtensionLoadException : Exception
 }
 
 /// <summary>Activating the extension threw an exception (strategy §17.26: host stays operational).</summary>
-public sealed class ExtensionActivationException : Exception
+public sealed class ExtensionActivationException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionActivationException"/> class.</summary>
     public ExtensionActivationException()

@@ -281,6 +281,35 @@ public static class SkillsTreeTests
             timeout.Token);
     }
 
+    /// <summary>Long skill rows use extra terminal width and still wrap after narrowing.</summary>
+    [Fact]
+    public static void LongSkillRowsUseAvailableWidthAndWrapOnNarrowTerminals()
+    {
+        // Arrange
+        const string label = "Review repository changes and dependencies for correctness [Maintained] enabled SKILLTAIL";
+        var request = Request() with { Options = [Request().Options[0] with { Label = label }] };
+        var modal = new ToggleModal(request, _ => CellStyle.Default, () => { }, () => { });
+
+        foreach (var width in new[] { 160, 70, 160 })
+        {
+            // Act
+            var cells = new CellBuffer(width, 30);
+            modal.Render(new BufferSurface(cells));
+            var rendered = TUIKit.Testing.Snapshot.ToText(cells);
+
+            // Assert
+            Assert.Contains("SKILLTAIL", rendered, StringComparison.Ordinal);
+            if (width == 160)
+            {
+                Assert.Contains(label, rendered, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain(label, rendered, StringComparison.Ordinal);
+            }
+        }
+    }
+
     private static InteractionToggleRequest Request()
     {
         return new(

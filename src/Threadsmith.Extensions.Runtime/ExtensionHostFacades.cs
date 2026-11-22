@@ -7,32 +7,37 @@ using Threadsmith.Extensions.Abstractions;
 internal sealed class ExtensionLogger : IExtensionLogger
 {
     private readonly ILogger _logger;
+    private readonly ExtensionSecretProtection? _protection;
 
     /// <summary>Initializes a new instance of the <see cref="ExtensionLogger"/> class.</summary>
-    internal ExtensionLogger(ILogger logger)
+    internal ExtensionLogger(ILogger logger, ExtensionSecretProtection? protection = null)
     {
         _logger = logger;
+        _protection = protection;
     }
 
     /// <inheritdoc />
     public void Information(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _logger.LogInformation("{Message}", message);
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation("{Message}", _protection?.SafeLogMessage(message) ?? message);
+        }
     }
 
     /// <inheritdoc />
     public void Warning(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _logger.LogWarning("{Message}", message);
+        _logger.LogWarning("{Message}", _protection?.SafeLogMessage(message) ?? message);
     }
 
     /// <inheritdoc />
     public void Error(string message)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        _logger.LogError("{Message}", message);
+        _logger.LogError("{Message}", _protection?.SafeLogMessage(message) ?? message);
     }
 }
 

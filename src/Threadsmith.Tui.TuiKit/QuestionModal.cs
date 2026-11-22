@@ -248,8 +248,7 @@ internal sealed class QuestionModal : Modal
         var contentWidth = Math.Max(1, Math.Min(90, surface.Size.Width - 4) - 4);
         if (_promptQuestionIndex != _draft.QuestionIndex || _promptWidth != contentWidth)
         {
-            _promptRows = [.. TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(question.Prompt)), contentWidth)
-                .Select(row => row.ToPlainString())];
+            _promptRows = ModalFrame.Wrap(question.Prompt, contentWidth);
             _promptQuestionIndex = _draft.QuestionIndex;
             _promptWidth = contentWidth;
         }
@@ -263,58 +262,89 @@ internal sealed class QuestionModal : Modal
             return;
         }
 
-        _title.Draw(frame, 0, 0, "The Assistant Has a Question", ResolveStyle(PresentationTextRole.SelectionPrompt));
+        var titleHeight = ModalFrame.DrawWrapped(frame, _title, 0, "The Assistant Has a Question", ResolveStyle(PresentationTextRole.SelectionPrompt));
         if (!_fits)
         {
-            _hints.Draw(frame, 0, 1, "Enlarge to answer; Esc cancels.", ResolveStyle(PresentationTextRole.Status));
+            ModalFrame.DrawWrapped(frame, _hints, titleHeight, "Enlarge to answer; Esc cancels.", ResolveStyle(PresentationTextRole.Status));
             return;
         }
 
         if (_showDetails)
         {
-            _hints.Draw(frame, 0, 2, "Scroll; F2 back; Esc cancels", ResolveStyle(PresentationTextRole.Status));
+            var detailTop = titleHeight + ModalFrame.DrawWrapped(frame, _hints, titleHeight, "Scroll; F2 back; Esc cancels", ResolveStyle(PresentationTextRole.Status));
             _details.ResolveStyle = ResolveStyle;
-            _details.Render(frame.CreateView(new Rect(0, 3, frame.Size.Width, frame.Size.Height - 3)));
+            _details.Render(frame.CreateView(new Rect(0, detailTop, frame.Size.Width, Math.Max(0, frame.Size.Height - detailTop))));
             return;
         }
 
-        var promptHeight = Math.Min(_promptRows.Length, Math.Max(1, Math.Min(4, frame.Size.Height - (showEditor ? 10 : 7))));
+        var pages = _draft.Request.Questions.Count > 1 ? $"{_draft.QuestionIndex + 1}/{_draft.Request.Questions.Count} {(_focus == 3 ? ">" : string.Empty)}[Prev] {(_focus == 4 ? ">" : string.Empty)}[Next] " : string.Empty;
+        var actionRows = ModalFrame.Wrap(_error ?? $"{pages}{(_focus == 5 ? ">" : string.Empty)}[Submit] {(_focus == 6 ? ">" : string.Empty)}[Cancel]", frame.Size.Width);
+        var hint = _focus == 1 ? $"Arrows; 1-{choiceCount}/Space; Tab" : _draft.Request.Questions.Count > 1 ? "PgUp/PgDn question; Tab focus" : "Tab focus; paste supported";
+        var hintRows = ModalFrame.Wrap(hint, frame.Size.Width);
+        var submitRows = ModalFrame.Wrap("Enter submit; F2 more; Esc cancel", frame.Size.Width);
+        var footerTop = Math.Max(titleHeight, frame.Size.Height - actionRows.Length - hintRows.Length - submitRows.Length);
+        var promptTop = titleHeight + (footerTop > titleHeight + 2 ? 1 : 0);
+        var promptHeight = Math.Min(_promptRows.Length, Math.Max(0, Math.Min(4, footerTop - promptTop - (showEditor ? 4 : 1))));
         for (var index = 0; index < promptHeight; index++)
         {
-            DrawRow(frame, index, 2 + index, _promptRows[index], PresentationTextRole.SelectionPrompt);
+            DrawRow(frame, index, promptTop + index, _promptRows[index], PresentationTextRole.SelectionPrompt);
         }
 
-        var optionTop = promptHeight + 2;
-        var optionHeight = Math.Max(0, frame.Size.Height - optionTop - (showEditor ? 6 : 3));
-        var top = Math.Max(0, _option - optionHeight + 1);
-        for (var index = top; index < Math.Min(choiceCount, top + optionHeight); index++)
+        var optionTop = promptTop + promptHeight;
+        var answerHeight = Math.Max(0, footerTop - optionTop);
+        var editorReservation = showEditor ? Math.Min(3, Math.Max(0, answerHeight - (_focus == 1 ? 1 : 0))) : 0;
+        var optionHeight = answerHeight - editorReservation;
+        var rows = new List<(int Option, string Text)>();
+        var selectedStart = 0;
+        var selectedHeight = 0;
+        for (var index = 0; index < choiceCount; index++)
         {
             var focused = _focus == 1 && index == _option;
             var isOther = index == question.Options.Count;
             var selected = isOther ? showEditor : _draft.SelectedOptions[_draft.QuestionIndex] == question.Options[index].Id;
-            DrawRow(
-                frame,
-                promptHeight + index,
-                optionTop + index - top,
-                $"{(focused ? ">" : " ")} [{(selected ? "x" : " ")}] {index + 1}. {(isOther ? "Other" : question.Options[index].Label)}",
-                focused ? PresentationTextRole.SelectionHighlight : PresentationTextRole.Default);
+            var prefix = $"{(focused ? ">" : " ")} [{(selected ? "x" : " ")}] {index + 1}. ";
+            var lines = ModalFrame.Wrap(isOther ? "Other" : question.Options[index].Label, Math.Max(1, frame.Size.Width - UnicodeWidth.GetWidth(prefix)));
+            if (index == _option)
+            {
+                selectedStart = rows.Count;
+                selectedHeight = lines.Length;
+            }
+
+            for (var line = 0; line < lines.Length; line++)
+            {
+                rows.Add((index, (line == 0 ? prefix : new string(' ', prefix.Length)) + lines[line]));
+            }
         }
 
-        if (showEditor)
+        var top = Math.Max(0, selectedStart + Math.Min(selectedHeight, optionHeight) - optionHeight);
+        var visibleOptions = Math.Min(optionHeight, rows.Count - top);
+        for (var row = 0; row < visibleOptions; row++)
         {
-            var editorTop = optionTop + Math.Min(choiceCount, optionHeight);
-            _choice.Draw(frame, 0, editorTop, $"{(_focus == 2 ? ">" : " ")} Your answer:", ResolveStyle(PresentationTextRole.Status));
+            var entry = rows[top + row];
+            DrawRow(
+                frame,
+                promptHeight + row,
+                optionTop + row,
+                entry.Text,
+                _focus == 1 && entry.Option == _option ? PresentationTextRole.SelectionHighlight : PresentationTextRole.Default);
+        }
+
+        if (showEditor && optionTop + visibleOptions < footerTop)
+        {
+            var editorTop = optionTop + visibleOptions;
+            editorTop += ModalFrame.DrawWrapped(frame, _choice, editorTop, $"{(_focus == 2 ? ">" : " ")} Your answer:", ResolveStyle(PresentationTextRole.Status));
             var editor = _draft.Editors[_draft.QuestionIndex];
             editor.Style = ResolveStyle(PresentationTextRole.Default);
             editor.OnFocusChanged(_focus == 2);
-            editor.Render(frame.CreateView(new Rect(0, editorTop + 1, frame.Size.Width, Math.Max(1, frame.Size.Height - editorTop - 4))));
+            if (editorTop < footerTop)
+            {
+                editor.Render(frame.CreateView(new Rect(0, editorTop, frame.Size.Width, footerTop - editorTop)));
+            }
         }
 
-        var pages = _draft.Request.Questions.Count > 1 ? $"{_draft.QuestionIndex + 1}/{_draft.Request.Questions.Count} {(_focus == 3 ? ">" : string.Empty)}[Prev] {(_focus == 4 ? ">" : string.Empty)}[Next] " : string.Empty;
-        _actions.Draw(frame, 0, frame.Size.Height - 3, _error ?? $"{pages}{(_focus == 5 ? ">" : string.Empty)}[Submit] {(_focus == 6 ? ">" : string.Empty)}[Cancel]", ResolveStyle(PresentationTextRole.Status));
-        var hint = _focus == 1 ? $"Arrows; 1-{choiceCount}/Space; Tab" : _draft.Request.Questions.Count > 1 ? "PgUp/PgDn question; Tab focus" : "Tab focus; paste supported";
-        _hints.Draw(frame, 0, frame.Size.Height - 2, hint, ResolveStyle(PresentationTextRole.Status));
-        _submitHint.Draw(frame, 0, frame.Size.Height - 1, "Enter submit; F2 more; Esc cancel", ResolveStyle(PresentationTextRole.Status));
+        ModalFrame.DrawLines(frame, _actions, footerTop, actionRows, ResolveStyle(PresentationTextRole.Status));
+        ModalFrame.DrawLines(frame, _hints, footerTop + actionRows.Length, hintRows, ResolveStyle(PresentationTextRole.Status));
+        ModalFrame.DrawLines(frame, _submitHint, footerTop + actionRows.Length + hintRows.Length, submitRows, ResolveStyle(PresentationTextRole.Status));
     }
 
     private void DrawRow(ISurface surface, int index, int y, string text, PresentationTextRole role)

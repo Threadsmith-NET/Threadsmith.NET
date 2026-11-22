@@ -80,7 +80,11 @@ internal static class SourceEditAnalysisProjection
             && (analyzers.Status != "completed" || analyzers.DocumentsAnalyzed < analyzers.DocumentsInScope
                 || analyzers.Truncated))
         {
-            return $"Validation incomplete: enabled analyzer checks are {analyzers.Status} or have incomplete document coverage.";
+            return analyzers.Status != "completed"
+                ? $"Validation incomplete: analyzer checks {analyzers.Status} ({analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} document instances checked)."
+                : analyzers.Truncated
+                    ? "Validation incomplete: analyzer diagnostic evidence is truncated."
+                    : $"Validation incomplete: analyzer coverage is incomplete ({analyzers.DocumentsAnalyzed}/{analyzers.DocumentsInScope} document instances checked).";
         }
 
         if (analysis.NewErrors > 0 || analysis.Diagnostics.Any(item => item.Origin == "introduced"
@@ -96,6 +100,54 @@ internal static class SourceEditAnalysisProjection
         }
 
         return null;
+    }
+
+    /// <summary>Separates the completion blocker, captured cause, check coverage and applied disk effects.</summary>
+    public static string CreateCompletionFailureDisplay(SourceEditAnalysis? analysis, IReadOnlyList<string> reasons, int changedFileCount)
+    {
+        var lines = new List<string> { "Source-edit validation incomplete" };
+        var distinctReasons = reasons.Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var reason in distinctReasons.Take(2))
+        {
+            const string prefix = "Validation incomplete: ";
+            lines.Add("- Reason: " + FormatCompletionDetail(reason.StartsWith(prefix, StringComparison.Ordinal) ? reason[prefix.Length..] : reason));
+        }
+
+        if (distinctReasons.Length > 2)
+        {
+            lines.Add($"- Additional limitations: {distinctReasons.Length - 2}; see the recorded execution outcome.");
+        }
+
+        if (analysis is not null)
+        {
+            if (!analysis.Obsolete && analysis.Analyzers.Status is "failed" or "cancelled" or "timed-out" or "unavailable")
+            {
+                lines.Add("- Cause: " + FormatCompletionDetail(analysis.Analyzers.FailureReason
+                    ?? "No specific failure reason was captured. Consult the host log for analyzer execution details."));
+            }
+            else if (!analysis.Obsolete && analysis.ProjectsAnalyzed == 0 && analysis.Omissions.Count > 0)
+            {
+                lines.Add("- Details: " + FormatCompletionDetail(analysis.Omissions[0]));
+            }
+
+            var compiler = analysis.Obsolete
+                ? "obsolete; current results unknown"
+                : analysis.Pending
+                    ? "pending; final totals unknown"
+                    : analysis.ProjectsAnalyzed == 0
+                        ? "unavailable; final totals unknown"
+                        : $"{analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} project instances analyzed; {analysis.CurrentErrors} reportable errors; "
+                            + (analysis.CurrentWarnings is { } warnings ? $"{warnings} selected warnings" : "warning total unknown");
+            lines.Add("- Compiler: " + compiler + ".");
+            lines.Add($"- Analyzers: {(analysis.Obsolete ? "obsolete" : analysis.Analyzers.Status)}; {analysis.Analyzers.DocumentsAnalyzed}/{analysis.Analyzers.DocumentsInScope} document instances checked.");
+        }
+
+        var fileLabel = changedFileCount == 1 ? "file" : "files";
+        lines.Add(changedFileCount == 0
+            ? "- Source changes: no applied file changes were recorded."
+            : $"- Source changes: {changedFileCount} {fileLabel} recorded as applied. This notice does not undo those edits.");
+        lines.Add("- Build and tests: separate checks; this notice does not establish their results.");
+        return string.Join(Environment.NewLine, lines);
     }
 
     /// <summary>Keeps coverage and findings while omitting counts that cannot establish completed validation.</summary>
@@ -161,5 +213,11 @@ internal static class SourceEditAnalysisProjection
         }
 
         return result;
+    }
+
+    private static string FormatCompletionDetail(string text)
+    {
+        var detail = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return detail.Length > 360 ? detail[..360] + "…" : detail;
     }
 }

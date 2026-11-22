@@ -232,6 +232,7 @@ public sealed partial class Plan91DelegationToolTests
         [
             new MetadataTool("read_file", ToolCategory.FileRead, ToolSideEffect.ReadOnly),
             new MetadataTool("hidden_read", ToolCategory.FileRead, ToolSideEffect.ReadOnly),
+            new MetadataTool("database_schema", ToolCategory.ExternalService, ToolSideEffect.ReadOnly),
             new MetadataTool(
                 "run_process",
                 ToolCategory.ProcessExecution,
@@ -271,6 +272,7 @@ public sealed partial class Plan91DelegationToolTests
             visibleToolIds:
             [
                 "approval_read",
+                "database_schema",
                 "parent_only_read",
                 DelegateAgentsContract.ToolId,
                 "invoke_skill",
@@ -316,7 +318,7 @@ public sealed partial class Plan91DelegationToolTests
         Assert.True(plan.Assignments[0].Policy.AllowNetwork);
         Assert.False(plan.Assignments[0].Policy.AllowProcesses);
         Assert.Equal(
-            ["approval_read", "jira", "read_file", "run_process", "web_search"],
+            ["approval_read", "database_schema", "jira", "read_file", "run_process", "web_search"],
             plan.Assignments[1].Policy.AllowedToolIds);
         Assert.Equal(plan.Assignments[1].Policy.AllowedToolIds, plan.Assignments[1].Policy.AllowedNetworkToolIds);
         Assert.True(plan.Assignments[1].Policy.AllowNetwork);

@@ -43,9 +43,17 @@ public sealed class ShadowCopier
 
         await WaitForStabilityAsync(sourceDirectory, cancellationToken);
         var stagingPath = Path.Combine(stagingRoot, Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(stagingPath);
-        CopyDirectory(sourceDirectory, stagingPath);
-        return stagingPath;
+        try
+        {
+            Directory.CreateDirectory(stagingPath);
+            CopyDirectory(sourceDirectory, stagingPath);
+            return stagingPath;
+        }
+        catch
+        {
+            Discard(stagingPath);
+            throw;
+        }
     }
 
     /// <summary>Removes a staging directory created by <see cref="StageAsync"/>.</summary>

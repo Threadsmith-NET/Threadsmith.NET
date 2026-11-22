@@ -13,6 +13,7 @@ More focused references are grouped by audience:
 - [Full-screen agent workspace](operations/agent-workspace.md) — tabs, live tool progress, management dialogs, authentication actions, and per-agent usage.
 - [Cache reporting](operations/cache-optimized-context.md) — request layout, cache reuse, and per-request counters.
 - [Extension authoring](extension-authoring/authoring-guide.md) — stable extension contracts and lifecycle guidance.
+- [Neo4j extension](extension-authoring/neo4j-extension.md) — installing, configuring, and safely operating the bundled graph-database extension.
 - [Skill authoring](skill-authoring.md) — declarative packages, schemas, workflows, verification, and distribution.
 - [Prompt files](prompt-file-reference.md) — deployed prompt locations, owners, and customization behavior.
 - [Architecture](architecture/README.md) — accepted decisions and subsystem contracts.

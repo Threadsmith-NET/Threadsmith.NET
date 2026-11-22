@@ -66,6 +66,8 @@ internal static class InteractionEventSegments
                 if (diagnostic.Code == "SourceEditCompletionFailed")
                 {
                     Add(segments, Environment.NewLine + Environment.NewLine, diagnosticRole);
+                    Add(segments, diagnostic.Message + Environment.NewLine, diagnosticRole);
+                    break;
                 }
                 else if (diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
                 {

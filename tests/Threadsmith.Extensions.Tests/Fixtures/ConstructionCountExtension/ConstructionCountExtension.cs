@@ -3,6 +3,22 @@ namespace Threadsmith.Tests.Fixtures.ConstructionCount;
 using System.Text.Json;
 using Threadsmith.Extensions.Abstractions;
 
+/// <summary>A second candidate that must not be constructed when the manifest selects the count extension.</summary>
+public sealed class UnselectedExtension : IThreadsmithExtension
+{
+    /// <summary>Initializes a new instance of the <see cref="UnselectedExtension"/> class.</summary>
+    public UnselectedExtension() => throw new InvalidOperationException("The wrong extension entry class was selected.");
+
+    /// <inheritdoc />
+    public ExtensionDescriptor Descriptor => throw new NotSupportedException();
+
+    /// <inheritdoc />
+    public ValueTask ActivateAsync(IExtensionActivationContext context, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+    /// <inheritdoc />
+    public ValueTask DeactivateAsync(IExtensionDeactivationContext context, CancellationToken cancellationToken) => throw new NotSupportedException();
+}
+
 /// <summary>
 /// A minimal extension that increments a static counter each time its constructor runs and exposes
 /// the count through a tool. Used to prove the host constructs an extension exactly once during load

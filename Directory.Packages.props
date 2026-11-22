@@ -72,6 +72,9 @@
     <PackageVersion Include="ModelContextProtocol.Core" Version="2.4.0" />
     <PackageVersion Include="ModelContextProtocol" Version="2.4.0" />
 
+    <!-- Bundled extensions. Private to src/Extensions/*; never referenced by the host or the contract package. -->
+    <PackageVersion Include="Neo4j.Driver" Version="6.5.1" />
+
     <!-- Testing (strategy Â§6: xUnit + Microsoft.Testing.Platform). xUnit v3 with the MTP v2 variant matches the pinned Microsoft.Testing.Platform 2.3.3. -->
     <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
     <PackageVersion Include="xunit.analyzers" Version="1.27.0" />

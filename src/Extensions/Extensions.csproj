@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Builds the extensions distributed with Threadsmith.NET.</Description>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="Neo4j/Threadsmith.Extensions.Neo4j.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

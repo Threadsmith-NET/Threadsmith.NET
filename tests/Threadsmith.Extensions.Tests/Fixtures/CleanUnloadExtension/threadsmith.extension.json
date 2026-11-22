@@ -3,7 +3,7 @@
   "Name": "Clean Unload Fixture",
   "Version": "1.0.0",
   "HostApiVersion": "current",
-  "EntryAssembly": "Threadsmith.Tests.Fixtures.CleanUnload.dll",
+  "EntryAssembly": "Threadsmith.Tests.Fixtures.CleanUnloadExtension.dll",
   "Capabilities": [],
   "Permissions": []
 }

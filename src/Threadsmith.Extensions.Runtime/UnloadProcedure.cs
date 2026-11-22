@@ -98,10 +98,20 @@ public sealed class UnloadProcedure
         var drainStart = _timeProvider.GetUtcNow();
         using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         drainCts.CancelAfter(DefaultDrainTimeout);
-        await _leaseAuthority.WaitForDrainAsync(generation.GenerationId, drainCts.Token).ConfigureAwait(false);
+        try
+        {
+            await _leaseAuthority.WaitForDrainAsync(generation.GenerationId, drainCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            await generation.SecretRetirement.CancelAsync();
+            throw;
+        }
+
         var drainWait = _timeProvider.GetUtcNow() - drainStart;
 
         // 3. Deactivate (best effort; deactivation failure does not block unload).
+        await generation.SecretRetirement.CancelAsync();
         await DeactivateAsync(generation, sessionId, cancellationToken);
 
         // 4. Remove capability + model-preference registrations for this generation and clear the
@@ -278,7 +288,7 @@ public sealed class UnloadProcedure
             _logger.LogWarning(
                 "Extension {ExtensionId} deactivation failed during unload: {Message}",
                 generation.ExtensionId,
-                exception.Message);
+                generation.SecretProtection.HasValues ? "ExtensionDeactivationFailed" : exception.Message);
             generation.State = ExtensionLifecycleState.DeactivationFailed;
         }
     }

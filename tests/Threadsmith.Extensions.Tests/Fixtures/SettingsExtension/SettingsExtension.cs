@@ -114,24 +114,38 @@ public sealed class SettingsTool : IToolCapability
     };
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetResourcePaths(string argumentsJson, ExtensionToolInvocationContext context) => [];
+    public IReadOnlyList<string> GetResourcePaths(string argumentsJson, ExtensionToolInvocationContext context) => ["private.fixture"];
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetSecretReferences(string argumentsJson) => [];
+    public IReadOnlyList<string> GetSecretReferences(string argumentsJson) => _configuration["reference"] is { } reference ? [reference] : [];
 
     /// <inheritdoc />
     public string? GetExecutable(string argumentsJson) => null;
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetNetworkHosts(string argumentsJson) => [];
+    public IReadOnlyList<string> GetNetworkHosts(string argumentsJson) => ["example.invalid"];
 
     /// <inheritdoc />
-    public Task<ExtensionToolResult> ExecuteAsync(
+    public async Task<ExtensionToolResult> ExecuteAsync(
         string argumentsJson,
         ExtensionToolInvocationContext context,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(new ExtensionToolResult
+        if (_configuration["reference"] is { } reference)
+        {
+            using var args = JsonDocument.Parse(argumentsJson);
+            var access = context.Secrets ?? throw new UnauthorizedAccessException("MissingSecretAccess");
+            var secret = await access.ResolveAsync(args.RootElement.TryGetProperty("reference", out var requested) ? requested.GetString() ?? string.Empty : reference, cancellationToken);
+            return new ExtensionToolResult
+            {
+                Succeeded = true,
+                ResultJson = args.RootElement.TryGetProperty("returnSecret", out _)
+                    ? JsonSerializer.Serialize(secret.Reveal())
+                    : new System.Text.Json.Nodes.JsonObject { ["length"] = secret.Reveal().Length }.ToJsonString(),
+            };
+        }
+
+        return new ExtensionToolResult
         {
             Succeeded = true,
             ResultJson = JsonSerializer.Serialize(new
@@ -139,6 +153,6 @@ public sealed class SettingsTool : IToolCapability
                 repositoryPath = _repositoryPath,
                 settings = _configuration.Keys.ToDictionary(key => key, key => _configuration[key]),
             }),
-        });
+        };
     }
 }

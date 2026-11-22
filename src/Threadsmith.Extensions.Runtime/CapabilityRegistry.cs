@@ -77,6 +77,9 @@ public sealed record ModelPreferenceContributorRegistration
 
     /// <summary>The contributor (held only inside the runtime).</summary>
     public required IModelPreferenceContributor Contributor { get; init; }
+
+    /// <summary>Protects host projections shared with the generation’s tool capabilities.</summary>
+    internal ExtensionSecretProtection Protection { get; init; } = new();
 }
 
 /// <summary>Default host-owned capability registry (§17.14).</summary>
@@ -248,6 +251,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
                     GenerationId = generation.GenerationId,
                     ExtensionId = generation.ExtensionId,
                     Contributor = contributor,
+                    Protection = generation.SecretProtection,
                 };
             }
         }
@@ -263,6 +267,7 @@ public sealed class CapabilityRegistry : ICapabilityRegistry
             GenerationId = generation.GenerationId,
             ExtensionId = generation.ExtensionId,
             Contributor = contributor,
+            Protection = generation.SecretProtection,
         };
         var key = $"{generation.GenerationId.Value:N}:{contributor.Descriptor.Id}";
         if (!_contributors.TryAdd(key, registration))

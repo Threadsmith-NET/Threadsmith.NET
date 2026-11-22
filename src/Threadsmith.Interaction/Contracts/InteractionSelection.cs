@@ -16,6 +16,9 @@ public sealed record InteractionSelectionRequest(
     string Title,
     IReadOnlyList<InteractionSelectionOption> Options)
 {
+    /// <summary>Opens the full review before offering the selection.</summary>
+    public bool OpenReview { get; init; }
+
     /// <summary>Gets bounded review evidence shown by the existing full-details view.</summary>
     public string? Details { get; init; }
 }

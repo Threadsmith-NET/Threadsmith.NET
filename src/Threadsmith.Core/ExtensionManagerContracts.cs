@@ -19,6 +19,7 @@ public interface IExtensionManager
     /// <param name="sessionId">The session owning the operation.</param>
     /// <param name="cancellationToken">A token that cancels the load.</param>
     /// <returns>The summary of the now-loaded extension, or null when the id is not discovered.</returns>
+    /// <exception cref="ExtensionOperationException">Loading failed with a safe operator-facing explanation.</exception>
     Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default);
 
     /// <summary>Cooperatively unloads the active generation of the given extension id with verification.</summary>
@@ -44,6 +45,12 @@ public sealed record ExtensionSummary
 
     /// <summary>The loaded generation id, including retired generations, or null when not loaded.</summary>
     public ExtensionGenerationId? GenerationId { get; init; }
+
+    /// <summary>Gets the declared repository trust floor when available.</summary>
+    public RepositoryTrustLevel? RequiredTrust { get; init; }
+
+    /// <summary>Access types disclosed by the package for operator review.</summary>
+    public IReadOnlyList<string> AccessTypes { get; init; } = [];
 
     /// <summary>The display name.</summary>
     public required string Name { get; init; }

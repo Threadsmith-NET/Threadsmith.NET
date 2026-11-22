@@ -1,5 +1,16 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-MODAL-WRAP — Modal text reflow
+
+**Prerequisites:** Use non-secret fixtures with long prose, unbroken paths, explicit newlines, CJK and combining characters. Record OS, terminal/version and theme.
+
+1. Open Extensions, Skills and MCP and select entries with long details. Narrow and widen the terminal while each remains selected. Confirm the inline detail preview uses at most three physical rows, with no text painted over the tree. Short details remain complete; longer details show an `… F2 details` hint. Use F2 to open the dedicated scrollable details view and Home/End/PgUp/PgDn to reach the full text. Escape or F2 returns to the same selection and filter without closing the settings dialog. Space, F3 and paste in details must not toggle settings, run actions or change the filter. Change selection and confirm the prior preview disappears. Repeat at 40×12 and after enabling or verifying an item.
+2. Repeat resize and long-text checks in choice/approval and source viewers, keyboard and command help, the command palette, clarification questions, memory browsing/editing, context usage and tool statistics. Confirm headings, hints, descriptions, errors and options wrap; scroll/page movement and selected-item reveal use the remaining visible area. Existing full-detail views remain available for content taller than the screen; statistics tables retain horizontal column scrolling.
+3. Check 160×50, 80×24 and 40×12, then below minimum and back. Confirm the Skills tree widens for longer labels, up to 120 columns, keeping a skill on one line when it fits; narrower terminals still wrap without losing text. Confirm no body/footer overlap, stale text, selection loss or unintended action. Where the screen cannot hold all fixed controls, verify existing compact/enlarge/details guidance rather than an overlapping editor. Test mouse tabs, editor clicks, source selection/copy and table scrolling after reflow. Repeat with NO_COLOR.
+4. With a theme whose dialog background is not terminal-default black, open Skills, Extensions, MCP and the command palette with fewer items than visible rows. Confirm unused list rows match the dialog background, ordinary rows retain theme colors, and the selected row remains highlighted across every wrapped continuation. Move selection, filter to no matches, clear the filter and resize; confirm no black rectangles or stale highlights appear.
+5. At 40×12, paste a 256-character choice filter and clear it with Backspace without resizing. Select `/mcp` in the command palette and confirm the highlighted result remains visible above its details. Open context usage and confirm the input token count and enlarge/close guidance remain visible. At 40×16, select Other in a multi-question clarification, enter a draft, then Shift+Tab to choices; confirm the focused choice is visible and the draft survives. In the memory editor, click blank space to the right of Save and Cancel; neither click may save or close the draft, while clicking each label still works. Check a long locked MCP profile with no explicit group path; its label tail must remain visible after wrapping.
+6. During startup, use a long operation label and diagnostic. Confirm labels wrap rather than ending in an ellipsis, active work and timers retain priority over completed history, and fatal overflow still discloses the full diagnostic on exit. Record physical Windows/Linux/macOS results separately from automated rendering checks; mark unavailable environments unverified.
+
 ## Memory-add reconciliation display
 
 In a disposable repository, have the model propose a non-sensitive multiline memory that requires reconciliation with an existing note. Confirm the completed `memories` tool block shows only the host reconciliation notice (not added) and the proposed memory text, all inside the normal `│`/`└` tool-output brackets. Existing candidate notes, IDs, reconciliation instructions, and diagnostic fields must not be printed. Check both situational and standing-preference proposals, long notes, blank lines, and terminal-control text. Confirm controls remain escaped and configured display truncation stays visible. The model must still receive the full reconciliation response and be able to update a matching note or confirm a distinct proposal. Record physical-terminal and OS checks separately from automated transcript tests.
@@ -80,7 +91,7 @@ Launch more children while older active and stopped tabs remain open. Confirm MA
 
 ## Source-edit completion diagnostic separation
 
-In a disposable repository, complete a source-edit run with incomplete final advisory coverage (for example, omitted earlier-project coverage). Confirm `[SourceEditCompletionFailed]` starts on a new line with a blank line before it, even when the final model answer has no trailing newline. Confirm the diagnostic remains visible once and the run still reports incomplete validation. Record terminal/platform checks separately from automated projection tests.
+In a disposable repository, complete a source-edit run with incomplete final advisory coverage (for example, omitted earlier-project coverage). Confirm a `Source-edit validation incomplete` notice starts on a new line with a blank line before it, even when the final model answer has no trailing newline. Confirm the notice uses separate reason, compiler, analyzer, source-change, and build/test lines rather than an internal diagnostic code and a paragraph of repeated caveats. Force a controlled analyzer exception and confirm its sanitized cause is shown in the notice and analyzer details; with older evidence lacking a cause, confirm it explicitly says no specific reason was captured. Confirm the diagnostic remains visible once, applied edits remain on disk, and the run still reports incomplete validation. Record terminal/platform checks separately from automated projection tests.
 
 ## Stale repository model selection recovery
 
@@ -1264,6 +1275,8 @@ Extension SDK and runtime: stable abstractions package, drop-in discovery with c
 - **Allowed (automated):** `IExtensionManager.DiscoverAsync` lists discovered extensions with loaded/unloaded state; `LoadAsync(id)`/`UnloadAsync(id)` drive load/unload by stable id; summaries are host-owned DTOs (`ExtensionSummary`) with no extension-runtime types (§8.1). Covered by `ExtensionManagerTests`.
 - **Allowed (automated):** `ExtensionSelectionConfig.LoadOrDefault` parses `discoveryDirectory` + `autoLoad` from `.threadsmith/extensions.json`; a missing or malformed file falls back to safe defaults (load nothing).
 - **Manual (interactive):** `/extensions` opens a navigable list (Up/Down, Enter) of all discovered extensions showing `[loaded]`/`[unloaded]`, name, version, state, and tool count; selecting an entry offers Load or Unload; `Back` returns. `/help` lists the command.
+- **Manual (version placeholder):** With a discovered but unloaded extension, open `/extensions` and confirm its version suffix is a single em dash (`—`), not garbled characters (`â€”`); check the F2 details too. Repeat in Windows, Linux, and macOS terminals.
+- **Manual (enable failure reason):** In a disposable repository, try enabling Neo4j with its required settings absent. At sufficient repository trust, confirm the notice identifies the missing `uri` setting, the checkbox stays unchecked, and F2 details retain the explanation. At insufficient trust, confirm the required trust level is shown instead. Supply valid non-secret settings and retry; confirm the checkbox reflects the actual loaded state and the old failure disappears. An unexpected fixture activation error must show a generic failure, not private exception details. Check long explanations through F2, terminal-control text escaping, and Escape/cancellation without a false success. Record Windows/Linux/macOS physical-terminal checks separately from automated tests.
 - **Manual (repository switch):** Start in repository A, use `/open` to switch to repository B, then enter `/extensions`. Confirm the restart instruction is displayed and `/help` still works in the same session.
 - **Manual (startup):** Extensions listed in `.threadsmith/extensions.json` `autoLoad` are discovered and loaded at application startup; a load failure is reported on the console without aborting startup.
 - **Constraint:** Extension selection is repo-level ONLY (`.threadsmith/extensions.json`); it is never read from the user `~/` config.
@@ -1660,6 +1673,14 @@ Expected: only the exact immutable handler/eligible pre-point/allowlisted code b
 3. Inspect process arguments/environment, redirected requests, logs, events, persistence, and diagnostics.
 
 Expected: no shell interpolation, command-line secret, ambient environment inheritance, orphan process, automatic redirect, secret forwarding to a changed origin, unbounded body, or leaked canary exists. Retries remain bounded and cancellation kills/stops waiting.
+
+### MTP-EXT-SECRETS — Repository trust and invocation-scoped credentials
+
+Use a disposable repository, a reviewed test package that declares `secret-access`, and a synthetic user-owned credential.
+Open the extension manager at read trust. Verify the displayed trust requirement and the rejected load.
+Grant the required repository trust through the normal repository workflow. Explicitly load the same package.
+Invoke a tool with its declared reference. Check its safe response and the host completion event.
+Attempt an undeclared reference. Confirm failure without disclosure. Unload the package and verify its tool leaves the catalog.
 
 ### MTP-EXT-SETTINGS — Repository extension settings snapshots
 

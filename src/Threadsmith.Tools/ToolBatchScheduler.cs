@@ -94,9 +94,9 @@ public sealed record ToolBatchPreflightResult
     public ToolBatchPreparation? Preparation { get; init; }
 }
 
-/// <summary>One validated invocation and its immutable scheduling snapshot.</summary>
+/// <summary>One invocation's preparation outcome and immutable scheduling snapshot.</summary>
 /// <param name="Request">Original request.</param>
-/// <param name="Registration">Generation-fenced registration, or <see langword="null" /> when preparation failed.</param>
+/// <param name="Registration">Generation-fenced registration, if resolved before any preparation error.</param>
 /// <param name="Claims">Normalized host claims.</param>
 /// <param name="PreparationError">Ordinary validation failure captured while preparing the invocation.</param>
 internal sealed record PlannedToolInvocation(
@@ -249,6 +249,7 @@ internal sealed class ToolConflictPlanner
 
     private PlannedToolInvocation Prepare(ToolBatchRequest request)
     {
+        ToolRegistration? registration = null;
         try
         {
             var current = _registry.GetRegistration(request.Invocation.ToolId, request.Invocation.Context);
@@ -259,7 +260,7 @@ internal sealed class ToolConflictPlanner
                     $"Tool '{request.Invocation.ToolId}' no longer matches the approved capability identity.");
             }
 
-            var registration = expected ?? current;
+            registration = expected ?? current;
             var input = registration.Tool.DeserializeInput(request.Invocation.ArgumentsJson);
             IReadOnlyList<ToolResourceClaim> claims = registration.Tool
                 .GetSchedulingClaims(input, request.Invocation.Context)
@@ -270,13 +271,13 @@ internal sealed class ToolConflictPlanner
         }
         catch (Exception exception) when (exception is KeyNotFoundException or ToolArgumentValidationException)
         {
-            return new PlannedToolInvocation(request, null, [], exception.Message);
+            return new PlannedToolInvocation(request, registration, [], exception.Message);
         }
         catch (Exception)
         {
             return new PlannedToolInvocation(
                 request,
-                null,
+                registration,
                 [],
                 "Tool arguments do not match the declared input schema or host invariants.");
         }
@@ -304,7 +305,8 @@ internal sealed class ToolConflictPlanner
     {
         if (wave.Count >= _options.MaximumConcurrency
             || wave.Any(existing => Conflicts(existing, planned))
-            || planned.Registration is null)
+            || planned.Registration is null
+            || planned.PreparationError is not null)
         {
             return false;
         }
@@ -320,7 +322,8 @@ internal sealed class ToolConflictPlanner
 
     private static bool Conflicts(PlannedToolInvocation left, PlannedToolInvocation right)
     {
-        if (left.Registration is null || right.Registration is null)
+        if (left.Registration is null || right.Registration is null
+            || left.PreparationError is not null || right.PreparationError is not null)
         {
             return true;
         }

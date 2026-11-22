@@ -24,6 +24,7 @@ internal sealed class ToggleModal : Modal
     private readonly Action _cancel;
     private readonly Action _toggleMouse;
     private readonly CachedTextRun _text = new();
+    private readonly WrappedModalList _wrappedTree = new();
     private readonly Channel<(string Id, bool Enabled, bool Actions)> _changes = Channel.CreateBounded<(string, bool, bool)>(1);
     private CheckTree<string> _tree;
     private TranscriptView? _details;
@@ -32,6 +33,7 @@ internal sealed class ToggleModal : Modal
     private string _cancellationNotice = "Cancelling action...";
     private bool _busy;
     private bool _fits = true;
+    private int _treeWidth;
 
     /// <summary>Initializes a new instance of the <see cref="ToggleModal"/> class.</summary>
     internal ToggleModal(InteractionToggleRequest request, Func<PresentationTextRole, CellStyle> style, Action cancel, Action toggleMouse, TuiResourceLimits? limits = null)
@@ -100,6 +102,10 @@ internal sealed class ToggleModal : Modal
         {
             _toggleMouse();
         }
+        else if (_details is not null && key.Code is KeyCode.Escape or KeyCode.Enter or KeyCode.F2)
+        {
+            _details = null;
+        }
         else if (key.Code is KeyCode.Escape or KeyCode.Enter)
         {
             if (CancelOperation is { } cancelOperation)
@@ -125,18 +131,12 @@ internal sealed class ToggleModal : Modal
         }
         else if (_fits && !_busy && key.Code == KeyCode.F2)
         {
-            if (_details is null)
-            {
-                _details = new TranscriptView(_limits) { ResolveStyle = _style };
-                var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-                var label = selected is null ? Label(_tree.SelectedNode) : selected.Label + "\n" + selected.Reason;
-                _details.Present(new PresentationBatch([new PresentationTextItem([new(label, PresentationTextRole.Default)])]));
-                _details.HandleKey(KeyEvent.Special(KeyCode.Home));
-            }
-            else
-            {
-                _details = null;
-            }
+            _details = new TranscriptView(_limits) { ResolveStyle = _style };
+            var selected = _options.GetValueOrDefault(_tree.SelectedNode);
+            var label = _request.Title + "\nFilter: " + _filter.Text + "\n"
+                + (selected is null ? Label(_tree.SelectedNode) : selected.Label + "\n" + selected.Reason) + "\n" + _notice;
+            _details.Present(new PresentationBatch([new PresentationTextItem([new(label, PresentationTextRole.Default)])]));
+            _details.HandleKey(KeyEvent.Special(KeyCode.Home));
         }
         else if (_details is not null)
         {
@@ -209,7 +209,8 @@ internal sealed class ToggleModal : Modal
     public override void Render(ISurface surface)
     {
         _fits = ModalFrame.Fits(surface.Size);
-        var frame = ModalFrame.Create(surface, _style(PresentationTextRole.Default));
+        var preferredSize = new Size(Math.Clamp(_treeWidth + 4, 90, 120), 24);
+        var frame = ModalFrame.Create(surface, _style(PresentationTextRole.Default), preferredSize: preferredSize);
         if (frame is null)
         {
             return;
@@ -218,22 +219,28 @@ internal sealed class ToggleModal : Modal
         _tree.HighlightStyle = _style(PresentationTextRole.SelectionHighlight).WithAttribute(CellAttributes.Reverse, true);
         _tree.RowStyle = _ => _style(PresentationTextRole.Default);
         var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-        var notice = _notice == selected?.Reason ? "Arrows navigate; Space applies now; Esc closes" : _notice;
-        var content = ModalFrame.CreateBody(
-            frame,
-            _text,
-            _style,
-            _request.Title + " — keyboard only",
-            "Filter: " + _filter.Text + " | F2 details" + (SupportsActions ? "; F3 actions" : string.Empty),
-            notice,
-            _details is null ? selected?.Reason ?? "Space applies immediately; closing keeps changes" : "F2 returns; arrows/PgUp/PgDn scroll details");
+        var notice = _details is not null ? string.Empty : Preview(_notice == selected?.Reason ? "Arrows navigate; Space applies now; Esc closes" : _notice, frame.Size.Width);
+        var title = _request.Title + (_details is null ? " — keyboard only" : " — details");
+        var subtitle = _details is null ? "Filter: " + _filter.Text + " | F2 details" + (SupportsActions ? "; F3 actions" : string.Empty) : string.Empty;
+        var footer = Preview(_details is null ? selected?.Reason ?? "Space applies immediately; closing keeps changes" : "F2/Esc returns; arrows/PgUp/PgDn scroll details", frame.Size.Width);
+        if (ModalFrame.BodyBounds(frame.Size, title, subtitle, notice, footer).Height < 2)
+        {
+            // Keep selection and full details usable when fixed prose is taller than the screen.
+            title = _details is null ? "Settings — F2 details" : "Setting details";
+            subtitle = string.Empty;
+            notice = string.Empty;
+            footer = Preview(_details is null ? selected?.Reason ?? "Space applies; F2 details; Esc closes" : "F2/Esc returns; Home/End scroll", frame.Size.Width);
+        }
+
+        var content = ModalFrame.CreateBody(frame, _text, _style, title, subtitle, notice, footer);
+        _fits = content.Size.Height > 0;
         if (_details is not null)
         {
             _details.Render(content);
         }
         else
         {
-            _tree.Render(content);
+            _wrappedTree.Render(_tree, content, _treeWidth, _style(PresentationTextRole.Default), _tree.HighlightStyle);
         }
     }
 
@@ -359,6 +366,12 @@ internal sealed class ToggleModal : Modal
         }
     }
 
+    private static string Preview(string value, int width)
+    {
+        var rows = ModalFrame.Wrap(value, width, maximumRows: 4);
+        return rows.Length > 3 ? string.Join('\n', rows.Take(2).Append("… F2 details")) : string.Join('\n', rows);
+    }
+
     private bool Matches(InteractionToggleOption option)
     {
         return option.Label.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase) || option.Group.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase);
@@ -420,6 +433,10 @@ internal sealed class ToggleModal : Modal
 
     private void ReconcileTree()
     {
+        // Native capture needs both UTF-16 and cell width; final wrapping happens afterward.
+        _treeWidth = _options.Select(option => (Label: Label(option.Key), Depth: Math.Max(1, option.Value.GroupPath.Count)))
+            .Select(option => Math.Max(option.Label.Length, UnicodeWidth.GetWidth(option.Label)) + ((option.Depth + 2) * 4))
+            .Concat(_groupLabels.Values.Select(label => UnicodeWidth.GetWidth(TranscriptView.Safe(label)) + 8)).DefaultIfEmpty(1).Max();
         foreach (var group in _groups)
         {
             _tree.SetExplicit(group.Key, group.Value.Where(id => Matches(_options[id])).All(id => _options[id].Enabled));

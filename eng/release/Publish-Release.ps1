@@ -36,7 +36,8 @@ Copy-Item (Join-Path $appPublish '*') $stage -Recurse -Force
 Copy-Item (Join-Path $workerPublish '*') $stage -Recurse -Force
 Copy-Item (Join-Path $root 'LICENSE') $stage
 & (Join-Path $PSScriptRoot 'Stage-Ripgrep.ps1') -RuntimeIdentifier $RuntimeIdentifier -StageDirectory $stage -WorkingDirectory (Join-Path $output 'ripgrep') | Out-Null
-& (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory (Join-Path $stage 'third-party') -RuntimeIdentifier $RuntimeIdentifier
+& (Join-Path $PSScriptRoot 'Stage-Extensions.ps1') -StageDirectory $stage -Version $Version -WorkingDirectory (Join-Path $publishRoot 'extensions') | Out-Null
+& (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory (Join-Path $stage 'third-party') -RuntimeIdentifier $RuntimeIdentifier -ExtensionAssetsFiles @((Join-Path $root 'src/Extensions/Neo4j/obj/project.assets.json'))
 & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier $RuntimeIdentifier -StageDirectory $stage -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json')
 $compliance = & (Join-Path $PSScriptRoot 'Test-ReleaseCompliance.ps1') -StageDirectory $stage -RuntimeIdentifier $RuntimeIdentifier
 [IO.File]::WriteAllText((Join-Path $stage 'release-compliance.json'), (($compliance | ConvertTo-Json -Depth 5) + "`n"), [Text.UTF8Encoding]::new($false))
@@ -48,7 +49,7 @@ foreach ($required in @($appHost, $workerHost, $ripgrepHost, (Join-Path $stage '
 }
 $files = @(Get-ChildItem $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
     $relative = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace([IO.Path]::DirectorySeparatorChar, '/')
-    $component = if ($relative -eq 'tools/rg' -or $relative -eq 'tools/rg.exe' -or $relative.StartsWith('third-party/ripgrep/', [StringComparison]::Ordinal)) { 'ripgrep' } else { 'payload' }
+    $component = if ($relative -eq 'tools/rg' -or $relative -eq 'tools/rg.exe' -or $relative.StartsWith('third-party/ripgrep/', [StringComparison]::Ordinal)) { 'ripgrep' } elseif ($relative.StartsWith('extensions/', [StringComparison]::Ordinal)) { 'extension' } else { 'payload' }
     Get-FileDigestRecord $_ $stage $component
 })
 [ordered]@{ schemaVersion = 1; product = 'Threadsmith.NET'; version = $Version; runtimeIdentifier = $RuntimeIdentifier; selfContained = $true; files = $files } |

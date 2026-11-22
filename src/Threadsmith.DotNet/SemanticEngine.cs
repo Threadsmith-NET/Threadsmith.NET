@@ -33,6 +33,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
     private readonly EditAnalysisOptions _editOptions;
     private readonly DiagnosticReportingPolicy _diagnosticReporting;
     private readonly IPromptLoader _prompts;
+    private readonly IOutputSanitizer? _outputSanitizer;
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<string> _invalidations = new();
@@ -59,7 +60,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         SemanticResourceLimits? resourceLimits = null,
         SemanticStartupProgress? startupProgress = null,
         TimeProvider? timeProvider = null,
-        int maximumConfigurationBytes = 1024 * 1024)
+        int maximumConfigurationBytes = 1024 * 1024,
+        IOutputSanitizer? outputSanitizer = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
         _maximumConfigurationBytes = maximumConfigurationBytes;
@@ -79,6 +81,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         _analyzerTimeProvider = timeProvider ?? TimeProvider.System;
         _diagnosticReporting = new(_editOptions);
         _prompts = prompts;
+        _outputSanitizer = outputSanitizer;
         _events = events;
         _logger = logger;
         _startupProgress = startupProgress;

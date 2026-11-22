@@ -18,6 +18,22 @@ public sealed partial class SemanticEngine
     /// <summary>Physical operation entries, used to verify coalescing independently of occupied permits.</summary>
     internal long GetAdvisoryOperationsStarted() => Interlocked.Read(ref _advisoryOperationsStarted);
 
+    /// <summary>Retains useful exception detail without stack traces, secrets or unbounded aggregate output.</summary>
+    internal static string CreateAnalyzerFailureReason(Exception exception, IOutputSanitizer? sanitizer, int maximumCharacters)
+    {
+        var cause = exception;
+        for (var depth = 0; depth < 8 && cause.InnerException is { } inner; depth++)
+        {
+            cause = inner;
+        }
+
+        var detail = sanitizer is null
+            ? "Analyzer execution failed; exception details were not retained because output sanitization is unavailable. Consult the host log."
+            : sanitizer.Sanitize($"{cause.GetType().Name}: {cause.Message}");
+        detail = string.Join(' ', detail.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return detail.Length > maximumCharacters ? detail[..(maximumCharacters - 1)] + "…" : detail;
+    }
+
     private async Task AnalyzeAutomaticEditAnalyzersAsync(EditCandidate candidate)
     {
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -61,18 +77,26 @@ public sealed partial class SemanticEngine
         catch (OperationCanceledException) when (candidate.Token.IsCancellationRequested)
         {
             outcome = SemanticCheckOutcome.Cancelled;
-            SetAnalyzerOmission(candidate, "cancelled", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerCancelled));
+            SetAnalyzerOmission(
+                candidate,
+                "cancelled",
+                _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerCancelled),
+                "The edit analysis lifetime was cancelled or expired; a more specific cause was not captured.");
         }
         catch (OperationCanceledException)
         {
             outcome = SemanticCheckOutcome.Cancelled;
-            SetAnalyzerOmission(candidate, "cancelled", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerCancelled));
+            SetAnalyzerOmission(
+                candidate,
+                "cancelled",
+                _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerCancelled),
+                "The analyzer operation was cancelled without edit lifetime cancellation; a more specific cause was not captured.");
         }
         catch (Exception exception)
         {
             _logger.LogWarning(exception, "Optional edit analyzer execution failed");
             outcome = SemanticCheckOutcome.Degraded;
-            SetAnalyzerOmission(candidate, "failed", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerFailed));
+            SetAnalyzerOmission(candidate, "failed", _prompts.Get(PromptFileNames.ContextSourceEditAnalyzerFailed), CreateAnalyzerFailureReason(exception, _outputSanitizer, _editOptions.MaximumDiagnosticMessageCharacters));
         }
         finally
         {
@@ -110,13 +134,18 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private void SetAnalyzerOmission(EditCandidate candidate, string status, string omission)
+    private void SetAnalyzerOmission(EditCandidate candidate, string status, string omission, string? failureReason = null)
     {
         UpdateEditResult(
             candidate,
             result => result with
             {
-                Analyzers = result.Analyzers with { Status = status, Omissions = [BoundEditText(omission, _editOptions.MaximumDiagnosticMessageCharacters)] },
+                Analyzers = result.Analyzers with
+                {
+                    Status = status,
+                    FailureReason = failureReason,
+                    Omissions = [BoundEditText(omission, _editOptions.MaximumDiagnosticMessageCharacters)],
+                },
             },
             terminal: true);
     }

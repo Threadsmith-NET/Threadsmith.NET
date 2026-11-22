@@ -16,6 +16,14 @@ public sealed class ThrowingExtension : IThreadsmithExtension
     /// <inheritdoc />
     public ValueTask ActivateAsync(IExtensionActivationContext context, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (context.Configuration["validationFailure"] == "true")
+        {
+            throw new ExtensionValidationException(
+                "Setting 'endpoint' is required; configure it before enabling the extension.",
+                new InvalidOperationException("private-validation-detail"));
+        }
+
         throw new InvalidOperationException("Deliberate activation failure for testing.");
     }
 

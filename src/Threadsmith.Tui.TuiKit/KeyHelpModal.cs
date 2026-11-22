@@ -9,9 +9,11 @@ using TUIKit.Modals;
 internal sealed class KeyHelpModal : Modal
 {
     private readonly string[] _entries;
-    private readonly CachedTextRun[] _entryRuns;
     private readonly CachedTextRun _titleRun = new();
     private readonly string _title;
+    private CachedTextRun[] _entryRuns = [];
+    private string[] _lines = [];
+    private int _width;
     private int _top;
     private int _height = 1;
 
@@ -20,11 +22,6 @@ internal sealed class KeyHelpModal : Modal
     {
         _title = title;
         _entries = [.. entries];
-        _entryRuns = new CachedTextRun[_entries.Length];
-        for (var index = 0; index < _entryRuns.Length; index++)
-        {
-            _entryRuns[index] = new CachedTextRun();
-        }
     }
 
     /// <summary>Gets or sets semantic role resolution for the current theme.</summary>
@@ -50,11 +47,11 @@ internal sealed class KeyHelpModal : Modal
             _top = key.Code switch
             {
                 KeyCode.Up => Math.Max(0, _top - 1),
-                KeyCode.Down => Math.Min(Math.Max(0, _entries.Length - _height), _top + 1),
+                KeyCode.Down => Math.Min(Math.Max(0, _lines.Length - _height), _top + 1),
                 KeyCode.PageUp => Math.Max(0, _top - _height),
-                KeyCode.PageDown => Math.Min(Math.Max(0, _entries.Length - _height), _top + _height),
+                KeyCode.PageDown => Math.Min(Math.Max(0, _lines.Length - _height), _top + _height),
                 KeyCode.Home => 0,
-                KeyCode.End => Math.Max(0, _entries.Length - _height),
+                KeyCode.End => Math.Max(0, _lines.Length - _height),
                 _ => _top,
             };
         }
@@ -71,12 +68,19 @@ internal sealed class KeyHelpModal : Modal
             return;
         }
 
-        _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
-        _height = view.Size.Height - 2;
-        _top = Math.Min(_top, Math.Max(0, _entries.Length - _height));
-        for (var index = _top; index < _entries.Length && index - _top < _height; index++)
+        var body = ModalFrame.CreateBody(view, _titleRun, ResolveStyle, _title, string.Empty, string.Empty, string.Empty);
+        if (_width != body.Size.Width)
         {
-            _entryRuns[index].Draw(view, 0, index - _top + 2, _entries[index], ResolveStyle(PresentationTextRole.Default));
+            _width = body.Size.Width;
+            _lines = [.. _entries.SelectMany(entry => entry.Length == 0 ? [string.Empty] : ModalFrame.Wrap(entry, _width))];
+            _entryRuns = [.. _lines.Select(_ => new CachedTextRun())];
+        }
+
+        _height = body.Size.Height;
+        _top = Math.Min(_top, Math.Max(0, _lines.Length - _height));
+        for (var index = _top; index < _lines.Length && index - _top < _height; index++)
+        {
+            _entryRuns[index].Draw(body, 0, index - _top, _lines[index], ResolveStyle(PresentationTextRole.Default));
         }
     }
 }

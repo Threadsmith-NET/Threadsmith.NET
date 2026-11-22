@@ -35,9 +35,15 @@ public interface IExtensionHost
 /// </summary>
 public sealed class ExtensionHost : IExtensionHost, IExtensionManager
 {
+    private const string _manifestFileName = "threadsmith.extension.json";
+
     private static readonly string _sharedContractAssemblyName =
         typeof(IThreadsmithExtension).Assembly.GetName().Name ?? "Threadsmith.Extensions.Abstractions";
 
+    private static readonly System.Text.Json.JsonSerializerOptions _manifestOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private readonly Threadsmith.Tools.ISecretResolver? _secrets;
+    private readonly Func<SessionId, CancellationToken, Task<RepositoryTrustLevel>>? _repositoryTrust;
     private readonly ShadowCopier _shadowCopier;
     private readonly IDomainEventStream _events;
     private readonly ILogger<ExtensionHost> _logger;
@@ -50,7 +56,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     private readonly ICapabilityRegistry _capabilities;
     private readonly InvocationLeaseAuthority _leaseAuthority;
     private readonly UnloadProcedure _unloadProcedure;
-    private readonly Dictionary<string, string> _discoveredDirectories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DiscoveredPackage> _discoveredPackages = new(StringComparer.OrdinalIgnoreCase);
     private string _discoveryDirectory = ".threadsmith/extensions";
 
     /// <summary>Initializes a new instance of the <see cref="ExtensionHost"/> class.</summary>
@@ -62,8 +68,12 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         InvocationLeaseAuthority? leaseAuthority = null,
         ILoggerFactory? extensionLoggerFactory = null,
         string? repositoryPath = null,
-        SessionPolicyBinding? policyBinding = null)
+        SessionPolicyBinding? policyBinding = null,
+        Threadsmith.Tools.ISecretResolver? secrets = null,
+        Func<SessionId, CancellationToken, Task<RepositoryTrustLevel>>? repositoryTrust = null)
     {
+        _secrets = secrets;
+        _repositoryTrust = repositoryTrust;
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(logger);
         _events = events;
@@ -128,32 +138,19 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ = CaptureRepositoryPolicy(_repositoryPath);
-        var discovered = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var discovered = new Dictionary<string, DiscoveredPackage>(StringComparer.OrdinalIgnoreCase);
         var root = ResolveDiscoveryRoot();
         var summaries = new List<ExtensionSummary>();
         if (Directory.Exists(root))
         {
-            // The discovery root may itself be a single extension package (DLLs at the top level) or a
-            // parent containing one extension package per subdirectory. Handle both layouts.
-            if (TryPeekExtensionId(root) is string rootId)
+            // A manifest owns the whole package, including its nested implementation directories.
+            if (!AddDiscoveredPackage(root))
             {
-                discovered[rootId] = root;
-                var rootActive = FindGeneration(rootId, activeOnly: false);
-                summaries.Add(BuildSummary(rootId, root, rootActive));
-            }
-
-            foreach (var dir in Directory.EnumerateDirectories(root))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var id = TryPeekExtensionId(dir);
-                if (id is null)
+                foreach (var dir in Directory.EnumerateDirectories(root))
                 {
-                    continue;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    AddDiscoveredPackage(dir);
                 }
-
-                discovered[id] = dir;
-                var active = FindGeneration(id, activeOnly: false);
-                summaries.Add(BuildSummary(id, dir, active));
             }
         }
 
@@ -163,7 +160,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             var id = generation.ExtensionId.Value.ToString();
             if (!summaries.Any(summary => summary.GenerationId == generation.GenerationId))
             {
-                discovered[id] = generation.StagingPath;
+                discovered[id] = new(BuildSummary(id, generation.StagingPath, null), HasManifest: false);
                 summaries.Add(BuildSummary(id, generation.StagingPath, generation));
             }
         }
@@ -172,14 +169,27 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         // BuildSummaries) never observe a partially-populated or cleared map (F5).
         lock (_gate)
         {
-            _discoveredDirectories.Clear();
+            _discoveredPackages.Clear();
             foreach (var entry in discovered)
             {
-                _discoveredDirectories[entry.Key] = entry.Value;
+                _discoveredPackages[entry.Key] = entry.Value;
             }
         }
 
         return summaries.OrderBy(s => s.Name, StringComparer.Ordinal).ToArray();
+
+        bool AddDiscoveredPackage(string directory)
+        {
+            if (TryPeekExtensionId(directory, out var manifest, out var hasManifest) is { } id)
+            {
+                var summary = BuildSummary(id, directory, null, manifest);
+                discovered[id] = new(summary, hasManifest);
+                var active = FindGeneration(id, activeOnly: false);
+                summaries.Add(active is null ? summary : BuildSummary(id, directory, active));
+            }
+
+            return hasManifest;
+        }
     }
 
     /// <inheritdoc />
@@ -189,33 +199,48 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(extensionId);
-        _ = CaptureRepositoryPolicy(_repositoryPath);
+        var trust = _repositoryTrust is null ? RepositoryTrustLevel.TrustedRead : RepositoryTrustLevel.FullyTrustedAutomation;
         if (FindGeneration(extensionId) is { } activeGeneration)
         {
-            return BuildSummary(extensionId, GetDiscoveredDirectory(extensionId), activeGeneration);
+            var policy = CaptureRepositoryPolicy(_repositoryPath);
+            trust = _repositoryTrust is null ? trust : await _repositoryTrust(sessionId, cancellationToken);
+            if (policy is not null && policy.MaximumTrust < trust)
+            {
+                trust = policy.MaximumTrust;
+            }
+
+            if (trust < activeGeneration.MinimumTrust)
+            {
+                throw new ExtensionIncompatibleException($"Extension requires repository trust {activeGeneration.MinimumTrust}.");
+            }
+
+            return BuildSummary(extensionId, GetDiscoveredPackage(extensionId)?.Summary.Directory ?? string.Empty, activeGeneration);
         }
 
-        var dir = GetDiscoveredDirectory(extensionId);
-        if (string.IsNullOrWhiteSpace(dir))
+        var selectedPackage = GetDiscoveredPackage(extensionId);
+        if (selectedPackage is null)
         {
             // Refresh discovery if the id was not yet known.
             await DiscoverAsync(cancellationToken);
-            dir = GetDiscoveredDirectory(extensionId);
-            if (string.IsNullOrWhiteSpace(dir))
+            selectedPackage = GetDiscoveredPackage(extensionId);
+            if (selectedPackage is null)
             {
                 return null;
             }
         }
 
+        var dir = selectedPackage.Summary.Directory;
         var stagingRoot = Path.Combine(Path.GetTempPath(), "threadsmith-extensions", Guid.NewGuid().ToString("N"));
         var generation = await LoadAsync(
             new ExtensionLoadRequest
             {
                 ExtensionDirectory = dir,
-                EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                EffectiveTrust = trust,
                 SessionId = sessionId,
                 ShadowStagingRoot = stagingRoot,
             },
+            replacedGenerationId: null,
+            selectedPackage,
             cancellationToken);
         return BuildSummary(extensionId, dir, generation);
     }
@@ -267,7 +292,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         ExtensionLoadRequest request,
         CancellationToken cancellationToken = default)
     {
-        return LoadAsync(request, null, cancellationToken);
+        return LoadAsync(request, replacedGenerationId: null, selectedPackage: null, cancellationToken);
     }
 
     /// <summary>Loads a generation as the explicitly authorized successor to an active predecessor.</summary>
@@ -292,7 +317,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             }
         }
 
-        return await LoadAsync(request, current.GenerationId, cancellationToken);
+        return await LoadAsync(request, current.GenerationId, selectedPackage: null, cancellationToken);
     }
 
     private List<ExtensionSummary> BuildSummaries()
@@ -304,43 +329,45 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             summaries.Add(BuildSummary(id, generation.StagingPath, generation));
         }
 
-        foreach (var entry in GetDiscoveredDirectoriesSnapshot())
+        foreach (var package in GetDiscoveredPackagesSnapshot())
         {
-            if (FindGeneration(entry.Key, activeOnly: false) is null)
+            if (FindGeneration(package.Summary.ExtensionId, activeOnly: false) is null)
             {
-                summaries.Add(BuildSummary(entry.Key, entry.Value, active: null));
+                summaries.Add(package.Summary);
             }
         }
 
         return summaries;
     }
 
-    private string GetDiscoveredDirectory(string extensionId)
+    private DiscoveredPackage? GetDiscoveredPackage(string extensionId)
     {
         lock (_gate)
         {
-            return _discoveredDirectories.GetValueOrDefault(extensionId) ?? string.Empty;
+            return _discoveredPackages.GetValueOrDefault(extensionId);
         }
     }
 
-    private IReadOnlyList<KeyValuePair<string, string>> GetDiscoveredDirectoriesSnapshot()
+    private IReadOnlyList<DiscoveredPackage> GetDiscoveredPackagesSnapshot()
     {
         lock (_gate)
         {
-            return [.. _discoveredDirectories];
+            return [.. _discoveredPackages.Values];
         }
     }
 
-    private static ExtensionSummary BuildSummary(string extensionId, string directory, ExtensionGeneration? active)
+    private static ExtensionSummary BuildSummary(string extensionId, string directory, ExtensionGeneration? active, ExtensionManifest? manifest = null)
     {
         return new ExtensionSummary
         {
             ExtensionId = extensionId,
             GenerationId = active?.GenerationId,
             Name = active?.Descriptor.Name ?? Path.GetFileName(directory),
-            Version = active?.Descriptor.Version ?? "â€”",
+            Version = active?.Descriptor.Version ?? "\u2014",
             State = active?.State.ToString() ?? "Discovered",
             IsLoaded = active is not null,
+            RequiredTrust = active?.MinimumTrust ?? (manifest is null ? null : RequiredTrust(manifest.RequiredTrust, manifest.Permissions)),
+            AccessTypes = active?.Descriptor.AccessTypes ?? CollectAccessTypes(manifest?.Permissions ?? [], manifest?.AccessTypes ?? []),
             ToolCount = active?.Tools.Count ?? 0,
             ModelPreferenceContributorCount = active?.ModelPreferenceContributors.Count ?? 0,
             Directory = directory,
@@ -379,19 +406,27 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             : Path.GetFullPath(_discoveryDirectory);
     }
 
-    private static string? TryPeekExtensionId(string extensionDirectory)
+    private static string? TryPeekExtensionId(
+        string extensionDirectory,
+        out ExtensionManifest? packageManifest,
+        out bool hasManifest)
     {
+        packageManifest = null;
+
         // Peek the extension id without loading the assembly: prefer a manifest, then the first DLL
         // that references the shared contract assembly. Returns null when no extension is found.
-        var manifestPath = Path.Combine(extensionDirectory, "threadsmith.extension.json");
-        if (File.Exists(manifestPath))
+        var manifestPath = Path.Combine(extensionDirectory, _manifestFileName);
+        hasManifest = File.Exists(manifestPath);
+        if (hasManifest)
         {
             try
             {
                 using var stream = File.OpenRead(manifestPath);
-                var manifest = System.Text.Json.JsonSerializer.Deserialize<ExtensionManifest>(stream);
+                var manifest = System.Text.Json.JsonSerializer.Deserialize<ExtensionManifest>(stream, _manifestOptions);
                 if (manifest is not null && !string.IsNullOrWhiteSpace(manifest.Id))
                 {
+                    _ = RequiredTrust(manifest.RequiredTrust, manifest.Permissions);
+                    packageManifest = manifest;
                     return manifest.Id;
                 }
             }
@@ -429,6 +464,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     private async Task<ExtensionGeneration> LoadAsync(
         ExtensionLoadRequest request,
         ExtensionGenerationId? replacedGenerationId,
+        DiscoveredPackage? selectedPackage,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -441,41 +477,100 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         var repositoryPath = request.RepositoryPath is { } requestedRepository
             ? Path.GetFullPath(requestedRepository) : _repositoryPath;
         var repositoryPolicy = CaptureRepositoryPolicy(repositoryPath);
+        if (_repositoryTrust is not null)
+        {
+            var sessionTrust = await _repositoryTrust(request.SessionId, cancellationToken);
+            if (sessionTrust < request.EffectiveTrust)
+            {
+                request = request with { EffectiveTrust = sessionTrust };
+            }
+        }
+
+        if (repositoryPolicy is not null && request.EffectiveTrust > repositoryPolicy.MaximumTrust)
+        {
+            request = request with { EffectiveTrust = repositoryPolicy.MaximumTrust };
+        }
+
         request = request with { RepositoryPath = repositoryPath, Configuration = explicitSettings };
         var selection = explicitSettings is null && repositoryPath is not null
             ? ExtensionSelectionConfig.Load(Path.Combine(repositoryPath, ".threadsmith", "extensions.json"), deferSettings: true)
             : null;
-        Directory.CreateDirectory(request.ShadowStagingRoot);
-        var extensionId = ResolveStableId(request.Manifest?.Id);
-        await _events.PublishAsync(
-            new ExtensionDiscovered(request.SessionId, DateTimeOffset.UtcNow, extensionId),
-            cancellationToken);
-
-        var stagingPath = await _shadowCopier.StageAsync(
-            request.ExtensionDirectory,
-            request.ShadowStagingRoot,
-            cancellationToken);
-        var entryAssemblyPath = ResolveEntryAssembly(stagingPath, request.Manifest);
-        var loadContext = new ExtensionLoadContext(entryAssemblyPath, _sharedContractAssemblyName);
+        var expectedId = selectedPackage?.Summary.ExtensionId ?? request.Manifest?.Id;
+        ExtensionId? discoveredId = string.IsNullOrWhiteSpace(expectedId) ? null : ResolveStableId(expectedId);
+        string? stagingPath = null;
+        ExtensionLoadContext? loadContext = null;
         var lifecycle = new ExtensionLifecycle();
         var generationId = ExtensionGenerationId.New();
         ExtensionGeneration? generation = null;
         var activationCompleted = false;
         try
         {
-            lifecycle.TransitionTo(ExtensionLifecycleState.Validating);
-            ValidateCompatibility(request, entryAssemblyPath);
-            ValidateNoBundledContract(stagingPath);
-            lifecycle.TransitionTo(ExtensionLifecycleState.Loading);
+            if (discoveredId is { } selectedId)
+            {
+                await PublishDiscoveredAsync(request.SessionId, selectedId, cancellationToken);
+            }
 
-            var extensionType = DiscoverExtensionType(loadContext, entryAssemblyPath, request.Manifest);
+            stagingPath = await _shadowCopier.StageAsync(
+                request.ExtensionDirectory,
+                request.ShadowStagingRoot,
+                cancellationToken);
+            lifecycle.TransitionTo(ExtensionLifecycleState.Validating);
+            ExtensionManifest? package = null;
+            var manifestPath = Path.Combine(stagingPath, _manifestFileName);
+            if (File.Exists(manifestPath))
+            {
+                await using var stream = File.OpenRead(manifestPath);
+                package = await System.Text.Json.JsonSerializer.DeserializeAsync<ExtensionManifest>(stream, _manifestOptions, cancellationToken)
+                    ?? throw new ExtensionIncompatibleException("Invalid extension manifest.");
+            }
+
+            // Manager lookup accepts case-insensitive input, but the selected package's canonical
+            // ID must match the staged ID exactly: repository settings use ordinal keys.
+            if ((selectedPackage is { HasManifest: true } && package is null)
+                || (package is not null && !string.IsNullOrWhiteSpace(expectedId)
+                    && !string.Equals(expectedId, package.Id, StringComparison.Ordinal)))
+            {
+                throw new ExtensionIncompatibleException("The staged manifest does not match the selected extension identity.");
+            }
+
+            var manifest = package ?? request.Manifest;
+            var extensionId = discoveredId ?? ResolveStableId(manifest?.Id);
+            if (discoveredId is null)
+            {
+                discoveredId = extensionId;
+                await PublishDiscoveredAsync(request.SessionId, extensionId, cancellationToken);
+            }
+
+            ValidateCompatibility(package);
+            ValidateCompatibility(request.Manifest);
+            ValidateNoBundledContract(stagingPath);
+            var packageTrust = RequiredTrust(package?.RequiredTrust ?? ExtensionTrustRequirement.None, package?.Permissions ?? []);
+            var requestedTrust = RequiredTrust(request.Manifest?.RequiredTrust ?? ExtensionTrustRequirement.None, request.Manifest?.Permissions ?? []);
+            packageTrust = (RepositoryTrustLevel)Math.Max((int)packageTrust, (int)requestedTrust);
+            if (request.EffectiveTrust < packageTrust)
+            {
+                throw new ExtensionIncompatibleException($"Extension requires repository trust {packageTrust}.");
+            }
+
+            var entryAssemblyPath = ResolveEntryAssembly(stagingPath, request.Manifest?.EntryAssembly, package?.EntryAssembly);
+            var entryClass = SelectEntryClass(request.Manifest?.EntryClass, package?.EntryClass);
+            lifecycle.TransitionTo(ExtensionLifecycleState.Loading);
+            loadContext = new ExtensionLoadContext(entryAssemblyPath, _sharedContractAssemblyName);
+            var extensionType = DiscoverExtensionType(loadContext, entryAssemblyPath, entryClass);
 
             // Construct the extension instance exactly once (F2: a throwaway prototype would run any
             // constructor side effects twice and could pin the collectible ALC). The same instance is
             // activated below; its Descriptor is read before activation so permissions can be validated.
             var instance = ConstructExtension(extensionType);
-            var descriptor = ReadDescriptor(instance, request.Manifest);
-            ValidatePermissions(request, descriptor);
+            var descriptor = ReadDescriptor(instance, manifest);
+            var declaredPermissions = descriptor.Permissions.Concat(request.Manifest?.Permissions ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var minimumTrust = RequiredTrust(descriptor.RequiredTrust, declaredPermissions);
+            minimumTrust = (RepositoryTrustLevel)Math.Max((int)minimumTrust, (int)packageTrust);
+            if (request.EffectiveTrust < minimumTrust)
+            {
+                throw new ExtensionIncompatibleException($"Extension requires repository trust {minimumTrust}.");
+            }
+
             if (request.Configuration is null)
             {
                 request = request with
@@ -488,13 +583,20 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             generation = new(
                 extensionId,
                 generationId,
-                descriptor,
-                request.Manifest,
+                descriptor with
+                {
+                    Permissions = Array.AsReadOnly(declaredPermissions),
+                    AccessTypes = CollectAccessTypes(declaredPermissions, descriptor.AccessTypes.Concat(request.Manifest?.AccessTypes ?? [])),
+                    Capabilities = Array.AsReadOnly(descriptor.Capabilities.ToArray()),
+                },
+                manifest,
                 loadContext,
                 instance,
                 stagingPath,
                 entryAssemblyPath)
             {
+                MinimumTrust = minimumTrust,
+                SecretResolver = declaredPermissions.Any(name => string.Equals(name.Replace("-", string.Empty), "SecretAccess", StringComparison.OrdinalIgnoreCase)) ? _secrets : null,
                 Budget = new(generationId),
                 RepositoryPath = repositoryPath,
             };
@@ -504,6 +606,11 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             await ActivateExtensionAsync(instance, generation, request, cancellationToken);
             activationCompleted = true;
             cancellationToken.ThrowIfCancellationRequested();
+            if (_repositoryTrust is not null && await _repositoryTrust(request.SessionId, cancellationToken) < minimumTrust)
+            {
+                throw new ExtensionIncompatibleException($"Extension requires repository trust {minimumTrust}.");
+            }
+
             if (repositoryPolicy is not null)
             {
                 _policyBinding?.Validate(repositoryPolicy);
@@ -553,7 +660,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             }
             else
             {
-                loadContext.Unload();
+                loadContext?.Unload();
             }
 
             if (exception is not OperationCanceledException)
@@ -561,17 +668,31 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 _logger.LogError(exception, "Extension load failed: {Message}", exception.Message);
             }
 
-            ShadowCopier.Discard(stagingPath);
+            if (stagingPath is not null)
+            {
+                ShadowCopier.Discard(stagingPath);
+            }
+
+            var failedExtensionId = discoveredId ?? ExtensionId.New();
+            if (discoveredId is null)
+            {
+                // A direct load can fail before staging yields a logical identity.
+                await PublishDiscoveredAsync(request.SessionId, failedExtensionId, CancellationToken.None);
+            }
+
             await _events.PublishAsync(
                 new ExtensionLoadFailed(
                     request.SessionId,
                     DateTimeOffset.UtcNow,
-                    extensionId,
+                    failedExtensionId,
                     exception.Message),
                 CancellationToken.None);
             throw;
         }
     }
+
+    private Task PublishDiscoveredAsync(SessionId sessionId, ExtensionId extensionId, CancellationToken cancellationToken) =>
+        _events.PublishAsync(new ExtensionDiscovered(sessionId, DateTimeOffset.UtcNow, extensionId), cancellationToken);
 
     private EffectiveSessionPolicy? CaptureRepositoryPolicy(string? repositoryPath)
     {
@@ -604,7 +725,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
     private static Type DiscoverExtensionType(
         ExtensionLoadContext loadContext,
         string entryAssemblyPath,
-        ExtensionManifest? manifest)
+        string? entryClass)
     {
         var assembly = loadContext.LoadFromAssemblyPath(entryAssemblyPath);
         Type[] types;
@@ -631,12 +752,18 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
                 $"No concrete {nameof(IThreadsmithExtension)} implementation was found in '{assemblyName}'.");
         }
 
-        if (candidates.Count > 1 && manifest is null)
+        if (!string.IsNullOrWhiteSpace(entryClass))
+        {
+            return candidates.Find(type => string.Equals(type.FullName, entryClass, StringComparison.Ordinal))
+                ?? throw new ExtensionLoadException($"Entry class '{entryClass}' is not a concrete {nameof(IThreadsmithExtension)} in the entry assembly.");
+        }
+
+        if (candidates.Count > 1)
         {
             var assemblyName = assembly.GetName().Name ?? "<unknown>";
             throw new ExtensionLoadException(
                 $"Multiple {nameof(IThreadsmithExtension)} implementations were found in '{assemblyName}'. "
-                + "Provide a manifest declaring which entry class to activate.");
+                + "Specify EntryClass in the manifest to select the extension to activate.");
         }
 
         return candidates[0];
@@ -673,47 +800,45 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             Version = string.IsNullOrWhiteSpace(manifest.Version) ? descriptor.Version : manifest.Version,
             ContractVersion = string.IsNullOrWhiteSpace(manifest.HostApiVersion)
                 ? descriptor.ContractVersion
-                : manifest.HostApiVersion,
+                : NormalizeHostApiVersion(manifest.HostApiVersion),
             Capabilities = manifest.Capabilities.Count > 0 ? manifest.Capabilities : descriptor.Capabilities,
-            Permissions = manifest.Permissions.Count > 0 ? manifest.Permissions : descriptor.Permissions,
+            AccessTypes = CollectAccessTypes(descriptor.AccessTypes, manifest.AccessTypes),
+            Permissions = descriptor.Permissions.Concat(manifest.Permissions).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
         };
     }
 
-    private static void ValidateCompatibility(ExtensionLoadRequest request, string entryAssemblyPath)
+    private static void ValidateCompatibility(ExtensionManifest? manifest)
     {
-        if (request.Manifest is { } manifest
-            && !string.IsNullOrWhiteSpace(manifest.HostApiVersion)
-            && !IsContractVersionCompatible(manifest.HostApiVersion))
+        if (manifest is not null && !string.IsNullOrWhiteSpace(manifest.HostApiVersion)
+            && NormalizeHostApiVersion(manifest.HostApiVersion).Split('.')[0] != ExtensionContractVersion.Current.Split('.')[0])
         {
             throw new ExtensionIncompatibleException(
                 $"Extension '{manifest.Id}' requires host API version '{manifest.HostApiVersion}' "
                 + $"but the host supports '{ExtensionContractVersion.Current}'.");
         }
-
-        if (!File.Exists(entryAssemblyPath))
-        {
-            throw new ExtensionLoadException($"Entry assembly not found: {entryAssemblyPath}");
-        }
     }
 
-    private static bool IsContractVersionCompatible(string requested)
+    private static string NormalizeHostApiVersion(string version)
+        => string.Equals(version, "current", StringComparison.OrdinalIgnoreCase) ? ExtensionContractVersion.Current : version;
+
+    private static IReadOnlyList<string> CollectAccessTypes(IEnumerable<string> permissions, IEnumerable<string> descriptions)
     {
-        const string current = ExtensionContractVersion.Current;
-        return requested.Split('.')[0] == current.Split('.')[0];
+        return Array.AsReadOnly(permissions.Concat(descriptions).Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    private static void ValidatePermissions(ExtensionLoadRequest request, ExtensionDescriptor descriptor)
+    private static RepositoryTrustLevel RequiredTrust(ExtensionTrustRequirement declared, IReadOnlyList<string> permissions)
     {
-        var granted = GrantPermissions(request.EffectiveTrust);
-        foreach (var permission in descriptor.Permissions)
+        var minimum = CapabilityProxy.MapTrust(declared);
+        foreach (var level in Enum.GetValues<RepositoryTrustLevel>())
         {
-            if (!IsPermissionGranted(permission, granted))
+            if (level >= minimum && permissions.All(name => IsPermissionGranted(name, GrantPermissions(level))))
             {
-                throw new ExtensionIncompatibleException(
-                    $"Extension '{descriptor.Id}' requests permission '{permission}' that the effective "
-                    + $"repository trust '{request.EffectiveTrust}' does not grant.");
+                return level;
             }
         }
+
+        throw new ExtensionIncompatibleException("Unsupported extension permissions.");
     }
 
     private static ExtensionPermission GrantPermissions(RepositoryTrustLevel trust)
@@ -752,11 +877,58 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             && (granted & requested) == requested;
     }
 
-    private static string ResolveEntryAssembly(string stagingPath, ExtensionManifest? manifest)
+    private static string? SelectEntryClass(string? requested, string? staged)
     {
-        if (manifest is not null && !string.IsNullOrWhiteSpace(manifest.EntryAssembly))
+        if (!string.IsNullOrWhiteSpace(requested) && !string.IsNullOrWhiteSpace(staged)
+            && !string.Equals(requested, staged, StringComparison.Ordinal))
         {
-            return Path.Combine(stagingPath, manifest.EntryAssembly);
+            throw new ExtensionIncompatibleException("The staged manifest and caller specify different extension entry classes.");
+        }
+
+        return string.IsNullOrWhiteSpace(staged) ? requested : staged;
+    }
+
+    private static string? NormalizeEntryAssembly(string stagingPath, string? entryAssembly)
+    {
+        if (string.IsNullOrWhiteSpace(entryAssembly))
+        {
+            return null;
+        }
+
+        if (!Path.IsPathRooted(entryAssembly))
+        {
+            var path = Path.GetFullPath(entryAssembly, Path.GetFullPath(stagingPath));
+            var relative = Path.GetRelativePath(stagingPath, path);
+            if (!Path.IsPathRooted(relative) && relative != ".."
+                && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return path;
+            }
+        }
+
+        throw new ExtensionIncompatibleException("The entry assembly must be inside the staged extension package.");
+    }
+
+    private static string ResolveEntryAssembly(string stagingPath, string? requested, string? staged)
+    {
+        var requestedPath = NormalizeEntryAssembly(stagingPath, requested);
+        var stagedPath = NormalizeEntryAssembly(stagingPath, staged);
+
+        // Case sensitivity can vary by directory even on Windows.
+        if (requestedPath is not null && stagedPath is not null
+            && !string.Equals(requestedPath, stagedPath, StringComparison.Ordinal))
+        {
+            throw new ExtensionIncompatibleException("The staged manifest and caller specify different extension entry assemblies.");
+        }
+
+        if ((stagedPath ?? requestedPath) is { } entryPath)
+        {
+            if (!File.Exists(entryPath))
+            {
+                throw new ExtensionLoadException($"Entry assembly not found: {entryPath}");
+            }
+
+            return entryPath;
         }
 
         string[] dlls = [.. Directory.GetFiles(stagingPath, "*.dll", SearchOption.TopDirectoryOnly)
@@ -830,7 +1002,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         ExtensionLoadRequest request,
         CancellationToken cancellationToken)
     {
-        var logger = new ExtensionLogger(CreateExtensionLogger(generation.Descriptor));
+        var logger = new ExtensionLogger(CreateExtensionLogger(generation.Descriptor), generation.SecretProtection);
         var configuration = new ExtensionConfiguration(request.Configuration
             ?? System.Collections.Frozen.FrozenDictionary<string, string?>.Empty);
         var collector = new ExtensionCapabilityCollector(generation);
@@ -853,6 +1025,22 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (ExtensionValidationException exception)
+        {
+            var reason = generation.SecretProtection.SafeLogMessage(exception.Message);
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                reason = "Extension validation failed.";
+            }
+
+            const int maximumReasonLength = 2048;
+            if (reason.Length > maximumReasonLength)
+            {
+                reason = reason[..maximumReasonLength] + " [truncated]";
+            }
+
+            throw new ExtensionActivationException(reason);
         }
         catch (Exception exception)
         {
@@ -897,4 +1085,6 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             return id;
         }
     }
+
+    private sealed record DiscoveredPackage(ExtensionSummary Summary, bool HasManifest);
 }

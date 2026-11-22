@@ -474,6 +474,20 @@ public static class Program
                 configuration,
                 policyBinding,
                 surface is null ? null : ReportAsync,
+                foundation.SecretResolver,
+                async (sessionId, token) =>
+                {
+                    var state = await foundation.Projections.GetAsync<SessionProjection>(new ProjectionKey("session", sessionId.Value.ToString("D")), token);
+                    if (state?.RepositoryPath is { } path && string.Equals(
+                        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)),
+                        Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot)),
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    {
+                        return state.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection;
+                    }
+
+                    return RepositoryTrustLevel.UntrustedInspection;
+                },
                 cancellationToken);
             extensionStartup?.Complete();
         }

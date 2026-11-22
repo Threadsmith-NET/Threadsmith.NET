@@ -69,6 +69,15 @@ internal sealed class InteractionSessionSurface
         IReadOnlyList<string> choices,
         string? details,
         CancellationToken cancellationToken = default)
+        => SelectAsync(title, choices, details, openReview: false, cancellationToken);
+
+    /// <summary>Selects an option with an optional initially expanded review.</summary>
+    internal Task<int> SelectAsync(
+        string title,
+        IReadOnlyList<string> choices,
+        string? details,
+        bool openReview,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(choices);
@@ -80,7 +89,7 @@ internal sealed class InteractionSessionSurface
         var options = choices
             .Select((label, index) => new InteractionSelectionOption(index.ToString(System.Globalization.CultureInfo.InvariantCulture), label))
             .ToArray();
-        return SelectAsync(new InteractionSelectionRequest(title, options) { Details = details }, cancellationToken);
+        return SelectAsync(new InteractionSelectionRequest(title, options) { Details = details, OpenReview = openReview }, cancellationToken);
     }
 
     /// <summary>Selects a structured option and validates its stable identity before returning its original index.</summary>

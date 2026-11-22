@@ -165,7 +165,7 @@ public sealed partial class InteractionCoordinator
         var rows = catalog.ToDictionary(extension => extension.GenerationId?.ToString() ?? extension.ExtensionId, StringComparer.Ordinal);
         return surface.SelectTogglesAsync(
             new InteractionToggleRequest("Extensions - checked means loaded", rows.Select(row => new InteractionToggleOption(
-                row.Key, $"{row.Value.Name} ({row.Value.Version})", "Extensions", row.Value.IsLoaded, Reason: $"{row.Value.ExtensionId} — {row.Value.State}")).ToArray()),
+                row.Key, $"{row.Value.Name} ({row.Value.Version})", "Extensions", row.Value.IsLoaded, Reason: FormatExtensionChoice(row.Value))).ToArray()),
             async (id, enabled, token) =>
             {
                 var selected = rows[id];
@@ -191,7 +191,9 @@ public sealed partial class InteractionCoordinator
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        failure = "The extension change failed; showing current state.";
+                        failure = exception is ExtensionOperationException && !string.IsNullOrWhiteSpace(exception.Message)
+                            ? $"The extension change failed: {exception.Message}"
+                            : "The extension change failed; showing current state.";
                     }
                 }
 
@@ -199,7 +201,17 @@ public sealed partial class InteractionCoordinator
                 var refreshed = (await manager.DiscoverAsync(token)).FirstOrDefault(extension =>
                     target.GenerationId is { } generationId ? extension.GenerationId == generationId : extension.ExtensionId == target.ExtensionId);
                 var loaded = refreshed?.IsLoaded == true;
-                return new InteractionToggleResult(loaded, failure ?? (loaded == enabled ? null : $"The extension did not reach the requested state ({refreshed?.State ?? "unavailable"})."));
+                var reason = failure ?? (loaded == enabled ? null : $"The extension did not reach the requested state ({refreshed?.State ?? "unavailable"}).");
+                var summary = refreshed ?? target;
+                return new InteractionToggleResult(loaded, reason)
+                {
+                    UpdatedOption = new InteractionToggleOption(
+                        id,
+                        $"{summary.Name} ({summary.Version})",
+                        "Extensions",
+                        loaded,
+                        Reason: reason is null ? FormatExtensionChoice(summary) : $"{FormatExtensionChoice(summary)}\n{reason}"),
+                };
             },
             cancellationToken);
     }

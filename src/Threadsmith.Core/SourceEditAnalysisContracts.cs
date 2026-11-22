@@ -59,6 +59,9 @@ public sealed record SourceEditAnalyzerAnalysis
     /// <summary>Whether retention or projection omitted reportable analyzer findings.</summary>
     public bool Truncated { get; init; }
 
+    /// <summary>Sanitized, bounded execution failure or cancellation reason, when captured.</summary>
+    public string? FailureReason { get; init; }
+
     /// <summary>Bounded scope, availability, failure and cancellation limitations.</summary>
     public IReadOnlyList<string> Omissions { get; init; } = [];
 }

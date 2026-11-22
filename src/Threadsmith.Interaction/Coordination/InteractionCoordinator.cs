@@ -4772,7 +4772,9 @@ public sealed partial class InteractionCoordinator
     {
         var marker = summary.IsLoaded ? "[loaded]  " : "[unloaded]";
         var tools = summary.ToolCount > 0 ? $" — {summary.ToolCount} tool(s)" : string.Empty;
-        return $"{marker} {summary.Name} ({summary.Version}) — {summary.State}{tools}";
+        var trust = summary.RequiredTrust is { } required ? $" — requires {required}" : string.Empty;
+        var access = summary.AccessTypes.Count > 0 ? string.Join(", ", summary.AccessTypes) : "unspecified";
+        return $"{marker} {summary.Name} ({summary.Version}) — {summary.State}{tools}{trust} — Declared access: {access}";
     }
 
     private async Task<InteractionRepositoryOpenWorkflowResult> OpenRepositoryAsync(

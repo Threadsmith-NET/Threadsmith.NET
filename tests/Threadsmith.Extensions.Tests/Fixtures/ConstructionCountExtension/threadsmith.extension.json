@@ -3,7 +3,8 @@
   "Name": "Construction Count Fixture",
   "Version": "1.0.0",
   "HostApiVersion": "current",
-  "EntryAssembly": "Threadsmith.Tests.Fixtures.ConstructionCount.dll",
+  "EntryAssembly": "Threadsmith.Tests.Fixtures.ConstructionCountExtension.dll",
+  "EntryClass": "Threadsmith.Tests.Fixtures.ConstructionCount.ConstructionCountExtension",
   "Capabilities": ["tool-provider"],
   "Permissions": []
 }

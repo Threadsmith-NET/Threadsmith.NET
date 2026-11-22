@@ -53,6 +53,9 @@ public enum ExtensionToolCategory
 
     /// <summary>Approved child-process execution.</summary>
     ProcessExecution,
+
+    /// <summary>Operations on an external service, including database queries and schema inspection.</summary>
+    ExternalService,
 }
 
 /// <summary>Whether a tool can change externally visible state.</summary>
@@ -63,6 +66,9 @@ public enum ExtensionToolSideEffect
 
     /// <summary>May execute repository or external code without changing files intentionally.</summary>
     ExecutesCode,
+
+    /// <summary>May commit changes to an external system.</summary>
+    WritesExternalData,
 }
 
 /// <summary>Whether retrying an identical tool call is safe.</summary>
@@ -77,6 +83,9 @@ public enum ExtensionToolIdempotency
 
 /// <summary>A typed JSON schema reference for an extension tool.</summary>
 public sealed record ExtensionToolSchema(string TypeName, int SchemaVersion, string JsonSchema);
+
+/// <summary>Generation-owned target and JSON input fields used for exact one-time statement review.</summary>
+public sealed record ExtensionStatementReview(string Destination, string Database, string StatementProperty, string ParametersProperty);
 
 /// <summary>Static metadata and policy requirements for an extension-contributed tool.</summary>
 /// <remarks>
@@ -109,6 +118,9 @@ public sealed record ExtensionToolDefinition
     /// <summary>Approval required after policy permits the operation.</summary>
     public ExtensionApprovalRequirement RequiredApproval { get; init; }
 
+    /// <summary>Optional statement review contract for operations that request operator approval.</summary>
+    public ExtensionStatementReview? StatementReview { get; init; }
+
     /// <summary>External side-effect classification.</summary>
     public ExtensionToolSideEffect SideEffect { get; init; }
 
@@ -128,19 +140,23 @@ public sealed record ExtensionToolDefinition
 /// <summary>Invocation state handed to an extension tool.</summary>
 public sealed record ExtensionToolInvocationContext
 {
+    /// <summary>Resolves permitted references during this invocation.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IExtensionSecretAccess? Secrets { get; init; }
+
     /// <summary>Normalized repository root when open, otherwise <see langword="null"/>.</summary>
     public string? RepositoryPath { get; init; }
 
-    /// <summary>Repository-relative or absolute roots the tool may inspect.</summary>
+    /// <summary>Approved roots for host-managed tools, supplied as information to the extension.</summary>
     public IReadOnlyList<string> ApprovedRoots { get; init; } = ["."];
 
-    /// <summary>Repository-relative prohibited path patterns.</summary>
+    /// <summary>Path patterns restricted for host-managed tools, supplied as information to the extension.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 
     /// <summary>Executable basenames permitted for process tools.</summary>
     public IReadOnlyList<string> AllowedExecutables { get; init; } = [];
 
-    /// <summary>Network hostnames permitted for network-aware tools.</summary>
+    /// <summary>Allowed hosts for host-managed tools, supplied as information to the extension.</summary>
     public IReadOnlyList<string> AllowedNetworkHosts { get; init; } = [];
 
     /// <summary>Requester identity retained in audit events.</summary>
@@ -172,8 +188,8 @@ public sealed record ExtensionToolResult
 /// <summary>A callable tool capability contributed by an extension (mirrors the host <c>ITool</c>).</summary>
 /// <remarks>
 /// The extension deserializes and validates its own arguments because the host cannot resolve
-/// extension-owned input types from the default load context. The host still evaluates repository,
-/// secret, executable, and network policy from the accessors below before invoking
+/// extension-owned input types from the default load context. Enabling an extension grants its disk
+/// and network access. The host evaluates secret and executable declarations before invoking
 /// <see cref="ExecuteAsync"/>.
 /// </remarks>
 public interface IToolCapability : ICapability
@@ -181,11 +197,11 @@ public interface IToolCapability : ICapability
     /// <summary>Static contract metadata.</summary>
     ExtensionToolDefinition Definition { get; }
 
-    /// <summary>Returns every path subject to repository policy for the given arguments.</summary>
+    /// <summary>Optionally describes disk targets. Extension admission does not consume this legacy accessor.</summary>
     /// <param name="argumentsJson">The raw JSON arguments.</param>
     /// <param name="context">The invocation context.</param>
-    /// <returns>The repository-relative or absolute paths to evaluate.</returns>
-    IReadOnlyList<string> GetResourcePaths(string argumentsJson, ExtensionToolInvocationContext context);
+    /// <returns>The repository-relative or absolute paths.</returns>
+    IReadOnlyList<string> GetResourcePaths(string argumentsJson, ExtensionToolInvocationContext context) => [];
 
     /// <summary>Returns every logical secret reference subject to policy.</summary>
     /// <param name="argumentsJson">The raw JSON arguments.</param>
@@ -197,10 +213,10 @@ public interface IToolCapability : ICapability
     /// <returns>The executable basename, or <see langword="null"/>.</returns>
     string? GetExecutable(string argumentsJson);
 
-    /// <summary>Returns network hosts evaluated by host policy.</summary>
+    /// <summary>Optionally describes network targets. Extension admission does not consume this legacy accessor.</summary>
     /// <param name="argumentsJson">The raw JSON arguments.</param>
     /// <returns>The network hosts.</returns>
-    IReadOnlyList<string> GetNetworkHosts(string argumentsJson);
+    IReadOnlyList<string> GetNetworkHosts(string argumentsJson) => [];
 
     /// <summary>Executes validated arguments and returns a host-owned result.</summary>
     /// <param name="argumentsJson">The raw JSON arguments.</param>

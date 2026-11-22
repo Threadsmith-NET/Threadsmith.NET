@@ -1667,6 +1667,11 @@ internal static partial class InteractionPresentationFormatter
         }
 
         lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
+        if (!analysis.Obsolete && analyzers.FailureReason is { } reason)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Cause: " + reason, PresentationTextRole.Warning));
+        }
+
         if (!analysis.Obsolete && analyzers.Status is "completed" or "partial")
         {
             var counts = $"Reportable analyzer findings: {analyzers.ReportableFindings}" + FormatAnalyzerSeverityCounts(analyzers);

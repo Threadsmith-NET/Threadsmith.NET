@@ -19,7 +19,6 @@ internal sealed class RepositoryMemoryModal : Modal
     private readonly Action _toggleMouse;
     private readonly Func<bool> _canHandleMouse;
     private readonly CachedTextRun _title = new();
-    private readonly CachedTextRun _footer = new();
     private readonly Channel<(RepositoryMemoryListItem? Item, bool Delete, int Tab)> _changes = Channel.CreateUnbounded<(RepositoryMemoryListItem?, bool, int)>();
     private Rect _tabBounds;
     private bool _fits;
@@ -130,12 +129,18 @@ internal sealed class RepositoryMemoryModal : Modal
 
         var frame = ModalFrame.Bounds(surface.Size, large: true);
         var content = WorkspaceLayout.ModalContent(new Size(frame.Width, frame.Height));
-        _tabBounds = new Rect(frame.Left + content.Left, frame.Top + content.Top + 1, view.Size.Width, Math.Max(1, view.Size.Height - 2));
-        _title.Draw(view, 0, 0, _error is null ? $"Repository memories / {_lists[_tabs.ActiveIndex].Name}" : "Error: " + TranscriptView.Safe(_error), _style(PresentationTextRole.SelectionPrompt));
+        var title = _error is null ? $"{(view.Size.Width < 50 ? "Memories" : "Repository memories")} / {_lists[_tabs.ActiveIndex].Name}" : "Error: " + _error;
+        var footer = _busy ? "Applying memory change..." : view.Size.Width < 80 ? "Ins: add Enter: edit Del: delete Esc" : "Ins: add  Enter/F4: edit  Del: delete  Tab: category  Up/Down: select  PgUp/PgDn: scroll  F2: IDs  Esc: close";
+        var body = ModalFrame.CreateBody(view, _title, _style, title, string.Empty, string.Empty, footer);
+        var bodyBounds = ModalFrame.BodyBounds(view.Size, title, string.Empty, string.Empty, footer);
+        _fits = body.Size.Height >= 4;
+        _tabBounds = new Rect(frame.Left + content.Left, frame.Top + content.Top + bodyBounds.Y, body.Size.Width, body.Size.Height);
         _tabs.ActiveStyle = _style(PresentationTextRole.AgentSelectedTabRole);
         _tabs.InactiveStyle = _style(PresentationTextRole.AgentNotSelectedTabRole);
-        _tabs.Render(view.CreateView(new Rect(0, 1, _tabBounds.Width, _tabBounds.Height)));
-        _footer.Draw(view, 0, view.Size.Height - 1, _busy ? "Applying memory change..." : view.Size.Width < 80 ? "Ins: add Enter: edit Del: delete Esc" : "Ins: add  Enter/F4: edit  Del: delete  Tab: category  Up/Down: select  PgUp/PgDn: scroll  F2: IDs  Esc: close", _style(PresentationTextRole.Status));
+        if (body.Size.Height > 0)
+        {
+            _tabs.Render(body);
+        }
     }
 
     /// <summary>Reconciles host results without losing the active tab.</summary>
@@ -193,7 +198,10 @@ internal sealed class RepositoryMemoryModal : Modal
                 Reflow(surface.Size.Width);
             }
 
-            _page = Math.Max(1, surface.Size.Height - 2);
+            var status = $"{_entries.Count} entries  |  {_rows.Count} lines";
+            var statusRows = ModalFrame.Wrap(status, surface.Size.Width);
+            var bodyTop = statusRows.Length + 1;
+            _page = Math.Max(0, surface.Size.Height - bodyTop);
             Scroll(0);
             if (_reveal)
             {
@@ -207,16 +215,16 @@ internal sealed class RepositoryMemoryModal : Modal
                 _reveal = false;
             }
 
-            Draw(surface, 0, 0, $"{_entries.Count} entries  |  {_top + (_rows.Count > 0 ? 1 : 0)}-{Math.Min(_rows.Count, _top + _page)} of {_rows.Count} lines", PresentationTextRole.Status);
-            Draw(surface, 0, 1, "ID", PresentationTextRole.SelectionPrompt);
-            Draw(surface, _originX, 1, "Origin", PresentationTextRole.SelectionPrompt);
-            Draw(surface, _textX, 1, "Memory", PresentationTextRole.SelectionPrompt);
+            ModalFrame.DrawLines(surface, _text[_textIndex++ % _text.Length], 0, statusRows, _style(PresentationTextRole.Status));
+            Draw(surface, 0, statusRows.Length, "ID", PresentationTextRole.SelectionPrompt);
+            Draw(surface, _originX, statusRows.Length, "Origin", PresentationTextRole.SelectionPrompt);
+            Draw(surface, _textX, statusRows.Length, "Memory", PresentationTextRole.SelectionPrompt);
             for (var index = 0; index < Math.Min(_page, _rows.Count - _top); index++)
             {
                 var row = _rows[_top + index];
-                Draw(surface, 0, index + 2, (row.Entry is not null && row.Entry == Selected?.Id ? ">" : " ") + row.Id, row.Entry is not null && row.Entry == Selected?.Id ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Status);
-                Draw(surface, _originX, index + 2, row.Origin, PresentationTextRole.Status);
-                Draw(surface, _textX, index + 2, row.Text, row.Role);
+                Draw(surface, 0, index + bodyTop, (row.Entry is not null && row.Entry == Selected?.Id ? ">" : " ") + row.Id, row.Entry is not null && row.Entry == Selected?.Id ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Status);
+                Draw(surface, _originX, index + bodyTop, row.Origin, PresentationTextRole.Status);
+                Draw(surface, _textX, index + bodyTop, row.Text, row.Role);
             }
         }
 

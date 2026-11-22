@@ -51,11 +51,16 @@ public sealed class ModelPreferenceAggregator : IModelPreferenceAggregator
 
     /// <inheritdoc />
     public IReadOnlyList<ModelPreferenceContributorSnapshot> Contributors => _registry.ModelPreferenceContributors
-        .Select(c => new ModelPreferenceContributorSnapshot
+        .Select(c =>
         {
-            CapabilityId = c.Protection.SafeMessage(c.Contributor.Descriptor.Id),
-            DisplayName = c.Protection.SafeMessage(c.Contributor.Descriptor.DisplayName),
-            ExtensionId = c.ExtensionId.Value.ToString(),
+            using var boundary = c.Protection.CreateScope(pinActiveValues: true);
+            var descriptor = c.Contributor.Descriptor;
+            return new ModelPreferenceContributorSnapshot
+            {
+                CapabilityId = c.Protection.SafeMessage(descriptor.Id),
+                DisplayName = c.Protection.SafeMessage(descriptor.DisplayName),
+                ExtensionId = c.ExtensionId.Value.ToString(),
+            };
         })
         .OrderBy(s => s.CapabilityId, StringComparer.Ordinal)
         .ToArray();
@@ -69,6 +74,7 @@ public sealed class ModelPreferenceAggregator : IModelPreferenceAggregator
         var all = new List<ExtensionModelPreferenceHint>();
         foreach (var registration in _registry.ModelPreferenceContributors)
         {
+            using var boundary = registration.Protection.CreateScope(pinActiveValues: true);
             try
             {
                 var hints =
@@ -83,7 +89,7 @@ public sealed class ModelPreferenceAggregator : IModelPreferenceAggregator
                     "Model-preference contributor {ContributorId} failed for workload {Workload}: {Error}",
                     registration.Protection.SafeMessage(registration.Contributor.Descriptor.Id),
                     workloadName,
-                    registration.Protection.SafeMessage(exception.Message));
+                    registration.Protection.SafeLogMessage(exception.Message));
             }
         }
 

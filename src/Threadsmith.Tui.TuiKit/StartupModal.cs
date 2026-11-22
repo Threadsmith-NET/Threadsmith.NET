@@ -27,6 +27,7 @@ internal sealed class StartupModal : Modal
 
     private readonly List<SemanticStartupPhaseSnapshot> _rows = [];
     private readonly List<RowCache> _rowCache = [];
+    private readonly List<(string Text, SemanticStartupPhaseState State)> _visibleLines = [];
     private readonly List<CachedTextRun> _lineRuns = [];
     private string? _fatalDetail;
     private int _fatalWidth;
@@ -126,9 +127,7 @@ internal sealed class StartupModal : Modal
         {
             _tip = tip;
             _tipWidth = view.Size.Width;
-            _tipLines = tip is null ? [] : [.. TextWrapper.Wrap(
-                StyledText.From(TranscriptView.Safe($"Tip: {tip}")), _tipWidth)
-                .Select(line => line.ToPlainString())];
+            _tipLines = tip is null ? [] : ModalFrame.Wrap($"Tip: {tip}", _tipWidth);
         }
 
         var progress = Progress?.Invoke() ?? [];
@@ -144,17 +143,28 @@ internal sealed class StartupModal : Modal
         AppendRows(progress, labeled: false);
         AppendRows(semantic, labeled: false);
         var activeCount = 0;
-        foreach (var row in _rows)
+        var usedSlots = 0;
+        foreach (var phase in _rows)
         {
-            if (row.State == SemanticStartupPhaseState.Running)
+            if (phase.State == SemanticStartupPhaseState.Running)
             {
-                activeCount++;
+                activeCount += PhaseLines(phase, view.Size.Width, usedSlots++).Length;
             }
         }
 
-        // Fatal confirmation owns its final row and a blank separator outside the history viewport.
-        var currentRows = (_label is null ? 0 : 1) + (TotalElapsed is null ? 0 : 1) + (Acknowledge is null ? 0 : 2);
-        var details = Details;
+        var operation = Operation?.Snapshot;
+        var operationState = operation?.State ?? _state;
+        var operationLines = _label is null ? [] : FormatWrappedRows(operation?.Elapsed ?? Elapsed, _label, operationState, string.Empty, view.Size.Width);
+        var totalLines = TotalElapsed is { } total ? FormatWrappedRows(total(), "Total startup", null, string.Empty, view.Size.Width) : [];
+        var acknowledgment = Acknowledge is null ? [] : ModalFrame.Wrap("press Enter to exit; Esc cancels", view.Size.Width);
+        var operationCapacity = Math.Max(1, view.Size.Height - CompactLogo.Length - totalLines.Length - (acknowledgment.Length == 0 ? 0 : acknowledgment.Length + 2));
+        if (operationLines.Length > operationCapacity)
+        {
+            operationLines = [.. operationLines.Take(operationCapacity - 1), $"… {operationState}; label overflow"];
+        }
+
+        var currentRows = operationLines.Length + totalLines.Length + (acknowledgment.Length == 0 ? 0 : acknowledgment.Length + 1);
+        IReadOnlyList<string> details = Details.SelectMany(detail => ModalFrame.Wrap(detail, view.Size.Width)).ToArray();
         if (Acknowledge is not null)
         {
             var fatalDetail = Details.Count == 0 ? null : Details[^1];
@@ -162,8 +172,7 @@ internal sealed class StartupModal : Modal
             {
                 _fatalDetail = fatalDetail;
                 _fatalWidth = view.Size.Width;
-                _fatalLines = fatalDetail is null ? [] : [.. TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(fatalDetail)), _fatalWidth)
-                    .Select(line => line.ToPlainString())];
+                _fatalLines = fatalDetail is null ? [] : ModalFrame.Wrap(fatalDetail, _fatalWidth);
             }
 
             details = _fatalLines;
@@ -188,9 +197,12 @@ internal sealed class StartupModal : Modal
         var progressHeight = view.Size.Height - tipHeight - (tipHeight > 0 ? 1 : 0);
         var showSplines = _label?.StartsWith("Loading ", StringComparison.Ordinal) == true
             && progressHeight - logoHeight - logoGap > requiredRows;
+        var splinesState = SplinesCompleted ? SemanticStartupPhaseState.Completed : SemanticStartupPhaseState.Running;
+        var splinesLines = FormatWrappedRows(SplinesElapsed, "Reticulating Splines", splinesState, string.Empty, view.Size.Width);
+        showSplines &= progressHeight - logoHeight - logoGap >= requiredRows + splinesLines.Length;
         if (showSplines)
         {
-            currentRows++;
+            currentRows += splinesLines.Length;
         }
 
         for (var index = 0; index < logoHeight; index++)
@@ -211,59 +223,59 @@ internal sealed class StartupModal : Modal
         }
 
         var capacity = Math.Max(0, progressHeight - y - currentRows - fatalDetailRows);
-        var skipActive = Math.Max(0, activeCount - capacity);
-        var skipHistory = Math.Max(0, _rows.Count - activeCount - Math.Max(0, capacity - activeCount));
-        foreach (var phase in _rows)
+        var historyRemaining = Math.Max(0, capacity - activeCount);
+        var activeSlot = usedSlots;
+        _visibleLines.Clear();
+        for (var index = _rows.Count - 1; index >= 0 && _visibleLines.Count < capacity; index--)
         {
-            if (phase.State == SemanticStartupPhaseState.Running ? skipActive-- > 0 : skipHistory-- > 0)
+            var phase = _rows[index];
+            var running = phase.State == SemanticStartupPhaseState.Running;
+            if (!running && historyRemaining == 0)
             {
+                if (activeSlot == 0)
+                {
+                    break;
+                }
+
                 continue;
             }
 
-            while (_rowCache.Count <= y)
+            var wrapped = running ? _rowCache[--activeSlot].Lines : PhaseLines(phase, view.Size.Width, usedSlots++);
+            var take = Math.Min(wrapped.Length, running ? capacity - _visibleLines.Count : historyRemaining);
+            for (var line = wrapped.Length - 1; line >= wrapped.Length - take; line--)
             {
-                _rowCache.Add(new RowCache());
+                _visibleLines.Add((wrapped[line], phase.State));
             }
 
-            var cache = _rowCache[y];
-            if (cache.Snapshot != phase || cache.Width != view.Size.Width)
+            if (!running)
             {
-                cache.Snapshot = phase;
-                cache.Width = view.Size.Width;
-                var label = phase.Label ?? phase.Phase switch
-                {
-                    SemanticStartupPhase.CaptureSnapshots => "Capture file snapshots",
-                    SemanticStartupPhase.OpenWorkspace => "Open/evaluate solution",
-                    SemanticStartupPhase.ConfineInputs => "Check input boundaries",
-                    SemanticStartupPhase.PrepareCompilation => "Prepare compilation",
-                    SemanticStartupPhase.StartMonitoring => "Start file monitoring",
-                    SemanticStartupPhase.ReadDocuments => "Read document snapshots",
-                    SemanticStartupPhase.ReconcileSnapshots => "Reconcile file snapshots",
-                    _ => phase.Phase.ToString(),
-                };
-                var detail = phase.Detail is null ? string.Empty : $" — {phase.Detail}";
-                cache.Text = FormatRow(phase.Elapsed, label, phase.State, detail, view.Size.Width);
+                historyRemaining -= take;
             }
-
-            Draw(view, y++, cache.Text, Role(phase.State));
         }
 
-        if (showSplines && y < progressHeight - 1)
+        _rowCache.RemoveRange(usedSlots, _rowCache.Count - usedSlots);
+        for (var index = _visibleLines.Count - 1; index >= 0; index--)
         {
-            var state = SplinesCompleted ? SemanticStartupPhaseState.Completed : SemanticStartupPhaseState.Running;
-            Draw(view, y++, FormatRow(SplinesElapsed, "Reticulating Splines", state, string.Empty, view.Size.Width), Role(state));
+            var line = _visibleLines[index];
+            Draw(view, y++, line.Text, Role(line.State));
         }
 
-        if (_label is not null)
+        if (showSplines)
         {
-            var operation = Operation?.Snapshot;
-            var state = operation?.State ?? _state;
-            Draw(view, y++, FormatRow(operation?.Elapsed ?? Elapsed, _label, state, string.Empty, view.Size.Width), Role(state));
+            foreach (var line in splinesLines)
+            {
+                Draw(view, y++, line, Role(splinesState));
+            }
         }
 
-        if (TotalElapsed is { } total && y < progressHeight)
+        foreach (var line in operationLines)
         {
-            Draw(view, y++, FormatRow(total(), "Total startup", null, string.Empty, view.Size.Width), PresentationTextRole.Status);
+            Draw(view, y++, line, Role(operationState));
+        }
+
+        foreach (var line in totalLines)
+        {
+            Draw(view, y++, line, PresentationTextRole.Status);
         }
 
         for (var index = 0; index < fatalDetailRows; index++)
@@ -274,9 +286,13 @@ internal sealed class StartupModal : Modal
             Draw(view, y++, text, PresentationTextRole.Error);
         }
 
-        if (Acknowledge is not null && y + 1 < progressHeight)
+        if (acknowledgment.Length > 0)
         {
-            Draw(view, y + 1, "press Enter to exit; Esc cancels", PresentationTextRole.Warning);
+            y++;
+            foreach (var line in acknowledgment)
+            {
+                Draw(view, y++, line, PresentationTextRole.Warning);
+            }
         }
 
         for (var index = 0; index < Math.Min(tipHeight, _tipLines.Length); index++)
@@ -314,6 +330,48 @@ internal sealed class StartupModal : Modal
         return $"{seconds} {item} {status}{TranscriptView.Safe(detail.Replace("...", string.Empty, StringComparison.Ordinal))}";
     }
 
+    private static string[] FormatWrappedRows(TimeSpan elapsed, string label, SemanticStartupPhaseState? state, string detail, int width)
+    {
+        var itemWidth = Math.Min(ItemWidth, Math.Max(3, width - ElapsedWidth - StatusWidth - 2));
+        var safeLabel = TranscriptView.Safe(label.Replace("...", string.Empty, StringComparison.Ordinal)).Trim();
+        if (UnicodeWidth.GetWidth(safeLabel) <= itemWidth)
+        {
+            return ModalFrame.Wrap(FormatRow(elapsed, label, state, detail, width), width);
+        }
+
+        var seconds = (Math.Clamp(elapsed.TotalSeconds, 0, 999.9).ToString("0.0", CultureInfo.InvariantCulture) + "s").PadLeft(ElapsedWidth);
+        return ModalFrame.Wrap($"{seconds} {safeLabel} {state}{detail}", width);
+    }
+
+    private string[] PhaseLines(SemanticStartupPhaseSnapshot phase, int width, int slot)
+    {
+        if (slot == _rowCache.Count)
+        {
+            _rowCache.Add(new RowCache());
+        }
+
+        var cache = _rowCache[slot];
+        if (cache.Snapshot != phase || cache.Width != width)
+        {
+            cache.Snapshot = phase;
+            cache.Width = width;
+            var label = phase.Label ?? phase.Phase switch
+            {
+                SemanticStartupPhase.CaptureSnapshots => "Capture file snapshots",
+                SemanticStartupPhase.OpenWorkspace => "Open/evaluate solution",
+                SemanticStartupPhase.ConfineInputs => "Check input boundaries",
+                SemanticStartupPhase.PrepareCompilation => "Prepare compilation",
+                SemanticStartupPhase.StartMonitoring => "Start file monitoring",
+                SemanticStartupPhase.ReadDocuments => "Read document snapshots",
+                SemanticStartupPhase.ReconcileSnapshots => "Reconcile file snapshots",
+                _ => phase.Phase.ToString(),
+            };
+            cache.Lines = FormatWrappedRows(phase.Elapsed, label, phase.State, phase.Detail is null ? string.Empty : " — " + phase.Detail, width);
+        }
+
+        return cache.Lines;
+    }
+
     private void AppendRows(IReadOnlyList<SemanticStartupPhaseSnapshot> source, bool labeled)
     {
         for (var index = 0; index < source.Count; index++)
@@ -328,6 +386,11 @@ internal sealed class StartupModal : Modal
 
     private void Draw(ISurface surface, int y, string text, PresentationTextRole role)
     {
+        if (y < 0 || y >= surface.Size.Height)
+        {
+            return;
+        }
+
         while (_lineRuns.Count <= y)
         {
             _lineRuns.Add(new CachedTextRun());
@@ -351,6 +414,6 @@ internal sealed class StartupModal : Modal
 
         internal int Width { get; set; }
 
-        internal string Text { get; set; } = string.Empty;
+        internal string[] Lines { get; set; } = [];
     }
 }

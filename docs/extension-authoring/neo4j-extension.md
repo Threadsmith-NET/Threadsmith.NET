@@ -93,12 +93,23 @@ Store only the logical reference in settings. The host resolves it through the s
 driver. The driver and its credential live and die inside that one invocation; nothing is pooled
 across invocations. An operation already in flight keeps the credential it previously obtained.
 
+Host output protection retains resolved credentials until the owning invocation's result conversion
+and failure translation finish. Overlapping owners and callback readers share reference-counted
+registrations; the last release forgets the plaintext and encoded value. The capacity limit applies
+to distinct active credentials, not credential-rotation history. Retained extension loggers withhold
+all free-form messages after the first credential retirement, including otherwise harmless messages,
+so late logging cannot disclose forgotten credentials. This does not make in-process extensions a
+security sandbox: extensions must not cache credentials for later results or admission callbacks.
+Exact-value filtering of those structured boundaries covers active registrations, not an indefinite
+history of credentials.
+
 ## 4. Database account
 
 Use a dedicated least-privilege account. Never an administrator.
 
 `forceReadOnly` is a client-side safety setting: it makes the extension request the server's read
-access mode and classifies the tool as read-only and idempotent. **Read routing is not
+access mode. Only `forceReadOnly && readOnlyEnforcedByServerAccount` classifies the tool as read-only
+and idempotent; otherwise it is tracked as a non-idempotent external write. **Read routing is not
 authorization.** For a genuinely read-only deployment the account itself must deny writes, and the
 server must restrict procedures and features with side effects, including any that perform outbound
 network access. Confirm your edition supports the role controls you need before you describe the
@@ -136,10 +147,11 @@ during approval, parameter values are not.
 }
 ```
 
-When `forceReadOnly` is `false`, every call is classified conservatively as a non-idempotent
+Unless both read-only settings are true, every call is classified conservatively as a non-idempotent
 external write that requires user approval, even if the statement only reads. Statement text cannot
-prove that a query is read-only. A forced read-only deployment also requires approval unless
-`readOnlyEnforcedByServerAccount` confirms that the server itself denies writes.
+prove that a query is read-only. This preserves external-write interruption and unknown-outcome
+warnings even when read routing was requested. The output `readOnly` field reports requested routing,
+not independently verified authorization.
 
 ### Output
 
@@ -177,11 +189,18 @@ prove that a query is read-only. A forced read-only deployment also requires app
 **Truncation is not failure.** A bounded response still reports its real transaction outcome:
 
 ```json
-{ "outcome": "committed", "truncated": true, "returnedRows": 500, "limitsReached": ["maximumRows"] }
+{ "outcome": "rolledBack", "phase": "consumption", "truncated": true, "returnedRows": 500, "limitsReached": ["maximumRows"] }
 ```
 
-Remaining records are discarded without being retained, so bounding the output never abandons the
-statement before its commit.
+When the row or retained-result-byte limit leaves unread records, the extension stops fetching and
+requests rollback. The driver waits for outstanding results to be discarded before it sends rollback;
+these output limits do not bound cleanup latency. This applies to reads and writes: a write returning
+an oversized result is **not committed**. Retained records are a partial, rolled-back view, not proof
+of persisted updates. If rollback cannot be confirmed, the result reports `unknown` with an error.
+Individual-value truncation alone does not abandon an otherwise fully consumed result.
+
+These limits bound retained output and explicit cursor fetching, not total server execution, the size
+of an individual incoming record, or the driver's fetch buffer. The server query timeout still applies.
 
 **An unknown commit is never replayed.** If the commit acknowledgement is lost, the result is:
 
@@ -202,6 +221,12 @@ Values that plain JSON cannot represent exactly are tagged with `$type` and expl
 database-scoped identifiers, not durable business keys. Nesting depth, collection entries, string
 length, and individual value size are bounded; when any bound applies, `limitsReached` includes
 `maximumValueSize`.
+
+Points include `dimensions` (2 or 3); 2D points omit `z`, while 3D points retain it. Non-finite
+coordinates use the same tagged `float` representation as ordinary non-finite numbers. Datetimes
+include `zoneKind`: named zones retain `zoneId`, including unresolved identifiers, while offset-only
+zones use `offsetSeconds` without `zoneId`. `zoneResolved: false` omits the unavailable offset but
+preserves the UTC instant, nanoseconds, and original zone identifier.
 
 ## 7. Using `neo4j_schema`
 

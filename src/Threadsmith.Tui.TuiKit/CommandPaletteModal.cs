@@ -15,8 +15,7 @@ internal sealed class CommandPaletteModal : Modal
     private readonly TuiKitCommandDiscovery _discovery;
     private readonly FuzzyList<Command> _palette;
     private readonly ComposerBuffer _query;
-    private readonly CellBuffer _listBuffer = new(1, 1);
-    private readonly CachedTextRun[] _rows = [.. Enumerable.Range(0, MaximumVisibleRows).Select(_ => new CachedTextRun())];
+    private readonly WrappedModalList _list = new();
     private readonly CachedTextRun _title = new();
     private readonly CachedTextRun _queryRun = new();
     private readonly CachedTextRun _usage = new();
@@ -113,35 +112,34 @@ internal sealed class CommandPaletteModal : Modal
             return;
         }
 
-        var view = frame;
         var highlight = _resolveStyle(PresentationTextRole.SelectionHighlight).WithAttribute(CellAttributes.Reverse, true);
-        _title.Draw(view, 0, 0, "Commands | Enter inserts | Esc closes", _resolveStyle(PresentationTextRole.SelectionPrompt));
-        _queryRun.Draw(view, 0, 2, "> " + FilterText, _resolveStyle(PresentationTextRole.Status).WithAttribute(CellAttributes.Reverse, _query.Selection.Length > 0));
-        var hasNoticeRow = view.Size.Height >= 7;
-        var count = Math.Min(MaximumVisibleRows, view.Size.Height - (hasNoticeRow ? 6 : 5));
-        RenderList(view.CreateView(new Rect(0, 3, view.Size.Width, count)), normal, highlight);
-        var detailsRow = count + 3;
-        if (hasNoticeRow)
-        {
-            _noticeRun.Draw(view, 0, detailsRow++, _notice, _resolveStyle(PresentationTextRole.Status));
-        }
 
+        // Query previews and details must never displace the selected result.
+        var titleRows = ModalFrame.Wrap("Commands | Enter inserts | Esc closes", frame.Size.Width, maximumRows: Math.Max(1, frame.Size.Height - 2));
+        var queryRows = ModalFrame.Wrap("> " + FilterText, frame.Size.Width, maximumRows: Math.Max(1, frame.Size.Height - titleRows.Length - 1));
+        ModalFrame.DrawLines(frame, _title, 0, titleRows, _resolveStyle(PresentationTextRole.SelectionPrompt));
+        ModalFrame.DrawLines(frame, _queryRun, titleRows.Length, queryRows, _resolveStyle(PresentationTextRole.Status).WithAttribute(CellAttributes.Reverse, _query.Selection.Length > 0));
+        var heading = titleRows.Length + queryRows.Length;
+        var usage = "No matching commands";
+        var description = string.Empty;
         if (_palette.SelectedItem is { } selected && _discovery.TryGet(selected.Id, out var descriptor))
         {
-            _usage.Draw(view, 0, detailsRow, descriptor.Usage, _resolveStyle(PresentationTextRole.SelectionPrompt));
-            _description.Draw(view, 0, detailsRow + 1, descriptor.Description, normal);
-        }
-        else
-        {
-            _usage.Draw(view, 0, detailsRow, "No matching commands", normal);
+            usage = descriptor.Usage;
+            description = descriptor.Description;
         }
 
-        if (!hasNoticeRow && _notice.Length > 0)
-        {
-            var notice = view.CreateView(new Rect(0, detailsRow + 1, view.Size.Width, 1));
-            notice.Fill(new Rect(0, 0, notice.Size.Width, 1), Cell.Blank(normal));
-            _noticeRun.Draw(notice, 0, 0, _notice, _resolveStyle(PresentationTextRole.Status));
-        }
+        var noticeRows = ModalFrame.Wrap(_notice, frame.Size.Width);
+        var usageRows = ModalFrame.Wrap(usage, frame.Size.Width);
+        var descriptionRows = ModalFrame.Wrap(description, frame.Size.Width);
+        var availableRows = frame.Size.Height - heading;
+        var count = Math.Clamp(availableRows - noticeRows.Length - usageRows.Length - descriptionRows.Length, 1, Math.Min(availableRows, MaximumVisibleRows));
+        var listTop = heading;
+        RenderList(frame.CreateView(new Rect(0, listTop, frame.Size.Width, count)), normal, highlight);
+        var detailsRow = listTop + count;
+        ModalFrame.DrawLines(frame, _noticeRun, detailsRow, noticeRows, _resolveStyle(PresentationTextRole.Status));
+        detailsRow += noticeRows.Length;
+        ModalFrame.DrawLines(frame, _usage, detailsRow, usageRows, _resolveStyle(PresentationTextRole.SelectionPrompt));
+        ModalFrame.DrawLines(frame, _description, detailsRow + usageRows.Length, descriptionRows, normal);
     }
 
     private void HandleQueryKey(KeyEvent key)
@@ -222,26 +220,8 @@ internal sealed class CommandPaletteModal : Modal
 
     private void RenderList(BufferSurface view, CellStyle normal, CellStyle highlight)
     {
-        // TUIKit 0.10.1 renders labels one UTF-16 code unit per cell and hardcodes default
-        // colors. Render the bounded full labels offscreen, then reflow whole graphemes using
-        // our existing safe text renderer. Matching, ordering and scrolling remain TUIKit-owned.
-        _listBuffer.Resize(_discovery.MaximumRenderedTitleLength, view.Size.Height + 1);
-        _listBuffer.Clear(CellStyle.Default);
         _palette.HighlightStyle = highlight;
         _palette.MatchStyle = CellStyle.Default;
-        _palette.Render(new BufferSurface(_listBuffer));
-        var text = new StringBuilder(_listBuffer.Width);
-        for (var row = 0; row < view.Size.Height; row++)
-        {
-            text.Clear();
-            for (var column = 0; column < _listBuffer.Width; column++)
-            {
-                text.Append(_listBuffer.Get(column, row + 1).Grapheme);
-            }
-
-            var style = _listBuffer.Get(0, row + 1).Style == highlight ? highlight : normal;
-            view.Fill(new Rect(0, row, view.Size.Width, 1), Cell.Blank(style));
-            _rows[row].Draw(view, 0, row, text.ToString().TrimEnd(), style);
-        }
+        _list.Render(_palette, view, _discovery.MaximumRenderedTitleLength, normal, highlight, headerRows: 1);
     }
 }

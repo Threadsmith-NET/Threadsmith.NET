@@ -165,21 +165,26 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
             _generation.GenerationId,
             _generation.Budget ?? new ExtensionInvocationBudget(_generation.GenerationId),
             GetLeaseTimeout());
+        ExtensionSecretAccess? secrets = null;
+        using var boundary = _generation.SecretProtection.CreateScope(pinActiveValues: true);
         try
         {
             var references = context.TakeSecretReferences(this, input);
             ExtensionToolResult result;
-            ExtensionSecretAccess? secrets = null;
             if (references is not null && _generation.SecretResolver is { } resolver && context.Invocation.TrustLevel >= RepositoryTrustLevel.FullyTrustedAutomation)
             {
                 secrets = new ExtensionSecretAccess(resolver, references, context, _generation.SecretProtection, _generation.Descriptor.Id, _generation.SecretRetirement.Token, cancellationToken);
             }
 
-            using (secrets)
+            try
             {
                 var extensionContext = MapContext(context.Invocation) with { Secrets = secrets };
                 markDispatched?.Invoke();
                 result = await _capability.ExecuteAsync(argumentsJson, extensionContext, cancellationToken);
+            }
+            finally
+            {
+                secrets?.Revoke();
             }
 
             object value = result.ResultJson is null
@@ -216,12 +221,14 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         }
         finally
         {
+            secrets?.Dispose();
             lease.Dispose();
         }
     }
 
     private T ReadAdmissionClaim<T>(Func<T> read, Func<T, bool> containsSecret)
     {
+        using var boundary = _generation.SecretProtection.CreateScope(pinActiveValues: true);
         T claim;
         try
         {

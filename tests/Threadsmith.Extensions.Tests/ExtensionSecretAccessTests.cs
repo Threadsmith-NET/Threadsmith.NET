@@ -12,6 +12,29 @@ using Xunit;
 /// <summary>Checks secret resolution, revocation, and output boundaries.</summary>
 public static class ExtensionSecretAccessTests
 {
+    /// <summary>Readers pin a retired value only if it is resolved again during their lifetime.</summary>
+    [Fact]
+    public static void SecretProtection_DoesNotTransferRetiredValuesBetweenReaders()
+    {
+        var protection = new ExtensionSecretProtection();
+        using var owner = protection.CreateScope();
+        owner.Protect("retired");
+        owner.Protect("renewed");
+        using var first = protection.CreateScope(pinActiveValues: true);
+        owner.Dispose();
+        using var next = protection.CreateScope(pinActiveValues: true);
+        using (var renewal = protection.CreateScope())
+        {
+            renewal.Protect("renewed");
+        }
+
+        first.Dispose();
+        Assert.False(protection.Contains("retired"));
+        Assert.True(protection.Contains("renewed"));
+        next.Dispose();
+        Assert.False(protection.Contains("renewed"));
+    }
+
     /// <summary>Exercises trust, declarations and resolution through a loaded package.</summary>
     [Fact]
     public static async Task ManagerGrant_ResolvesOnlyAdmittedReferences()
@@ -288,6 +311,115 @@ public static class ExtensionSecretAccessTests
         Assert.DoesNotContain(DiagnosticTool.Escaped, completed.ResultJson ?? string.Empty, StringComparison.Ordinal);
     }
 
+    /// <summary>Rotation forgets inactive values while overlapping owners and retained logs remain protected.</summary>
+    [Fact]
+    public static async Task SecretProtection_RetiresInvocationRegistrations()
+    {
+        var protection = new ExtensionSecretProtection();
+        var logger = new CaptureLogger();
+        var retained = new ExtensionLogger(logger, protection);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext { RepositoryPath = ".", RequestedBy = "test" });
+        var references = new HashSet<string> { "secrets:test" };
+        var token = TestContext.Current.CancellationToken;
+        for (var index = 0; index < 257; index++)
+        {
+            var credential = $"rotating-fixture-{index}";
+            var resolver = new TestResolver();
+            resolver.Result.SetResult(new SecretResolutionResult { Value = new SecretValue(credential) });
+            var first = new ExtensionSecretAccess(resolver, references, context, protection, "fixture", default, token);
+            var second = new ExtensionSecretAccess(resolver, references, context, protection, "fixture", default, token);
+            using (first)
+            using (second)
+            {
+                await first.ResolveAsync("secrets:test", token);
+                await first.ResolveAsync("secrets:test", token); // One owner despite repeated resolution.
+                await second.ResolveAsync("secrets:test", token);
+                using var boundary = protection.CreateScope(pinActiveValues: true);
+                first.Revoke();
+                Assert.True(protection.Contains(credential));
+                first.Dispose();
+                Assert.True(protection.Contains(credential));
+                second.Dispose();
+                Assert.True(protection.Contains(credential)); // Callback/output reader still owns it.
+            }
+
+            Assert.False(protection.Contains(credential));
+            retained.Information(credential); // A retained logger cannot reveal a forgotten value.
+            Assert.Equal("[protected extension log]", logger.Message);
+        }
+
+        // A contributor can overlap the invoking tool. Force the invocation to retire first,
+        // then complete either its hint projection or its diagnostic exception.
+        foreach (var fail in new[] { false, true })
+        {
+            const string credential = "overlapping-contributor-value";
+            var generation = new ExtensionGeneration(ExtensionId.New(), ExtensionGenerationId.New(), new() { Id = "fixture", Name = "fixture" }, null, null!, null, ".", ".");
+            var contributor = new PausedContributor();
+            var registry = new CapabilityRegistry(new InvocationLeaseAuthority(NullLogger.Instance), NullLogger<CapabilityRegistry>.Instance);
+            registry.RegisterModelPreferenceContributor(generation, contributor);
+            var aggregate = new ModelPreferenceAggregator(registry, logger);
+            using var owner = generation.SecretProtection.CreateScope();
+            if (!fail)
+            {
+                owner.Protect(credential);
+            }
+
+            var pending = aggregate.GetHintsAsync("General", token);
+            IReadOnlyList<ExtensionModelPreferenceHint> hints = [];
+            try
+            {
+                await contributor.Entered.Task.WaitAsync(token);
+                if (fail)
+                {
+                    owner.Protect(credential); // The callback began before credential resolution.
+                }
+
+                owner.Dispose();
+                Assert.True(generation.SecretProtection.Contains(credential));
+            }
+            finally
+            {
+                if (fail)
+                {
+                    contributor.Result.TrySetException(new InvalidOperationException(credential));
+                }
+                else
+                {
+                    contributor.Result.TrySetResult([new() { WorkloadName = "General", PreferredProfileName = "fast", Rationale = credential }]);
+                }
+
+                hints = await pending;
+            }
+
+            Assert.Empty(hints);
+            Assert.False(generation.SecretProtection.Contains(credential));
+            if (fail)
+            {
+                Assert.DoesNotContain(credential, logger.Message, StringComparison.Ordinal);
+                Assert.Contains("[protected extension log]", logger.Message, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    private sealed class PausedContributor : IModelPreferenceContributor
+    {
+        public CapabilityDescriptor Descriptor { get; } = new() { Id = "paused_contributor", Kind = CapabilityKind.ModelPreference };
+
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource<IReadOnlyList<ExtensionModelPreferenceHint>> Result { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<IReadOnlyList<ExtensionModelPreferenceHint>> GetHintsAsync(string workloadName, CancellationToken cancellationToken = default)
+        {
+            Entered.TrySetResult();
+            return Result.Task.WaitAsync(cancellationToken);
+        }
+    }
+
     private sealed class DiagnosticTool(string field) : IToolCapability
     {
         internal const string Escaped = """["fixture-\"<&value"]""";
@@ -385,7 +517,7 @@ public static class ExtensionSecretAccessTests
         internal void PauseNext() => Interlocked.Exchange(ref _pauseNext, 1);
     }
 
-    private sealed class CaptureLogger : ILogger
+    private sealed class CaptureLogger : ILogger<ModelPreferenceAggregator>
     {
         internal string? Message { get; private set; }
 

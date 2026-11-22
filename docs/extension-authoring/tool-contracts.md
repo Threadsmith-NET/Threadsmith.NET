@@ -19,7 +19,7 @@ Tools are invoked only through `IToolInvocationPipeline`. The pipeline owns poli
 
 ## External services and optional operator review
 
-Set `Category = ExtensionToolCategory.ExternalService` for tools that operate on an external service. For a database extension, use this category for both schema inspection and query execution. Set `SideEffect` to `ReadOnly` for schema inspection and forced-read-only execution. Category and side effect do not request approval or limit extension I/O.
+Set `Category = ExtensionToolCategory.ExternalService` for tools that operate on an external service. For a database extension, use this category for both schema inspection and query execution. Set `SideEffect` to `ReadOnly` only when the operation cannot write; requesting read routing alone is not sufficient. Category and side effect do not request approval or limit extension I/O.
 
 Use `ExtensionToolSideEffect.WritesExternalData` for a tool that may change a remote system. Set its idempotency according to its actual replay behavior. Enabling an extension already gives it direct I/O. The side-effect label tells the host how to report an interruption. To request a review for each model tool call, also set `RequiredApproval = ExtensionApprovalRequirement.User`.
 
@@ -47,6 +47,13 @@ The shared resolver selects an eligible user-owned or higher-trust provider.
 Keep the revealed value local to the authenticated operation.
 Completion, cancellation, deadline expiry, and generation retirement end access.
 An ordinary drain lets an admitted operation finish. Use the wrapper's explicit reveal only at the transport boundary.
-The host checks tool output and provenance and protects extension logs. After a generation resolves a credential,
-its host logger also withholds messages containing backslashes because free-form text can contain escaped credentials.
-Extension code remains responsible for any copies it makes and for third-party logging inside its own process.
+The host checks tool output and provenance against active credential registrations, retained through result conversion
+and failure translation. Concurrent invocation owners and callback readers keep registrations alive until their last release;
+the 256-value capacity applies to distinct active credentials, not historical rotations. Values are then forgotten, not retained
+until generation unload. While values are active, the host logger also withholds messages containing backslashes because
+free-form text can contain escaped credentials. After the first registration retirement, retained host loggers withhold all
+free-form messages, including clean messages, to protect late logging without keeping historical plaintext. Retained
+model-preference descriptor text and diagnostics use the same conservative policy; in-flight contributor callbacks
+retain protection across their await and result filtering, including credentials resolved after the callback begins.
+Do not cache credentials for later results or admission callbacks: exact-value checks cover active registrations, not all past
+values. Extension code remains responsible for any copies it makes and for third-party logging inside its own process.

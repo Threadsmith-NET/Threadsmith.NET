@@ -44,6 +44,15 @@ internal sealed class Neo4jDriverSession : IGraphSession
             Configure);
     }
 
+    /// <summary>Initializes a new instance of the <see cref="Neo4jDriverSession"/> class with an owned driver.</summary>
+    internal Neo4jDriverSession(Neo4jSettings settings, IDriver driver)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(driver);
+        _settings = settings;
+        _driver = driver;
+    }
+
     /// <inheritdoc />
     public async Task<GraphExecutionResult> RunAsync(
         GraphStatement statement,
@@ -69,8 +78,23 @@ internal sealed class Neo4jDriverSession : IGraphSession
             phase = GraphPhase.Consumption;
             var retained = await ReadAsync(cursor, keys, statement, cancellationToken);
 
-            // Consuming the cursor discards any remaining records without retaining them, so a bounded
-            // response cannot abandon the statement before its commit is requested.
+            if (retained.LimitsReached.Contains(GraphLimit.Rows) || retained.LimitsReached.Contains(GraphLimit.ResultBytes))
+            {
+                // Stop fetching records and never commit a truncated write. Driver 6.5.1 waits
+                // for the outstanding result to be discarded before it sends ROLLBACK.
+                var outcome = await ResolveFailedOutcomeAsync(transaction, phase);
+                transaction = null;
+                return retained with
+                {
+                    Outcome = outcome,
+                    Columns = keys,
+                    Failure = outcome == GraphOutcome.Unknown
+                        ? new GraphFailure(GraphFailureKind.Database, null, "Result limit reached; rollback was not confirmed.")
+                        : null,
+                };
+            }
+
+            // The record stream has already ended; only its summary remains.
             var summary = await cursor.ConsumeAsync();
             phase = GraphPhase.Commit;
 
@@ -268,6 +292,7 @@ internal sealed class Neo4jDriverSession : IGraphSession
         }
 
         // Reaching the row capacity does not prove the server still had records to send.
+        cancellationToken.ThrowIfCancellationRequested();
         if (!await cursor.FetchAsync())
         {
             return Build(records, limits, mapper, truncated: false);

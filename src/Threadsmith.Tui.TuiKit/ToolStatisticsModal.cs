@@ -148,31 +148,38 @@ internal sealed class ToolStatisticsModal : Modal
             return;
         }
 
-        Draw(view, 0, "Repository tool statistics", PresentationTextRole.SelectionPrompt);
-        var footer = _busy ? "Storage pending | Esc close (admitted reset may still commit)"
-            : "R reset | F5 refresh | Arrows scroll | PgUp/PgDn Home/End | Esc close";
-        Draw(view, view.Size.Height - 1, footer, PresentationTextRole.Status);
+        _tableBounds = default;
+        const string title = "Repository tool statistics";
+        var compact = view.Size.Width < 60;
+        var subtitle = compact ? "Counts include rejections" : "Stored tools, including unavailable tools. Counts include rejections.";
+        var footer = _busy
+            ? "Storage pending | Esc close (admitted reset may still commit)"
+            : compact ? "R reset; F5 refresh; Esc closes" : "R reset | F5 refresh | Arrows scroll | PgUp/PgDn Home/End | Esc close";
+        var body = ModalFrame.CreateBody(view, _text[_textIndex++], _style, title, subtitle, string.Empty, footer, spaceAfterSubtitle: !compact);
         if (_error is { } error)
         {
-            Draw(view, 2, "Statistics unavailable: " + error, PresentationTextRole.Error);
-            Draw(view, 3, "No reset or exact snapshot confirmed. F5 retries.");
+            Draw(body, 0, "Statistics unavailable: " + error + "\nNo reset or exact snapshot confirmed. F5 retries.", PresentationTextRole.Error);
             return;
         }
 
         if (_snapshot is null)
         {
-            Draw(view, 2, "Loading tool statistics...");
+            Draw(body, 0, "Loading tool statistics...");
             return;
         }
 
         if (RowCount == 0)
         {
-            Draw(view, 2, "No completed tool invocations have been recorded.");
+            Draw(body, 0, "No completed tool invocations have been recorded.");
             return;
         }
 
-        Draw(view, 1, "Stored tools, including unavailable tools. Counts include rejections.");
-        var tableArea = new Rect(0, 3, view.Size.Width, Math.Max(1, view.Size.Height - 4));
+        var tableArea = ModalFrame.BodyBounds(view.Size, title, subtitle, string.Empty, footer, spaceAfterSubtitle: !compact);
+        if (tableArea.Height == 0)
+        {
+            return;
+        }
+
         var frame = ModalFrame.Bounds(surface.Size, large: true, expandHeight: true);
         var content = WorkspaceLayout.ModalContent(new Size(frame.Width, frame.Height));
         _tableBounds = new Rect(frame.Left + content.Left, frame.Top + content.Top + tableArea.Top, tableArea.Width, tableArea.Height);
@@ -188,7 +195,7 @@ internal sealed class ToolStatisticsModal : Modal
         // Only horizontal overflow is hosted here; DataTable virtualizes the rows at viewport height.
         var contentHeight = Math.Max(1, tableArea.Height - (TableWidth > tableArea.Width ? 1 : 0));
         _scroll.SetContentSize(Math.Max(TableWidth, tableArea.Width), contentHeight);
-        _scroll.Render(view.CreateView(tableArea));
+        _scroll.Render(body);
     }
 
     /// <summary>Applies an acknowledgement on the terminal owner unless dismissed.</summary>
@@ -223,6 +230,6 @@ internal sealed class ToolStatisticsModal : Modal
 
     private void Draw(ISurface surface, int y, string text, PresentationTextRole role = PresentationTextRole.Default)
     {
-        _text[_textIndex++ % _text.Length].Draw(surface, 0, y, TranscriptView.Safe(text), _style(role));
+        ModalFrame.DrawWrapped(surface, _text[_textIndex++ % _text.Length], y, text, _style(role));
     }
 }

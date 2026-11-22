@@ -153,67 +153,96 @@ internal sealed class ContextUsageModal : Modal
             return;
         }
 
-        Draw(view, 0, "Context usage — Estimated", PresentationTextRole.SelectionPrompt);
+        var headerHeight = Draw(view, 0, "Context usage — Estimated", PresentationTextRole.SelectionPrompt);
         if (_snapshot is not { } snapshot)
         {
-            Draw(view, 2, "No captured request usage available.");
-            Draw(view, 3, "Send a request first; Esc closes.");
+            headerHeight += Draw(view, headerHeight, "No captured request usage available.");
+            Draw(view, headerHeight, "Send a request first; Esc closes.");
             return;
         }
 
-        Draw(view, 1, $"{snapshot.ModelName ?? snapshot.ModelProfileId?.Value.ToString() ?? "Model unknown"} · {snapshot.Stage} #{snapshot.Round + 1} · {snapshot.CapturedAt:HH:mm:ss} UTC · {(snapshot.DispatchStarted ? "submitted" : "prepared; submission unobserved")}");
+        var requestHeader = $"{snapshot.ModelName ?? snapshot.ModelProfileId?.Value.ToString() ?? "Model unknown"} · {snapshot.Stage} #{snapshot.Round + 1} · {snapshot.CapturedAt:HH:mm:ss} UTC · {(snapshot.DispatchStarted ? "submitted" : "prepared; submission unobserved")}";
         if (_memoryView)
         {
-            RenderMemories(view, snapshot);
+            headerHeight += Draw(view, headerHeight, requestHeader);
+            RenderMemories(view, snapshot, headerHeight);
             return;
         }
 
-        Draw(view, 2, $"Host-stable prefix {snapshot.StablePrefixTokens:N0} tokens · cache eligible · actual cache use requires provider telemetry");
+        var requestTop = headerHeight;
+        var stableHeader = $"Host-stable prefix {snapshot.StablePrefixTokens:N0} tokens · cache eligible · actual cache use requires provider telemetry";
+        headerHeight += ModalFrame.Wrap(requestHeader, view.Size.Width).Length + ModalFrame.Wrap(stableHeader, view.Size.Width).Length;
         if (_basisWidth != view.Size.Width)
         {
             _basisWidth = view.Size.Width;
             _basisLines = TextWrapper.Wrap(StyledText.From(ContextUsageFormatter.Label(snapshot.EstimationBasis)), _basisWidth).Select(line => line.ToPlainString()).ToArray();
         }
 
-        var footerHeight = _basisLines.Count + 2;
-        if (view.Size.Height < footerHeight + 9)
+        var stableSuffix = !_categoryView && _selected < _stablePrefixRows ? " · stable prefix" : string.Empty;
+        var selectedRows = ModalFrame.Wrap(_rows.Count > 0 ? $"{ContextUsageFormatter.Label(_rows[_selected].Label)} · {_rows[_selected].Tokens:N0} tokens · {ContextUsageFormatter.Percent(_rows[_selected].Tokens, snapshot.InputTokens)} of input{stableSuffix}" : "No included content.", view.Size.Width);
+        var navigationRows = ModalFrame.Wrap("↑↓ PgUp/Dn Home/End · Tab categories/order · M memories · Esc close", view.Size.Width);
+        var footerHeight = _basisLines.Count + selectedRows.Length + navigationRows.Length;
+        var footerTop = Math.Max(headerHeight, view.Size.Height - footerHeight);
+        var bodyHeight = Math.Max(0, footerTop - headerHeight);
+        if (bodyHeight < 6)
         {
-            Draw(view, 3, $"Input {snapshot.InputTokens:N0} · Used {ContextUsageFormatter.Percent(snapshot.InputTokens, snapshot.ContextWindow)}");
-            Draw(view, 4, "Enlarge terminal for graphs; Esc closes.");
+            // Essential usage and resize guidance take priority over request metadata and explanations.
+            var compact = view.CreateView(new Rect(0, requestTop, view.Size.Width, view.Size.Height - requestTop));
+            var y = Draw(compact, 0, $"Input {snapshot.InputTokens:N0} · Used {ContextUsageFormatter.Percent(snapshot.InputTokens, snapshot.ContextWindow)}");
+            Draw(compact, y, "Enlarge terminal for graphs; Esc closes.");
+            _page = 1;
             return;
         }
 
+        var stableTop = requestTop + Draw(view, requestTop, requestHeader);
+        Draw(view, stableTop, stableHeader);
+        ModalFrame.DrawLines(view, _text[_textIndex++ % _text.Length], footerTop, _basisLines, _style(PresentationTextRole.Default));
+        ModalFrame.DrawLines(view, _text[_textIndex++ % _text.Length], footerTop + _basisLines.Count, selectedRows, _style(PresentationTextRole.Default));
+        ModalFrame.DrawLines(view, _text[_textIndex++ % _text.Length], footerTop + _basisLines.Count + selectedRows.Length, navigationRows, _style(PresentationTextRole.Default));
+
         var sideBySide = view.Size.Width >= 100;
         var detailWidth = sideBySide ? view.Size.Width - 39 : view.Size.Width;
-        var summary = sideBySide ? view.CreateView(new Rect(detailWidth + 1, 3, 38, view.Size.Height - 3 - footerHeight))
-            : view.CreateView(new Rect(0, 3, view.Size.Width, 3));
-        Draw(summary, 0, $"Input {snapshot.InputTokens:N0} tokens · {ContextUsageFormatter.Percent(snapshot.InputTokens, snapshot.ContextWindow)} used");
-        Draw(summary, 1, $"Window {snapshot.ContextWindow?.ToString("N0") ?? "?"} · Reserve {snapshot.OutputReserve:N0}");
+        var inputLabel = $"Input {snapshot.InputTokens:N0} tokens · {ContextUsageFormatter.Percent(snapshot.InputTokens, snapshot.ContextWindow)} used";
+        var windowLabel = $"Window {snapshot.ContextWindow?.ToString("N0") ?? "?"} · Reserve {snapshot.OutputReserve:N0}";
+        var summaryWidth = sideBySide ? 38 : view.Size.Width;
+        var summaryHeight = ModalFrame.Wrap(inputLabel, summaryWidth).Length + ModalFrame.Wrap(windowLabel, summaryWidth).Length + 1;
+        var summary = sideBySide
+            ? view.CreateView(new Rect(detailWidth + 1, headerHeight, 38, bodyHeight))
+            : view.CreateView(new Rect(0, headerHeight, view.Size.Width, Math.Min(bodyHeight, summaryHeight)));
+        var summaryY = Draw(summary, 0, inputLabel);
+        summaryY += Draw(summary, summaryY, windowLabel);
         if (snapshot.ContextWindow is > 0)
         {
             _progress.Value = (double)snapshot.InputTokens / snapshot.ContextWindow.Value;
             _progress.FillColor = _style(PresentationTextRole.Status).Foreground;
-            _progress.Render(summary.CreateView(new Rect(0, 2, summary.Size.Width, 1)));
+            if (summaryY < summary.Size.Height)
+            {
+                _progress.Render(summary.CreateView(new Rect(0, summaryY, summary.Size.Width, 1)));
+            }
         }
         else
         {
-            Draw(summary, 2, "Window usage unavailable");
+            Draw(summary, summaryY, "Window usage unavailable");
         }
 
         if (sideBySide)
         {
-            Draw(summary, 3, "Categories — % of input (rounded)", PresentationTextRole.SelectionPrompt);
-            var y = 4;
-            var visible = Math.Max(0, (summary.Size.Height - y) / 2);
-            if (visible < _categories.Count)
+            var y = summaryY + 1;
+            y += Draw(summary, y, "Categories — % of input (rounded)", PresentationTextRole.SelectionPrompt);
+            var visible = 0;
+            foreach (var item in _categories)
             {
-                visible = Math.Max(0, (summary.Size.Height - y - 1) / 2);
-            }
+                var label = $"{item.Label} {ContextUsageFormatter.Percent(item.Tokens, snapshot.InputTokens)}";
+                var height = ModalFrame.Wrap(label, summary.Size.Width).Length;
+                var more = ModalFrame.Wrap($"+{_categories.Count - visible} categories · Tab for all", summary.Size.Width).Length;
+                if (y + height + 1 + more > summary.Size.Height)
+                {
+                    break;
+                }
 
-            foreach (var item in _categories.Take(visible))
-            {
-                Draw(summary, y++, $"{item.Label} {ContextUsageFormatter.Percent(item.Tokens, snapshot.InputTokens)}");
+                y += Draw(summary, y, label);
                 Graph(summary, y++, item.Tokens, _categories.Count > 0 ? _categories[0].Tokens : 0);
+                visible++;
             }
 
             if (visible < _categories.Count)
@@ -222,62 +251,85 @@ internal sealed class ContextUsageModal : Modal
             }
         }
 
-        var start = sideBySide ? 3 : 7;
-        var detail = view.CreateView(new Rect(0, start, detailWidth, view.Size.Height - start - footerHeight));
-        _page = Math.Max(1, detail.Size.Height / 2);
-        _top = Math.Clamp(_top, Math.Max(0, _selected - _page + 1), _selected);
-        for (var index = _top; index < Math.Min(_rows.Count, _top + _page); index++)
+        var start = headerHeight + (sideBySide ? 0 : summary.Size.Height + 1);
+        var detail = view.CreateView(new Rect(0, start, detailWidth, Math.Max(0, footerTop - start)));
+        _top = Math.Clamp(_top, Math.Max(0, _selected - Math.Max(1, detail.Size.Height / 2) + 1), _selected);
+        var firstMeasured = _top;
+        var labels = new List<string[]>();
+        var physicalRows = 0;
+        for (var index = _top; index <= _selected && index < _rows.Count; index++)
         {
-            var item = _rows[index];
-            var y = (index - _top) * 2;
-            var prefixMarker = !_categoryView && index < _stablePrefixRows
-                ? index == _stablePrefixRows - 1 ? '└' : '│'
-                : ' ';
-            Draw(detail, y, $"{(index == _selected ? ">" : " ")}{prefixMarker}[{item.Container}] {item.Label}", index == _selected ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default);
-            Graph(detail, y + 1, item.Tokens, _maximum, leftPadding: 2);
+            var lines = ContributionRows(index, detailWidth);
+            labels.Add(lines);
+            physicalRows += lines.Length + 1;
+        }
+
+        while (physicalRows > detail.Size.Height && _top < _selected)
+        {
+            physicalRows -= labels[_top - firstMeasured].Length + 1;
+            _top++;
+        }
+
+        var yDetail = 0;
+        var visibleRows = 0;
+        for (var index = _top; index < _rows.Count && yDetail < detail.Size.Height; index++)
+        {
+            var lines = ContributionRows(index, detailWidth);
+            if (index > _selected && yDetail + lines.Length + 1 > detail.Size.Height)
+            {
+                break;
+            }
+
+            ModalFrame.DrawLines(detail, _text[_textIndex++ % _text.Length], yDetail, lines, _style(index == _selected ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default));
+            yDetail += lines.Length;
+            Graph(detail, yDetail, _rows[index].Tokens, _maximum, leftPadding: 2);
             var prefixContinuation = !_categoryView && index < _stablePrefixRows - 1 ? '│' : ' ';
-            Draw(detail, y + 1, $" {prefixContinuation}");
+            Draw(detail, yDetail++, $" {prefixContinuation}");
+            visibleRows++;
         }
 
-        for (var index = 0; index < _basisLines.Count; index++)
-        {
-            Draw(view, view.Size.Height - footerHeight + index, _basisLines[index]);
-        }
-
-        var stableSuffix = !_categoryView && _selected < _stablePrefixRows ? " · stable prefix" : string.Empty;
-        Draw(view, view.Size.Height - 2, _rows.Count > 0 ? $"{ContextUsageFormatter.Label(_rows[_selected].Label)} · {_rows[_selected].Tokens:N0} tokens · {ContextUsageFormatter.Percent(_rows[_selected].Tokens, snapshot.InputTokens)} of input{stableSuffix}" : "No included content.");
-        Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End · Tab categories/order · M memories · Esc close");
+        _page = Math.Max(1, visibleRows);
     }
 
-    private void RenderMemories(BufferSurface view, ContextUsageSnapshot snapshot)
+    private string[] ContributionRows(int index, int width)
+    {
+        var item = _rows[index];
+        var marker = !_categoryView && index < _stablePrefixRows ? index == _stablePrefixRows - 1 ? '└' : '│' : ' ';
+        return ModalFrame.Wrap($"{(index == _selected ? ">" : " ")}{marker}[{item.Container}] {item.Label}", width);
+    }
+
+    private void RenderMemories(BufferSurface view, ContextUsageSnapshot snapshot, int headerHeight)
     {
         if (_memoryWidth != view.Size.Width)
         {
             _memoryWidth = view.Size.Width;
-            _memoryLines = ContextUsageFormatter.FormatMemories(snapshot).ReplaceLineEndings("\n").Split('\n')
-                .SelectMany(line => line.Length == 0 ? (IEnumerable<string>)[string.Empty]
-                    : TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(line)), _memoryWidth).Select(wrapped => wrapped.ToPlainString()))
-                .ToArray();
+            _memoryLines = ModalFrame.Wrap(ContextUsageFormatter.FormatMemories(snapshot), _memoryWidth);
         }
 
-        _page = Math.Max(1, view.Size.Height - 4);
+        var footer = ModalFrame.Wrap("↑↓ PgUp/Dn Home/End scroll · M usage · Esc close", view.Size.Width);
+        var bodyTop = Math.Min(view.Size.Height, headerHeight + Draw(view, headerHeight, $"Included memories: {snapshot.Memories.Count}", PresentationTextRole.Memory));
+        _page = Math.Max(0, view.Size.Height - bodyTop - footer.Length);
         _memoryTop = Math.Clamp(_memoryTop, 0, Math.Max(0, _memoryLines.Count - _page));
-        Draw(view, 2, $"Included memories: {snapshot.Memories.Count}", PresentationTextRole.Memory);
         for (var index = 0; index < Math.Min(_page, _memoryLines.Count - _memoryTop); index++)
         {
-            _text[_textIndex++ % _text.Length].Draw(view, 0, index + 3, _memoryLines[_memoryTop + index], _style(PresentationTextRole.Memory));
+            _text[_textIndex++ % _text.Length].Draw(view, 0, index + bodyTop, _memoryLines[_memoryTop + index], _style(PresentationTextRole.Memory));
         }
 
-        Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End scroll · M usage · Esc close");
+        ModalFrame.DrawLines(view, _text[_textIndex++ % _text.Length], bodyTop + _page, footer, _style(PresentationTextRole.Default));
     }
 
-    private void Draw(ISurface surface, int y, string text, PresentationTextRole role = PresentationTextRole.Default)
+    private int Draw(ISurface surface, int y, string text, PresentationTextRole role = PresentationTextRole.Default)
     {
-        _text[_textIndex++ % _text.Length].Draw(surface, 0, y, ContextUsageFormatter.Label(text), _style(role));
+        return ModalFrame.DrawWrapped(surface, _text[_textIndex++ % _text.Length], y, ContextUsageFormatter.Label(text), _style(role));
     }
 
     private void Graph(BufferSurface surface, int y, long tokens, double maximum, int leftPadding = 0)
     {
+        if (y < 0 || y >= surface.Size.Height)
+        {
+            return;
+        }
+
         // A clipped second row fixes the native chart's scale across scrolling.
         // The scratch surface is always two rows, independent of the source inventory size.
         var width = Math.Max(1, surface.Size.Width - leftPadding);

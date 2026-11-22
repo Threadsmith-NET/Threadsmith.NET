@@ -8,25 +8,34 @@ using Threadsmith.Tools;
 internal sealed class ExtensionSecretProtection
 {
     private const string _protectedMessage = "[protected extension log]";
-    private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProtectedValue> _values = new(StringComparer.Ordinal);
+    private readonly HashSet<Scope> _readers = [];
     private readonly Lock _gate = new();
+    private bool _retired;
 
     /// <summary>Registers a credential before its first reveal.</summary>
     internal void Protect(string value)
     {
         lock (_gate)
         {
-            if (_values.ContainsKey(value))
+            if (_values.TryGetValue(value, out var current))
             {
-                return;
+                _values[value] = current with { Owners = current.Owners + 1 };
+            }
+            else
+            {
+                if (_values.Count >= 256)
+                {
+                    throw new InvalidOperationException("ExtensionSecretProtectionCapacity");
+                }
+
+                _values.Add(value, new ProtectedValue(JsonEncodedText.Encode(value).ToString(), 1, 0));
             }
 
-            if (_values.Count >= 256)
+            foreach (var reader in _readers)
             {
-                throw new InvalidOperationException("ExtensionSecretProtectionCapacity");
+                reader.Pin(value);
             }
-
-            _values.Add(value, JsonEncodedText.Encode(value).ToString());
         }
     }
 
@@ -37,7 +46,7 @@ internal sealed class ExtensionSecretProtection
         {
             lock (_gate)
             {
-                return _values.Count > 0;
+                return _retired || _values.Count > 0;
             }
         }
     }
@@ -47,14 +56,14 @@ internal sealed class ExtensionSecretProtection
     {
         lock (_gate)
         {
-            return text is not null && _values.Any(value => text.Contains(value.Key, StringComparison.Ordinal) || text.Contains(value.Value, StringComparison.Ordinal));
+            return text is not null && _values.Any(value => text.Contains(value.Key, StringComparison.Ordinal) || text.Contains(value.Value.Encoded, StringComparison.Ordinal));
         }
     }
 
-    /// <summary>Removes exact protected values from extension diagnostics.</summary>
+    /// <summary>Protects free-form contributor projections, including retained components after retirement.</summary>
     internal string SafeMessage(string message)
     {
-        return Contains(message) ? _protectedMessage : message;
+        return SafeLogMessage(message);
     }
 
     /// <summary>Protects free-form logs, which may embed JSON using unknown escaping conventions.</summary>
@@ -62,13 +71,38 @@ internal sealed class ExtensionSecretProtection
     {
         // JSON escapes require a backslash. Without a declared format, even a JSON fragment
         // embedded in ordinary text may encode a credential, so withhold ambiguous messages.
-        return ContainsDiagnostic(message) ? _protectedMessage : message;
+        lock (_gate)
+        {
+            // Retained generation loggers can outlive every invocation. Once values have been
+            // forgotten, withhold their free-form text instead of retaining credential history.
+            return _retired || ContainsDiagnostic(message) ? _protectedMessage : message;
+        }
     }
 
     /// <summary>Checks free-form diagnostics without assuming a particular escaping convention.</summary>
     internal bool ContainsDiagnostic(string? text)
     {
         return text is not null && ((text.Contains('\\') && HasValues) || Contains(text));
+    }
+
+    /// <summary>Creates an owner, optionally pinning current and newly registered values until a callback finishes.</summary>
+    internal Scope CreateScope(bool pinActiveValues = false)
+    {
+        lock (_gate)
+        {
+            var scope = new Scope(this);
+            if (pinActiveValues)
+            {
+                foreach (var value in _values.Where(pair => pair.Value.Owners > 0).Select(pair => pair.Key).ToArray())
+                {
+                    scope.Pin(value);
+                }
+
+                _readers.Add(scope);
+            }
+
+            return scope;
+        }
     }
 
     /// <summary>Checks decoded property names and values before result serialization.</summary>
@@ -82,6 +116,90 @@ internal sealed class ExtensionSecretProtection
             _ => Contains(element.GetRawText()),
         };
     }
+
+    /// <summary>Encoded active credential and its invocation/boundary owner count.</summary>
+    private sealed record ProtectedValue(string Encoded, int Owners, int Pins);
+
+    /// <summary>Keeps each distinct credential alive until its owning output boundary has finished.</summary>
+    internal sealed class Scope : IDisposable
+    {
+        private readonly ExtensionSecretProtection _owner;
+        private readonly HashSet<string> _values = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _pins = new(StringComparer.Ordinal);
+        private bool _disposed;
+
+        /// <summary>Initializes a new instance of the <see cref="Scope"/> class.</summary>
+        internal Scope(ExtensionSecretProtection owner)
+        {
+            _owner = owner;
+        }
+
+        /// <inheritdoc />
+        public void Dispose()
+        {
+            lock (_owner._gate)
+            {
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _disposed = true;
+                _owner._readers.Remove(this);
+                foreach (var value in _values)
+                {
+                    var current = _owner._values[value];
+                    Release(value, current with { Owners = current.Owners - 1 });
+                }
+
+                foreach (var value in _pins)
+                {
+                    var current = _owner._values[value];
+                    Release(value, current with { Pins = current.Pins - 1 });
+                }
+
+                _values.Clear();
+                _pins.Clear();
+            }
+        }
+
+        /// <summary>Pins an overlapping credential under the owner's lock without registering a new invocation.</summary>
+        internal void Pin(string value)
+        {
+            if (_pins.Add(value))
+            {
+                var current = _owner._values[value];
+                _owner._values[value] = current with { Pins = current.Pins + 1 };
+            }
+        }
+
+        /// <summary>Registers before reveal, atomically with respect to scope closure.</summary>
+        internal void Protect(string value)
+        {
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                if (!_values.Contains(value))
+                {
+                    _owner.Protect(value);
+                    _values.Add(value);
+                }
+            }
+        }
+
+        private void Release(string value, ProtectedValue remaining)
+        {
+            if (remaining.Owners == 0 && remaining.Pins == 0)
+            {
+                _owner._retired = true;
+                _owner._values.Remove(value);
+            }
+            else
+            {
+                _owner._values[value] = remaining;
+            }
+        }
+    }
 }
 
 /// <summary>Binds resolver authority to one admitted execution and its retirement signal.</summary>
@@ -90,11 +208,12 @@ internal sealed class ExtensionSecretAccess : IExtensionSecretAccess, IDisposabl
     private readonly ISecretResolver _resolver;
     private readonly IReadOnlySet<string> _references;
     private readonly ToolExecutionContext _context;
-    private readonly ExtensionSecretProtection _protection;
+    private readonly ExtensionSecretProtection.Scope _protection;
     private readonly string _component;
     private readonly CancellationTokenSource? _deadline;
     private readonly CancellationTokenSource _lifetime;
     private readonly CancellationToken _revoked;
+    private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="ExtensionSecretAccess"/> class.</summary>
     internal ExtensionSecretAccess(
@@ -109,7 +228,7 @@ internal sealed class ExtensionSecretAccess : IExtensionSecretAccess, IDisposabl
         _resolver = resolver;
         _references = references;
         _context = context;
-        _protection = protection;
+        _protection = protection.CreateScope();
         _component = SecretResolutionRequest.CreateConfiguredComponentId("extension", extensionId);
         var expires = context.Deadline is { } admission && (context.ExecutionDeadline is null || admission < context.ExecutionDeadline)
             ? admission
@@ -160,9 +279,21 @@ internal sealed class ExtensionSecretAccess : IExtensionSecretAccess, IDisposabl
     /// <inheritdoc />
     public void Dispose()
     {
-        _lifetime.Cancel();
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        Revoke();
         _lifetime.Dispose();
         _deadline?.Dispose();
+        _protection.Dispose();
+    }
+
+    /// <summary>Ends resolver authority while retaining credentials through result/catch sanitization.</summary>
+    internal void Revoke()
+    {
+        _lifetime.Cancel();
     }
 
     private void Validate(CancellationToken cancellationToken)

@@ -196,6 +196,17 @@ internal sealed class Neo4jValueMapper
             ["ambiguous"] = value.Ambiguous,
             ["zoneResolved"] = !value.UnknownZoneInfo,
         };
+        if (value.Zone is ZoneId zone)
+        {
+            // The identifier is available even when local zone rules cannot be resolved.
+            result["zoneKind"] = "named";
+            result["zoneId"] = zone.Id;
+        }
+        else
+        {
+            result["zoneKind"] = "offset";
+        }
+
         if (!value.UnknownZoneInfo)
         {
             result["offsetSeconds"] = value.OffsetSeconds;
@@ -218,14 +229,21 @@ internal sealed class Neo4jValueMapper
 
     private static JsonNode PointValue(Point value)
     {
-        return new JsonObject
+        var hasZ = !double.IsNaN(value.Z);
+        var result = new JsonObject
         {
             ["$type"] = "point",
             ["srid"] = value.SrId,
-            ["x"] = value.X,
-            ["y"] = value.Y,
-            ["z"] = value.Z,
+            ["dimensions"] = hasZ ? 3 : 2,
+            ["x"] = Number(value.X),
+            ["y"] = Number(value.Y),
         };
+        if (hasZ)
+        {
+            result["z"] = Number(value.Z);
+        }
+
+        return result;
     }
 
     private static JsonNode Unsupported(object value)

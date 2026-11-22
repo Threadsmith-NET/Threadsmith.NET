@@ -85,24 +85,31 @@ public sealed class Neo4jContractTests
 
     /// <summary>Static metadata stays conservative and destination-bound in each configured mode.</summary>
     /// <param name="forceReadOnly">The configured access mode.</param>
+    /// <param name="serverEnforced">Whether server enforcement is confirmed.</param>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void ExecuteMetadata_IsConservativeInEachConfiguredMode(bool forceReadOnly)
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public void ExecuteMetadata_IsConservativeInEachConfiguredMode(bool forceReadOnly, bool serverEnforced)
     {
-        var settings = TestGraph.Settings(TestGraph.Values(forceReadOnly));
+        var values = TestGraph.Values(forceReadOnly);
+        values["readOnlyEnforcedByServerAccount"] = serverEnforced ? "true" : "false";
+        var settings = TestGraph.Settings(values);
+        var confirmedReadOnly = forceReadOnly && serverEnforced;
         var capability = new Neo4jExecuteCapability(settings, new FakeGraphSessionFactory());
         var definition = capability.Definition;
 
         Assert.Equal(ExtensionToolCategory.ExternalService, definition.Category);
         Assert.Equal(
-            forceReadOnly ? ExtensionToolSideEffect.ReadOnly : ExtensionToolSideEffect.WritesExternalData,
+            confirmedReadOnly ? ExtensionToolSideEffect.ReadOnly : ExtensionToolSideEffect.WritesExternalData,
             definition.SideEffect);
         Assert.Equal(
-            forceReadOnly ? ExtensionToolIdempotency.Idempotent : ExtensionToolIdempotency.NonIdempotent,
+            confirmedReadOnly ? ExtensionToolIdempotency.Idempotent : ExtensionToolIdempotency.NonIdempotent,
             definition.Idempotency);
-        // Neither mode waives approval while server-enforced read-only access is unconfirmed.
-        Assert.Equal(ExtensionApprovalRequirement.User, definition.RequiredApproval);
+        Assert.Equal(
+            confirmedReadOnly ? ExtensionApprovalRequirement.None : ExtensionApprovalRequirement.User,
+            definition.RequiredApproval);
 
         var review = Assert.IsType<ExtensionStatementReview>(definition.StatementReview);
         Assert.Equal(settings.Destination, review.Destination);

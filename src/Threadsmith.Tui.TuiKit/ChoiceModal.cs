@@ -43,6 +43,7 @@ internal sealed class ChoiceModal : Modal
     private int _selectionPrefixWidth = 2;
     private int _selected;
     private int _height = 5;
+    private int _layoutWidth = 90;
     private bool _details;
     private bool _fits = true;
     private TranscriptView? _detail;
@@ -109,6 +110,7 @@ internal sealed class ChoiceModal : Modal
             _selectionMarker = value;
             _selectionPrefix = value + " ";
             _selectionPrefixWidth = UnicodeWidth.GetWidth(_selectionPrefix);
+            _layoutWidth = 0;
         }
     }
 
@@ -158,11 +160,6 @@ internal sealed class ChoiceModal : Modal
             return true;
         }
 
-        if (!_fits)
-        {
-            return true;
-        }
-
         if (key.Code == KeyCode.F2 && _scriptDocument is null)
         {
             _details = !_details;
@@ -175,6 +172,11 @@ internal sealed class ChoiceModal : Modal
                 _detail = null;
             }
 
+            return true;
+        }
+
+        if (!_fits)
+        {
             return true;
         }
 
@@ -280,7 +282,7 @@ internal sealed class ChoiceModal : Modal
                 spaceAfterSubtitle: true);
             var bounds = ModalFrame.Bounds(surface.Size, expandHeight: true, preferredSize: preferredSize);
             var inner = WorkspaceLayout.ModalContent(new Size(bounds.Width, bounds.Height));
-            var body = WorkspaceLayout.ModalBody(frame.Size, spaceAfterSubtitle: true);
+            var body = ModalFrame.BodyBounds(frame.Size, _title, "Read-only C# source", _copyStatus ?? "F4 Copy full script; F6 Copy selection", "Arrows/PgUp/PgDn scroll; Home/End; Esc closes", spaceAfterSubtitle: true);
             _detailBounds = new Rect(bounds.X + inner.X + body.X, bounds.Y + inner.Y + body.Y, body.Width, body.Height);
             _detail?.ResolveStyle = ResolveStyle;
             _detail?.Render(content);
@@ -289,7 +291,15 @@ internal sealed class ChoiceModal : Modal
 
         var area = new Rect(0, 0, frame.Size.Width, frame.Size.Height);
         var view = frame.CreateView(area);
-        var promptHeight = _details ? 0 : Math.Min(Math.Max(1, area.Height - 7), Math.Min(6, Math.Max(1, (UnicodeWidth.GetWidth(TranscriptView.Safe(_title)) + area.Width - 1) / area.Width)));
+        var hint = _details ? "PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint;
+        var maximumHintRows = Math.Max(1, Math.Min(3, area.Height - 1));
+        var hintRows = ModalFrame.Wrap(hint, area.Width, maximumRows: maximumHintRows + 1);
+        if (hintRows.Length > maximumHintRows)
+        {
+            hintRows = [.. hintRows.Take(maximumHintRows - 1), "… F2 details; Esc cancels"];
+        }
+
+        var promptHeight = _details ? 0 : Math.Min(Math.Max(0, area.Height - hintRows.Length - 2), Math.Min(6, ModalFrame.Wrap(_title, area.Width).Length));
         if (promptHeight > 0)
         {
             _prompt.ResolveStyle = role => ResolveStyle(role == PresentationTextRole.OutputStreamPaneRole
@@ -298,10 +308,11 @@ internal sealed class ChoiceModal : Modal
             _prompt.Render(view.CreateView(new Rect(0, 0, area.Width, promptHeight)));
         }
 
-        var hint = _details ? "PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint;
-        _hintRun.Draw(view, 0, promptHeight + 1, hint, ResolveStyle(PresentationTextRole.Status));
-        var contentTop = promptHeight + 3;
-        _height = Math.Max(1, area.Height - contentTop);
+        var gap = area.Height > promptHeight + hintRows.Length + 3 ? 1 : 0;
+        ModalFrame.DrawLines(view, _hintRun, promptHeight + gap, hintRows, ResolveStyle(PresentationTextRole.Status));
+        var contentTop = Math.Min(area.Height, promptHeight + gap + hintRows.Length + gap);
+        _height = Math.Max(0, area.Height - contentTop);
+        _fits = _height > 0;
         if (_details)
         {
             var bounds = ModalFrame.Bounds(surface.Size, preferredSize: preferredSize);
@@ -313,15 +324,27 @@ internal sealed class ChoiceModal : Modal
             return;
         }
 
+        if (_layoutWidth != area.Width)
+        {
+            _layoutWidth = area.Width;
+            BuildRows();
+        }
+
         var selectedRow = _matches.Length > 0 ? _optionRows[_selected] : 0;
-        var top = Math.Max(0, selectedRow - _height + 1);
+        var selectedHeight = 0;
+        while (selectedHeight < _height && selectedRow + selectedHeight < _rows.Length && _rows[selectedRow + selectedHeight].OptionIndex == _selected)
+        {
+            selectedHeight++;
+        }
+
+        var top = Math.Max(0, selectedRow + selectedHeight - _height);
         for (var index = top; index < Math.Min(_rows.Length, top + _height); index++)
         {
             var entry = _rows[index];
             var row = index - top + contentTop;
             if (entry.Heading is { } heading)
             {
-                _groupRuns[heading].Draw(view, 0, row, heading, ResolveStyle(PresentationTextRole.SelectionPrompt));
+                _groupRuns[heading].Draw(view, 0, row, entry.Text, ResolveStyle(PresentationTextRole.SelectionPrompt));
                 continue;
             }
 
@@ -330,8 +353,12 @@ internal sealed class ChoiceModal : Modal
             var prefix = selected ? _selectionPrefix : "  ";
             var style = selected ? ResolveStyle(PresentationTextRole.SelectionHighlight) : ResolveStyle(PresentationTextRole.Default);
             var indent = option.Group is null ? 0 : 2;
-            (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, indent, row, prefix, style);
-            GetOptionRun(option).Draw(view, indent + (selected ? _selectionPrefixWidth : 2), row, option.Label, style);
+            if (entry.First)
+            {
+                (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, indent, row, prefix, style);
+            }
+
+            GetOptionRun(option).Draw(view, indent + Math.Max(_selectionPrefixWidth, 2), row, entry.Text, style);
         }
     }
 
@@ -339,7 +366,9 @@ internal sealed class ChoiceModal : Modal
     internal void OpenReview()
     {
         var selected = _matches.Length > 0 ? _matches[_selected] : default;
-        var selectedDetail = selected.Label is null ? string.Empty : "\n\nSelected option: " + (selected.Group is null ? string.Empty : selected.Group + " / ") + selected.Label;
+        var selectedDetail = selected.Label is null
+            ? string.Empty
+            : "\n\nSelected option: " + (selected.Group is null ? string.Empty : selected.Group + " / ") + selected.Label;
         var text = _title + (_reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails) + selectedDetail;
         var limits = _reviewDetails is { Length: <= 16384 } ? _limits with
         {
@@ -458,17 +487,31 @@ internal sealed class ChoiceModal : Modal
             var option = _matches[index];
             if (option.Group is { } group && !string.Equals(group, previousGroup, StringComparison.Ordinal))
             {
-                rows.Add(new DisplayRow(-1, group));
+                foreach (var line in ModalFrame.Wrap(group, _layoutWidth))
+                {
+                    rows.Add(new DisplayRow(-1, group, line, true));
+                }
+
                 _groupRuns.TryAdd(group, new CachedTextRun());
             }
 
             previousGroup = option.Group;
             _optionRows[index] = rows.Count;
-            rows.Add(new DisplayRow(index, null));
+            var width = Math.Max(1, _layoutWidth - (option.Group is null ? 0 : 2) - Math.Max(2, _selectionPrefixWidth));
+            var lines = ModalFrame.Wrap(option.Label, width);
+            if (lines.Length == 0)
+            {
+                lines = [string.Empty];
+            }
+
+            for (var line = 0; line < lines.Length; line++)
+            {
+                rows.Add(new DisplayRow(index, null, lines[line], line == 0));
+            }
         }
 
         _rows = [.. rows];
     }
 
-    private readonly record struct DisplayRow(int OptionIndex, string? Heading);
+    private readonly record struct DisplayRow(int OptionIndex, string? Heading, string Text, bool First);
 }

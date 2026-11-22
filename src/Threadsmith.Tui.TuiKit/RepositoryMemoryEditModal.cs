@@ -22,8 +22,8 @@ internal sealed class RepositoryMemoryEditModal : Modal
     private readonly CachedTextRun _hint = new();
     private readonly Channel<string> _saves = Channel.CreateUnbounded<string>();
     private Rect _editorBounds;
-    private Rect _saveBounds;
-    private Rect _cancelBounds;
+    private Rect[] _saveBounds = [];
+    private Rect[] _cancelBounds = [];
     private int _focus;
     private bool _busy;
     private bool _fits;
@@ -145,11 +145,11 @@ internal sealed class RepositoryMemoryEditModal : Modal
             }
             else if (mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left)
             {
-                if (Contains(_saveBounds, mouse))
+                if (_saveBounds.Any(bounds => Contains(bounds, mouse)))
                 {
                     Save();
                 }
-                else if (Contains(_cancelBounds, mouse))
+                else if (_cancelBounds.Any(bounds => Contains(bounds, mouse)))
                 {
                     RequestClose(null);
                 }
@@ -173,16 +173,30 @@ internal sealed class RepositoryMemoryEditModal : Modal
         var content = WorkspaceLayout.ModalContent(new Size(frame.Width, frame.Height));
         var left = frame.Left + content.Left;
         var top = frame.Top + content.Top;
-        var height = Math.Max(1, view.Size.Height - 4);
-        _editorBounds = new Rect(left, top + 1, view.Size.Width, height);
-        _saveBounds = new Rect(left, top + height + 1, 16, 1);
-        _cancelBounds = new Rect(left, top + height + 2, 24, 1);
-        _title.Draw(view, 0, 0, Title + " | " + (_editor.Overwrite ? "Overwrite" : "Insert"), _style(PresentationTextRole.SelectionPrompt));
+        var titleRows = ModalFrame.Wrap(Title + " | " + (_editor.Overwrite ? "Overwrite" : "Insert"), view.Size.Width);
+        var saveLabel = (_focus == 1 ? ">" : " ") + "[Save Changes]";
+        var saveRows = ModalFrame.Wrap(saveLabel + (CanSave ? string.Empty : " (disabled)"), view.Size.Width);
+        var cancelRows = ModalFrame.Wrap((_focus == 2 ? ">" : " ") + "[Cancel, No Changes]", view.Size.Width);
+        var hintCapacity = Math.Max(0, view.Size.Height - titleRows.Length - saveRows.Length - cancelRows.Length - 1);
+        var hintRows = ModalFrame.Wrap(_busy ? "Saving..." : _error ?? "Tab: focus  Ctrl+S: save  Esc: cancel", view.Size.Width, hintCapacity);
+        var editorTop = Math.Min(view.Size.Height, titleRows.Length);
+        var height = Math.Max(0, view.Size.Height - editorTop - saveRows.Length - cancelRows.Length - hintRows.Length);
+        _fits = height > 0;
+        var saveTop = editorTop + height;
+        var cancelTop = Math.Min(view.Size.Height, saveTop + saveRows.Length);
+        _editorBounds = new Rect(left, top + editorTop, view.Size.Width, height);
+        _saveBounds = ControlBounds(ModalFrame.Wrap(saveLabel, view.Size.Width), left, top + saveTop, view.Size.Height - saveTop);
+        _cancelBounds = ControlBounds(cancelRows, left, top + cancelTop, view.Size.Height - cancelTop);
+        ModalFrame.DrawLines(view, _title, 0, titleRows, _style(PresentationTextRole.SelectionPrompt));
         _editor.Style = _style(PresentationTextRole.Default);
-        _editor.Render(view.CreateView(new Rect(0, 1, view.Size.Width, height)));
-        _save.Draw(view, 0, height + 1, (_focus == 1 ? ">" : " ") + "[Save Changes]" + (CanSave ? string.Empty : " (disabled)"), _style(CanSave ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Status));
-        _cancel.Draw(view, 0, height + 2, (_focus == 2 ? ">" : " ") + "[Cancel, No Changes]", _style(PresentationTextRole.SelectionPrompt));
-        _hint.Draw(view, 0, height + 3, _busy ? "Saving..." : _error is not null ? TranscriptView.Safe(_error) : "Tab: focus  Ctrl+S: save  Esc: cancel", _style(_error is null ? PresentationTextRole.Status : PresentationTextRole.Warning));
+        if (height > 0)
+        {
+            _editor.Render(view.CreateView(new Rect(0, editorTop, view.Size.Width, height)));
+        }
+
+        ModalFrame.DrawLines(view, _save, saveTop, saveRows, _style(CanSave ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Status));
+        ModalFrame.DrawLines(view, _cancel, cancelTop, cancelRows, _style(PresentationTextRole.SelectionPrompt));
+        ModalFrame.DrawLines(view, _hint, cancelTop + cancelRows.Length, hintRows, _style(_error is null ? PresentationTextRole.Status : PresentationTextRole.Warning));
     }
 
     /// <summary>Restores editing after a rejected save, preserving the draft.</summary>
@@ -200,6 +214,9 @@ internal sealed class RepositoryMemoryEditModal : Modal
             _saves.Writer.TryWrite(_editor.Text);
         }
     }
+
+    private static Rect[] ControlBounds(IReadOnlyList<string> rows, int left, int top, int height)
+        => [.. rows.Take(Math.Max(0, height)).Select((row, index) => new Rect(left, top + index, UnicodeWidth.GetWidth(row), 1))];
 
     private static bool Contains(Rect bounds, MouseEvent mouse)
         => mouse.X >= bounds.Left && mouse.X < bounds.Left + bounds.Width && mouse.Y >= bounds.Top && mouse.Y < bounds.Top + bounds.Height;

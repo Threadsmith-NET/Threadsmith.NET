@@ -84,12 +84,12 @@ internal sealed class CommandHelpModal : Modal
             Reflow(view.Size.Width);
         }
 
-        _title.Draw(view, 0, 0, "Commands — PgUp/PgDn; Esc closes", _style(PresentationTextRole.SelectionPrompt));
-        _height = view.Size.Height - 2;
+        var body = ModalFrame.CreateBody(view, _title, _style, "Commands — PgUp/PgDn; Esc closes", string.Empty, string.Empty, string.Empty);
+        _height = body.Size.Height;
         _top = Math.Min(_top, Math.Max(0, _lines.Count - _height));
         for (var index = _top; index < Math.Min(_lines.Count, _top + _height); index++)
         {
-            _runs[index].Draw(view, 0, index - _top + 2, _lines[index], _style(index == 0 ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default));
+            _runs[index].Draw(body, 0, index - _top, _lines[index], _style(index == 0 ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default));
         }
     }
 
@@ -115,8 +115,6 @@ internal sealed class CommandHelpModal : Modal
 
     private static string[] Wrap(string text, int width)
     {
-        return [..
-        TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(text).ReplaceLineEndings(" ")), width)
-            .Select(line => line.ToPlainString())];
+        return ModalFrame.Wrap(text, width);
     }
 }

@@ -5,7 +5,7 @@ using Threadsmith.Extensions.Abstractions;
 
 /// <summary>Runs one Cypher statement in one explicit transaction at the configured destination.</summary>
 /// <remarks>
-/// Static metadata is conservative: when the deployment is not forced read-only, every invocation is
+/// Static metadata is conservative: unless server-enforced read-only access is confirmed, every invocation is
 /// classified as a non-idempotent external write that requires operator approval, because statement
 /// text cannot prove that a query is read-only.
 /// </remarks>
@@ -40,6 +40,7 @@ internal sealed class Neo4jExecuteCapability : IToolCapability
             DisplayName = "Neo4j Execute",
             RequiredPermissions = ["network-access", "secret-access"],
         };
+        var confirmedReadOnly = settings.ForceReadOnly && settings.ReadOnlyEnforcedByServerAccount;
         Definition = new ExtensionToolDefinition
         {
             Id = "neo4j_execute",
@@ -49,14 +50,14 @@ internal sealed class Neo4jExecuteCapability : IToolCapability
             InputSchema = new("Neo4jExecuteInput", 1, _inputSchemaJson),
             OutputSchema = new("Neo4jExecuteOutput", 1, _outputSchemaJson),
             RequiredTrust = ExtensionTrustRequirement.FullyTrustedAutomation,
-            RequiredApproval = settings.ForceReadOnly && settings.ReadOnlyEnforcedByServerAccount
+            RequiredApproval = confirmedReadOnly
                 ? ExtensionApprovalRequirement.None
                 : ExtensionApprovalRequirement.User,
             StatementReview = new(settings.Destination, settings.Database, "cypher", "parameters"),
-            SideEffect = settings.ForceReadOnly
+            SideEffect = confirmedReadOnly
                 ? ExtensionToolSideEffect.ReadOnly
                 : ExtensionToolSideEffect.WritesExternalData,
-            Idempotency = settings.ForceReadOnly
+            Idempotency = confirmedReadOnly
                 ? ExtensionToolIdempotency.Idempotent
                 : ExtensionToolIdempotency.NonIdempotent,
             SupportsCancellation = true,

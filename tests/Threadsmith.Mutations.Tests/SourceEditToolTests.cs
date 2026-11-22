@@ -27,6 +27,31 @@ public sealed partial class SourceEditToolTests
         Assert.Equal(14, projected["Diagnostics"]![0]!["Column"]!.GetValue<int>());
     }
 
+    /// <summary>Repeated finding metadata can shrink without losing locations, origin, or incomplete coverage.</summary>
+    [Fact]
+    public void FeedbackProjection_RetainsActionableFindingsAcrossPartialCoverage()
+    {
+        var finding = new SourceEditDiagnostic("CS0001", "Check argument", "Example.cs", 3, "Example", "net10.0", "introduced") { Column = 1 };
+        var analysis = new SourceEditAnalysis
+        {
+            EffectId = Guid.NewGuid(),
+            ProjectsAnalyzed = 1,
+            ProjectsInScope = 2,
+            Diagnostics = [finding, finding with { Origin = "initial" }, finding with { Line = 8 }, finding with { Column = 7 }],
+        };
+
+        var projected = SourceEditAnalysisProjection.Create(analysis);
+
+        Assert.Equal("partial", projected["Status"]!.GetValue<string>());
+        var entries = projected["Diagnostics"]!.AsArray();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(3, entries[0]!["Line"]!.GetValue<int>());
+        Assert.Equal(8, entries[0]!["AdditionalLocations"]![0]!["Line"]!.GetValue<int>());
+        Assert.Equal(7, entries[0]!["AdditionalLocations"]![1]!["Column"]!.GetValue<int>());
+        Assert.Equal("initial", entries[1]!["Origin"]!.GetValue<string>());
+        Assert.True(entries.ToJsonString().Length < JsonSerializer.Serialize(analysis.Diagnostics).Length);
+    }
+
     /// <summary>User-visible feedback summarizes coverage without rendering serialized state or unknown error totals.</summary>
     [Theory]
     [InlineData(true, false, 0, "pending", false)]

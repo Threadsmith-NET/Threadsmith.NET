@@ -2318,7 +2318,7 @@ public sealed partial class SessionApplication
                         SourceOpaqueResultCount = deterministicProjection?.OpaqueResultCount ?? 0,
                         SourceReclaimedCharacters = deterministicProjection?.ReclaimedCharacters ?? 0,
                         SummaryAvoidedBySourceProjection =
-                            status == ActiveTurnCompactionInspectionStatus.DeterministicReduction,
+                            status == ActiveTurnCompactionInspectionStatus.DeterministicReduction && (hasContextPressure || hasBudgetPressure),
                         SummaryPreparedInputTokens =
                             attemptObserver?.LastSummaryPreparedInputTokens,
                         SummaryAdmissionOutputTokens =
@@ -2368,35 +2368,28 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (!hasContextPressure && !hasBudgetPressure)
-        {
-            await RecordAsync(
-                ActiveTurnCompactionInspectionStatus.BelowPressure,
-                "The canonical complete request is below the context target and fits the remaining execution budget.");
-            return;
-        }
-
-        var sourceProjectionAttemptIdentity = string.Join(
-            ':',
-            loopState.LastGroupSequence,
-            loopState.HistoryRewriteGeneration,
-            beforeEstimate.WireInputTokens,
-            pressureTargetTokens,
-            ordinaryAdmissionStatus.ExhaustedDimensions,
-            activeTurnRecoveryDefinition?.Version ?? "none",
-            invocationContext?.WorkspaceId?.Value.ToString("N") ?? "none",
-            ordinaryProfileId?.Value.ToString("N") ?? "none",
-            context.Layout.StablePrefixDigest,
-            context.InstructionBundleDigest ?? "none",
-            context.ToolInventoryDigest ?? "none",
-            loopState.SourceProjectionInputIdentity,
-            loopState.SourceProjectionIdentity ?? "none",
-            _activeTurnCompactionPolicy.MinimumSavingsTokens,
-            _activeTurnCompactionPolicy.MaximumSourceGroups,
-            _activeTurnCompactionPolicy.MaximumInputTokens);
+        var underPressure = hasContextPressure || hasBudgetPressure;
         if (!hasRetentionPressure && activeTurnRecoveryDefinition is not null
             && invocationContext is not null
-            && loopState.BeginSourceProjectionAttempt(sourceProjectionAttemptIdentity))
+            && (underPressure || (loopState.LastGroupSequence >= loopState.NextProactiveSourceScan && loopState.HasPendingSourceEvidence))
+            && loopState.BeginSourceProjectionAttempt(string.Join(
+                ':',
+                loopState.LastGroupSequence,
+                loopState.HistoryRewriteGeneration,
+                beforeEstimate.WireInputTokens,
+                pressureTargetTokens,
+                ordinaryAdmissionStatus.ExhaustedDimensions,
+                activeTurnRecoveryDefinition.Version,
+                invocationContext.WorkspaceId?.Value.ToString("N") ?? "none",
+                ordinaryProfileId?.Value.ToString("N") ?? "none",
+                context.Layout.StablePrefixDigest,
+                context.InstructionBundleDigest ?? "none",
+                context.ToolInventoryDigest ?? "none",
+                loopState.SourceProjectionInputIdentity,
+                loopState.SourceProjectionIdentity ?? "none",
+                _activeTurnCompactionPolicy.MinimumSavingsTokens,
+                _activeTurnCompactionPolicy.MaximumSourceGroups,
+                _activeTurnCompactionPolicy.MaximumInputTokens)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             deterministicProjection = new ActiveTurnSourceProjector(RequirePrompts()).Propose(
@@ -2471,11 +2464,23 @@ public sealed partial class SessionApplication
                         projectedEstimate.WireInputTokens);
                     await RecordAsync(
                         ActiveTurnCompactionInspectionStatus.DeterministicReduction,
-                        "Exact equal-or-contained source coverage resolved request pressure without a summarizer call.",
+                        "Exact equal-or-contained source coverage reduced the complete request without a summarizer call.",
                         afterInputTokens: projectedEstimate.WireInputTokens);
+                    loopState.NextProactiveSourceScan = 0;
                     return;
                 }
             }
+
+            // Amortize an unsuccessful full-history scan over as many new groups as we just assessed.
+            loopState.NextProactiveSourceScan = loopState.LastGroupSequence + loopState.RawGroupCount;
+        }
+
+        if (!underPressure)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.BelowPressure,
+                "The canonical complete request is below the context target and fits the remaining execution budget.");
+            return;
         }
 
         if (_activeTurnCompactor is null)
@@ -3361,6 +3366,10 @@ public sealed partial class SessionApplication
             _prompts = prompts;
         }
 
+        public bool HasPendingSourceEvidence { get; private set; }
+
+        public long NextProactiveSourceScan { get; set; }
+
         public int AssessmentSequence { get; private set; }
 
         public int BackoffRoundsRemaining { get; private set; }
@@ -3812,6 +3821,12 @@ public sealed partial class SessionApplication
                 _purgeableGroupSequences.Add(sequence);
             }
 
+            if (_groups.Count > 1 && !HasPendingSourceEvidence)
+            {
+                HasPendingSourceEvidence = results.Any(result => result.IsError != true
+                    && result.ToolName is "read_file" or "code_explore");
+            }
+
             var retainedText = _currentAssistantMessages.Any(message => message.ToolCallId is null);
             AbortCurrentGroup();
             return retainedText;
@@ -4015,6 +4030,7 @@ public sealed partial class SessionApplication
                 return false;
             }
 
+            HasPendingSourceEvidence = false;
             _sourceProjectionAttemptIdentity = identity;
             return true;
         }

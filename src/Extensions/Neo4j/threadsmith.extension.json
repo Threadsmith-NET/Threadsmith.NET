@@ -1,0 +1,12 @@
+{
+  "Id": "threadsmith.neo4j",
+  "Name": "Neo4j",
+  "Version": "1.0.0",
+  "HostApiVersion": "current",
+  "EntryAssembly": "Threadsmith.Extensions.Neo4j.dll",
+  "EntryClass": "Threadsmith.Extensions.Neo4j.Neo4jExtension",
+  "RequiredTrust": "FullyTrustedAutomation",
+  "Capabilities": [ "tool-provider" ],
+  "Permissions": [ "network-access", "secret-access" ],
+  "AccessTypes": [ "network-access", "secret-access", "database-read", "database-write" ]
+}

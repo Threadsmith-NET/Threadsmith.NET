@@ -123,6 +123,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Extensions", "Extensions\Ex
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Extensions.Neo4j", "Extensions\Neo4j\Threadsmith.Extensions.Neo4j.csproj", "{C006EBBE-F3BE-4DFE-919B-DD266C7BC954}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Extensions.Neo4j.Tests", "..\tests\Threadsmith.Extensions.Neo4j.Tests\Threadsmith.Extensions.Neo4j.Tests.csproj", "{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -829,6 +831,18 @@ Global
 		{C006EBBE-F3BE-4DFE-919B-DD266C7BC954}.Release|x64.Build.0 = Release|Any CPU
 		{C006EBBE-F3BE-4DFE-919B-DD266C7BC954}.Release|x86.ActiveCfg = Release|Any CPU
 		{C006EBBE-F3BE-4DFE-919B-DD266C7BC954}.Release|x86.Build.0 = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|x64.Build.0 = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Debug|x86.Build.0 = Debug|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|x64.ActiveCfg = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|x64.Build.0 = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|x86.ActiveCfg = Release|Any CPU
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -862,6 +876,7 @@ Global
 		{A1170000-0000-4000-8000-000000000117} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 		{C9EC581E-85CB-4833-BFC6-0D6AC2E17F89} = {BE133D91-034E-1084-498B-FF24C4084A55}
 		{C006EBBE-F3BE-4DFE-919B-DD266C7BC954} = {BE133D91-034E-1084-498B-FF24C4084A55}
+		{7B1F0A52-3C94-4E6D-9A31-5D2C8E4B7F10} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {46014F96-A256-4DD2-8AE4-792C9A5F7E66}

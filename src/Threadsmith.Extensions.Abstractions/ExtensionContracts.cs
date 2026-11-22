@@ -302,6 +302,8 @@ public interface IThreadsmithExtension
     /// <param name="context">The activation context.</param>
     /// <param name="cancellationToken">A token that cancels activation.</param>
     /// <returns>A task that completes when activation is finished.</returns>
+    /// <exception cref="ExtensionValidationException">Extension-owned validation failed. Supply a safe,
+    /// actionable message for the operator; do not include credentials or configured values.</exception>
     ValueTask ActivateAsync(
         IExtensionActivationContext context,
         CancellationToken cancellationToken);

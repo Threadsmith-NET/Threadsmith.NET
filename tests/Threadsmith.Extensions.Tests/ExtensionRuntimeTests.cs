@@ -30,6 +30,53 @@ public sealed class ExtensionRuntimeTests
         Assert.Equal(ExtensionLifecycleState.Active, lifecycle.State);
     }
 
+    /// <summary>Explicit validation diagnostics cross the activation boundary, unlike arbitrary exception details.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public static async Task LoadAsync_ReportsValidationReasonButHidesUnexpectedDetails(bool validationFailure)
+    {
+        var stagingRoot = NewStagingRoot();
+        var events = new RecordingEventStream();
+        var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
+        try
+        {
+            var failure = await Assert.ThrowsAsync<ExtensionActivationException>(() => host.LoadAsync(
+                new ExtensionLoadRequest
+                {
+                    ExtensionDirectory = ResolveFixtureOutputDirectory("ThrowingExtension"),
+                    EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                    SessionId = SessionId.New(),
+                    ShadowStagingRoot = stagingRoot,
+                    Configuration = new Dictionary<string, string?>
+                    {
+                        ["validationFailure"] = validationFailure ? "true" : "false",
+                    },
+                },
+                TestContext.Current.CancellationToken));
+
+            Assert.IsType<ExtensionOperationException>(failure, exactMatch: false);
+            Assert.Equal(
+                validationFailure
+                    ? "Setting 'endpoint' is required; configure it before enabling the extension."
+                    : "Extension 'threadsmith.tests.throwing' failed during activation.",
+                failure.Message);
+            Assert.Equal(failure.Message, Assert.Single(events.Published.OfType<ExtensionLoadFailed>()).Reason);
+            Assert.Empty(host.Generations);
+            Assert.Empty(host.Capabilities.Registrations);
+            if (validationFailure)
+            {
+                Assert.Null(failure.InnerException);
+            }
+        }
+        finally
+        {
+            // Windows can retain staged assembly handles until the collectible context is collected.
+            // Use the host's best-effort cleanup, not a timing-dependent unload wait or retry.
+            ShadowCopier.Discard(stagingRoot);
+        }
+    }
+
     private static async Task<(ExtensionHost host, SessionId sessionId)> LoadSampleAsync()
     {
         var stagingRoot = NewStagingRoot();

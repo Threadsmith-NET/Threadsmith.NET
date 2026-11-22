@@ -543,13 +543,18 @@ public sealed class SourceEditApplication :
             risks.Add("The transactional baseline does not match final edit identities; cumulative diff text is unavailable.");
         }
 
+        var completionReasons = new List<string>(risks);
+        SourceEditAnalysis? completionAnalysis = null;
         if (_feedback.TryGetValue(sessionId, out var delivery) && delivery.RunId == runId)
         {
             var latest = GetLatestFeedback(delivery);
+            completionAnalysis = latest;
             var completionIssue = SourceEditAnalysisProjection.GetCompletionIssue(latest, delivery.EffectId);
             if (delivery.FinalFeedbackRevision is not null)
             {
-                risks.Add("Validation incomplete: final semantic feedback was not reviewed by the model before its round budget ended.");
+                const string reason = "Validation incomplete: final semantic feedback was not reviewed before the model's round budget ended.";
+                risks.Add(reason);
+                completionReasons.Add(reason);
                 if (status == ExecutionCheckpointPhase.Completed)
                 {
                     status = ExecutionCheckpointPhase.Failed;
@@ -559,6 +564,7 @@ public sealed class SourceEditApplication :
             if (completionIssue is not null)
             {
                 risks.Add(completionIssue);
+                completionReasons.Add(completionIssue);
                 if (status == ExecutionCheckpointPhase.Completed)
                 {
                     status = ExecutionCheckpointPhase.Failed;
@@ -569,6 +575,11 @@ public sealed class SourceEditApplication :
             {
                 risks.AddRange(latest.Omissions);
                 risks.AddRange(latest.Analyzers.Omissions);
+                if (latest.Analyzers.FailureReason is { } failureReason)
+                {
+                    risks.Add(failureReason);
+                }
+
                 risks.Add(SourceEditAnalysisProjection.CreateDisplaySummary(latest));
             }
         }
@@ -592,7 +603,7 @@ public sealed class SourceEditApplication :
         await _checkpoints.SaveOutcomeAsync(outcome, cancellationToken);
         if (status == ExecutionCheckpointPhase.Failed && requestedStatus != ExecutionCheckpointPhase.Failed)
         {
-            var detail = _sanitizer.Sanitize(string.Join(" ", risks.Distinct(StringComparer.Ordinal).Take(8)));
+            var detail = _sanitizer.Sanitize(SourceEditAnalysisProjection.CreateCompletionFailureDisplay(completionAnalysis, completionReasons, changed.Count));
             await _events.PublishAsync(
                 new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "SourceEditCompletionFailed", detail[..Math.Min(detail.Length, 2048)]),
                 cancellationToken);

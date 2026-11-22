@@ -45,6 +45,32 @@ public sealed class ExtensionManagerTests
         Assert.Equal("a", config.AutoLoad[0]);
     }
 
+    /// <summary>Unloaded summaries use a well-formed version placeholder without activating an extension.</summary>
+    [Fact]
+    public static async Task DiscoverAsync_UnloadedVersionUsesEmDash()
+    {
+        var root = Directory.CreateTempSubdirectory().FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "threadsmith.extension.json"),
+                """{"Id":"version-placeholder","Name":"Version placeholder fixture"}""",
+                TestContext.Current.CancellationToken);
+            IExtensionManager manager = new ExtensionHost(new RecordingEventStream(), NullLogger<ExtensionHost>.Instance);
+            ((ExtensionHost)manager).SetDiscoveryDirectory(root);
+
+            var discovered = Assert.Single(await manager.DiscoverAsync(TestContext.Current.CancellationToken));
+
+            Assert.False(discovered.IsLoaded);
+            Assert.Equal("\u2014", discovered.Version);
+            Assert.Equal(discovered, Assert.Single(manager.Summaries));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static string NewStagingRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), "threadsmith-m7-tests", Guid.NewGuid().ToString("N"));

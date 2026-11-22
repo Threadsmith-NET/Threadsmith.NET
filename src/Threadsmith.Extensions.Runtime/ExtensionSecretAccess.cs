@@ -62,7 +62,13 @@ internal sealed class ExtensionSecretProtection
     {
         // JSON escapes require a backslash. Without a declared format, even a JSON fragment
         // embedded in ordinary text may encode a credential, so withhold ambiguous messages.
-        return message.Contains('\\') && HasValues ? _protectedMessage : SafeMessage(message);
+        return ContainsDiagnostic(message) ? _protectedMessage : message;
+    }
+
+    /// <summary>Checks free-form diagnostics without assuming a particular escaping convention.</summary>
+    internal bool ContainsDiagnostic(string? text)
+    {
+        return text is not null && ((text.Contains('\\') && HasValues) || Contains(text));
     }
 
     /// <summary>Checks decoded property names and values before result serialization.</summary>

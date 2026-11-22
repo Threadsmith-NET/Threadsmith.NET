@@ -529,7 +529,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 promptLoader,
                 resourceLimits: operationalLimits.Semantic,
                 startupProgress: progress,
-                maximumConfigurationBytes: trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024));
+                maximumConfigurationBytes: trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
+                outputSanitizer: sanitizer);
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
             repositoryFileObserver = new RepositoryFileObserver();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(

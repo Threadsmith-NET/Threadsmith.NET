@@ -15,6 +15,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
     private readonly IPromptLoader _prompts;
+    private readonly IOutputSanitizer? _outputSanitizer;
     private readonly TimeProvider _timeProvider;
     private readonly IDomainEventStream _events;
     private readonly ILoggerFactory _loggerFactory;
@@ -30,7 +31,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         SemanticResourceLimits? resourceLimits = null,
         SemanticStartupProgress? startupProgress = null,
         TimeProvider? timeProvider = null,
-        int maximumConfigurationBytes = 1024 * 1024)
+        int maximumConfigurationBytes = 1024 * 1024,
+        IOutputSanitizer? outputSanitizer = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
         _maximumConfigurationBytes = maximumConfigurationBytes;
@@ -46,6 +48,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
         _prompts = prompts;
+        _outputSanitizer = outputSanitizer;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _events = events;
         _loggerFactory = loggerFactory;
@@ -214,7 +217,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             _resourceLimits,
             StartupProgress,
             _timeProvider,
-            _maximumConfigurationBytes));
+            _maximumConfigurationBytes,
+            _outputSanitizer));
         if (_confidencePublisher is { } publisher)
         {
             engine.SetConfidencePublisher(publisher);

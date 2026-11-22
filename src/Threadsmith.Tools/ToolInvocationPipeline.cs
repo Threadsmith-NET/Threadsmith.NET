@@ -1095,7 +1095,9 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                     (markDispatched, token) => tool.ExecuteExternalWriteAsync(input, executionContext, markDispatched, token),
                     request.Completion,
                     timeoutCancellation.Token)
-                : await tool.ExecuteAsync(input, executionContext, timeoutCancellation.Token);
+                : source.Kind == ToolActivitySourceKind.Extension
+                    ? await admission.AwaitExecutionAsync(token => tool.ExecuteAsync(input, executionContext, token), timeoutCancellation.Token)
+                    : await tool.ExecuteAsync(input, executionContext, timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);

@@ -178,6 +178,16 @@ must be JSON strings or null. Each activation receives only its own section thro
 Validate your extension's key names, types and required values. Store logical references, not
 passwords. The host resolves a reference only during an admitted tool call. See [Tool contracts](tool-contracts.md#extension-secret-access).
 
+When validation fails, throw `ExtensionValidationException` from `ActivateAsync` with a short,
+actionable explanation, for example `Setting 'endpoint' is required; configure it before enabling the extension.`
+The host shows this message in the extension manager notice and F2 details, and records it in the
+load-failure event. It limits the explanation to 2,048 characters, with a truncation marker when needed.
+Name the setting and corrective action, never its value, credentials, or private connection details.
+Inner exceptions are not part of this public diagnostic. Unexpected activation exceptions keep a
+generic operator-facing message. Validate before registering capabilities or starting work; a failed
+activation does not publish the extension's capabilities. This is an additive exception contract;
+existing `IThreadsmithExtension` implementations do not need a new method.
+
 Each generation keeps an immutable snapshot. File edits take effect only after explicit unload/load
 or hot replacement. In-flight old-generation calls retain their original view. Failed or cancelled
 activation cannot publish a partial settings update. A missing file or section supplies an empty

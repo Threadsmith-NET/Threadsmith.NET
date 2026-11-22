@@ -5,8 +5,16 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.Extensions.Neo4j.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../../Threadsmith.Extensions.Abstractions/Threadsmith.Extensions.Abstractions.csproj"
                       Private="false" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Neo4j.Driver" />
+  </ItemGroup>
+  <!-- Ship the extension manifest so discovery reads the canonical id without loading the assembly. -->
+  <ItemGroup>
+    <None Include="threadsmith.extension.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <Import Project="../../Threadsmith.Extensions.Abstractions/build/Threadsmith.Extensions.Abstractions.targets" />
 </Project>

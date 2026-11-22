@@ -245,6 +245,85 @@ public static class ExtensionSecretAccessTests
         Assert.DoesNotContain(AdmissionTool.Credential, JsonSerializer.Serialize(events.Published.OfType<ToolInvocationCompleted>()), StringComparison.Ordinal);
     }
 
+    /// <summary>Free-form error and provenance fields cannot bypass protection using relaxed JSON escaping.</summary>
+    [Theory]
+    [InlineData("error")]
+    [InlineData("kind")]
+    [InlineData("identifier")]
+    [InlineData("range")]
+    public static async Task SecretOutput_ProtectsEscapedErrorAndProvenance(string field)
+    {
+        const string credential = "fixture-\"<&value";
+        var resolver = new TestResolver();
+        resolver.Result.SetResult(new SecretResolutionResult { Value = new SecretValue(credential) });
+        var generation = new ExtensionGeneration(ExtensionId.New(), ExtensionGenerationId.New(), new() { Id = "fixture", Name = "fixture" }, null, null!, null, ".", ".")
+        {
+            SecretResolver = resolver,
+        };
+        var clock = new FakeTimeProvider();
+        var registry = new ToolRegistry([]);
+        var proxy = new CapabilityProxy(new DiagnosticTool(field), CapabilityId.New(), generation, new InvocationLeaseAuthority(NullLogger.Instance, clock), NullLogger.Instance);
+        registry.RegisterOrReplace(proxy, new ToolActivitySource(ToolActivitySourceKind.Extension, "fixture"));
+        var events = new RecordingEventStream();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new Threadsmith.Telemetry.SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock, prompts: TestPromptLoader.Instance);
+        var request = new ToolInvocationRequest
+        {
+            Context = new() { RepositoryPath = ".", RequestedBy = "test", TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation },
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = proxy.Definition.Id,
+            ArgumentsJson = "{}",
+        };
+
+        var result = await pipeline.InvokeAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, resolver.Calls);
+        Assert.Equal(ToolErrorClassification.ExecutionFailure, result.ErrorClassification);
+        Assert.Equal(field == "error" ? "[protected extension log]" : "ExtensionToolExecutionFailed", result.Error);
+        Assert.Empty(result.Sources);
+        var completed = Assert.Single(events.Published.OfType<ToolInvocationCompleted>());
+        Assert.Equal(result.Error, completed.Error);
+        Assert.DoesNotContain(credential, result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(DiagnosticTool.Escaped, result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain(DiagnosticTool.Escaped, completed.ResultJson ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    private sealed class DiagnosticTool(string field) : IToolCapability
+    {
+        internal const string Escaped = """["fixture-\"<&value"]""";
+
+        public CapabilityDescriptor Descriptor { get; } = new() { Id = "fixture_diagnostic", Kind = CapabilityKind.Tool };
+
+        public ExtensionToolDefinition Definition { get; } = new()
+        {
+            Id = "fixture_diagnostic",
+            Version = "1",
+            Description = "Fixture diagnostic output",
+            InputSchema = new("input", 1, "{}"),
+            OutputSchema = new("output", 1, "{}"),
+        };
+
+        public string? GetExecutable(string argumentsJson) => null;
+
+        public IReadOnlyList<string> GetSecretReferences(string argumentsJson) => ["secrets:test"];
+
+        public async Task<ExtensionToolResult> ExecuteAsync(string argumentsJson, ExtensionToolInvocationContext context, CancellationToken cancellationToken = default)
+        {
+            await context.Secrets!.ResolveAsync("secrets:test", cancellationToken);
+            var source = new ExtensionProvenanceSource(
+                field == "kind" ? Escaped : "fixture",
+                field == "identifier" ? Escaped : "fixture",
+                field == "range" ? Escaped : null);
+            return new ExtensionToolResult
+            {
+                Succeeded = false,
+                ResultJson = "{}",
+                Error = field == "error" ? Escaped : "Fixture failure",
+                Sources = field == "error" ? [] : [source],
+            };
+        }
+    }
+
     private sealed class AdmissionTool(string claim) : IToolCapability
     {
         internal const string Credential = "fixture-private-value";

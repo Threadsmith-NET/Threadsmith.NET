@@ -19,7 +19,7 @@ foreach ($component in $evidence.components) {
             if ($expression -notin $approved) { throw "Component $($component.id) has an unrecorded supplemental license expression." }
         }
     }
-    if ($component.scope -eq 'bundled-package') {
+    if ($component.scope -in @('bundled-package', 'bundled-extension-package')) {
         if ($component.packageSha512 -notmatch '^[A-Za-z0-9+/]{80,}={0,2}$') { throw "Bundled package $($component.id) has no closed package digest." }
         if ($component.PSObject.Properties.Name -contains 'additionalNotices') {
             foreach ($relativeNotice in $component.additionalNotices) {

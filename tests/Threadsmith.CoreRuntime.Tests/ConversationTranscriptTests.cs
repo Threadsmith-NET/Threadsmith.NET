@@ -15,14 +15,17 @@ public static class ConversationTranscriptTests
     public static void SourceEditCompletionFailureIsSeparatedFromFinalAnswer()
     {
         var diagnostic = new DiagnosticObserved(
-            SessionId.New(), DateTimeOffset.UtcNow, "SourceEditCompletionFailed", "Validation incomplete.");
+            SessionId.New(),
+            DateTimeOffset.UtcNow,
+            "SourceEditCompletionFailed",
+            $"Source-edit validation incomplete{Environment.NewLine}- Cause: Analyzer dependency unavailable.");
         var segments = new List<PresentationTextSegment>();
 
         InteractionEventSegments.Append(segments, diagnostic, string.Empty);
 
         var output = "Nothing was committed or pushed." + string.Concat(segments.Select(segment => segment.Text));
         Assert.Equal(
-            $"Nothing was committed or pushed.{Environment.NewLine}{Environment.NewLine}[SourceEditCompletionFailed] Validation incomplete.{Environment.NewLine}",
+            $"Nothing was committed or pushed.{Environment.NewLine}{Environment.NewLine}Source-edit validation incomplete{Environment.NewLine}- Cause: Analyzer dependency unavailable.{Environment.NewLine}",
             output);
     }
 

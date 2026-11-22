@@ -182,7 +182,7 @@ public sealed class DuplicateContractAssemblyException : Exception
 }
 
 /// <summary>The extension's contract version is incompatible with the host.</summary>
-public sealed class ExtensionIncompatibleException : Exception
+public sealed class ExtensionIncompatibleException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionIncompatibleException"/> class.</summary>
     public ExtensionIncompatibleException()
@@ -203,7 +203,7 @@ public sealed class ExtensionIncompatibleException : Exception
 }
 
 /// <summary>Loading or reflecting the extension entry assembly failed.</summary>
-public sealed class ExtensionLoadException : Exception
+public sealed class ExtensionLoadException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionLoadException"/> class.</summary>
     public ExtensionLoadException()
@@ -224,7 +224,7 @@ public sealed class ExtensionLoadException : Exception
 }
 
 /// <summary>Activating the extension threw an exception (strategy §17.26: host stays operational).</summary>
-public sealed class ExtensionActivationException : Exception
+public sealed class ExtensionActivationException : ExtensionOperationException
 {
     /// <summary>Initializes a new instance of the <see cref="ExtensionActivationException"/> class.</summary>
     public ExtensionActivationException()

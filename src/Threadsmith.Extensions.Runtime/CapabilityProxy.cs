@@ -190,14 +190,14 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
                 .ToArray();
             var protection = _generation.SecretProtection;
             if (protection.HasValues && ((value is JsonElement json && protection.Contains(json))
-                || sources.Any(source => protection.Contains(source.Kind) || protection.Contains(source.Identifier) || protection.Contains(source.Range))))
+                || sources.Any(source => protection.ContainsDiagnostic(source.Kind) || protection.ContainsDiagnostic(source.Identifier) || protection.ContainsDiagnostic(source.Range))))
             {
                 throw new InvalidOperationException("ExtensionSecretInOutput");
             }
 
             var failure = result.Succeeded
                 ? null
-                : new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, protection.SafeMessage(result.Error ?? "ExtensionToolExecutionFailed"));
+                : new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, protection.SafeLogMessage(result.Error ?? "ExtensionToolExecutionFailed"));
             return new ToolExecutionEnvelope(value, sources, result.IsTruncated, Failure: failure);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

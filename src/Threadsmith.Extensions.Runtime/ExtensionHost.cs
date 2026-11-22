@@ -363,7 +363,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             ExtensionId = extensionId,
             GenerationId = active?.GenerationId,
             Name = active?.Descriptor.Name ?? Path.GetFileName(directory),
-            Version = active?.Descriptor.Version ?? "â€”",
+            Version = active?.Descriptor.Version ?? "\u2014",
             State = active?.State.ToString() ?? "Discovered",
             IsLoaded = active is not null,
             RequiredTrust = active?.MinimumTrust ?? (manifest is null ? null : RequiredTrust(manifest.RequiredTrust, manifest.Permissions)),
@@ -1025,6 +1025,22 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (ExtensionValidationException exception)
+        {
+            var reason = generation.SecretProtection.SafeLogMessage(exception.Message);
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                reason = "Extension validation failed.";
+            }
+
+            const int maximumReasonLength = 2048;
+            if (reason.Length > maximumReasonLength)
+            {
+                reason = reason[..maximumReasonLength] + " [truncated]";
+            }
+
+            throw new ExtensionActivationException(reason);
         }
         catch (Exception exception)
         {

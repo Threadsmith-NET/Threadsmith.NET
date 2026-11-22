@@ -1136,6 +1136,46 @@ public static partial class Milestone1Tests
         Assert.Empty(surface.SelectionRequests);
     }
 
+    /// <summary>Known extension failures stay visible in the notice and details, while retries preserve actual state.</summary>
+    [Fact]
+    public static async Task ExtensionCheckboxesShowKnownFailureAndRecover()
+    {
+        const string reason = "Setting 'uri' is required; configure it before enabling the extension.";
+        var manager = new ToggleExtensionManager { LoadFailure = new ExtensionOperationException(reason) };
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new ToggleInteractionSurface(["/extensions", "/quit"])
+        {
+            Toggle = async (_, change, token) =>
+            {
+                var failed = await change("first", true, token);
+                Assert.False(failed.Enabled);
+                Assert.Contains(reason, failed.Reason, StringComparison.Ordinal);
+                Assert.Contains(reason, failed.UpdatedOption?.Reason, StringComparison.Ordinal);
+
+                manager.LoadFailure = new InvalidOperationException("private-detail");
+                var unknown = await change("first", true, token);
+                Assert.False(unknown.Enabled);
+                Assert.Equal("The extension change failed; showing current state.", unknown.Reason);
+                Assert.DoesNotContain("private-detail", unknown.UpdatedOption?.Reason ?? string.Empty, StringComparison.Ordinal);
+
+                manager.LoadFailure = null;
+                var retry = await change("first", true, token);
+                Assert.True(retry.Enabled);
+                Assert.Null(retry.Reason);
+                Assert.DoesNotContain(reason, retry.UpdatedOption?.Reason ?? string.Empty, StringComparison.Ordinal);
+            },
+        };
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
+            harness.EventStream,
+            surface,
+            extensionManager: manager);
+
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, surface.ToggleCount);
+    }
+
     /// <summary>A failed model turn renders its engine diagnostic once before accepting the next prompt.</summary>
     [Theory]
     [InlineData(false)]
@@ -3961,6 +4001,8 @@ public static partial class Milestone1Tests
 
         public Exception? DiscoveryFailure { get; init; }
 
+        public Exception? LoadFailure { get; set; }
+
         public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default)
         {
             if (DiscoveryFailure is { } failure)
@@ -3973,6 +4015,11 @@ public static partial class Milestone1Tests
 
         public Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
         {
+            if (LoadFailure is { } failure)
+            {
+                return Task.FromException<ExtensionSummary?>(failure);
+            }
+
             _extensions[extensionId] = _extensions[extensionId] with { IsLoaded = true, State = "Active", GenerationId = ExtensionGenerationId.New() };
             return Task.FromResult<ExtensionSummary?>(_extensions[extensionId]);
         }

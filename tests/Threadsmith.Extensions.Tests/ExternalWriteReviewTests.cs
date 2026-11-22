@@ -223,14 +223,73 @@ public static class ExternalWriteReviewTests
         }
     }
 
+    /// <summary>Interruption stops the host wait without disposing blocked work or publishing its late result.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task InterruptedReadOnlyExtension_RetainsOwnershipAndDiscardsLateResult(bool callerCancels)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var fixture = new Fixture(ExtensionApprovalRequirement.None, statementReview: false, readOnly: true);
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+        using var snapshot = new CancellationTokenSource();
+        await snapshot.CancelAsync();
+        var pending = fixture.Pipeline.InvokeAsync(fixture.Request, caller.Token);
+        Task<ToolInvocationResult>? successor = null;
+        try
+        {
+            await Task.WhenAny(pending, fixture.Tool.Entered.Task).WaitAsync(token);
+            Assert.True(fixture.Tool.Entered.Task.IsCompletedSuccessfully);
+            if (callerCancels)
+            {
+                await caller.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending.WaitAsync(token));
+            }
+            else
+            {
+                fixture.Clock.Advance(TimeSpan.FromMinutes(1));
+                Assert.Equal(ToolErrorClassification.Timeout, (await pending.WaitAsync(token)).ErrorClassification);
+            }
+
+            Assert.Equal(1, await fixture.Leases.WaitForDrainAsync(fixture.Proxy.GenerationId, snapshot.Token));
+            successor = fixture.Pipeline.InvokeAsync(fixture.Request with { RunId = RunId.New() }, token);
+            Assert.False(successor.IsCompleted); // The abandoned invocation still owns source admission.
+            fixture.Tool.Release.SetResult(new ExtensionToolResult { Succeeded = true, ResultJson = "{\"late\":true}" });
+            await fixture.Tool.CleanupEntered.Task.WaitAsync(token);
+            Assert.Equal(1, await fixture.Leases.WaitForDrainAsync(fixture.Proxy.GenerationId, snapshot.Token));
+            Assert.False(successor.IsCompleted);
+            fixture.Tool.CleanupRelease.SetResult();
+            Assert.True((await successor.WaitAsync(token)).Succeeded);
+            Assert.Equal(0, await fixture.Leases.WaitForDrainAsync(fixture.Proxy.GenerationId, snapshot.Token));
+
+            var receipt = Assert.Single(fixture.Events.Published.OfType<ToolInvocationCompleted>(), item => item.RunId == fixture.Request.RunId);
+            Assert.Equal(callerCancels ? OperationActivityOutcome.Cancelled : OperationActivityOutcome.TimedOut, receipt.Outcome);
+            Assert.Equal(fixture.Source, receipt.Source);
+            Assert.DoesNotContain("unknown", receipt.ResultJson ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("late", receipt.ResultJson ?? string.Empty, StringComparison.Ordinal);
+            Assert.Equal(2, fixture.Tool.Calls); // Exactly one original execution and one explicitly queued successor.
+        }
+        finally
+        {
+            fixture.Tool.Release.TrySetResult(new ExtensionToolResult { Succeeded = true });
+            fixture.Tool.CleanupRelease.TrySetResult();
+            if (successor is not null)
+            {
+                await successor.WaitAsync(token);
+            }
+        }
+    }
+
     private sealed class Fixture
     {
         internal Fixture(
             ExtensionApprovalRequirement approval = ExtensionApprovalRequirement.User,
             bool statementReview = true,
-            ToolParallelOptions? parallelOptions = null)
+            ToolParallelOptions? parallelOptions = null,
+            bool readOnly = false)
         {
-            Tool = new WriteTool(approval, statementReview);
+            Registry = new ToolRegistry([], runtimeOptions: new() { Defaults = new() { MaximumSourceConcurrency = readOnly ? 1 : 2 } });
+            Tool = new WriteTool(approval, statementReview, readOnly);
             Leases = new InvocationLeaseAuthority(NullLogger.Instance, Clock);
             Proxy = NewProxy();
             Registry.RegisterOrReplace(Proxy, Source);
@@ -239,7 +298,7 @@ public static class ExternalWriteReviewTests
 
         internal FakeTimeProvider Clock { get; } = new();
 
-        internal ToolRegistry Registry { get; } = new([], runtimeOptions: new() { Defaults = new() { MaximumSourceConcurrency = 2 } });
+        internal ToolRegistry Registry { get; }
 
         internal InvocationLeaseAuthority Leases { get; }
 
@@ -272,7 +331,7 @@ public static class ExternalWriteReviewTests
         }
     }
 
-    private sealed class WriteTool(ExtensionApprovalRequirement approval, bool statementReview) : IToolCapability
+    private sealed class WriteTool(ExtensionApprovalRequirement approval, bool statementReview, bool readOnly) : IToolCapability
     {
         public CapabilityDescriptor Descriptor { get; } = new() { Id = "fixture_write", Kind = CapabilityKind.Tool };
 
@@ -284,7 +343,7 @@ public static class ExternalWriteReviewTests
             Category = ExtensionToolCategory.ExternalService,
             InputSchema = new("input", 1, "{}"),
             OutputSchema = new("output", 1, "{}"),
-            SideEffect = ExtensionToolSideEffect.WritesExternalData,
+            SideEffect = readOnly ? ExtensionToolSideEffect.ReadOnly : ExtensionToolSideEffect.WritesExternalData,
             RequiredApproval = approval,
             Idempotency = ExtensionToolIdempotency.NonIdempotent,
             StatementReview = statementReview ? new("graph.example", "fixture", "cypher", "parameters") : null,
@@ -295,17 +354,32 @@ public static class ExternalWriteReviewTests
 
         internal TaskCompletionSource<ExtensionToolResult> Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal TaskCompletionSource CleanupEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource CleanupRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         internal int Calls { get; private set; }
 
         public string? GetExecutable(string argumentsJson) => null;
 
         public IReadOnlyList<string> GetSecretReferences(string argumentsJson) => [];
 
-        public Task<ExtensionToolResult> ExecuteAsync(string argumentsJson, ExtensionToolInvocationContext context, CancellationToken cancellationToken = default)
+        public async Task<ExtensionToolResult> ExecuteAsync(string argumentsJson, ExtensionToolInvocationContext context, CancellationToken cancellationToken = default)
         {
             Calls++;
             Entered.TrySetResult();
-            return Release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            try
+            {
+                return await Release.Task.WaitAsync(TestContext.Current.CancellationToken);
+            }
+            finally
+            {
+                if (readOnly)
+                {
+                    CleanupEntered.TrySetResult();
+                    await CleanupRelease.Task.WaitAsync(TestContext.Current.CancellationToken);
+                }
+            }
         }
     }
 }

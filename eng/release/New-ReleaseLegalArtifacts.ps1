@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string] $AssetsFile, [Parameter(Mandatory)][string] $OutputDirectory, [Parameter(Mandatory)][string] $RuntimeIdentifier)
+param([Parameter(Mandatory)][string] $AssetsFile, [Parameter(Mandatory)][string] $OutputDirectory, [Parameter(Mandatory)][string] $RuntimeIdentifier, [string[]] $ExtensionAssetsFiles = @())
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
 Assert-ReleaseRid $RuntimeIdentifier
 $evidence = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
@@ -23,6 +23,33 @@ foreach ($package in $resolved) {
     if ($match.Count -ne 1 -or $match[0].packageSha512 -ne $package.sha512) { throw "Resolved package $($package.id)/$($package.version) does not match reviewed evidence." }
 }
 if (@($approvedPackages | Where-Object { $_.id -notin $resolved.id }).Count -gt 0) { throw 'Reviewed bundled-package evidence is stale relative to the exact release closure.' }
+# Bundled extensions ship their own private runtime assets beside the host payload, so their closure is
+# reviewed under a separate scope and must not widen the host closure above.
+# Only callers that stage extensions supply their assets files. Host-only callers must keep producing the
+# unchanged host notices and SBOM, so the extension closure is validated and emitted only when requested.
+$approvedExtensionPackages = @($evidence.components | Where-Object scope -EQ 'bundled-extension-package')
+$extensionResolved = @()
+if ($ExtensionAssetsFiles.Count -gt 0) {
+    foreach ($extensionAssetsFile in $ExtensionAssetsFiles) {
+        $extensionAssets = Get-Content -LiteralPath $extensionAssetsFile -Raw | ConvertFrom-Json
+        $shipped = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($framework in $extensionAssets.targets.PSObject.Properties) {
+            foreach ($library in $framework.Value.PSObject.Properties) {
+                if ($library.Value.PSObject.Properties.Name -contains 'runtime') { [void]$shipped.Add($library.Name) }
+            }
+        }
+        $extensionResolved += @($extensionAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq 'package' -and $shipped.Contains($_.Name) } | ForEach-Object {
+            $separator = $_.Name.LastIndexOf('/')
+            [pscustomobject]@{ id = $_.Name.Substring(0, $separator); version = $_.Name.Substring($separator + 1); sha512 = $_.Value.sha512 }
+        })
+    }
+    $extensionResolved = @($extensionResolved | Sort-Object id, version -Unique)
+    foreach ($package in $extensionResolved) {
+        $match = @($approvedExtensionPackages | Where-Object { $_.id -eq $package.id -and $_.version -eq $package.version })
+        if ($match.Count -ne 1 -or $match[0].packageSha512 -ne $package.sha512) { throw "Resolved extension package $($package.id)/$($package.version) does not match reviewed evidence." }
+    }
+    if (@($approvedExtensionPackages | Where-Object { $_.id -notin @($extensionResolved.id) }).Count -gt 0) { throw 'Reviewed bundled-extension-package evidence is stale relative to the exact extension closure.' }
+}
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $notice = [Text.StringBuilder]::new()
 [void]$notice.AppendLine('THREADSMITH.NET THIRD-PARTY NOTICES').AppendLine('Generated deterministically from reviewed release evidence.').AppendLine()
@@ -37,6 +64,11 @@ foreach ($package in $resolved) {
     }
     if ($entry.id.StartsWith('SQLitePCLRaw.', [StringComparison]::Ordinal)) { [void]$notice.AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'legal/SQLitePCLRaw-NOTICE.txt') -Raw).Trim()).AppendLine() }
 }
+foreach ($package in $extensionResolved) {
+    $entry = @($approvedExtensionPackages | Where-Object { $_.id -eq $package.id -and $_.version -eq $package.version })[0]
+    [void]$notice.AppendLine("================================================================================").AppendLine("$($entry.id) $($entry.version)").AppendLine("License: $($entry.licenseExpression)").AppendLine("Copyright: $($entry.copyrightText)").AppendLine("Source: $($entry.provenance)").AppendLine('Distribution: bundled Threadsmith.NET extension payload under extensions/.')
+    [void]$notice.AppendLine().AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot ([string]$entry.licenseText)) -Raw).Trim()).AppendLine()
+}
 $model = Get-Content -LiteralPath (Join-Path (Get-RepositoryRoot) 'src/Threadsmith.Embeddings.Local/minilm-assets.json') -Raw | ConvertFrom-Json
 [void]$notice.AppendLine('================================================================================').AppendLine("$($model.model) $($model.revision)").AppendLine('License: Apache-2.0').AppendLine("Source: $($model.source)/tree/$($model.revision)").AppendLine('Model license declaration: bundled README.md at the pinned revision.').AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot 'legal/licenses/Apache-2.0.txt') -Raw).Trim()).AppendLine()
 $reranker = Get-Content -LiteralPath (Join-Path (Get-RepositoryRoot) 'src/Threadsmith.Reranking.Local/crossencoder-assets.json') -Raw | ConvertFrom-Json
@@ -49,6 +81,11 @@ $packages = @($resolved | ForEach-Object {
     $resolvedPackage = $_
     $entry = @($approvedPackages | Where-Object { $_.id -eq $resolvedPackage.id -and $_.version -eq $resolvedPackage.version })[0]
     [ordered]@{ SPDXID = "SPDXRef-Package-$([Uri]::EscapeDataString($entry.id))"; name = $entry.id; versionInfo = $entry.version; downloadLocation = $entry.provenance; licenseDeclared = $entry.licenseExpression; licenseConcluded = $(if ($entry.PSObject.Properties.Name -contains 'licenseConcluded') { $entry.licenseConcluded } else { $entry.licenseExpression }); checksums = @([ordered]@{ algorithm = 'SHA512'; checksumValue = [Convert]::ToHexString([Convert]::FromBase64String([string]$entry.packageSha512)).ToLowerInvariant() }) }
+})
+$packages += @($extensionResolved | ForEach-Object {
+    $resolvedPackage = $_
+    $entry = @($approvedExtensionPackages | Where-Object { $_.id -eq $resolvedPackage.id -and $_.version -eq $resolvedPackage.version })[0]
+    [ordered]@{ SPDXID = "SPDXRef-Extension-Package-$([Uri]::EscapeDataString($entry.id))"; name = $entry.id; versionInfo = $entry.version; downloadLocation = $entry.provenance; licenseDeclared = $entry.licenseExpression; licenseConcluded = $(if ($entry.PSObject.Properties.Name -contains 'licenseConcluded') { $entry.licenseConcluded } else { $entry.licenseExpression }); checksums = @([ordered]@{ algorithm = 'SHA512'; checksumValue = [Convert]::ToHexString([Convert]::FromBase64String([string]$entry.packageSha512)).ToLowerInvariant() }) }
 })
 $modelArtifact = @($model.artifacts | Where-Object name -EQ 'model.onnx')[0]
 $packages += [ordered]@{ SPDXID = 'SPDXRef-Model-MiniLM-L12-v2'; name = $model.model; versionInfo = $model.revision; downloadLocation = "$($model.source)/resolve/$($model.revision)/onnx/model.onnx"; licenseDeclared = 'Apache-2.0'; licenseConcluded = 'Apache-2.0'; checksums = @([ordered]@{ algorithm = 'SHA256'; checksumValue = $modelArtifact.sha256 }) }

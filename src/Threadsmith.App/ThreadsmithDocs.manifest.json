@@ -39,6 +39,7 @@
     "docs/operations/tools.md",
     "docs/operations/release-packaging.md",
     "docs/extension-authoring/authoring-guide.md",
+    "docs/extension-authoring/neo4j-extension.md",
     "docs/testing/fake-model-scripts.md",
     "docs/architecture/README.md",
     "docs/architecture/adr-34-governed-declarative-skills.md",

@@ -30,17 +30,19 @@ internal sealed class ToolExecutionAdmission : IDisposable
         _lease = await _limiter.AcquireAsync(_source, _maximumConcurrency, cancellationToken);
     }
 
-    /// <summary>Bounds even synchronous external dispatch and retains source admission until the work finishes.</summary>
-    public async Task<ToolExecutionEnvelope> AwaitExternalWriteAsync(
-        Func<Action, CancellationToken, Task<ToolExecutionEnvelope>> invoke,
-        ToolSuspensionCompletion? completion,
+    /// <summary>Bounds non-cooperative execution and retains source admission through cleanup.</summary>
+    public async Task<ToolExecutionEnvelope> AwaitExecutionAsync(
+        Func<CancellationToken, Task<ToolExecutionEnvelope>> invoke,
         CancellationToken cancellationToken)
     {
-        const int pending = 0;
-        const int dispatched = 1;
-        const int closed = 2;
-        var dispatchState = pending;
-        var operation = Task.Run(DispatchAsync, cancellationToken);
+        var operation = Task.Run(
+            () =>
+            {
+                _validate();
+                cancellationToken.ThrowIfCancellationRequested();
+                return invoke(cancellationToken);
+            },
+            cancellationToken);
         try
         {
             return await operation.WaitAsync(cancellationToken);
@@ -61,17 +63,26 @@ internal sealed class ToolExecutionAdmission : IDisposable
                 TaskScheduler.Default);
             throw;
         }
+    }
+
+    /// <summary>Bounds even synchronous external dispatch and retains source admission until the work finishes.</summary>
+    public async Task<ToolExecutionEnvelope> AwaitExternalWriteAsync(
+        Func<Action, CancellationToken, Task<ToolExecutionEnvelope>> invoke,
+        ToolSuspensionCompletion? completion,
+        CancellationToken cancellationToken)
+    {
+        const int pending = 0;
+        const int dispatched = 1;
+        const int closed = 2;
+        var dispatchState = pending;
+        try
+        {
+            return await AwaitExecutionAsync(token => invoke(MarkDispatched, token), cancellationToken);
+        }
         finally
         {
             var started = Interlocked.Exchange(ref dispatchState, closed) == dispatched;
             completion?.ExternalWriteDispatched = started;
-        }
-
-        Task<ToolExecutionEnvelope> DispatchAsync()
-        {
-            _validate();
-            cancellationToken.ThrowIfCancellationRequested();
-            return invoke(MarkDispatched, cancellationToken);
         }
 
         void MarkDispatched()

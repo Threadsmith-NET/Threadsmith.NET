@@ -1174,6 +1174,19 @@
       "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
       "packageArchiveSha512": "UeHyeQHanssVVZmIHa4XTCvUCfHTt4043LODXv4+BTJqPDvvftr6vOVji/2x3ENKfFMZeawEbsiYARfdHhV4jQ==",
       "reviewNotes": "Release owner approved the unmodified PDFium 160.0.8165 packages with complete matching notices on 2026-11-18. Package hashes and six-RID native asset provenance are in legal/PdfReading/160.0.8165-candidate-evidence.json."
+    },
+    {
+      "id": "Neo4j.Driver",
+      "version": "6.5.1",
+      "scope": "bundled-extension-package",
+      "provenance": "https://www.nuget.org/packages/Neo4j.Driver/6.5.1",
+      "packageSha512": "VYb1KDuXeCjj8Tl0VEIMvFS3Yqbu6tiIW6za9cHCglMKdqR2pL/55Vi/Y8w5cEqXg70cdlP3QOTkDJer0CX5Mg==",
+      "licenseExpression": "Apache-2.0",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "noticeTreatment": "Full license text; shipped only inside the optional bundled extension payload at extensions/Neo4j/.",
+      "reviewState": "approved",
+      "copyrightText": "© Neo4j, Inc.",
+      "reviewNotes": "The package resolves one managed runtime asset (lib/net10.0/Neo4j.Driver.dll) and declares no package dependencies, so the extension closure is this single component."
     }
   ]
 }

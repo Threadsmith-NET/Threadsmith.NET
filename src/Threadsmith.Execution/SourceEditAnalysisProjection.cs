@@ -212,7 +212,34 @@ internal static class SourceEditAnalysisProjection
             }
         }
 
+        if (analysis.Diagnostics.Count > 1 && result[nameof(analysis.Diagnostics)] is JsonArray diagnostics)
+        {
+            GroupRepeatedLocations(analysis.Diagnostics, diagnostics);
+        }
+
         return result;
+    }
+
+    private static void GroupRepeatedLocations(IReadOnlyList<SourceEditDiagnostic> findings, JsonArray diagnostics)
+    {
+        var entries = diagnostics.ToArray();
+        diagnostics.Clear();
+        var firstByKey = new Dictionary<SourceEditDiagnostic, JsonObject>();
+        for (var index = 0; index < findings.Count; index++)
+        {
+            var finding = findings[index];
+            var key = finding with { Line = null, Column = null };
+            var entry = entries[index] as JsonObject ?? throw new InvalidOperationException("Expected a serialized edit diagnostic.");
+            if (firstByKey.TryAdd(key, entry))
+            {
+                diagnostics.Add(entry);
+                continue;
+            }
+
+            var first = firstByKey[key];
+            var locations = (first["AdditionalLocations"] ??= new JsonArray()).AsArray();
+            locations.Add(new JsonObject { ["Line"] = finding.Line, ["Column"] = finding.Column });
+        }
     }
 
     private static string FormatCompletionDetail(string text)

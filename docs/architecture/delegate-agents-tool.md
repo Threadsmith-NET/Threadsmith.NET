@@ -131,7 +131,7 @@ Only source `RoleConfiguration` sets `UsesTrustedCatalog`. `ApplicationPin`, `In
 
 Selection records configured and effective provider/profile/reasoning, source, and any fallback reason in `AgentModelProvenance`. Every actual request is checked for capability, workload, capacity, sensitivity, cost, deadline, and provider compatibility before I/O. A changed profile requires rebuilding instructions and capacity estimates and checking again. Only host selection can make that fallback; model output cannot reroute the child. See [models for delegated roles](../operations/model-providers.md#models-for-delegated-roles) for configuration and startup errors.
 
-`ChildAgentRequestFitter` validates the complete request against the selected model's actual context window. It never drops parent evidence, applicable `AGENTS.md` sources, or configured prompt append sources. When the complete request cannot fit, execution fails explicitly instead of silently reducing caller-provided context. The request records every delivered evidence ID.
+On every round, `ChildAgentModelLoop.FitRequest` checks the prepared request, including the output reserve, against the selected model's context window. If selection changes the model, the loop prepares the request again. If the request cannot fit, fitting fails rather than dropping evidence or instructions.
 
 The request does not contain:
 
@@ -144,7 +144,7 @@ The request does not contain:
 Primary implementation:
 
 - `AgentContextAssembler` selects every policy-eligible governed evidence item.
-- `ChildAgentRequestFitter` validates the complete provider request and records delivered evidence IDs.
+- `ChildAgentModelLoop` fits each provider request and tracks delivered evidence IDs across rounds.
 - `ChildAgentPrompt` renders instructions, role amendment, assignment, evidence, and tools.
 - `ChildAgentInstructions` resolves the applicable repository instruction bundle.
 
@@ -242,14 +242,13 @@ For a focused code review, read these files in order:
 3. `DelegateAgentsPlanning.cs`: host-owned assignment and authority construction.
 4. `DelegationOrchestration.cs`: scheduler, checkpoints, cancellation, and join arbitration.
 5. `AgentRoleRunnerRegistry.cs`, `ModelExplorerAssignmentRunner.cs`, `ChildAgentPrompt.cs`, and `Prompts/`: runner selection, role amendments, child composition, and parent join.
-6. `ChildAgentRequestFitter.cs`: exact initial request fitting.
-7. `ChildAgentModelLoop.cs`: bounded model/tool continuation loop.
-8. `AgentContext.cs`: child context selection and finding admission.
-9. `EvidenceStore.cs`: atomic evidence batch commit.
-10. `DelegateAgentsResultProjector.cs` and `DelegateAgentsResultRenderer.cs`: final bounded output.
-11. `AgentRoleModelConfiguration.cs`, `AgentRoleModelPolicy.cs`, and `AgentModelSelection.cs`: trusted routing, precedence, and request checks.
-12. `SourceEditApplication.cs`: shared source-edit materialization, exact authorization, durable effects and feedback.
-13. `ContextContracts.cs` and `ContextAssembler.cs`: ordinary request assembly and complete capacity checks.
+6. `ChildAgentModelLoop.cs`: per-round request fitting and the bounded model/tool continuation loop.
+7. `AgentContext.cs`: child context selection and finding admission.
+8. `EvidenceStore.cs`: atomic evidence batch commit.
+9. `DelegateAgentsResultProjector.cs` and `DelegateAgentsResultRenderer.cs`: final bounded output.
+10. `AgentRoleModelConfiguration.cs`, `AgentRoleModelPolicy.cs`, and `AgentModelSelection.cs`: trusted routing, precedence, and request checks.
+11. `SourceEditApplication.cs`: shared source-edit materialization, exact authorization, durable effects and feedback.
+12. `ContextContracts.cs` and `ContextAssembler.cs`: ordinary request assembly and complete capacity checks.
 
 Application composition connects these services to provider dispatch, persistence, terminal inspection, and the central tool policy.
 

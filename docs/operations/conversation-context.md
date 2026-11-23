@@ -217,12 +217,14 @@ Source projection is a request-time view. It does not delete or rewrite the orig
 
 ### Request lifecycle
 
+In model-facing edit feedback, findings with identical non-location fields can share their rule, message, file, project, producer, and origin. `AdditionalLocations` lists every further occurrence in order. The first location stays on the finding. This grouping applies within one report only; a narrower retry or partial report does not clear earlier findings. Typed edit results are unchanged.
+
 For every ordinary multi-round evidence or planning request, Threadsmith:
 
 1. Builds the complete provider request, including instructions, messages, tool schemas, and provider framing, while reserving the selected profile's required output capacity.
 2. Estimates that exact prepared input with the canonical provider-wire estimator and checks it against the remaining input capacity and execution budget.
-3. Sends it unchanged when neither the context-pressure threshold nor the remaining execution budget requires reduction.
-4. Under pressure, checks already delivered `read_file` and `code_explore` results for exact source ranges that a newer result fully covers.
+3. Below pressure, checks for new source evidence before considering a rewrite; unrelated tool rounds reuse the current history. When a scan produces no usable reduction, the next below-pressure scan waits for as many new groups as were retained at that scan. Duplicates can stay visible during that interval; pressure bypasses the wait.
+4. Checks already delivered `read_file` and `code_explore` results for exact source ranges that a newer result fully covers.
 5. Replaces eligible older source bodies with compact receipts and rebuilds the complete request, including the conditional recovery-tool schema.
 6. Activates the projection only when the rebuilt request has positive net token savings and passes the pressure and capacity checks. If projection saves tokens but cannot resolve the pressure alone, the existing summary fallback evaluates a dependency-safe projected prefix.
 7. Validates the final request immediately before dispatch. A receipt cannot survive without its supporting newer source and authorized evidence.
@@ -349,7 +351,7 @@ Compiled defaults:
 
 Invalid enum values, non-positive budgets, pressure outside 1–100%, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
 
-`context:conversation:compactionPressurePercent` controls the context assembler's recommendation for bounded cross-turn conversation history. It does not change the active-turn tool-continuation trigger described above. Active-turn source projection and summary assessment use the compiled host-owned 75% trigger; `context:activeTurnCompaction` configures only the optional summary profile, reasoning, summary budget, and output partition.
+`context:conversation:compactionPressurePercent` controls the context assembler's recommendation for bounded cross-turn conversation history. It does not change the active-turn tool-continuation trigger described above. Exact source projection can run below the host-owned 75% trigger. Model-written summaries remain pressure-gated; `context:activeTurnCompaction` configures only the optional summary profile, reasoning, summary budget, and output partition.
 
 ## Retention and restoration
 

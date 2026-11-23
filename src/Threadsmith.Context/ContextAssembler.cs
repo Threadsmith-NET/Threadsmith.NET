@@ -1007,12 +1007,11 @@ public sealed class ContextAssembler : IContextAssembler
         TaskSpecification task,
         CancellationToken cancellationToken)
     {
+        var recentCutoff = DateTimeOffset.UtcNow - _options.Conversation.RecentTurnMaximumAge;
         var state = _conversationStore is null
             ? new ConversationStateSnapshot { SessionId = request.SessionId }
-            : await _conversationStore.GetSnapshotAsync(
-                request.SessionId,
-                includeBodies: false,
-                cancellationToken: cancellationToken);
+            : await _conversationStore.GetSelectionSnapshotAsync(
+                request.SessionId, recentCutoff, request.ConversationModeOverride, request.CurrentMessageId, cancellationToken);
         var mode = request.ConversationModeOverride
             ?? (_conversationStore is null ? _options.Conversation.Mode : state.Mode);
         var modeSource = request.ConversationModeOverride is not null
@@ -1021,7 +1020,6 @@ public sealed class ContextAssembler : IContextAssembler
         var current = request.CurrentMessageId is { } currentId
             ? state.Messages.FirstOrDefault(message => message.Id == currentId)
             : null;
-        var recentCutoff = DateTimeOffset.UtcNow - _options.Conversation.RecentTurnMaximumAge;
         ConversationMessage[] allPriorMessages =
         [
             .. state.Messages.Where(message =>
@@ -1314,14 +1312,6 @@ public sealed class ContextAssembler : IContextAssembler
             Sources = sources,
             Digest = digest,
         };
-    }
-
-    private static int EstimateWireInputTokens(
-        string modelInput,
-        int nativeToolTokens,
-        int framingTokens)
-    {
-        return checked(TokenEstimator.Estimate(modelInput) + nativeToolTokens + framingTokens);
     }
 
     private sealed record CanonicalMessage(ModelMessageRole Role, string SectionId, string? ToolCallId, string? ToolName, string Content);

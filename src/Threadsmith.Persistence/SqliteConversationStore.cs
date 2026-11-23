@@ -123,47 +123,29 @@ public sealed class SqliteConversationStore : IConversationStore
     }
 
     /// <inheritdoc />
-    public async Task<ConversationStateSnapshot> GetSnapshotAsync(
+    public async Task<ConversationContextMode> GetModeAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        return await ReadModeAsync(connection, sessionId, [], cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<ConversationStateSnapshot> GetSnapshotAsync(
         SessionId sessionId,
         bool includeBodies = true,
         ConversationHistoryWindow? historyWindow = null,
         CancellationToken cancellationToken = default)
-    {
-        if (historyWindow is not null)
-        {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumMessages);
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumCharacters);
-        }
+        => ReadSnapshotAsync(sessionId, includeBodies, historyWindow, null, null, null, cancellationToken);
 
-        await using var connection = new SqliteConnection(_connectionString);
-        await connection.OpenAsync(cancellationToken);
-        var warnings = new List<string>();
-        var mode = await ReadModeAsync(connection, sessionId, warnings, cancellationToken);
-        var messages = await ReadMessagesAsync(
-            connection,
-            sessionId,
-            includeBodies,
-            warnings,
-            historyWindow,
-            null,
-            cancellationToken);
-
-        // Retired automatic memory rows and indexes are historical data, never restoration input.
-        if (messages.Count == 0)
-        {
-            AddWarning(warnings, "LegacySessionWithoutConversationArchive");
-        }
-
-        return new ConversationStateSnapshot
-        {
-            SessionId = sessionId,
-            Mode = mode,
-            Messages = messages,
-            MemoryItems = [],
-            Summary = null,
-            Warnings = warnings,
-        };
-    }
+    /// <inheritdoc />
+    public Task<ConversationStateSnapshot> GetSelectionSnapshotAsync(
+        SessionId sessionId,
+        DateTimeOffset recentCutoff,
+        ConversationContextMode? modeOverride,
+        ConversationMessageId? currentMessageId,
+        CancellationToken cancellationToken = default)
+        => ReadSnapshotAsync(sessionId, false, null, recentCutoff, modeOverride, currentMessageId, cancellationToken);
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
@@ -180,7 +162,7 @@ public sealed class SqliteConversationStore : IConversationStore
 
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
-        return await ReadMessagesAsync(connection, sessionId, true, [], null, messageIds, cancellationToken);
+        return await ReadMessagesAsync(connection, sessionId, true, [], null, messageIds, true, null, null, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -415,6 +397,46 @@ public sealed class SqliteConversationStore : IConversationStore
         return (ConversationContextMode)value;
     }
 
+    private async Task<ConversationStateSnapshot> ReadSnapshotAsync(
+        SessionId sessionId,
+        bool includeBodies,
+        ConversationHistoryWindow? historyWindow,
+        DateTimeOffset? selectionCutoff,
+        ConversationContextMode? modeOverride,
+        ConversationMessageId? currentMessageId,
+        CancellationToken cancellationToken)
+    {
+        if (historyWindow is not null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumMessages);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumCharacters);
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        var warnings = new List<string>();
+        var mode = await ReadModeAsync(connection, sessionId, warnings, cancellationToken);
+        var imageCutoff = (modeOverride ?? mode) == ConversationContextMode.ConversationAware ? selectionCutoff : null;
+        var messages = await ReadMessagesAsync(
+            connection, sessionId, includeBodies, warnings, historyWindow, null, selectionCutoff is null, imageCutoff, currentMessageId, cancellationToken);
+
+        // Retired automatic memory rows and indexes are historical data, never restoration input.
+        if (messages.Count == 0)
+        {
+            AddWarning(warnings, "LegacySessionWithoutConversationArchive");
+        }
+
+        return new ConversationStateSnapshot
+        {
+            SessionId = sessionId,
+            Mode = mode,
+            Messages = messages,
+            MemoryItems = [],
+            Summary = null,
+            Warnings = warnings,
+        };
+    }
+
     private async Task<IReadOnlyList<ConversationMessage>> ReadMessagesAsync(
         SqliteConnection connection,
         SessionId sessionId,
@@ -422,13 +444,16 @@ public sealed class SqliteConversationStore : IConversationStore
         List<string> warnings,
         ConversationHistoryWindow? historyWindow,
         IReadOnlyCollection<ConversationMessageId>? messageIds,
+        bool includeReceipts,
+        DateTimeOffset? imageCutoff,
+        ConversationMessageId? deferredImageMessageId,
         CancellationToken cancellationToken)
     {
         var messages = new List<ConversationMessage>();
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT message_id, run_id, sequence, role, {(includeBodies ? "body" : "NULL")}, artifact_id, content_hash,
-                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json, receipt_json
+                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json, {(includeReceipts ? "receipt_json" : "NULL")}
             FROM conversation_messages WHERE session_id = $session
             """ + (messageIds is null ? string.Empty : " AND message_id IN (SELECT value FROM json_each($messages))")
             + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
@@ -504,22 +529,27 @@ public sealed class SqliteConversationStore : IConversationStore
                 }
             }
 
+            var occurredAt = DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture);
+            var messageId = new ConversationMessageId(Guid.Parse(reader.GetString(0)));
+            var imageJson = messageId != deferredImageMessageId && (imageCutoff is null || occurredAt < imageCutoff)
+                ? reader.GetString(12)
+                : null;
             messages.Add(new ConversationMessage
             {
-                Id = new ConversationMessageId(Guid.Parse(reader.GetString(0))),
+                Id = messageId,
                 SessionId = sessionId,
                 RunId = new RunId(Guid.Parse(reader.GetString(1))),
                 Sequence = reader.GetInt64(2),
                 Role = (ConversationRole)reader.GetInt32(3),
                 Content = body,
-                Images = JsonSerializer.Deserialize<ImageArtifact[]>(reader.GetString(12)) ?? [],
+                Images = imageJson is null or "[]" ? [] : JsonSerializer.Deserialize<ImageArtifact[]>(imageJson) ?? [],
                 Receipt = await reader.IsDBNullAsync(13, cancellationToken) ? null : JsonSerializer.Deserialize<ConversationReceiptProvenance>(reader.GetString(13)),
                 ArtifactId = artifactId,
                 ContentHash = reader.GetString(6),
                 EstimatedTokens = reader.GetInt32(7),
                 Sensitivity = (ConversationSensitivity)reader.GetInt32(8),
                 RepositoryRevision = await reader.IsDBNullAsync(9, cancellationToken) ? null : reader.GetString(9),
-                OccurredAt = DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture),
+                OccurredAt = occurredAt,
                 SchemaVersion = schemaVersion,
             });
         }

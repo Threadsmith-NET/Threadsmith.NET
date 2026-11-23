@@ -449,7 +449,8 @@ public sealed partial class SessionApplication
         ConversationLoopState loopState,
         CancellationToken cancellationToken)
     {
-        using var promptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
+        var initialProfileId = _sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId;
+        using var promptScope = _prompts.BeginModelScope(initialProfileId);
         var conversationTools = ConversationToolAvailability.CreateSnapshot(
             _toolPipeline,
             _toolRegistry,
@@ -463,10 +464,7 @@ public sealed partial class SessionApplication
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
-        var modelTools = CreateModelTools(
-            conversationDefinitions,
-            workspaceAvailable,
-            loopState.ActiveTurnEvidenceReferences.Count > 0);
+        RoundToolInventory? inventory = null;
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
         var continuationImages = loopState.CreateModelVisibleContinuation().Messages
@@ -492,13 +490,15 @@ public sealed partial class SessionApplication
 
         if (_contextAssembler is not null && context is null)
         {
-            var toolSchemas = CreateContextToolSchemas(modelTools, conversationDefinitions);
+            inventory = new(conversationDefinitions, workspaceAvailable);
+            var assemblyTools = inventory.Select(loopState.ActiveTurnEvidenceReferences.Count > 0);
+            var toolSchemas = assemblyTools.Select(inventory.CreateContextSchema).ToArray();
             var assemblyRequest = CreateContextAssemblyRequest(
                 registration,
                 runId,
                 phase,
                 invocationContext,
-                modelTools,
+                assemblyTools,
                 toolSchemas,
                 modelPreference,
                 _defaultModelProfileId) with
@@ -513,8 +513,7 @@ public sealed partial class SessionApplication
                     ? registration.MemoryIntent.Capture(intentRepository, runId) : null,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
-                ReceiptRecoveryTool = CreateContextToolSchemas(CreateModelTools(conversationDefinitions, workspaceAvailable, true), conversationDefinitions)
-                    .FirstOrDefault(schema => schema.Id == ActiveTurnEvidenceTool.ToolId),
+                ReceiptRecoveryTool = inventory.RecoveryTool is { } recovery ? inventory.CreateContextSchema(recovery) : null,
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -531,16 +530,19 @@ public sealed partial class SessionApplication
             loopState.FrozenContext = context;
         }
 
-        using var resolvedPromptScope = _prompts.BeginModelScope(context?.ModelResolution?.ProfileId ?? modelPreference?.ProfileId ?? _defaultModelProfileId);
+        var resolvedProfileId = context?.ModelResolution?.ProfileId ?? modelPreference?.ProfileId ?? _defaultModelProfileId;
+        using var resolvedPromptScope = _prompts.BeginModelScope(resolvedProfileId);
+        if (inventory is null || initialProfileId != resolvedProfileId)
+        {
+            inventory = new(conversationDefinitions, workspaceAvailable);
+        }
+
         invocationContext = AttachModelBudgetToInvocationContext(
             invocationContext,
             context?.ModelResolution);
 
         var receiptReferences = ReceiptEvidenceAuthorization.Select(context?.Messages, registration.SessionId, invocationContext?.RepositoryPath);
-        modelTools = CreateModelTools(
-            conversationDefinitions,
-            workspaceAvailable,
-            loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
+        var modelTools = inventory.Select(loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
 
         await AssessActiveTurnCompactionAsync(
             runId,
@@ -552,16 +554,10 @@ public sealed partial class SessionApplication
             context,
             loopState,
             invocationContext,
-            conversationDefinitions.FirstOrDefault(definition => string.Equals(
-                definition.Id,
-                ActiveTurnSourceProjector.RecoveryToolId,
-                StringComparison.Ordinal)),
+            inventory,
             _sessionPreferences?.IncludeReasoningText ?? false,
             cancellationToken);
-        modelTools = CreateModelTools(
-            conversationDefinitions,
-            workspaceAvailable,
-            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
+        modelTools = inventory.Select(loopState.ActiveTurnEvidenceReferences.Count > 0 || receiptReferences.Count > 0);
 
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
@@ -606,7 +602,7 @@ public sealed partial class SessionApplication
         if (receiptReferences.Count == 0 && loopState.ActiveTurnEvidenceReferences.Count == 0
             && modelTools.Any(tool => tool.Name == ActiveTurnEvidenceTool.ToolId))
         {
-            modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, false);
+            modelTools = inventory.Select(false);
             requestEnvelope = CreateRequestEnvelope(context, modelTools, modelVisibleContinuation.Messages, modelVisibleContinuation.FirstNeverDeliveredMessageIndex);
 
             // Removing a schema does not restore historical grants in this dispatched request.
@@ -1800,48 +1796,6 @@ public sealed partial class SessionApplication
             cancellationToken);
     }
 
-    private bool TryAppendSingleToolCorrection(
-        ToolRequestModelOutput tool,
-        ConversationRound round,
-        ConversationLoopState loopState,
-        ModelRoundStreamState streamState,
-        CorrectiveTurnState correctiveTurns,
-        int maximumModelRounds,
-        string failureSummary,
-        out int attemptNumber)
-    {
-        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out attemptNumber))
-        {
-            return false;
-        }
-
-        var ordinal = streamState.ToolCallOrdinal;
-        var toolCallId = CreateNextToolCallId(round.ModelRound, streamState);
-        if (streamState.HasResponseEnvelope)
-        {
-            loopState.TransientState.BindToolCall(
-                round.ModelRequest.ToolContinuationRound,
-                ordinal,
-                toolCallId);
-        }
-
-        loopState.AddCurrentToolCall(CreateToolCallMessage(
-            toolCallId,
-            tool.ToolName,
-            tool.ArgumentsJson) with
-        { ModelRound = round.ModelRequest.ToolContinuationRound });
-        loopState.AddCurrentToolResult(RequireCorrectiveMessages().CreateRejectedToolResultMessage(
-            toolCallId,
-            tool.ToolName,
-            attemptNumber,
-            correctiveTurns.MaximumTurns,
-            failureSummary,
-            isFailingCall: true) with
-        { ModelRound = round.ModelRequest.ToolContinuationRound });
-        streamState.MarkCorrectiveTurnRequested();
-        return true;
-    }
-
     private bool TryAppendDeveloperCorrection(
         ConversationRound round,
         ConversationLoopState loopState,
@@ -1939,46 +1893,6 @@ public sealed partial class SessionApplication
             cancellationToken: CancellationToken.None);
     }
 
-    private static List<ModelToolDefinition> CreateModelTools(
-        IReadOnlyList<ToolDefinition> conversationDefinitions,
-        bool workspaceAvailable,
-        bool activeTurnRecoveryAvailable)
-    {
-        var availableDefinitions = workspaceAvailable
-            ? conversationDefinitions
-            : conversationDefinitions.Where(definition => !definition.RequiresWorkspace);
-        availableDefinitions = availableDefinitions.Where(definition =>
-            !string.Equals(
-                definition.Id,
-                ActiveTurnSourceProjector.RecoveryToolId,
-                StringComparison.Ordinal)
-            || activeTurnRecoveryAvailable);
-        List<ModelToolDefinition> modelTools = [.. availableDefinitions.Select(definition => new ModelToolDefinition
-        {
-            Name = definition.Id,
-            Description = definition.Description,
-            ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
-            PreferStrictArguments = definition.PreferStrictArguments,
-        })];
-        return [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
-    }
-
-    private static ContextToolSchema[] CreateContextToolSchemas(
-        IReadOnlyList<ModelToolDefinition> modelTools,
-        IReadOnlyList<ToolDefinition> definitions)
-    {
-        var descriptions = definitions.ToDictionary(definition => definition.Id, StringComparer.Ordinal);
-        return [.. modelTools.Select(definition =>
-            new ContextToolSchema(
-                definition.Name,
-                definition.Description,
-                definition.ArgumentsJsonSchema,
-                definition.PreferStrictArguments)
-            {
-                DescriptionResolver = descriptions[definition.Name].DescriptionResolver,
-            })];
-    }
-
     private static ContextAssemblyRequest CreateContextAssemblyRequest(
         RunRegistration registration,
         RunId runId,
@@ -2031,7 +1945,7 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? context,
         ConversationLoopState loopState,
         ToolInvocationContext? invocationContext,
-        ToolDefinition? activeTurnRecoveryDefinition,
+        RoundToolInventory inventory,
         bool includeReasoningText,
         CancellationToken cancellationToken)
     {
@@ -2057,14 +1971,17 @@ public sealed partial class SessionApplication
         var compactionActivityProfileId = default(ModelProfileId?);
         var visible = loopState.CreateModelVisibleContinuation();
         ModelStreamRequest? replayOriginalRequest = null;
-        ModelStreamRequest PrepareRequest(
-            ModelVisibleContinuation continuation,
-            bool applyCapacityFallback = true,
-            IReadOnlyList<ModelToolDefinition>? requestTools = null)
+        var activeTurnRecoveryDefinition = inventory.RecoveryDefinition;
+        var hasReceipts = activeTurnRecoveryDefinition is not null && ReceiptEvidenceAuthorization.Select(context.Messages, registration.SessionId, invocationContext?.RepositoryPath).Count > 0;
+        ModelStreamRequest PrepareRequest(ModelVisibleContinuation continuation, bool applyCapacityFallback = true)
         {
-            var effectiveTools = ResolveRecoveryToolAvailability(
-                requestTools ?? modelTools,
-                continuation.EvidenceReferences.Count > 0 || (activeTurnRecoveryDefinition is not null && ReceiptEvidenceAuthorization.Select(context.Messages, registration.SessionId, invocationContext?.RepositoryPath).Count > 0));
+            var recoveryRequired = continuation.EvidenceReferences.Count > 0 || hasReceipts;
+            if (recoveryRequired && activeTurnRecoveryDefinition is null)
+            {
+                throw new InvalidOperationException("Active-turn receipts require the historical evidence recovery tool.");
+            }
+
+            var effectiveTools = inventory.Select(recoveryRequired);
             var messages = continuation.Messages.ToList();
             var envelope = applyCapacityFallback
                 ? CreateRequestEnvelope(
@@ -2113,35 +2030,6 @@ public sealed partial class SessionApplication
             }
 
             return ModelRequestPreparation.Prepare(_model, request with { TransientState = loopState.TransientState });
-        }
-
-        IReadOnlyList<ModelToolDefinition> ResolveRecoveryToolAvailability(
-            IReadOnlyList<ModelToolDefinition> requestTools,
-            bool recoveryRequired)
-        {
-            var withoutRecovery = requestTools.Where(tool => !string.Equals(
-                tool.Name,
-                ActiveTurnSourceProjector.RecoveryToolId,
-                StringComparison.Ordinal));
-            if (!recoveryRequired)
-            {
-                return [.. ModelToolCanonicalizer.Canonicalize(withoutRecovery)];
-            }
-
-            if (activeTurnRecoveryDefinition is null)
-            {
-                throw new InvalidOperationException(
-                    "Active-turn receipts require the historical evidence recovery tool.");
-            }
-
-            var recoveryModelTool = new ModelToolDefinition
-            {
-                Name = activeTurnRecoveryDefinition.Id,
-                Description = activeTurnRecoveryDefinition.Description,
-                ArgumentsJsonSchema = activeTurnRecoveryDefinition.InputSchema.JsonSchema,
-                PreferStrictArguments = activeTurnRecoveryDefinition.PreferStrictArguments,
-            };
-            return [.. ModelToolCanonicalizer.Canonicalize([.. withoutRecovery, recoveryModelTool])];
         }
 
         var preparedOrdinaryRequest = PrepareRequest(visible, applyCapacityFallback: false);
@@ -2318,7 +2206,7 @@ public sealed partial class SessionApplication
                         SourceOpaqueResultCount = deterministicProjection?.OpaqueResultCount ?? 0,
                         SourceReclaimedCharacters = deterministicProjection?.ReclaimedCharacters ?? 0,
                         SummaryAvoidedBySourceProjection =
-                            status == ActiveTurnCompactionInspectionStatus.DeterministicReduction,
+                            status == ActiveTurnCompactionInspectionStatus.DeterministicReduction && (hasContextPressure || hasBudgetPressure),
                         SummaryPreparedInputTokens =
                             attemptObserver?.LastSummaryPreparedInputTokens,
                         SummaryAdmissionOutputTokens =
@@ -2368,35 +2256,28 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (!hasContextPressure && !hasBudgetPressure)
-        {
-            await RecordAsync(
-                ActiveTurnCompactionInspectionStatus.BelowPressure,
-                "The canonical complete request is below the context target and fits the remaining execution budget.");
-            return;
-        }
-
-        var sourceProjectionAttemptIdentity = string.Join(
-            ':',
-            loopState.LastGroupSequence,
-            loopState.HistoryRewriteGeneration,
-            beforeEstimate.WireInputTokens,
-            pressureTargetTokens,
-            ordinaryAdmissionStatus.ExhaustedDimensions,
-            activeTurnRecoveryDefinition?.Version ?? "none",
-            invocationContext?.WorkspaceId?.Value.ToString("N") ?? "none",
-            ordinaryProfileId?.Value.ToString("N") ?? "none",
-            context.Layout.StablePrefixDigest,
-            context.InstructionBundleDigest ?? "none",
-            context.ToolInventoryDigest ?? "none",
-            loopState.SourceProjectionInputIdentity,
-            loopState.SourceProjectionIdentity ?? "none",
-            _activeTurnCompactionPolicy.MinimumSavingsTokens,
-            _activeTurnCompactionPolicy.MaximumSourceGroups,
-            _activeTurnCompactionPolicy.MaximumInputTokens);
+        var underPressure = hasContextPressure || hasBudgetPressure;
         if (!hasRetentionPressure && activeTurnRecoveryDefinition is not null
             && invocationContext is not null
-            && loopState.BeginSourceProjectionAttempt(sourceProjectionAttemptIdentity))
+            && (underPressure || (loopState.LastGroupSequence >= loopState.NextProactiveSourceScan && loopState.HasPendingSourceEvidence))
+            && loopState.BeginSourceProjectionAttempt(string.Join(
+                ':',
+                loopState.LastGroupSequence,
+                loopState.HistoryRewriteGeneration,
+                beforeEstimate.WireInputTokens,
+                pressureTargetTokens,
+                ordinaryAdmissionStatus.ExhaustedDimensions,
+                activeTurnRecoveryDefinition.Version,
+                invocationContext.WorkspaceId?.Value.ToString("N") ?? "none",
+                ordinaryProfileId?.Value.ToString("N") ?? "none",
+                context.Layout.StablePrefixDigest,
+                context.InstructionBundleDigest ?? "none",
+                context.ToolInventoryDigest ?? "none",
+                loopState.SourceProjectionInputIdentity,
+                loopState.SourceProjectionIdentity ?? "none",
+                _activeTurnCompactionPolicy.MinimumSavingsTokens,
+                _activeTurnCompactionPolicy.MaximumSourceGroups,
+                _activeTurnCompactionPolicy.MaximumInputTokens)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             deterministicProjection = new ActiveTurnSourceProjector(RequirePrompts()).Propose(
@@ -2411,24 +2292,9 @@ public sealed partial class SessionApplication
                     loopState.SourceProjectionIdentity,
                     StringComparison.Ordinal))
             {
-                var recoveryModelTool = new ModelToolDefinition
-                {
-                    Name = activeTurnRecoveryDefinition.Id,
-                    Description = activeTurnRecoveryDefinition.Description,
-                    ArgumentsJsonSchema = activeTurnRecoveryDefinition.InputSchema.JsonSchema,
-                    PreferStrictArguments = activeTurnRecoveryDefinition.PreferStrictArguments,
-                };
-                IReadOnlyList<ModelToolDefinition> projectedTools =
-                    [.. ModelToolCanonicalizer.Canonicalize(
-                        [.. modelTools.Where(tool => !string.Equals(
-                            tool.Name,
-                            ActiveTurnSourceProjector.RecoveryToolId,
-                            StringComparison.Ordinal)), recoveryModelTool])];
+                var projectedTools = inventory.Select(true);
                 var preview = loopState.CreateProjectionPreview(deterministicProjection);
-                var preparedProjectedRequest = PrepareRequest(
-                    preview,
-                    applyCapacityFallback: false,
-                    projectedTools);
+                var preparedProjectedRequest = PrepareRequest(preview, applyCapacityFallback: false);
                 var projectedEstimate = preparedProjectedRequest.WireEstimate
                     ?? EstimateCompleteRequest(
                         context,
@@ -2471,11 +2337,23 @@ public sealed partial class SessionApplication
                         projectedEstimate.WireInputTokens);
                     await RecordAsync(
                         ActiveTurnCompactionInspectionStatus.DeterministicReduction,
-                        "Exact equal-or-contained source coverage resolved request pressure without a summarizer call.",
+                        "Exact equal-or-contained source coverage reduced the complete request without a summarizer call.",
                         afterInputTokens: projectedEstimate.WireInputTokens);
+                    loopState.NextProactiveSourceScan = 0;
                     return;
                 }
             }
+
+            // Amortize an unsuccessful full-history scan over as many new groups as we just assessed.
+            loopState.NextProactiveSourceScan = loopState.LastGroupSequence + loopState.RawGroupCount;
+        }
+
+        if (!underPressure)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.BelowPressure,
+                "The canonical complete request is below the context target and fits the remaining execution budget.");
+            return;
         }
 
         if (_activeTurnCompactor is null)
@@ -2521,9 +2399,7 @@ public sealed partial class SessionApplication
                     compactedGroupCount,
                     maximumInputTokens,
                     sourceProjectionForSummary,
-                    continuation => PrepareRequest(
-                        continuation,
-                        requestTools: sourceProjectionTools));
+                    continuation => PrepareRequest(continuation));
                 continuationAdmissions.Add(compactedGroupCount, admission);
             }
 
@@ -2652,10 +2528,7 @@ public sealed partial class SessionApplication
                     summary,
                     compactedGroupCount,
                     sourceProjectionForSummary);
-                var canonicalAfterRequest = PrepareRequest(
-                    preview,
-                    applyCapacityFallback: false,
-                    requestTools: sourceProjectionTools);
+                var canonicalAfterRequest = PrepareRequest(preview, applyCapacityFallback: false);
                 var canonicalAfterEstimate = canonicalAfterRequest.WireEstimate
                     ?? EstimateCompleteRequest(
                         context,
@@ -2669,9 +2542,7 @@ public sealed partial class SessionApplication
                     ModelStreamRequest preparedAfterRequest;
                     try
                     {
-                        preparedAfterRequest = PrepareRequest(
-                            preview,
-                            requestTools: sourceProjectionTools);
+                        preparedAfterRequest = PrepareRequest(preview);
                     }
                     catch (BudgetExceededException)
                     {
@@ -3361,6 +3232,10 @@ public sealed partial class SessionApplication
             _prompts = prompts;
         }
 
+        public bool HasPendingSourceEvidence { get; private set; }
+
+        public long NextProactiveSourceScan { get; set; }
+
         public int AssessmentSequence { get; private set; }
 
         public int BackoffRoundsRemaining { get; private set; }
@@ -3812,6 +3687,12 @@ public sealed partial class SessionApplication
                 _purgeableGroupSequences.Add(sequence);
             }
 
+            if (_groups.Count > 1 && !HasPendingSourceEvidence)
+            {
+                HasPendingSourceEvidence = results.Any(result => result.IsError != true
+                    && result.ToolName is "read_file" or "code_explore");
+            }
+
             var retainedText = _currentAssistantMessages.Any(message => message.ToolCallId is null);
             AbortCurrentGroup();
             return retainedText;
@@ -4015,6 +3896,7 @@ public sealed partial class SessionApplication
                 return false;
             }
 
+            HasPendingSourceEvidence = false;
             _sourceProjectionAttemptIdentity = identity;
             return true;
         }

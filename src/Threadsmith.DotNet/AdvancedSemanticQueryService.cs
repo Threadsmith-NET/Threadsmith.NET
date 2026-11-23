@@ -10178,27 +10178,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             typeCounts));
     }
 
-    private static IReadOnlyList<string> GetToolCapabilitySelectionFamilies(
-        CodeExploreQueryInterpretation interpretation,
-        CodeExploreNaturalLanguageIntent intent)
-    {
-        if (intent != CodeExploreNaturalLanguageIntent.ToolCapabilityExplanation)
-        {
-            return [];
-        }
-
-        var families = new List<string>(GetMentionedToolCapabilityFamilies(interpretation));
-        if (ShouldExpandSemanticToolSurvey(interpretation))
-        {
-            foreach (var family in ToolCapabilitySurveyFamilies)
-            {
-                AddMentionedToolCapabilityFamily(families, family, isMentioned: true);
-            }
-        }
-
-        return families;
-    }
-
     private static IReadOnlyList<string> GetNaturalLanguageRetrievalToolFamilies(
         CodeExploreQueryInterpretation interpretation,
         CodeExploreNaturalLanguageIntent intent)

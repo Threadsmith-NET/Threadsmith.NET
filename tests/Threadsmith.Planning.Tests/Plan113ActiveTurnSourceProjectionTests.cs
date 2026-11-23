@@ -16,9 +16,10 @@ public static class Plan113ActiveTurnSourceProjectionTests
 {
     /// <summary>The ordinary conversation path projects duplicates before sampling and avoids the summary provider.</summary>
     [Theory]
-    [InlineData(0)]
-    [InlineData(8192)]
-    public static async Task Conversation_projection_reduces_complete_request_and_advertises_recovery_only_with_receipts(int additionalPromptCharacters)
+    [InlineData(0, false)]
+    [InlineData(8192, false)]
+    [InlineData(0, true)]
+    public static async Task Conversation_projection_reduces_complete_request_and_advertises_recovery_only_with_receipts(int additionalPromptCharacters, bool deferredScan)
     {
         var prompts = TestPromptLoader.Instance.WithPrompt(
             PromptFileNames.SystemRepositoryInspection,
@@ -49,9 +50,10 @@ public static class Plan113ActiveTurnSourceProjectionTests
             var budget = new ExecutionBudget(new BudgetDimensions(
                 1_000_000,
                 100,
-                TimeSpan.FromMinutes(2)));
+                TimeSpan.MaxValue));
             var registry = new ToolRegistry(
             [
+                new DateTimeTool(prompts, new FakeTimeProvider(DateTimeOffset.UnixEpoch)),
                 new ReadFileTool(prompts, sanitizer),
                 new ActiveTurnEvidenceTool(evidence, prompts),
             ]);
@@ -78,9 +80,15 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 new ModelResolver(
                     new ConfiguredModelCatalog([profile]),
                     new InMemoryModelPreferenceSnapshotProvider()));
-            var model = new DuplicateReadProvider();
+            var model = new DuplicateReadProvider { InterleaveUnrelatedResults = deferredScan };
             var compactionPolicy = await CreateProjectionPolicyAsync(
                 assembler, registry, profile, root, lines, TestContext.Current.CancellationToken);
+            var belowPressure = additionalPromptCharacters == 0;
+            if (belowPressure)
+            {
+                compactionPolicy = compactionPolicy with { PressureTargetPercent = 75 };
+            }
+
             var summaryProvider = new UnexpectedSummaryProvider();
             var application = new SessionApplication(
                 events,
@@ -99,7 +107,7 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 evidence,
                 registry,
                 profile.Id,
-                new ExecutionLimits { MaxModelRounds = 4 },
+                new ExecutionLimits { MaxModelRounds = 5 },
                 activeTurnCompactor: new ActiveTurnCompactor(
                     summaryProvider,
                     new ActiveTurnCompactionValidator(compactionPolicy, sanitizer, prompts),
@@ -115,16 +123,20 @@ public static class Plan113ActiveTurnSourceProjectionTests
                 new SubmitRequestCommand(sessionId, "Read the same fixture twice, then finish."));
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
-            Assert.Equal(3, model.Requests.Count);
-            Assert.DoesNotContain(
-                model.Requests[0].Tools,
-                tool => tool.Name == ActiveTurnEvidenceTool.ToolId);
-            Assert.DoesNotContain(
-                model.Requests[1].Tools,
-                tool => tool.Name == ActiveTurnEvidenceTool.ToolId);
-            Assert.Equal(0, model.Requests[0].HistoryRewriteGeneration);
-            Assert.Equal(0, model.Requests[1].HistoryRewriteGeneration);
-            var projectedRequest = model.Requests[2];
+            Assert.Equal(deferredScan ? 5 : 3, model.Requests.Count);
+            foreach (var request in model.Requests.SkipLast(1))
+            {
+                Assert.DoesNotContain(request.Tools, tool => tool.Name == ActiveTurnEvidenceTool.ToolId);
+                Assert.Equal(0, request.HistoryRewriteGeneration);
+            }
+
+            var projectedRequest = model.Requests[^1];
+            if (deferredScan)
+            {
+                var lastResult = projectedRequest.Messages.Last(message => message.Role == ModelMessageRole.Tool);
+                Assert.Equal("datetime", lastResult.ToolName);
+            }
+
             Assert.True(
                 projectedRequest.Tools.Any(tool => tool.Name == ActiveTurnEvidenceTool.ToolId),
                 $"wire estimates: {string.Join(", ", model.Requests.Select(item => item.WireEstimate?.WireInputTokens))}; "
@@ -146,10 +158,10 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Assert.Equal(ActiveTurnCompactionInspectionStatus.DeterministicReduction, inspection.Status);
             Assert.Equal(profile.Id.Value, inspection.CandidateProfileId);
             Assert.NotEqual(summaryProfile.ProfileId.Value, inspection.CandidateProfileId);
-            Assert.True(inspection.SummaryAvoidedBySourceProjection);
+            Assert.Equal(!belowPressure, inspection.SummaryAvoidedBySourceProjection);
             Assert.Equal(1, inspection.SourceRemovedRangeCount);
             var originalReadResult = Assert.Single(
-                model.Requests[1].Messages,
+                model.Requests[deferredScan ? 2 : 1].Messages,
                 message => message.Role == ModelMessageRole.Tool && message.ToolName == "read_file");
             var originalRead = JsonSerializer.Deserialize<ReadFileOutput>(originalReadResult.GetModelVisibleContent());
             Assert.NotNull(originalRead);
@@ -157,11 +169,12 @@ public static class Plan113ActiveTurnSourceProjectionTests
             // Prompt wording and advertised schemas may grow; the source reduction must still
             // reclaim the fixture's payload and account for the complete dispatched request.
             Assert.True(inspection.BeforeInputTokens > inspection.AfterInputTokens);
-            Assert.True(inspection.BeforeInputTokens >= inspection.PressureTargetTokens);
+            Assert.Equal(belowPressure, inspection.BeforeInputTokens < inspection.PressureTargetTokens);
+            TestContext.Current.TestOutputHelper?.WriteLine($"Prepared input: {inspection.BeforeInputTokens} -> {inspection.AfterInputTokens}; target {inspection.PressureTargetTokens}; cumulative {model.Requests.Sum(request => request.WireEstimate?.WireInputTokens)}.");
             Assert.True(inspection.AfterInputTokens < inspection.PressureTargetTokens);
             Assert.Equal(inspection.AfterInputTokens, projectedRequest.WireEstimate?.WireInputTokens);
             Assert.True(model.Requests[1].WireEstimate?.WireInputTokens > model.Requests[0].WireEstimate?.WireInputTokens);
-            var unreducedTotal = model.Requests.Take(2).Sum(request => request.WireEstimate?.WireInputTokens)
+            var unreducedTotal = model.Requests.SkipLast(1).Sum(request => request.WireEstimate?.WireInputTokens)
                 + inspection.BeforeInputTokens;
             Assert.Equal(
                 inspection.BeforeInputTokens - inspection.AfterInputTokens,
@@ -1176,6 +1189,8 @@ public static class Plan113ActiveTurnSourceProjectionTests
 
     private sealed class DuplicateReadProvider : IModelProvider
     {
+        public bool InterleaveUnrelatedResults { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1185,13 +1200,25 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (Requests.Count <= 2)
+            var readRound = Requests.Count - (InterleaveUnrelatedResults ? 1 : 0);
+            if (InterleaveUnrelatedResults && Requests.Count is 1 or 4)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput("datetime", "{}"),
+                    Usage = new ModelUsage(10, 5),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            if (readRound <= 2)
             {
                 yield return new ModelChunk
                 {
                     Output = new ToolRequestModelOutput(
                         "read_file",
-                        Requests.Count == 1
+                        readRound == 1
                             ? "{\"path\":\"fixture.txt\",\"startLine\":2,\"maximumLines\":398}"
                             : "{\"path\":\"fixture.txt\",\"startLine\":1,\"maximumLines\":400}"),
                     Usage = new ModelUsage(10, 5),

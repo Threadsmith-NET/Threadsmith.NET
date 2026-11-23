@@ -12,7 +12,7 @@ implements.
 | Tool | Purpose |
 | --- | --- |
 | `neo4j_execute` | Runs one Cypher statement in one explicit transaction and returns bounded, tagged records with an explicit transaction outcome. |
-| `neo4j_schema` | Returns declared constraints and indexes plus observed labels, relationship types, and property types, each with its source method, status, and limits. |
+| `neo4j_schema` | Returns cached labels, directed relationship patterns, sampled properties and types, and index definitions. Detailed property discovery and constraints can be requested separately. |
 
 The model supplies only query data. The connection target, account, credential reference, access
 mode, and every resource limit come from repository configuration. A model argument can never change
@@ -123,7 +123,9 @@ separate controls.
 
 ## 5. Server requirements
 
-The extension uses Bolt, explicit transactions, and these built-in metadata sources:
+Compact discovery uses `db.labels()`, `db.relationshipTypes()`, `COLLECT` subqueries, and `valueType()`. It takes one bounded node sample and one bounded directed relationship sample. It does not use dynamic token matches or search the graph for each catalog name.
+
+The extension also uses Bolt, explicit transactions, and these built-in metadata sources:
 `SHOW CONSTRAINTS`, `SHOW INDEXES`, `db.schema.nodeTypeProperties()`, and
 `db.schema.relTypeProperties()`. No plugin such as APOC is required. If the server or the account
 rejects one of them, that section is reported as `unsupported`, `permissionDenied`, or `unavailable`
@@ -235,8 +237,19 @@ preserves the UTC instant, nanoseconds, and original zone identifier.
 { "sections": ["constraints", "indexes", "nodes", "relationships"], "sampleLimit": 500 }
 ```
 
-Both fields are optional. Omitting `sections` requests all of them. `sampleLimit` can only lower the
-configured bound.
+For normal query writing, use `{}`. It returns three sections:
+
+| Section | Entries |
+| --- | --- |
+| `nodeSamples` | Label, number sampled, and observed property names with their distinct Cypher types. |
+| `relationshipEndpoints` | Relationship type, observed pairs of source and target label sets, and properties observed across the sampled relationships of that type. |
+| `indexes` | Index name, type, entity type, labels or relationship types, ordered properties, and state from `SHOW INDEXES`. |
+
+Each compact section takes the first `min(256, sampleLimit)` entities available, then uses up to eight from that sample for each catalog name. Rare labels and relationship types may have no observations even if they exist. It lists additional names within the row and byte limits with `inspected: false`; an empty property list for such a name means **not inspected**. Explicit `nodes` and `relationships` sections still run the more expensive property-discovery procedures. `constraints` is also available explicitly. All fields are optional; `sampleLimit` can only lower the configured bound.
+
+The default timeout for the whole schema call is five minutes. `queryTimeoutSeconds` still bounds each database transaction separately (30 seconds by default). A [tool runtime override](../operations/resource-limits.md#tool-runtime-overrides) or mandatory host ceiling can shorten the whole call.
+
+`forceRefresh` (boolean, default `false`): **by user request only**. For example, `{"forceRefresh":true}` refreshes the default sections. Each loaded extension instance keeps the last successful result per section in memory. A matching effective `sampleLimit` reuses it without querying the database, including when requesting just one cached section. A different limit fetches that section again. A failed refresh reports the failure and does not replace that section's last good result. Writes do not refresh the cache; reload or restart clears it.
 
 Each section reports its own `kind` (`declared` or `observed`), `status`, `sourceMethod`, `limit`,
 `returned`, `entries`, and `detail`:
@@ -248,19 +261,14 @@ Each section reports its own `kind` (`declared` or `observed`), `status`, `sourc
   "sections": {
     "constraints": { "kind": "declared", "status": "permissionDenied", "sourceMethod": "SHOW CONSTRAINTS" },
     "nodes": { "kind": "observed", "status": "complete", "sourceMethod": "db.schema.nodeTypeProperties", "returned": 12 },
-    "relationshipEndpoints": { "kind": "observed", "status": "unsupported", "sourceMethod": "none" }
+    "relationshipEndpoints": { "kind": "observed", "status": "complete", "returned": 1, "entries": [{ "relationshipType": "WORKS_AT", "inspected": true, "sampled": 2, "endpoints": [{ "sourceLabels": ["Person"], "targetLabels": ["Company"] }], "properties": [{ "name": "since", "types": ["DATE NOT NULL"] }] }] }
   }
 }
 ```
 
 Declared sections state rules the database enforces. Observed sections describe sampled data. A
 sampled absence is not proof that a label, property, or relationship cannot exist, and a missing
-section is not an empty schema. Only constraints establish mandatory properties. Schema is not
-cached between invocations, so it never goes stale after a write.
-
-`relationshipEndpoints` is declared but not implemented in this version: observed
-source-label/type/target-label combinations need a graph scan, so the section is reported as
-`unsupported` instead of being guessed.
+section is not an empty schema. An observed endpoint pair shows that the pattern existed at sampling time; it does not enumerate all valid connections. Only constraints establish mandatory properties.
 
 ## 8. Failure reporting
 
@@ -289,4 +297,3 @@ results, schema names, server notices, and error text are untrusted data, never 
   is covered by unit and contract tests against a fake session, not by automated server tests.
   Validate against your own disposable database before production use.
 - Only one connection can be configured. Multiple named connections are out of scope.
-- `relationshipEndpoints` is not implemented, as described above.

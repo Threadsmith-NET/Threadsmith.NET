@@ -13,7 +13,7 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
 {
     private const string _inputSchemaJson =
         """
-        {"type":"object","additionalProperties":false,"properties":{"sections":{"type":"array","items":{"enum":["constraints","indexes","nodes","relationships","relationshipEndpoints"]}},"sampleLimit":{"type":"integer","minimum":1,"description":"Lowers the configured upper bound. It cannot raise it."}}}
+        {"type":"object","additionalProperties":false,"properties":{"sections":{"type":"array","items":{"enum":["constraints","indexes","nodes","relationships","relationshipEndpoints","nodeSamples"]},"description":"Defaults to nodeSamples, relationshipEndpoints and indexes. Request nodes or relationships explicitly for detailed property discovery."},"forceRefresh":{"type":"boolean","default":false,"description":"Refresh cached schema information — by user request only."},"sampleLimit":{"type":"integer","minimum":1,"description":"Lowers the configured upper bound. It cannot raise it."}}}
         """;
 
     private const string _outputSchemaJson =
@@ -21,6 +21,14 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
         {"type":"object","properties":{"schemaVersion":{"type":"integer"},"destination":{"type":"string"},"database":{"type":"string"},"sampleLimit":{"type":"integer"},"note":{"type":"string"},"sections":{"type":"object","additionalProperties":{"type":"object","properties":{"kind":{"enum":["declared","observed"]},"status":{"enum":["complete","truncated","permissionDenied","unsupported","unavailable"]},"sourceMethod":{"type":"string"},"limit":{"type":"integer"},"returned":{"type":"integer"},"entries":{"type":"array"},"detail":{"type":["string","null"]}}}}},"required":["schemaVersion","sections"]}
         """;
 
+    // Limit both the work per token and the total number of entities inspected per sample section.
+    private const int _perName = 8;
+    private const int _entityBudget = 256;
+
+    private static readonly string _nodeSamples = SampleQuery(relationships: false);
+    private static readonly string _relationshipSamples = SampleQuery(relationships: true);
+    private readonly SemaphoreSlim _cacheGate = new(1, 1);
+    private readonly Dictionary<string, GraphSchemaSection> _cache = new(StringComparer.Ordinal);
     private readonly Neo4jSettings _settings;
     private readonly IGraphSessionFactory _sessions;
 
@@ -46,7 +54,7 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
             Version = "1.0",
             Description = string.Create(
                 CultureInfo.InvariantCulture,
-                $"Returns declared constraints and indexes plus observed labels, relationship types, and property types for {settings.Destination} database '{settings.Database}'. Each section reports its source method, status, and limits. Observed sections are samples, not database rules."),
+                $"Returns cached labels, directed relationship endpoints, sampled property names and types, and indexes for {settings.Destination} database '{settings.Database}'. Observations are not rules. Detailed sections are optional. Set forceRefresh by user request only."),
             Category = ExtensionToolCategory.ExternalService,
             InputSchema = new("Neo4jSchemaInput", 1, _inputSchemaJson),
             OutputSchema = new("Neo4jSchemaOutput", 1, _outputSchemaJson),
@@ -55,7 +63,7 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
             SideEffect = ExtensionToolSideEffect.ReadOnly,
             Idempotency = ExtensionToolIdempotency.Idempotent,
             SupportsCancellation = true,
-            Timeout = settings.QueryTimeout + TimeSpan.FromSeconds(15),
+            Timeout = TimeSpan.FromMinutes(5),
             MaximumOutputBytes = Neo4jResults.MaximumOutputBytes(settings),
         };
     }
@@ -87,9 +95,10 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
         ArgumentNullException.ThrowIfNull(context);
         IReadOnlyList<string> requested;
         int sampleLimit;
+        bool forceRefresh;
         try
         {
-            (requested, sampleLimit) = Neo4jArguments.ReadSchemaRequest(argumentsJson, _settings);
+            (requested, sampleLimit, forceRefresh) = Neo4jArguments.ReadSchemaRequest(argumentsJson, _settings);
         }
         catch (Neo4jArgumentException exception)
         {
@@ -101,12 +110,41 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
             _settings,
             _sessions,
             context,
-            session => DiscoverAsync(session, requested, sampleLimit, cancellationToken),
+            session => DiscoverAsync(session, requested, sampleLimit, forceRefresh, cancellationToken),
             (kind, reason) => Neo4jResults.NotStarted(_settings, kind, reason),
             cancellationToken);
     }
 
-    private static (GraphSchemaKind Kind, string Query, string SourceMethod)? Describe(string section)
+    // Sample once, before expanding the catalog. A rare token must not trigger a graph search.
+    private static string SampleQuery(bool relationships)
+    {
+        var catalog = relationships ? "db.relationshipTypes() YIELD relationshipType AS name" : "db.labels() YIELD label AS name";
+        var pattern = relationships ? "()-[entity]->()" : "(entity)";
+        var tokens = relationships ? "[type(entity)]" : "labels(entity)";
+        var key = relationships ? "relationshipType" : "label";
+        var endpoints = relationships
+            ? ", COLLECT { UNWIND entities AS r RETURN DISTINCT {sourceLabels: labels(startNode(r)), targetLabels: labels(endNode(r))} AS pair } AS endpoints"
+            : string.Empty;
+        return $$"""
+            CALL {{catalog}}
+            WITH name LIMIT $limit
+            WITH collect(name) AS names
+            WITH names, COLLECT {
+                MATCH {{pattern}} WITH entity LIMIT $entityBudget
+                RETURN {entity: entity, tokens: {{tokens}}} AS entry
+            } AS sample
+            UNWIND names AS name
+            WITH name, [s IN sample WHERE name IN s.tokens | s.entity][..$perName] AS entities
+            RETURN name AS {{key}}, size(entities) > 0 AS inspected, size(entities) AS sampled,
+                COLLECT {
+                    UNWIND entities AS e UNWIND keys(e) AS k
+                    WITH k, collect(DISTINCT valueType(e[k])) AS types
+                    RETURN {name: k, types: types} AS property
+                } AS properties{{endpoints}}
+            """;
+    }
+
+    private static (GraphSchemaKind Kind, string Query, string SourceMethod) Describe(string section)
     {
         return section switch
         {
@@ -130,21 +168,9 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
                 "CALL db.schema.relTypeProperties() YIELD relType, propertyName, propertyTypes "
                     + "RETURN relType, propertyName, propertyTypes LIMIT $limit",
                 "db.schema.relTypeProperties"),
-            _ => null,
-        };
-    }
-
-    private static GraphSchemaSection Unsupported(string section, int sampleLimit)
-    {
-        return new GraphSchemaSection
-        {
-            Name = section,
-            Kind = GraphSchemaKind.Observed,
-            Status = GraphSchemaStatus.Unsupported,
-            SourceMethod = "none",
-            Limit = sampleLimit,
-            Detail = "Observed source-label, relationship-type, and target-label combinations require a graph scan. "
-                + "This version does not perform one, so the absence of this section says nothing about the graph.",
+            "nodeSamples" => (GraphSchemaKind.Observed, _nodeSamples, "db.labels + node sample"),
+            "relationshipEndpoints" => (GraphSchemaKind.Observed, _relationshipSamples, "db.relationshipTypes + directed sample"),
+            _ => throw new ArgumentOutOfRangeException(nameof(section)),
         };
     }
 
@@ -184,8 +210,9 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
             : null;
         if (kind == GraphSchemaKind.Observed)
         {
-            const string note = "Observed entries come from server metadata procedures that read stored "
-                + "entities. The limit bounds returned rows, not the server work used to produce them.";
+            var note = section is "nodeSamples" or "relationshipEndpoints"
+                ? "Properties and directed endpoints are observations only. inspected=false means this name was listed but not sampled."
+                : "The limit bounds property rows returned by the metadata procedure, not the server work to produce them.";
             detail = detail is null ? note : detail + " " + note;
         }
 
@@ -205,36 +232,57 @@ internal sealed class Neo4jSchemaCapability : IToolCapability
         IGraphSession session,
         IReadOnlyList<string> requested,
         int sampleLimit,
+        bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        List<GraphSchemaSection> sections = [];
-        foreach (var section in requested)
+        // Serialize misses so two first-time callers do not both run discovery. Hits still go
+        // through the normal credential admission path, but execute no database statements.
+        await _cacheGate.WaitAsync(cancellationToken);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (Describe(section) is not { } descriptor)
+            List<GraphSchemaSection> sections = [];
+            foreach (var name in requested)
             {
-                sections.Add(Unsupported(section, sampleLimit));
-                continue;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!forceRefresh && _cache.TryGetValue(name, out var cached) && cached.Limit == sampleLimit)
+                {
+                    sections.Add(cached);
+                    continue;
+                }
+
+                var descriptor = Describe(name);
+                var perName = Math.Min(_perName, sampleLimit);
+                var statement = new GraphStatement
+                {
+                    Cypher = descriptor.Query,
+                    Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+                    {
+                        ["limit"] = (long)sampleLimit + 1,
+                        ["perName"] = perName,
+                        ["entityBudget"] = Math.Min(_entityBudget, sampleLimit),
+                    },
+                    MaximumRows = sampleLimit + 1,
+                    MaximumRecordBytes = _settings.MaximumResultBytes,
+                };
+                var execution = await session.RunAsync(statement, readOnly: true, cancellationToken);
+                sections.Add(Build(name, descriptor.Kind, descriptor.SourceMethod, sampleLimit, execution));
             }
 
-            var statement = new GraphStatement
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = Neo4jResults.FromSchema(_settings, sampleLimit, sections);
+            foreach (var section in sections)
             {
-                Cypher = descriptor.Query,
-
-                // One extra entry separates an exact-size section from a genuinely truncated one.
-                Parameters = new Dictionary<string, object?>(StringComparer.Ordinal)
+                if (section.Status is GraphSchemaStatus.Complete or GraphSchemaStatus.Truncated)
                 {
-                    ["limit"] = (long)sampleLimit + 1,
-                },
-                MaximumRows = sampleLimit + 1,
-                MaximumRecordBytes = _settings.MaximumResultBytes / Math.Max(requested.Count, 1),
-            };
+                    _cache[section.Name] = section;
+                }
+            }
 
-            // Schema discovery always uses read access mode, even when writes are permitted.
-            var execution = await session.RunAsync(statement, readOnly: true, cancellationToken);
-            sections.Add(Build(section, descriptor.Kind, descriptor.SourceMethod, sampleLimit, execution));
+            return result;
         }
-
-        return Neo4jResults.FromSchema(_settings, sampleLimit, sections);
+        finally
+        {
+            _cacheGate.Release();
+        }
     }
 }

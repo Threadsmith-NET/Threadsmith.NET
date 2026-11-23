@@ -148,7 +148,10 @@ public sealed class Neo4jContractTests
 
         var defaulted = Neo4jArguments.ReadSchemaRequest("{}", settings);
         Assert.Equal(100, defaulted.SampleLimit);
-        Assert.Equal(Neo4jArguments.AllSections, defaulted.Sections);
+        Assert.Equal(["nodeSamples", "relationshipEndpoints", "indexes"], defaulted.Sections);
+        Assert.False(defaulted.ForceRefresh);
+        Assert.True(Neo4jArguments.ReadSchemaRequest("""{"forceRefresh":true}""", settings).ForceRefresh);
+        Assert.Throws<Neo4jArgumentException>(() => Neo4jArguments.ReadSchemaRequest("""{"forceRefresh":"true"}""", settings));
 
         Assert.Equal(
             ["indexes"],

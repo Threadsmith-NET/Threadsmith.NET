@@ -255,12 +255,26 @@ public interface IConversationStore
         ConversationContextMode mode,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads the effective stored mode without requiring archived messages.</summary>
+    async Task<ConversationContextMode> GetModeAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        => (await GetSnapshotAsync(sessionId, includeBodies: false, cancellationToken: cancellationToken)).Mode;
+
     /// <summary>Gets detached state with tolerant schema handling.</summary>
     Task<ConversationStateSnapshot> GetSnapshotAsync(
         SessionId sessionId,
         bool includeBodies = true,
         ConversationHistoryWindow? historyWindow = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the complete archive for turn selection. Bodies and receipts are not required;
+    /// images are required only for messages projected as omissions before hydration.</summary>
+    Task<ConversationStateSnapshot> GetSelectionSnapshotAsync(
+        SessionId sessionId,
+        DateTimeOffset recentCutoff,
+        ConversationContextMode? modeOverride,
+        ConversationMessageId? currentMessageId,
+        CancellationToken cancellationToken = default)
+        => GetSnapshotAsync(sessionId, includeBodies: false, cancellationToken: cancellationToken);
 
     /// <summary>Loads complete bodies for selected messages in session order, using the archive's normal integrity checks.</summary>
     Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(

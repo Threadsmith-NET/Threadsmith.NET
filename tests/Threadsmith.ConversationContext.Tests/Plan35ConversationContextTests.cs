@@ -1,5 +1,6 @@
 namespace Threadsmith.ConversationContext.Tests;
 
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Cli;
 using Threadsmith.Context;
@@ -80,6 +81,80 @@ public static class Plan35ConversationContextTests
         var policy = new ConversationContextPolicy { CompactionPressurePercent = 101 };
 
         Assert.Throws<ArgumentOutOfRangeException>(policy.Validate);
+    }
+
+    /// <summary>Legacy pairing, model attachments, and inspection survive the lightweight archive read.</summary>
+    [Fact]
+    public static async Task LongSessionSelectionPreservesTurnsMetadataAndInspection()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var session = SessionId.New();
+        var old = await ArchiveAsync(fixture, session, ConversationRole.User, "expired", occurredAt: DateTimeOffset.UnixEpoch);
+        var image = new ImageArtifact
+        {
+            Id = "archived-image", ContentHash = new string('a', 64), MediaType = "image/png",
+            Width = 1, Height = 1, ByteLength = 72, Source = "clipboard",
+        };
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync(token);
+        await using var seed = connection.CreateCommand();
+        seed.CommandText = """
+            WITH RECURSIVE older(n) AS (VALUES(2) UNION ALL SELECT n+1 FROM older WHERE n<96)
+            INSERT INTO conversation_messages(message_id, session_id, run_id, sequence, role, content_hash,
+                estimated_tokens, sensitivity, occurred_at, schema_version)
+            SELECT printf('00000000-0000-0000-0000-%012d', n), session_id, run_id, sequence+n-1, role,
+                content_hash, estimated_tokens, sensitivity, occurred_at, schema_version
+            FROM older CROSS JOIN conversation_messages WHERE message_id=$old;
+            """;
+        seed.Parameters.AddWithValue("$old", old.Id.Value.ToString("D"));
+        await seed.ExecuteNonQueryAsync(token);
+        var user = await ArchiveAsync(fixture, session, ConversationRole.User, "recent user");
+        var assistant = await ArchiveAsync(fixture, session, ConversationRole.Assistant, "recent assistant");
+        var current = await ArchiveAsync(fixture, session, ConversationRole.User, "current user");
+        var receipt = new ConversationReceiptProvenance(1, session, assistant.RunId, assistant.Id);
+        await using var metadata = connection.CreateCommand();
+        metadata.CommandText = """
+            UPDATE conversation_messages SET images_json=$images WHERE message_id IN ($old,$user,$current);
+            UPDATE conversation_messages SET schema_version=1 WHERE message_id IN ($user,$assistant);
+            UPDATE conversation_messages SET receipt_json=$receipt WHERE message_id=$assistant;
+            """;
+        metadata.Parameters.AddWithValue("$old", old.Id.Value.ToString("D"));
+        metadata.Parameters.AddWithValue("$user", user.Id.Value.ToString("D"));
+        metadata.Parameters.AddWithValue("$assistant", assistant.Id.Value.ToString("D"));
+        metadata.Parameters.AddWithValue("$current", current.Id.Value.ToString("D"));
+        metadata.Parameters.AddWithValue("$images", JsonSerializer.Serialize(new[] { image }));
+        metadata.Parameters.AddWithValue("$receipt", JsonSerializer.Serialize(receipt));
+        await metadata.ExecuteNonQueryAsync(token);
+
+        var selection = await fixture.Store.GetSelectionSnapshotAsync(session, DateTimeOffset.UnixEpoch.AddDays(1), null, current.Id, token);
+        Assert.Equal(99, selection.Messages.Count);
+        Assert.Empty(selection.Messages.Single(m => m.Id == user.Id).Images);
+        Assert.Null(selection.Messages.Single(m => m.Id == assistant.Id).Receipt);
+        var request = CreateRequest(fixture, session, current, "current user");
+        var assembler = CreateAssembler(fixture, events);
+        var result = await assembler.AssembleAsync(request, token);
+        var items = result.Inspection.ConversationItems;
+        Assert.Equal(new[] { user.Id, assistant.Id }, items.Where(i => i.Included).SelectMany(i => i.SourceMessageIds));
+        Assert.Equal(96, items.Count(i => !i.Included));
+        var expired = items.Single(i => i.Id == old.Id.Value.ToString("D"));
+        Assert.Equal("metadata only; pixels omitted", expired.ImageDisposition);
+        Assert.Equal(image, Assert.Single(expired.Images));
+        Assert.Equal(image, Assert.Single(items.Single(i => i.Id == user.Id.Value.ToString("D")).Images));
+        Assert.Contains(result.Messages!, m => m.Receipt?.OriginMessageId == assistant.Id);
+        Assert.Equal(2, result.Messages!.SelectMany(m => m.Content).Count(part => part.Image == image));
+
+        await fixture.Store.SetModeAsync(session, ConversationContextMode.Stateless, token);
+        Assert.Equal(ConversationContextMode.Stateless, await fixture.Store.GetModeAsync(session, token));
+        var statelessSelection = await fixture.Store.GetSelectionSnapshotAsync(session, DateTimeOffset.UnixEpoch.AddDays(1), null, current.Id, token);
+        Assert.Empty(statelessSelection.Messages.Single(m => m.Id == current.Id).Images);
+        Assert.Equal(image, Assert.Single(statelessSelection.Messages.Single(m => m.Id == user.Id).Images));
+        var stateless = await assembler.AssembleAsync(request, token);
+        Assert.Equal(image, Assert.Single(stateless.Messages!.SelectMany(m => m.Content), part => part.Image is not null).Image);
+        var omitted = stateless.Inspection.ConversationItems.Single(i => i.Id == user.Id.Value.ToString("D"));
+        Assert.False(omitted.Included);
+        Assert.Equal(image, Assert.Single(omitted.Images));
     }
 
     private static async Task AddMemoryAsync(

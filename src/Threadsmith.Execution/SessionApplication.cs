@@ -659,11 +659,8 @@ public sealed partial class SessionApplication :
 
             if (_conversationStore is not null)
             {
-                var conversationState = await _conversationStore.GetSnapshotAsync(
-                    command.SessionId,
-                    includeBodies: false,
-                    cancellationToken: registration.Cancellation.Token);
-                registration.ConversationMode = conversationState.Mode;
+                registration.ConversationMode = await _conversationStore.GetModeAsync(
+                    command.SessionId, registration.Cancellation.Token);
             }
 
             await _events.PublishAsync(

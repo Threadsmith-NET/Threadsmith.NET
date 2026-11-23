@@ -62,7 +62,8 @@ internal sealed record GraphSchemaSection
         var entries = new JsonArray();
         foreach (var entry in Entries)
         {
-            entries.Add(entry);
+            // The snapshot may be rendered more than once. Each payload owns its JSON children.
+            entries.Add(entry.DeepClone());
         }
 
         return new JsonObject

@@ -130,7 +130,16 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
         {
             _cancelled = true;
             _escape = null;
-            _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
+
+            // Cancellation is terminal: displace nonterminal input if the bounded queue is full.
+            // Input has one UI-thread producer; a completed channel needs no further signal.
+            if (!_signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested))
+            {
+                _signals.Reader.TryRead(out _);
+
+                // Retry even if the concurrent consumer, rather than this eviction, made space.
+                _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
+            }
         }
     }
 

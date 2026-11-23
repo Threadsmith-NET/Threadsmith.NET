@@ -14,7 +14,7 @@ public sealed class Neo4jContractTests
     [InlineData("uri", "neo4j+s://operator:hunter2@graph.example.com:7687")]
     [InlineData("uri", "https://graph.example.com:7687")]
     [InlineData("uri", "bolt://graph.example.com:7687")]
-    [InlineData("forceReadOnly", "yes")]
+    [InlineData("readOnly", "yes")]
     [InlineData("maximumRows", "100000")]
     public void Settings_RejectUnsafeConfiguration(string key, string value)
     {
@@ -32,12 +32,12 @@ public sealed class Neo4jContractTests
     public void Settings_ApplyDocumentedDefaults()
     {
         var values = TestGraph.Values();
-        values.Remove("forceReadOnly");
+        values.Remove("readOnly");
         values["uri"] = "neo4j+s://graph.example.com";
 
         var settings = TestGraph.Settings(values);
 
-        Assert.True(settings.ForceReadOnly);
+        Assert.True(settings.ReadOnly);
         Assert.True(settings.Routed);
         Assert.True(settings.Encrypted);
         Assert.Equal(TimeSpan.FromSeconds(30), settings.QueryTimeout);
@@ -83,32 +83,26 @@ public sealed class Neo4jContractTests
         Assert.Equal(0, factory.Created);
     }
 
-    /// <summary>Static metadata stays conservative and destination-bound in each configured mode.</summary>
-    /// <param name="forceReadOnly">The configured access mode.</param>
-    /// <param name="serverEnforced">Whether server enforcement is confirmed.</param>
+    /// <summary>Approval and side-effect metadata follow the configured driver mode.</summary>
+    /// <param name="readOnly">The configured access mode.</param>
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, false)]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    public void ExecuteMetadata_IsConservativeInEachConfiguredMode(bool forceReadOnly, bool serverEnforced)
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ExecuteMetadata_MatchesConfiguredMode(bool readOnly)
     {
-        var values = TestGraph.Values(forceReadOnly);
-        values["readOnlyEnforcedByServerAccount"] = serverEnforced ? "true" : "false";
-        var settings = TestGraph.Settings(values);
-        var confirmedReadOnly = forceReadOnly && serverEnforced;
+        var settings = TestGraph.Settings(TestGraph.Values(readOnly));
         var capability = new Neo4jExecuteCapability(settings, new FakeGraphSessionFactory());
         var definition = capability.Definition;
 
         Assert.Equal(ExtensionToolCategory.ExternalService, definition.Category);
         Assert.Equal(
-            confirmedReadOnly ? ExtensionToolSideEffect.ReadOnly : ExtensionToolSideEffect.WritesExternalData,
+            readOnly ? ExtensionToolSideEffect.ReadOnly : ExtensionToolSideEffect.WritesExternalData,
             definition.SideEffect);
         Assert.Equal(
-            confirmedReadOnly ? ExtensionToolIdempotency.Idempotent : ExtensionToolIdempotency.NonIdempotent,
+            readOnly ? ExtensionToolIdempotency.Idempotent : ExtensionToolIdempotency.NonIdempotent,
             definition.Idempotency);
         Assert.Equal(
-            confirmedReadOnly ? ExtensionApprovalRequirement.None : ExtensionApprovalRequirement.User,
+            readOnly ? ExtensionApprovalRequirement.None : ExtensionApprovalRequirement.User,
             definition.RequiredApproval);
 
         var review = Assert.IsType<ExtensionStatementReview>(definition.StatementReview);
@@ -129,7 +123,7 @@ public sealed class Neo4jContractTests
     /// <param name="argumentsJson">The rejected arguments.</param>
     [Theory]
     [InlineData("{\"cypher\":\"RETURN 1\",\"uri\":\"bolt://evil.example.com:7687\"}")]
-    [InlineData("{\"cypher\":\"RETURN 1\",\"forceReadOnly\":false}")]
+    [InlineData("{\"cypher\":\"RETURN 1\",\"readOnly\":false}")]
     [InlineData("{\"cypher\":\"RETURN 1\",\"password\":\"hunter2\"}")]
     [InlineData("{\"parameters\":{\"id\":1}}")]
     [InlineData("{\"cypher\":\"   \"}")]
@@ -154,7 +148,10 @@ public sealed class Neo4jContractTests
 
         var defaulted = Neo4jArguments.ReadSchemaRequest("{}", settings);
         Assert.Equal(100, defaulted.SampleLimit);
-        Assert.Equal(Neo4jArguments.AllSections, defaulted.Sections);
+        Assert.Equal(["nodeSamples", "relationshipEndpoints", "indexes"], defaulted.Sections);
+        Assert.False(defaulted.ForceRefresh);
+        Assert.True(Neo4jArguments.ReadSchemaRequest("""{"forceRefresh":true}""", settings).ForceRefresh);
+        Assert.Throws<Neo4jArgumentException>(() => Neo4jArguments.ReadSchemaRequest("""{"forceRefresh":"true"}""", settings));
 
         Assert.Equal(
             ["indexes"],
@@ -163,25 +160,17 @@ public sealed class Neo4jContractTests
             () => Neo4jArguments.ReadSchemaRequest("{\"sections\":[\"everything\"]}", settings));
     }
 
-    /// <summary>Approval is waived only when the operator confirms server-enforced read-only access.</summary>
+    /// <summary>The default read-only mode requires no operator approval.</summary>
     [Fact]
-    public void ExecuteMetadata_WaivesApprovalOnlyWhenServerEnforcementConfirmed()
+    public void ExecuteMetadata_DefaultReadOnlyNeedsNoApproval()
     {
-        var values = TestGraph.Values(forceReadOnly: true);
-        values["readOnlyEnforcedByServerAccount"] = "true";
-        var confirmed = new Neo4jExecuteCapability(
+        var values = TestGraph.Values();
+        values.Remove("readOnly");
+        var capability = new Neo4jExecuteCapability(
             TestGraph.Settings(values),
             new FakeGraphSessionFactory());
 
-        Assert.Equal(ExtensionApprovalRequirement.None, confirmed.Definition.RequiredApproval);
-
-        // The acknowledgement never weakens a deployment that still permits writes.
-        values["forceReadOnly"] = "false";
-        var writable = new Neo4jExecuteCapability(
-            TestGraph.Settings(values),
-            new FakeGraphSessionFactory());
-
-        Assert.Equal(ExtensionApprovalRequirement.User, writable.Definition.RequiredApproval);
+        Assert.Equal(ExtensionApprovalRequirement.None, capability.Definition.RequiredApproval);
     }
 
     /// <summary>The local-development exception never covers a remote self-signed endpoint.</summary>

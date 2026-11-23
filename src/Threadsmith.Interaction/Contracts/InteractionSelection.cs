@@ -7,6 +7,9 @@ public sealed record InteractionSelectionOption(string Id, string Label)
 {
     /// <summary>Gets the optional display heading; headings are not selectable options.</summary>
     public string? Group { get; init; }
+
+    /// <summary>Gets optional searchable text shown only in the selected option's full review.</summary>
+    public string? Details { get; init; }
 }
 
 /// <summary>Requests one ordered, sequential selection.</summary>
@@ -18,6 +21,9 @@ public sealed record InteractionSelectionRequest(
 {
     /// <summary>Opens the full review before offering the selection.</summary>
     public bool OpenReview { get; init; }
+
+    /// <summary>Gets a value indicating whether to separate list entries with an empty row.</summary>
+    public bool SpaceBetweenOptions { get; init; }
 
     /// <summary>Gets bounded review evidence shown by the existing full-details view.</summary>
     public string? Details { get; init; }

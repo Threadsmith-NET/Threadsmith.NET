@@ -64,6 +64,41 @@ public static class SessionResumePresentationTests
         }
     }
 
+    /// <summary>The resume picker shows a spaced preview and keeps model metadata in the full review.</summary>
+    [Fact]
+    public static async Task Resume_picker_separates_preview_from_model_details()
+    {
+        await using var events = new DomainEventStream();
+        var model = new SessionModelSelectionRecord
+        {
+            ProviderId = "test-provider",
+            ProfileId = new ModelProfileId(Guid.NewGuid()),
+            ReasoningLevel = "High",
+        };
+        var dispatcher = new HistoryDispatcher(current: true) { PickerModel = model };
+        var surface = new HistorySurface("/resume");
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, new EmptyProjectionStore()),
+            events,
+            surface,
+            sessionLifecycleAvailable: true);
+
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var selection = Assert.IsType<InteractionSelectionRequest>(surface.Selection);
+        Assert.Equal("Resume session", selection.Title);
+        Assert.True(selection.SpaceBetweenOptions);
+        var option = Assert.Single(selection.Options);
+        Assert.Equal(dispatcher.Target.Value.ToString("D"), option.Id);
+        var rows = option.Label.Split('\n');
+        Assert.Equal(2, rows.Length);
+        Assert.StartsWith("Idle (current)", rows[0], StringComparison.Ordinal);
+        Assert.Contains(option.Id, rows[0], StringComparison.Ordinal);
+        Assert.Equal("Preview: Latest visible message", rows[1]);
+        Assert.DoesNotContain(model.ProviderId, option.Label, StringComparison.Ordinal);
+        Assert.Equal($"Model: test-provider/{model.ProfileId.Value:D} (high)", option.Details);
+    }
+
     /// <summary>Rejected transitions leave the visible conversation available.</summary>
     [Fact]
     public static async Task Failed_resume_preserves_output()
@@ -105,6 +140,8 @@ public static class SessionResumePresentationTests
 
         internal bool ReadOnly { get; init; }
 
+        internal SessionModelSelectionRecord? PickerModel { get; init; }
+
         internal GetConversationStateCommand? HistoryQuery { get; private set; }
 
         public Task<TResponse> DispatchAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
@@ -117,7 +154,7 @@ public static class SessionResumePresentationTests
                     result = new SessionTransitionResult { Kind = SessionTransitionKind.New, ActiveSession = Entry(_source) };
                     break;
                 case ListResumableSessionsCommand:
-                    result = new[] { Entry(Target) };
+                    result = new[] { Entry(Target) with { Preview = "Latest visible message", ModelSelection = PickerModel } };
                     break;
                 case ResumeSessionCommand resume:
                     Assert.Equal(Target, resume.SessionId);
@@ -203,6 +240,8 @@ public static class SessionResumePresentationTests
 
         internal int Replacements { get; private set; }
 
+        internal InteractionSelectionRequest? Selection { get; private set; }
+
         internal string Output => string.Join('\n', View.Lines);
 
         public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
@@ -219,7 +258,11 @@ public static class SessionResumePresentationTests
         }
 
         public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new InteractionSelectionResult(request.Options[0].Id, false));
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Selection = request;
+            return Task.FromResult(new InteractionSelectionResult(request.Options[0].Id, false));
+        }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {

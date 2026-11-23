@@ -189,7 +189,7 @@ public sealed partial class InteractionCoordinator
                             _ = await manager.UnloadAsync(generationId, sessionId, token);
                         }
                     }
-                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    catch (Exception exception) when (exception is not OperationCanceledException || !token.IsCancellationRequested)
                     {
                         failure = exception is ExtensionOperationException && !string.IsNullOrWhiteSpace(exception.Message)
                             ? $"The extension change failed: {exception.Message}"

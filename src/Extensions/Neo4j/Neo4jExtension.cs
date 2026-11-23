@@ -59,8 +59,8 @@ public sealed class Neo4jExtension : IThreadsmithExtension
         context.Capabilities.RegisterTool(new Neo4jSchemaCapability(settings, _sessions));
 
         // The log states the configured mode only. It never contains the endpoint, account, or reference.
-        context.Logger.Information(settings.ForceReadOnly
-            ? "Neo4j extension activated in forced read-only mode."
+        context.Logger.Information(settings.ReadOnly
+            ? "Neo4j extension activated in read-only mode."
             : "Neo4j extension activated with write-capable execution. Writes still require operator approval and database privileges.");
         return default;
     }

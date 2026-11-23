@@ -35,7 +35,7 @@ internal static class Neo4jResults
             ["schemaVersion"] = OutputSchemaVersion,
             ["outcome"] = execution.Outcome,
             ["phase"] = execution.Phase,
-            ["readOnly"] = settings.ForceReadOnly,
+            ["readOnly"] = settings.ReadOnly,
             ["destination"] = settings.Destination,
             ["database"] = settings.Database,
             ["columns"] = columns,

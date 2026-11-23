@@ -153,15 +153,23 @@ internal sealed class RecordingEventStream : IDomainEventStream
     }
 
     /// <inheritdoc />
-    public Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
+    public async Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(domainEvent);
+        if (BeforePublication is { } beforePublication)
+        {
+            await beforePublication(domainEvent, cancellationToken);
+        }
+
+        if (RejectPublication?.Invoke(domainEvent) == true)
+        {
+            throw new InvalidOperationException("Fixture notification failed.");
+        }
+
         lock (_gate)
         {
             _published.Add(domainEvent);
         }
-
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -188,6 +196,10 @@ internal sealed class RecordingEventStream : IDomainEventStream
         GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
+
+    internal Func<IDomainEvent, bool>? RejectPublication { get; init; }
+
+    internal Func<IDomainEvent, CancellationToken, Task>? BeforePublication { get; init; }
 
     private sealed class NullSubscription : IDomainEventSubscription
     {

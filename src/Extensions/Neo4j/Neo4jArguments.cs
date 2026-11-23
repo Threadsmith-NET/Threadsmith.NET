@@ -34,7 +34,10 @@ internal static class Neo4jArguments
         "nodes",
         "relationships",
         "relationshipEndpoints",
+        "nodeSamples",
     ];
+
+    private static readonly string[] _defaultSections = ["nodeSamples", "relationshipEndpoints", "indexes"];
 
     private static readonly JsonDocumentOptions _documentOptions = new() { AllowDuplicateProperties = false };
 
@@ -86,14 +89,15 @@ internal static class Neo4jArguments
     /// <param name="settings">The generation-owned limits.</param>
     /// <returns>The requested sections and the effective sample limit.</returns>
     /// <exception cref="Neo4jArgumentException">Thrown when the arguments are unsupported or exceed a bound.</exception>
-    internal static (IReadOnlyList<string> Sections, int SampleLimit) ReadSchemaRequest(
+    internal static (IReadOnlyList<string> Sections, int SampleLimit, bool ForceRefresh) ReadSchemaRequest(
         string argumentsJson,
         Neo4jSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
         using var document = Parse(argumentsJson);
         var root = Root(document);
-        IReadOnlyList<string> sections = AllSections;
+        IReadOnlyList<string> sections = _defaultSections;
+        var forceRefresh = false;
         var sampleLimit = settings.SchemaSampleLimit;
         foreach (var field in root.EnumerateObject())
         {
@@ -105,13 +109,22 @@ internal static class Neo4jArguments
             {
                 sampleLimit = ReadSampleLimit(field.Value, settings.SchemaSampleLimit);
             }
+            else if (field.NameEquals("forceRefresh"))
+            {
+                forceRefresh = field.Value.ValueKind switch
+                {
+                    JsonValueKind.True => true,
+                    JsonValueKind.False => false,
+                    _ => throw new Neo4jArgumentException("'forceRefresh' must be a boolean."),
+                };
+            }
             else
             {
-                throw new Neo4jArgumentException("Only 'sections' and 'sampleLimit' are accepted.");
+                throw new Neo4jArgumentException("Only 'sections', 'sampleLimit', and 'forceRefresh' are accepted.");
             }
         }
 
-        return (sections, sampleLimit);
+        return (sections, sampleLimit, forceRefresh);
     }
 
     private static JsonDocument Parse(string argumentsJson)

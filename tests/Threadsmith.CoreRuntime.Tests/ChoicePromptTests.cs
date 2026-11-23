@@ -115,6 +115,78 @@ public static class ChoicePromptTests
         Assert.Contains("  > Model 02", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
     }
 
+    /// <summary>Wrapped and separated entries remain selectable and searchable by hidden details.</summary>
+    [Fact]
+    public static void SpacedChoicesWrapCleanlyAndKeepDetailsSearchable()
+    {
+        var modal = new ChoiceModal(
+            "Resume session",
+            [
+                new("first", "Idle · First session\nPreview: A short first sentence followed by more words to wrap.") { Details = "Model: first profile" },
+                new("second", "Active · Second session\nPreview: No visible messages") { Details = "Model: second profile" },
+            ],
+            spaceBetweenOptions: true);
+        var cells = new CellBuffer(52, 24);
+
+        modal.Render(new BufferSurface(cells));
+
+        var initial = TUIKit.Testing.Snapshot.ToText(cells);
+        var rows = initial.Split('\n');
+        var first = Array.FindIndex(rows, row => row.Contains("> Idle · First session", StringComparison.Ordinal));
+        var continuation = Array.FindIndex(rows, row => row.Contains("to wrap.", StringComparison.Ordinal));
+        var second = Array.FindIndex(rows, row => row.Contains("Active · Second session", StringComparison.Ordinal));
+        Assert.True(first >= 0);
+        Assert.True(continuation > first + 1);
+        Assert.Equal(continuation + 2, second);
+        Assert.Equal(rows[first + 1].IndexOf("Preview:", StringComparison.Ordinal), rows[continuation].IndexOf("by more", StringComparison.Ordinal));
+        Assert.Empty(rows[continuation + 1].Trim().Trim('│').Trim());
+        Assert.DoesNotContain("Model:", initial, StringComparison.Ordinal);
+
+        modal.HandleKey(KeyEvent.Special(KeyCode.Down));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("> Active · Second session", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+
+        modal.HandlePaste("first profile");
+        modal.Render(new BufferSurface(cells));
+        var filtered = TUIKit.Testing.Snapshot.ToText(cells);
+        Assert.Contains("> Idle · First session", filtered, StringComparison.Ordinal);
+        Assert.DoesNotContain("Second session", filtered, StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("Model: first profile", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
+        Assert.True(modal.IsClosed);
+    }
+
+    /// <summary>Choice filtering bounds its search without truncating the detail view.</summary>
+    [Fact]
+    public static void LongDetailsStayVisibleButOnlyTheirPrefixIsSearchable()
+    {
+        var modal = new ChoiceModal(
+            "Sessions",
+            [new("session", "Session choice") { Details = "profile prefix\n" + new string('x', 4096) + "\nprofile tail" }]);
+        var cells = new CellBuffer(80, 24);
+        var surface = new BufferSurface(cells);
+
+        modal.HandlePaste("profile tail");
+        modal.Render(surface);
+        Assert.DoesNotContain("Session choice", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        for (var index = 0; index < "profile tail".Length; index++)
+        {
+            modal.HandleKey(KeyEvent.Special(KeyCode.Backspace));
+        }
+
+        modal.HandlePaste("PROFILE PREFIX");
+        modal.Render(surface);
+        Assert.Contains("> Session choice", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        modal.Render(surface);
+        modal.HandleKey(KeyEvent.Special(KeyCode.End));
+        modal.Render(surface);
+        Assert.Contains("profile tail", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+    }
+
     /// <summary>Details wrap unbroken targets, survive resize, and never approve through scrolling.</summary>
     [Theory]
     [InlineData(40, 12)]

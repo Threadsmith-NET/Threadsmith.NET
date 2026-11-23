@@ -12,7 +12,7 @@ implements.
 | Tool | Purpose |
 | --- | --- |
 | `neo4j_execute` | Runs one Cypher statement in one explicit transaction and returns bounded, tagged records with an explicit transaction outcome. |
-| `neo4j_schema` | Returns declared constraints and indexes plus observed labels, relationship types, and property types, each with its source method, status, and limits. |
+| `neo4j_schema` | Returns cached labels, directed relationship patterns, sampled properties and types, and index definitions. Detailed property discovery and constraints can be requested separately. |
 
 The model supplies only query data. The connection target, account, credential reference, access
 mode, and every resource limit come from repository configuration. A model argument can never change
@@ -43,7 +43,7 @@ All values are strings. Only these keys are accepted; any other key is a configu
   "database": "neo4j",
   "username": "threadsmith-reader",
   "passwordReference": "secrets:neo4j:primary:password",
-  "forceReadOnly": "true",
+  "readOnly": "true",
   "queryTimeoutSeconds": "30",
   "maximumRows": "500",
   "maximumResultBytes": "65536",
@@ -57,17 +57,19 @@ All values are strings. Only these keys are accepted; any other key is a configu
 | `database` | yes | — | At most 63 ASCII letters, digits, `.`, `-`, or `_`. |
 | `username` | yes | — | The least-privilege account. |
 | `passwordReference` | yes | — | A logical reference the host resolves; never the password itself. |
-| `forceReadOnly` | no | `true` | `true` or `false`. Any other value is a configuration error. |
+| `readOnly` | no | `true` | `true` uses driver read mode without an approval prompt; `false` uses write mode with normal approval. Any other value is a configuration error. |
 | `queryTimeoutSeconds` | no | `30` | 1–300. Applied as the server-side transaction timeout. |
 | `maximumRows` | no | `500` | 1–10000 retained records. |
 | `maximumResultBytes` | no | `65536` | 4096–262144 retained UTF-8 record bytes. |
 | `schemaSampleLimit` | no | `1000` | 1–10000. A request can lower it but never raise it. |
-| `readOnlyEnforcedByServerAccount` | no | `false` | Set `true` only after the account itself denies writes. Waives per-statement approval when `forceReadOnly` is `true`. |
 | `allowInsecureLocalConnections` | no | `false` | Permits the direct `bolt` and `bolt+ssc` schemes **for a loopback host only**. Remote and routed addresses are rejected either way. |
 
 The settings are validated when the extension activates. Activation opens no connection, resolves no
 credential, and starts no background work. A configuration change takes effect through the normal
 host load or replacement process.
+
+For existing configurations, rename `forceReadOnly` to `readOnly` and remove
+`readOnlyEnforcedByServerAccount`. The old keys are no longer accepted.
 
 ### TLS
 
@@ -107,27 +109,23 @@ history of credentials.
 
 Use a dedicated least-privilege account. Never an administrator.
 
-`forceReadOnly` is a client-side safety setting: it makes the extension request the server's read
-access mode. Only `forceReadOnly && readOnlyEnforcedByServerAccount` classifies the tool as read-only
-and idempotent; otherwise it is tracked as a non-idempotent external write. **Read routing is not
-authorization.** For a genuinely read-only deployment the account itself must deny writes, and the
-server must restrict procedures and features with side effects, including any that perform outbound
-network access. Confirm your edition supports the role controls you need before you describe the
-deployment as safe for arbitrary Cypher. If you cannot enforce that, narrow the queries you allow
-instead of relying on the setting alone.
+`readOnly` controls the driver's access mode and the tool's approval requirement. When `true`,
+execution uses read mode, is classified as read-only and idempotent, and does not prompt for approval.
+When `false`, execution uses write mode and follows normal approval for a non-idempotent external write.
 
-The extension cannot verify any of that from the client, so `forceReadOnly` alone does **not** waive
-operator approval. A forced read-only deployment still requires approval for every statement until
-you also set `readOnlyEnforcedByServerAccount` to `true`. That setting records your confirmation
-that the account and procedure restrictions above are actually in place. It is an operator
-assertion, not a check the extension can make, so set it only when it is true.
+**Read routing is not authorization.** Database account permissions are your responsibility. For
+server-enforced read-only access, use an account that denies writes and restrict procedures and
+features with side effects, including outbound network access. The extension does not verify account
+permissions or ask you to confirm them through another setting.
 
-Setting `forceReadOnly` to `false` only permits the model to *request* a write. It does not grant
-host approval and it does not grant database privileges; those remain separate controls.
+Setting `readOnly` to `false` does not grant host approval or database privileges; those remain
+separate controls.
 
 ## 5. Server requirements
 
-The extension uses Bolt, explicit transactions, and these built-in metadata sources:
+Compact discovery uses `db.labels()`, `db.relationshipTypes()`, `COLLECT` subqueries, and `valueType()`. It takes one bounded node sample and one bounded directed relationship sample. It does not use dynamic token matches or search the graph for each catalog name.
+
+The extension also uses Bolt, explicit transactions, and these built-in metadata sources:
 `SHOW CONSTRAINTS`, `SHOW INDEXES`, `db.schema.nodeTypeProperties()`, and
 `db.schema.relTypeProperties()`. No plugin such as APOC is required. If the server or the account
 rejects one of them, that section is reported as `unsupported`, `permissionDenied`, or `unavailable`
@@ -147,11 +145,10 @@ during approval, parameter values are not.
 }
 ```
 
-Unless both read-only settings are true, every call is classified conservatively as a non-idempotent
-external write that requires user approval, even if the statement only reads. Statement text cannot
-prove that a query is read-only. This preserves external-write interruption and unknown-outcome
-warnings even when read routing was requested. The output `readOnly` field reports requested routing,
-not independently verified authorization.
+With `readOnly` set to `true` (the default), calls use driver read mode without an approval prompt.
+With `readOnly` set to `false`, every call is classified as a non-idempotent external write requiring
+user approval, even if the statement only reads. Statement text does not determine the access mode.
+The output `readOnly` field reports requested routing, not independently verified authorization.
 
 ### Output
 
@@ -202,6 +199,12 @@ Individual-value truncation alone does not abandon an otherwise fully consumed r
 These limits bound retained output and explicit cursor fetching, not total server execution, the size
 of an individual incoming record, or the driver's fetch buffer. The server query timeout still applies.
 
+Canceling the request stops Threadsmith from waiting for the result. The driver does not expose
+cancellation for an outstanding explicit transaction call. The invocation retains the credential,
+session, and extension lease until that call and cleanup finish. After observing cancellation, it
+starts no further query work and does not send a new commit. Cancellation does not undo a commit
+already sent or prove that the server has stopped the query.
+
 **An unknown commit is never replayed.** If the commit acknowledgement is lost, the result is:
 
 ```json
@@ -234,8 +237,19 @@ preserves the UTC instant, nanoseconds, and original zone identifier.
 { "sections": ["constraints", "indexes", "nodes", "relationships"], "sampleLimit": 500 }
 ```
 
-Both fields are optional. Omitting `sections` requests all of them. `sampleLimit` can only lower the
-configured bound.
+For normal query writing, use `{}`. It returns three sections:
+
+| Section | Entries |
+| --- | --- |
+| `nodeSamples` | Label, number sampled, and observed property names with their distinct Cypher types. |
+| `relationshipEndpoints` | Relationship type, observed pairs of source and target label sets, and properties observed across the sampled relationships of that type. |
+| `indexes` | Index name, type, entity type, labels or relationship types, ordered properties, and state from `SHOW INDEXES`. |
+
+Each compact section takes the first `min(256, sampleLimit)` entities available, then uses up to eight from that sample for each catalog name. Rare labels and relationship types may have no observations even if they exist. It lists additional names within the row and byte limits with `inspected: false`; an empty property list for such a name means **not inspected**. Explicit `nodes` and `relationships` sections still run the more expensive property-discovery procedures. `constraints` is also available explicitly. All fields are optional; `sampleLimit` can only lower the configured bound.
+
+The default timeout for the whole schema call is five minutes. `queryTimeoutSeconds` still bounds each database transaction separately (30 seconds by default). A [tool runtime override](../operations/resource-limits.md#tool-runtime-overrides) or mandatory host ceiling can shorten the whole call.
+
+`forceRefresh` (boolean, default `false`): **by user request only**. For example, `{"forceRefresh":true}` refreshes the default sections. Each loaded extension instance keeps the last successful result per section in memory. A matching effective `sampleLimit` reuses it without querying the database, including when requesting just one cached section. A different limit fetches that section again. A failed refresh reports the failure and does not replace that section's last good result. Writes do not refresh the cache; reload or restart clears it.
 
 Each section reports its own `kind` (`declared` or `observed`), `status`, `sourceMethod`, `limit`,
 `returned`, `entries`, and `detail`:
@@ -247,19 +261,14 @@ Each section reports its own `kind` (`declared` or `observed`), `status`, `sourc
   "sections": {
     "constraints": { "kind": "declared", "status": "permissionDenied", "sourceMethod": "SHOW CONSTRAINTS" },
     "nodes": { "kind": "observed", "status": "complete", "sourceMethod": "db.schema.nodeTypeProperties", "returned": 12 },
-    "relationshipEndpoints": { "kind": "observed", "status": "unsupported", "sourceMethod": "none" }
+    "relationshipEndpoints": { "kind": "observed", "status": "complete", "returned": 1, "entries": [{ "relationshipType": "WORKS_AT", "inspected": true, "sampled": 2, "endpoints": [{ "sourceLabels": ["Person"], "targetLabels": ["Company"] }], "properties": [{ "name": "since", "types": ["DATE NOT NULL"] }] }] }
   }
 }
 ```
 
 Declared sections state rules the database enforces. Observed sections describe sampled data. A
 sampled absence is not proof that a label, property, or relationship cannot exist, and a missing
-section is not an empty schema. Only constraints establish mandatory properties. Schema is not
-cached between invocations, so it never goes stale after a write.
-
-`relationshipEndpoints` is declared but not implemented in this version: observed
-source-label/type/target-label combinations need a graph scan, so the section is reported as
-`unsupported` instead of being guessed.
+section is not an empty schema. An observed endpoint pair shows that the pattern existed at sampling time; it does not enumerate all valid connections. Only constraints establish mandatory properties.
 
 ## 8. Failure reporting
 
@@ -288,4 +297,3 @@ results, schema names, server notices, and error text are untrusted data, never 
   is covered by unit and contract tests against a fake session, not by automated server tests.
   Validate against your own disposable database before production use.
 - Only one connection can be configured. Multiple named connections are out of scope.
-- `relationshipEndpoints` is not implemented, as described above.

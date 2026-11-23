@@ -61,7 +61,7 @@ public sealed class Neo4jExecutionTests
             GraphPhase.Commit,
             new GraphFailure(GraphFailureKind.Transient, "Neo.TransientError.Transaction.Terminated")));
         var factory = new FakeGraphSessionFactory(session);
-        var settings = TestGraph.Settings(TestGraph.Values(forceReadOnly: false));
+        var settings = TestGraph.Settings(TestGraph.Values(readOnly: false));
         var capability = new Neo4jExecuteCapability(settings, factory);
 
         var result = await capability.ExecuteAsync(
@@ -120,9 +120,15 @@ public sealed class Neo4jExecutionTests
                 Phase = GraphPhase.Completed,
                 Columns = ["nodeLabels", "propertyName", "propertyTypes"],
                 Records = [new JsonObject { ["propertyName"] = "name" }],
+            },
+            new GraphExecutionResult
+            {
+                Outcome = GraphOutcome.Committed,
+                Phase = GraphPhase.Completed,
+                Records = [Payload("""{"relationshipType":"WORKS_AT","endpoints":[{"sourceLabels":["Person"],"targetLabels":["Company"]}]}""")],
             });
         var factory = new FakeGraphSessionFactory(session);
-        var values = TestGraph.Values(forceReadOnly: false);
+        var values = TestGraph.Values(readOnly: false);
         values["schemaSampleLimit"] = "250";
         var capability = new Neo4jSchemaCapability(TestGraph.Settings(values), factory);
 
@@ -140,11 +146,12 @@ public sealed class Neo4jExecutionTests
         Assert.Equal("complete", (string?)sections["nodes"]!["status"]);
         Assert.Equal(250, (int?)sections["nodes"]!["limit"]);
         Assert.Equal(1, (int?)sections["nodes"]!["returned"]);
-        Assert.Equal("unsupported", (string?)sections["relationshipEndpoints"]!["status"]);
-        Assert.Equal("none", (string?)sections["relationshipEndpoints"]!["sourceMethod"]);
-
-        // The unsupported section runs no query, and discovery always requests read access mode.
-        Assert.Equal(2, session.Statements.Count);
+        var endpoints = sections["relationshipEndpoints"]!;
+        Assert.Equal("complete", (string?)endpoints["status"]);
+        var pair = endpoints["entries"]![0]!["endpoints"]![0]!;
+        Assert.Equal("Person", (string?)pair["sourceLabels"]![0]);
+        Assert.Equal("Company", (string?)pair["targetLabels"]![0]);
+        Assert.Equal(3, session.Statements.Count);
         Assert.All(session.ReadOnlyRequests, Assert.True);
     }
 
@@ -154,7 +161,7 @@ public sealed class Neo4jExecutionTests
     [InlineData(false)]
     public async Task Execute_CompletePayloadFitsBoundAndPreservesCommit(bool manySmallRecords)
     {
-        var values = TestGraph.Values(forceReadOnly: false);
+        var values = TestGraph.Values(readOnly: false);
         values["maximumRows"] = "10000";
         values["maximumResultBytes"] = manySmallRecords ? "262144" : "4096";
         JsonObject[] records = manySmallRecords
@@ -206,7 +213,8 @@ public sealed class Neo4jExecutionTests
         var session = new FakeGraphSession(
             OversizedSection(),
             GraphExecutionResult.Failed(GraphOutcome.NotStarted, GraphPhase.Execution, new GraphFailure(GraphFailureKind.Authorization, "Neo.ClientError.Security.Forbidden")),
-            OversizedSection());
+            OversizedSection(),
+            new GraphExecutionResult { Outcome = GraphOutcome.Committed, Phase = GraphPhase.Completed });
         var capability = new Neo4jSchemaCapability(TestGraph.Settings(values), new FakeGraphSessionFactory(session));
 
         var result = await capability.ExecuteAsync("{\"sections\":[\"constraints\",\"indexes\",\"nodes\",\"relationshipEndpoints\"]}", TestGraph.Context(new TestSecrets(TestGraph.Password)), TestContext.Current.CancellationToken);
@@ -220,7 +228,7 @@ public sealed class Neo4jExecutionTests
         var sections = payload["sections"]!.AsObject();
         Assert.Equal(4, sections.Count);
         Assert.Equal("permissionDenied", (string?)sections["indexes"]!["status"]);
-        Assert.Equal("unsupported", (string?)sections["relationshipEndpoints"]!["status"]);
+        Assert.Equal("complete", (string?)sections["relationshipEndpoints"]!["status"]);
         foreach (var name in new[] { "constraints", "nodes" })
         {
             var section = sections[name]!;
@@ -228,6 +236,57 @@ public sealed class Neo4jExecutionTests
             Assert.Equal(section["entries"]!.AsArray().Count, (int?)section["returned"]);
             Assert.NotNull(section["sourceMethod"]);
         }
+    }
+
+    /// <summary>Compact discovery reuses successful sections and preserves them across failed refreshes.</summary>
+    /// <returns>A task that completes when the assertions finish.</returns>
+    [Fact]
+    public async Task Schema_DefaultReusesSnapshotUntilUserRefreshAsync()
+    {
+        static GraphExecutionResult Row(string json) => new()
+        {
+            Outcome = GraphOutcome.Committed,
+            Phase = GraphPhase.Completed,
+            Records = [Payload(json)],
+        };
+        const string indexes = """{"sections":["indexes"]}""";
+        const string refresh = """{"sections":["indexes"],"forceRefresh":true}""";
+        var session = new FakeGraphSession(
+            Row("""{"label":"Person","properties":[{"name":"age","types":["INTEGER NOT NULL"]}]}"""),
+            Row("""{"relationshipType":"WORKS_AT"}"""),
+            Row("""{"name":"old_index"}"""),
+            Row("""{"name":"new_index"}"""),
+            GraphExecutionResult.Failed(GraphOutcome.NotStarted, GraphPhase.Execution, new GraphFailure(GraphFailureKind.Timeout, null)));
+        var capability = new Neo4jSchemaCapability(TestGraph.Settings(), new FakeGraphSessionFactory(session));
+        var context = TestGraph.Context(new TestSecrets(TestGraph.Password));
+        var token = TestContext.Current.CancellationToken;
+
+        Assert.Equal(TimeSpan.FromMinutes(5), capability.Definition.Timeout);
+        var first = await capability.ExecuteAsync("{}", context, token);
+        Assert.Equal(first.ResultJson, (await capability.ExecuteAsync("{}", context, token)).ResultJson);
+        Assert.Contains("old_index", (await capability.ExecuteAsync(indexes, context, token)).ResultJson, StringComparison.Ordinal);
+        Assert.Collection(
+            session.Statements,
+            s => Assert.Contains("db.labels()", s.Cypher, StringComparison.Ordinal),
+            s => Assert.Contains("db.relationshipTypes()", s.Cypher, StringComparison.Ordinal),
+            s => Assert.StartsWith("SHOW INDEXES", s.Cypher, StringComparison.Ordinal));
+        foreach (var statement in session.Statements.Take(2))
+        {
+            var sample = statement.Cypher.IndexOf("WITH entity LIMIT $entityBudget", StringComparison.Ordinal);
+            var expand = statement.Cypher.IndexOf("UNWIND names AS name", StringComparison.Ordinal);
+            Assert.True(sample >= 0 && sample < expand);
+            Assert.DoesNotContain("MATCH", statement.Cypher[expand..], StringComparison.Ordinal);
+            Assert.Contains("valueType(e[k])", statement.Cypher, StringComparison.Ordinal);
+            Assert.Equal(256, statement.Parameters["entityBudget"]);
+            Assert.Equal(8, statement.Parameters["perName"]);
+        }
+
+        var updated = await capability.ExecuteAsync(refresh, context, token);
+        Assert.Contains("new_index", updated.ResultJson, StringComparison.Ordinal);
+        var failed = await capability.ExecuteAsync(refresh, context, token);
+        Assert.Equal("unavailable", (string?)Payload(failed.ResultJson)["sections"]!["indexes"]!["status"]);
+        Assert.Equal(updated.ResultJson, (await capability.ExecuteAsync(indexes, context, token)).ResultJson);
+        Assert.Equal(5, session.Statements.Count);
     }
 
     private static JsonObject Payload(string? resultJson)

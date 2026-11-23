@@ -1158,11 +1158,13 @@ public sealed partial class InteractionCoordinator
                             continue;
                         }
 
-                        string[] labels = [.. sessions.Select(entry => FormatSessionChoice(entry, sessionId))];
-                        var selected = await _surface.SelectAsync(
+                        var request = new InteractionSelectionRequest(
                             "Resume session",
-                            labels,
-                            lifetime.Token);
+                            [.. sessions.Select(entry => FormatSessionChoice(entry, sessionId))])
+                        {
+                            SpaceBetweenOptions = true,
+                        };
+                        var selected = await _surface.SelectAsync(request, lifetime.Token);
                         if (selected < 0)
                         {
                             continue;
@@ -2747,15 +2749,19 @@ public sealed partial class InteractionCoordinator
         }
     }
 
-    private static string FormatSessionChoice(SessionCatalogEntry entry, SessionId activeSessionId)
+    private static InteractionSelectionOption FormatSessionChoice(SessionCatalogEntry entry, SessionId activeSessionId)
     {
-        var current = entry.SessionId == activeSessionId ? "current; " : string.Empty;
-        var clone = entry.CloneSourceSessionId is null ? string.Empty : "; clone";
+        var current = entry.SessionId == activeSessionId ? " (current)" : string.Empty;
+        var clone = entry.CloneSourceSessionId is null ? string.Empty : " (clone)";
         var preview = string.IsNullOrWhiteSpace(entry.Preview) ? "no visible messages" : entry.Preview;
         var model = entry.ModelSelection is null
             ? "unknown model"
             : $"{entry.ModelSelection.ProviderId}/{entry.ModelSelection.ProfileId.Value:D} ({entry.ModelSelection.ReasoningLevel.ToLowerInvariant()})";
-        return $"{entry.SessionId.Value:D} — {current}{entry.State}{clone} — {entry.UpdatedAt:u} — {model} — {preview}";
+        var id = entry.SessionId.Value.ToString("D");
+        return new InteractionSelectionOption(id, $"{entry.State}{current}{clone} · {entry.UpdatedAt:u} · {id}\nPreview: {preview}")
+        {
+            Details = $"Model: {model}",
+        };
     }
 
     private static string FormatToolChoice(ToolStateEntry state)
@@ -4759,7 +4765,7 @@ public sealed partial class InteractionCoordinator
                     cancellationToken);
             }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             await _surface.WriteAsync(
                 $"Extension operation failed: {exception.Message}\n",

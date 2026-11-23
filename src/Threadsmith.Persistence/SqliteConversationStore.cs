@@ -194,14 +194,39 @@ public sealed class SqliteConversationStore : IConversationStore
         }
 
         int removed;
-        await using (var command = connection.CreateCommand())
+        await using (var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken))
         {
+            // Capture only sessions losing visible bodies, without a second cutoff scan or
+            // returning one ID to the host per pruned message. Both temp objects roll back on failure.
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
             command.CommandText = """
+                CREATE TEMP TABLE pruned_preview_sessions(session_id TEXT PRIMARY KEY) WITHOUT ROWID;
+                CREATE TEMP TRIGGER track_pruned_preview AFTER UPDATE OF body ON main.conversation_messages
+                WHEN OLD.body IS NOT NULL AND OLD.receipt_json IS NULL
+                BEGIN
+                    INSERT OR IGNORE INTO pruned_preview_sessions VALUES (OLD.session_id);
+                END;
                 UPDATE conversation_messages SET body = NULL, artifact_id = NULL
                 WHERE (body IS NOT NULL OR artifact_id IS NOT NULL) AND occurred_at < $cutoff;
+                SELECT changes();
                 """;
             command.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
-            removed = await command.ExecuteNonQueryAsync(cancellationToken);
+
+            // SQLite changes() counts only the pruning UPDATE, not trigger writes.
+            removed = Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+
+            await using var refresh = connection.CreateCommand();
+            refresh.Transaction = transaction;
+            refresh.CommandText = $"""
+                UPDATE session_catalog AS catalog SET preview = {SqliteSessionLifecycleStore.LatestVisiblePreviewSql}
+                WHERE session_id IN (SELECT session_id FROM pruned_preview_sessions);
+                DROP TRIGGER temp.track_pruned_preview;
+                DROP TABLE temp.pruned_preview_sessions;
+                """;
+            refresh.Parameters.AddWithValue("$previewCharacters", SqliteSessionLifecycleStore.MaximumPreviewCharacters);
+            await refresh.ExecuteNonQueryAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
 
         await _artifactStore.PruneImageReferencesAsync(cutoff, cancellationToken);
@@ -287,6 +312,16 @@ public sealed class SqliteConversationStore : IConversationStore
                 VALUES($message, $session, $run, $sequence, $role, $body, $artifact,
                     $hash, $tokens, $sensitivity, $revision, $occurredAt, $schemaVersion, $images, $receipt);
                 """;
+            if (archived is { Content: not null, Receipt: null })
+            {
+                command.CommandText += """
+
+                    UPDATE session_catalog SET preview = substr($body, 1, $previewCharacters)
+                    WHERE session_id = $session;
+                    """;
+                command.Parameters.AddWithValue("$previewCharacters", SqliteSessionLifecycleStore.MaximumPreviewCharacters);
+            }
+
             AddMessageParameters(command, archived);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }

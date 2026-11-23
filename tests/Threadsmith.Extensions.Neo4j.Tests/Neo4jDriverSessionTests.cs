@@ -68,6 +68,66 @@ public static class Neo4jDriverSessionTests
         Assert.Equal(0, uncertain.Commits);
     }
 
+    /// <summary>A canceled fetch does no further query work and retains ownership through serialized cleanup.</summary>
+    [Fact]
+    public static async Task DriverSession_CancellationDuringFetchStopsAndOwnsCleanup()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var fetchEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var returnFetched = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposalEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowDisposal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var boundary = new DriverBoundary(
+            available: 0,
+            fetch: () =>
+            {
+                fetchEntered.SetResult();
+                return returnFetched.Task.WaitAsync(cancellationToken);
+            },
+            disposeTransaction: () =>
+            {
+                disposalEntered.SetResult();
+                return allowDisposal.Task.WaitAsync(cancellationToken);
+            });
+        var pending = InvokeAsync();
+        Exception? failure;
+        try
+        {
+            await fetchEntered.Task.WaitAsync(cancellationToken);
+            await caller.CancelAsync();
+            Assert.False(pending.IsCompleted);
+            Assert.False(disposalEntered.Task.IsCompleted);
+            returnFetched.SetResult(false);
+            await disposalEntered.Task.WaitAsync(cancellationToken);
+            Assert.False(pending.IsCompleted);
+            Assert.Equal(0, boundary.Consumed);
+            Assert.Equal(0, boundary.Commits);
+            Assert.Equal(0, boundary.SessionDisposals);
+            Assert.Equal(0, boundary.DriverDisposals);
+        }
+        finally
+        {
+            returnFetched.TrySetResult(false);
+            allowDisposal.TrySetResult();
+            failure = await Record.ExceptionAsync(() => pending.WaitAsync(cancellationToken));
+        }
+
+        Assert.IsType<OperationCanceledException>(failure, exactMatch: false);
+        Assert.Equal(1, boundary.Fetches);
+        Assert.Equal(1, boundary.SessionDisposals);
+        Assert.Equal(1, boundary.DriverDisposals);
+
+        async Task<GraphExecutionResult> InvokeAsync()
+        {
+            await using var session = new Neo4jDriverSession(TestGraph.Settings(), boundary.Driver);
+            return await session.RunAsync(
+                new GraphStatement { Cypher = "RETURN 1", Parameters = new Dictionary<string, object?>(), MaximumRows = 1, MaximumRecordBytes = 1024 },
+                readOnly: true,
+                caller.Token);
+        }
+    }
+
     /// <summary>Fakes only used SDK members and rejects unexpected calls without network behavior.</summary>
     public class DriverProxy : DispatchProxy
     {
@@ -83,7 +143,11 @@ public static class Neo4jDriverSessionTests
 
     private sealed class DriverBoundary
     {
-        internal DriverBoundary(int available, bool rollbackFails = false)
+        internal DriverBoundary(
+            int available,
+            bool rollbackFails = false,
+            Func<Task<bool>>? fetch = null,
+            Func<Task>? disposeTransaction = null)
         {
             var record = Stub<IRecord>((method, _) => method.Name == "get_Item" ? new Point(7203, 1, 2) : throw new NotSupportedException(method.Name));
             var summary = Stub<IResultSummary>((method, _) => throw new NotSupportedException(method.Name));
@@ -97,7 +161,7 @@ public static class Neo4jDriverSessionTests
                     case "FetchAsync":
                         {
                             Fetches++;
-                            return Task.FromResult(Fetches <= available);
+                            return fetch?.Invoke() ?? Task.FromResult(Fetches <= available);
                         }
 
                     case "get_Current":
@@ -131,7 +195,7 @@ public static class Neo4jDriverSessionTests
                         }
 
                     case "DisposeAsync":
-                        return ValueTask.CompletedTask;
+                        return new ValueTask(disposeTransaction?.Invoke() ?? Task.CompletedTask);
                     default:
                         throw new NotSupportedException(method.Name);
                 }
@@ -147,16 +211,30 @@ public static class Neo4jDriverSessionTests
                         }
 
                     case "DisposeAsync":
-                        return ValueTask.CompletedTask;
+                        {
+                            SessionDisposals++;
+                            return ValueTask.CompletedTask;
+                        }
+
                     default:
                         throw new NotSupportedException(method.Name);
                 }
             });
-            Driver = Stub<IDriver>((method, _) => method.Name switch
+            Driver = Stub<IDriver>((method, _) =>
             {
-                "AsyncSession" => session,
-                "DisposeAsync" => ValueTask.CompletedTask,
-                _ => throw new NotSupportedException(method.Name),
+                switch (method.Name)
+                {
+                    case "AsyncSession":
+                        return session;
+                    case "DisposeAsync":
+                        {
+                            DriverDisposals++;
+                            return ValueTask.CompletedTask;
+                        }
+
+                    default:
+                        throw new NotSupportedException(method.Name);
+                }
             });
         }
 
@@ -165,6 +243,10 @@ public static class Neo4jDriverSessionTests
         internal AccessMode Mode { get; private set; }
 
         internal int Fetches { get; private set; }
+
+        internal int SessionDisposals { get; private set; }
+
+        internal int DriverDisposals { get; private set; }
 
         // Counts direct adapter calls only, not the SDK's internal discard during rollback.
         internal int Consumed { get; private set; }

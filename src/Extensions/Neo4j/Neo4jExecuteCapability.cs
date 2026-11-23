@@ -40,7 +40,6 @@ internal sealed class Neo4jExecuteCapability : IToolCapability
             DisplayName = "Neo4j Execute",
             RequiredPermissions = ["network-access", "secret-access"],
         };
-        var confirmedReadOnly = settings.ForceReadOnly && settings.ReadOnlyEnforcedByServerAccount;
         Definition = new ExtensionToolDefinition
         {
             Id = "neo4j_execute",
@@ -50,14 +49,14 @@ internal sealed class Neo4jExecuteCapability : IToolCapability
             InputSchema = new("Neo4jExecuteInput", 1, _inputSchemaJson),
             OutputSchema = new("Neo4jExecuteOutput", 1, _outputSchemaJson),
             RequiredTrust = ExtensionTrustRequirement.FullyTrustedAutomation,
-            RequiredApproval = confirmedReadOnly
+            RequiredApproval = settings.ReadOnly
                 ? ExtensionApprovalRequirement.None
                 : ExtensionApprovalRequirement.User,
             StatementReview = new(settings.Destination, settings.Database, "cypher", "parameters"),
-            SideEffect = confirmedReadOnly
+            SideEffect = settings.ReadOnly
                 ? ExtensionToolSideEffect.ReadOnly
                 : ExtensionToolSideEffect.WritesExternalData,
-            Idempotency = confirmedReadOnly
+            Idempotency = settings.ReadOnly
                 ? ExtensionToolIdempotency.Idempotent
                 : ExtensionToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
@@ -109,26 +108,16 @@ internal sealed class Neo4jExecuteCapability : IToolCapability
             context,
             async session => Neo4jResults.FromExecution(
                 _settings,
-                await session.RunAsync(statement, _settings.ForceReadOnly, cancellationToken)),
+                await session.RunAsync(statement, _settings.ReadOnly, cancellationToken)),
             (kind, reason) => Neo4jResults.NotStarted(_settings, kind, reason),
             cancellationToken);
     }
 
     private static string Describe(Neo4jSettings settings)
     {
-        string mode;
-        if (!settings.ForceReadOnly)
-        {
-            mode = "This deployment permits write requests. Each call needs operator approval and the database account's own privileges. An unknown outcome is never retried automatically.";
-        }
-        else if (settings.ReadOnlyEnforcedByServerAccount)
-        {
-            mode = "This deployment is configured read-only, requests the server read access mode, and the operator confirmed the database account denies writes.";
-        }
-        else
-        {
-            mode = "This deployment requests the server read access mode, but server-enforced read-only access is not confirmed, so each call still needs operator approval.";
-        }
+        var mode = settings.ReadOnly
+            ? "This deployment is configured read-only and uses the driver's read access mode without operator approval. Database account permissions are the operator's responsibility."
+            : "This deployment permits write requests. Each call needs operator approval and the database account's own privileges. An unknown outcome is never retried automatically.";
 
         return string.Create(
             CultureInfo.InvariantCulture,

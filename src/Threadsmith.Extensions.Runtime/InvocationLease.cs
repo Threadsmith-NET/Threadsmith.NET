@@ -29,8 +29,7 @@ public sealed class InvocationLeaseAuthority
     /// <param name="generationId">The generation entering drain.</param>
     public void BeginDraining(ExtensionGenerationId generationId)
     {
-        var book = _books.GetOrAdd(generationId, id => new ExtensionLeaseBook(id));
-        book.IsDraining = true;
+        GetBook(generationId).BeginDraining();
     }
 
     /// <summary>Acquires a lease for an invocation, or throws when the generation is draining or the budget is exhausted (Â§17.15, Â§22.2).</summary>
@@ -41,28 +40,13 @@ public sealed class InvocationLeaseAuthority
     public IInvocationLease Acquire(ExtensionGenerationId generationId, ExtensionInvocationBudget budget, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(budget);
-        var book = _books.GetOrAdd(generationId, id => new ExtensionLeaseBook(id));
-        if (book.IsDraining)
-        {
-            throw new ExtensionDrainingException(
-                $"Cannot acquire an invocation lease for generation '{generationId}' because it is draining.");
-        }
-
-        if (!budget.TryReserve())
-        {
-            throw new ExtensionBudgetExhaustedException(
-                $"The invocation budget for extension generation '{generationId}' is exhausted for this turn.");
-        }
-
-        var lease = new InvocationLease(book, budget, timeout, _timeProvider, _logger);
-        book.Add(lease);
-        return lease;
+        return Acquire(GetBook(generationId), budget, timeout);
     }
 
     /// <summary>Waits until all in-flight leases for a generation are released (cooperative drain, plan-17).</summary>
     /// <param name="generationId">The generation to wait on.</param>
-    /// <param name="cancellationToken">A token that cancels the wait.</param>
-    /// <returns>The number of leases that were still held when the wait was abandoned.</returns>
+    /// <param name="cancellationToken">Cancels an outstanding wait. An already-canceled token requests a snapshot instead.</param>
+    /// <returns>Zero on completion, or the current number of leases when requesting a snapshot.</returns>
     public async Task<int> WaitForDrainAsync(ExtensionGenerationId generationId, CancellationToken cancellationToken)
     {
         if (!_books.TryGetValue(generationId, out var book))
@@ -70,32 +54,52 @@ public sealed class InvocationLeaseAuthority
             return 0;
         }
 
-        while (!cancellationToken.IsCancellationRequested)
+        if (cancellationToken.IsCancellationRequested)
         {
-            if (book.InFlight == 0)
-            {
-                return 0;
-            }
-
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken).ConfigureAwait(false);
+            return book.InFlight;
         }
 
-        return book.InFlight;
+        await book.WhenEmptyAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
+        return 0;
     }
 
     /// <summary>Removes the book for a generation after unload completes.</summary>
     /// <param name="generationId">The generation whose book should be removed.</param>
     public void RemoveBook(ExtensionGenerationId generationId)
     {
-        _books.TryRemove(generationId, out _);
+        if (_books.TryGetValue(generationId, out var book))
+        {
+            book.BeginDraining();
+            _books.TryRemove(new KeyValuePair<ExtensionGenerationId, ExtensionLeaseBook>(generationId, book));
+        }
+    }
+
+    /// <summary>Captures the original admission book so a stale proxy can never reopen a retired generation.</summary>
+    /// <remarks>A null budget protects a preflight callback without charging an execution slot.</remarks>
+    internal Func<ExtensionInvocationBudget?, TimeSpan, IInvocationLease> CaptureAdmission(ExtensionGenerationId generationId)
+    {
+        var book = GetBook(generationId);
+        return (budget, timeout) => Acquire(book, budget, timeout);
+    }
+
+    private ExtensionLeaseBook GetBook(ExtensionGenerationId generationId)
+    {
+        return _books.GetOrAdd(generationId, static id => new ExtensionLeaseBook(id));
+    }
+
+    private InvocationLease Acquire(ExtensionLeaseBook book, ExtensionInvocationBudget? budget, TimeSpan timeout)
+    {
+        var expiresAt = _timeProvider.GetUtcNow() + timeout;
+        book.Reserve(budget);
+        return new InvocationLease(book, budget, expiresAt, _timeProvider, _logger);
     }
 
     private sealed class ExtensionLeaseBook
     {
-        private static int _nextLeaseId;
-
-        private readonly ConcurrentDictionary<int, InvocationLease> _held = new();
         private readonly Lock _gate = new();
+        private TaskCompletionSource? _empty;
+        private int _inFlight;
+        private bool _isDraining;
 
         public ExtensionLeaseBook(ExtensionGenerationId generationId)
         {
@@ -104,49 +108,72 @@ public sealed class InvocationLeaseAuthority
 
         public ExtensionGenerationId GenerationId { get; }
 
-        public bool IsDraining
+        public int InFlight
         {
             get
             {
                 lock (_gate)
                 {
-                    return _isDraining;
+                    return _inFlight;
                 }
             }
+        }
 
-            set
+        public void BeginDraining()
+        {
+            lock (_gate)
             {
-                lock (_gate)
-                {
-                    _isDraining = value;
-                }
+                _isDraining = true;
             }
         }
 
-        private bool _isDraining;
-
-        public int InFlight => _held.Count;
-
-        public static int AllocateLeaseId()
+        public void Reserve(ExtensionInvocationBudget? budget)
         {
-            return Interlocked.Increment(ref _nextLeaseId);
+            lock (_gate)
+            {
+                if (_isDraining)
+                {
+                    throw new ExtensionDrainingException(
+                        $"Cannot acquire an invocation lease for generation '{GenerationId}' because it is draining.");
+                }
+
+                if (budget?.TryReserve() == false)
+                {
+                    throw new ExtensionBudgetExhaustedException(
+                        $"The invocation budget for extension generation '{GenerationId}' is exhausted for this turn.");
+                }
+
+                _inFlight++;
+            }
         }
 
-        public void Add(InvocationLease lease)
+        public Task WhenEmptyAsync()
         {
-            _held.TryAdd(lease.LeaseId, lease);
+            lock (_gate)
+            {
+                return _inFlight == 0
+                    ? Task.CompletedTask
+                    : (_empty ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            }
         }
 
-        public void Release(InvocationLease lease)
+        public void Release()
         {
-            _held.TryRemove(lease.LeaseId, out _);
+            lock (_gate)
+            {
+                if (--_inFlight == 0)
+                {
+                    _empty?.SetResult();
+                    _empty = null;
+                }
+            }
         }
     }
 
     private sealed class InvocationLease : IInvocationLease
     {
         private readonly ExtensionLeaseBook _book;
-        private readonly ExtensionInvocationBudget _budget;
+        private readonly ExtensionInvocationBudget? _budget;
         private readonly DateTimeOffset _expiresAt;
         private readonly TimeProvider _timeProvider;
         private readonly ILogger _logger;
@@ -154,8 +181,8 @@ public sealed class InvocationLeaseAuthority
 
         public InvocationLease(
             ExtensionLeaseBook book,
-            ExtensionInvocationBudget budget,
-            TimeSpan timeout,
+            ExtensionInvocationBudget? budget,
+            DateTimeOffset expiresAt,
             TimeProvider timeProvider,
             ILogger logger)
         {
@@ -163,11 +190,8 @@ public sealed class InvocationLeaseAuthority
             _budget = budget;
             _timeProvider = timeProvider;
             _logger = logger;
-            _expiresAt = timeProvider.GetUtcNow() + timeout;
-            LeaseId = ExtensionLeaseBook.AllocateLeaseId();
+            _expiresAt = expiresAt;
         }
-
-        public int LeaseId { get; }
 
         public LeaseState State => (LeaseState)Interlocked.CompareExchange(ref _state, 0, 0);
 
@@ -184,8 +208,8 @@ public sealed class InvocationLeaseAuthority
                 return;
             }
 
-            _budget.Release();
-            _book.Release(this);
+            _budget?.Release();
+            _book.Release();
             if (finalState == LeaseState.TimedOut)
             {
                 _logger.LogWarning(

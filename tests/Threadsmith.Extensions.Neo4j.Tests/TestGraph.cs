@@ -12,9 +12,9 @@ internal static class TestGraph
     internal const string PasswordReference = "secrets:neo4j:primary:password";
 
     /// <summary>Builds a complete, valid settings section.</summary>
-    /// <param name="forceReadOnly">The configured access mode.</param>
+    /// <param name="readOnly">The configured access mode.</param>
     /// <returns>The settings values.</returns>
-    internal static Dictionary<string, string> Values(bool forceReadOnly = true)
+    internal static Dictionary<string, string> Values(bool readOnly = true)
     {
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -22,7 +22,7 @@ internal static class TestGraph
             ["database"] = "neo4j",
             ["username"] = "threadsmith",
             ["passwordReference"] = PasswordReference,
-            ["forceReadOnly"] = forceReadOnly ? "true" : "false",
+            ["readOnly"] = readOnly ? "true" : "false",
         };
     }
 

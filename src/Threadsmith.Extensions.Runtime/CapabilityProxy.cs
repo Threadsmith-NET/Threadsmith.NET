@@ -15,7 +15,7 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
     private readonly IToolCapability _capability;
     private readonly CapabilityId _capabilityId;
     private readonly ExtensionGeneration _generation;
-    private readonly InvocationLeaseAuthority _leaseAuthority;
+    private readonly Func<ExtensionInvocationBudget?, TimeSpan, IInvocationLease> _acquireLease;
     private readonly ILogger _logger;
 
     /// <summary>Initializes a new instance of the <see cref="CapabilityProxy"/> class.</summary>
@@ -38,7 +38,7 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         _capability = capability;
         _capabilityId = capabilityId;
         _generation = generation;
-        _leaseAuthority = leaseAuthority;
+        _acquireLease = leaseAuthority.CaptureAdmission(generation.GenerationId);
         _logger = logger;
         var metadata = capability.Definition;
         _review = metadata.StatementReview;
@@ -87,7 +87,8 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         // Copy the extension-owned collection inside the boundary; enumeration can also run extension code.
         return ReadAdmissionClaim(
             () => _capability.GetSecretReferences(((ExtensionToolArguments)input).Json).ToArray(),
-            references => references.Any(_generation.SecretProtection.Contains));
+            references => references.Any(_generation.SecretProtection.Contains),
+            unavailable: []);
     }
 
     /// <inheritdoc />
@@ -96,7 +97,8 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         ArgumentNullException.ThrowIfNull(input);
         return ReadAdmissionClaim(
             () => _capability.GetExecutable(((ExtensionToolArguments)input).Json),
-            _generation.SecretProtection.Contains);
+            _generation.SecretProtection.Contains,
+            unavailable: null);
     }
 
     /// <inheritdoc />
@@ -161,10 +163,8 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         var argumentsJson = ((ExtensionToolArguments)input).Json;
 
         // Acquire a lease so plan-17 draining cannot unload the ALC while the extension is executing.
-        var lease = _leaseAuthority.Acquire(
-            _generation.GenerationId,
-            _generation.Budget ?? new ExtensionInvocationBudget(_generation.GenerationId),
-            GetLeaseTimeout());
+        using var lease = _acquireLease(
+            _generation.Budget ?? new ExtensionInvocationBudget(_generation.GenerationId), GetLeaseTimeout());
         ExtensionSecretAccess? secrets = null;
         using var boundary = _generation.SecretProtection.CreateScope(pinActiveValues: true);
         try
@@ -222,12 +222,24 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
         finally
         {
             secrets?.Dispose();
-            lease.Dispose();
         }
     }
 
-    private T ReadAdmissionClaim<T>(Func<T> read, Func<T, bool> containsSecret)
+    private T ReadAdmissionClaim<T>(Func<T> read, Func<T, bool> containsSecret, T unavailable)
     {
+        IInvocationLease lease;
+        try
+        {
+            lease = _acquireLease(null, GetLeaseTimeout());
+        }
+        catch (ExtensionDrainingException)
+        {
+            // Do not call a retiring extension for preflight data. The same permanently closed
+            // book refuses execution before dispatch, where the pipeline reports not-started.
+            return unavailable;
+        }
+
+        using var claimLease = lease;
         using var boundary = _generation.SecretProtection.CreateScope(pinActiveValues: true);
         T claim;
         try
@@ -249,9 +261,7 @@ public sealed class CapabilityProxy : ITool, IToolStatementReview
 
     private TimeSpan GetLeaseTimeout()
     {
-        return Definition.Timeout > TimeSpan.Zero
-                ? Definition.Timeout
-                : InvocationLeaseAuthority.DefaultLeaseTimeout;
+        return Definition.Timeout > TimeSpan.Zero ? Definition.Timeout : InvocationLeaseAuthority.DefaultLeaseTimeout;
     }
 
     private static ExtensionToolInvocationContext MapContext(ToolInvocationContext context)

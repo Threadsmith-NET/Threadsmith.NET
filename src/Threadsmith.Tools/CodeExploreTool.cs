@@ -483,26 +483,41 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         ArgumentNullException.ThrowIfNull(result);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSerializedBytes);
 
-        if (GetSerializedByteCount(result) <= maximumSerializedBytes)
+        var measuredBytes = GetSerializedByteCount(result);
+        if (measuredBytes <= maximumSerializedBytes)
         {
             return result;
         }
 
+        // Each trim creates a new result rather than mutating the measured instance.
+        var measuredResult = result;
+        bool FitsBudget(CodeExploreResult candidate)
+        {
+            if (!ReferenceEquals(candidate, measuredResult))
+            {
+                measuredBytes = GetSerializedByteCount(candidate);
+                measuredResult = candidate;
+            }
+
+            return measuredBytes <= maximumSerializedBytes;
+        }
+
+        Predicate<CodeExploreResult> fits = FitsBudget;
         var prioritizedSections = PrioritizeFileSectionsForModelBudget(result);
         var bounded = result;
-        bounded = TrimPresentation(bounded, maximumSerializedBytes);
-        bounded = TrimFileRelevance(bounded, maximumSerializedBytes);
-        bounded = TrimCandidateSummaries(bounded, maximumSerializedBytes);
-        bounded = TrimBlastRadius(bounded, maximumSerializedBytes);
-        bounded = TrimFlow(bounded, maximumSerializedBytes);
-        bounded = TrimAssociatedArtifacts(bounded, maximumSerializedBytes, prompts);
-        bounded = TrimBackReferences(bounded, maximumSerializedBytes);
-        bounded = TrimEmissions(bounded, maximumSerializedBytes);
-        bounded = TrimAnchorAlternatives(bounded, maximumSerializedBytes);
-        bounded = TrimNonSourceMetadataForSourceRetention(bounded, maximumSerializedBytes);
-        bounded = TrimFileSections(bounded, prioritizedSections, maximumSerializedBytes, prompts);
-        bounded = TrimContinuationTargets(bounded, maximumSerializedBytes);
-        if (GetSerializedByteCount(bounded) <= maximumSerializedBytes)
+        bounded = TrimPresentation(bounded, fits);
+        bounded = TrimFileRelevance(bounded, fits);
+        bounded = TrimCandidateSummaries(bounded, fits);
+        bounded = TrimBlastRadius(bounded, fits);
+        bounded = TrimFlow(bounded, fits);
+        bounded = TrimAssociatedArtifacts(bounded, fits, prompts);
+        bounded = TrimBackReferences(bounded, fits);
+        bounded = TrimEmissions(bounded, fits);
+        bounded = TrimAnchorAlternatives(bounded, fits);
+        bounded = TrimNonSourceMetadataForSourceRetention(bounded, fits);
+        bounded = TrimFileSections(bounded, prioritizedSections, fits, prompts);
+        bounded = TrimContinuationTargets(bounded, fits);
+        if (fits(bounded))
         {
             return bounded;
         }
@@ -618,9 +633,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimNonSourceMetadataForSourceRetention(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
-        if (result.FileSections.Count == 0 || GetSerializedByteCount(result) <= maximumSerializedBytes)
+        if (result.FileSections.Count == 0 || fits(result))
         {
             return result;
         }
@@ -637,12 +652,12 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
                 ? null
                 : result.Availability,
         });
-        if (GetSerializedByteCount(result) <= maximumSerializedBytes)
+        if (fits(result))
         {
             return result;
         }
 
-        result = MarkResultBound(
+        return MarkResultBound(
             result with
             {
                 ResolvedAnchors = [],
@@ -650,12 +665,6 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
                 BlastRadius = null,
             },
             symbolResolutionComplete: false);
-        if (GetSerializedByteCount(result) <= maximumSerializedBytes)
-        {
-            return result;
-        }
-
-        return result;
     }
 
     private static CodeExploreResult MarkResultBound(
@@ -714,10 +723,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimPresentation(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var presentation = result.Presentation;
-        while (presentation is not null && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (presentation is not null && !fits(result))
         {
             if (!string.IsNullOrWhiteSpace(presentation.ModelSummary))
             {
@@ -757,10 +766,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimFileRelevance(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var fileRelevance = result.FileRelevance;
-        while (fileRelevance is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (fileRelevance is { Count: > 0 } && !fits(result))
         {
             fileRelevance = TakeHalf(fileRelevance);
             result = result with
@@ -780,10 +789,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimCandidateSummaries(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var summaries = result.CandidateSummaries;
-        while (summaries is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (summaries is { Count: > 0 } && !fits(result))
         {
             summaries = summaries.Take(summaries.Count / 2).ToArray();
             result = result with
@@ -806,10 +815,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimBlastRadius(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var blastRadius = result.BlastRadius;
-        while (blastRadius is { Items.Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (blastRadius is { Items.Count: > 0 } && !fits(result))
         {
             var items = blastRadius.Items.Take(blastRadius.Items.Count / 2).ToArray();
             blastRadius = blastRadius with
@@ -834,10 +843,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimFlow(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var flow = result.Flow;
-        while (flow is not null && HasFlowMetadata(flow) && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (flow is not null && HasFlowMetadata(flow) && !fits(result))
         {
             flow = flow with
             {
@@ -869,10 +878,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimContinuationTargets(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
-        if (result.ContinuationTargets.Count > 1
-            && GetSerializedByteCount(result) > maximumSerializedBytes)
+        if (result.ContinuationTargets.Count > 1 && !fits(result))
         {
             result = result with
             {
@@ -882,7 +890,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             };
         }
 
-        while (result.ContinuationTargets.Count > 1 && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (result.ContinuationTargets.Count > 1 && !fits(result))
         {
             var retainedTargets = result.ContinuationTargets
                 .Take(result.ContinuationTargets.Count / 2)
@@ -929,14 +937,14 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimAssociatedArtifacts(
         CodeExploreResult result,
-        int maximumSerializedBytes,
+        Predicate<CodeExploreResult> fits,
         IPromptLoader prompts)
     {
         var artifacts = result.AssociatedArtifacts;
         var artifactContinuations = result.ArtifactCoverage?.ContinuationTargets.ToList() ?? [];
         while (artifacts is { Count: > 0 }
             && artifacts.Any(artifact => artifact.Content is not null)
-            && GetSerializedByteCount(result) > maximumSerializedBytes)
+            && !fits(result))
         {
             artifacts = artifacts
                 .Select(artifact => TrimAssociatedArtifactContent(
@@ -958,7 +966,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             };
         }
 
-        while (artifacts is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (artifacts is { Count: > 0 } && !fits(result))
         {
             var retainedCount = artifacts.Count / 2;
             foreach (var artifact in artifacts.Skip(retainedCount))
@@ -1094,10 +1102,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimBackReferences(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var backReferences = result.BackReferences;
-        while (backReferences is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (backReferences is { Count: > 0 } && !fits(result))
         {
             backReferences = backReferences.Take(backReferences.Count / 2).ToArray();
             result = result with
@@ -1120,10 +1128,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimEmissions(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
         var emissions = result.Emissions;
-        while (emissions is { Count: > 0 } && GetSerializedByteCount(result) > maximumSerializedBytes)
+        while (emissions is { Count: > 0 } && !fits(result))
         {
             emissions = emissions.Take(emissions.Count / 2).ToArray();
             result = result with
@@ -1143,9 +1151,9 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
     private static CodeExploreResult TrimAnchorAlternatives(
         CodeExploreResult result,
-        int maximumSerializedBytes)
+        Predicate<CodeExploreResult> fits)
     {
-        if (GetSerializedByteCount(result) <= maximumSerializedBytes
+        if (fits(result)
             || !result.ResolvedAnchors.Any(anchor => anchor.Alternatives.Count > 0))
         {
             return result;
@@ -1169,10 +1177,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
     private static CodeExploreResult TrimFileSections(
         CodeExploreResult result,
         IReadOnlyList<CodeExploreFileSection> prioritizedSections,
-        int maximumSerializedBytes,
+        Predicate<CodeExploreResult> fits,
         IPromptLoader prompts)
     {
-        if (result.FileSections.Count == 0 || GetSerializedByteCount(result) <= maximumSerializedBytes)
+        if (result.FileSections.Count == 0 || fits(result))
         {
             return result;
         }
@@ -1183,8 +1191,8 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         for (var retainedCount = sections.Length - 1; retainedCount >= 1; retainedCount--)
         {
             var projected = ProjectFileSectionPrefix(result, sections, retainedCount, prompts);
-            projected = TrimContinuationTargets(projected, maximumSerializedBytes);
-            if (GetSerializedByteCount(projected) <= maximumSerializedBytes)
+            projected = TrimContinuationTargets(projected, fits);
+            if (fits(projected))
             {
                 return projected;
             }
@@ -1192,7 +1200,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
         return TrimContinuationTargets(
             ProjectFileSectionPrefix(result, sections, retainedCount: 0, prompts),
-            maximumSerializedBytes);
+            fits);
     }
 
     private static CodeExploreResult ProjectFileSectionPrefix(

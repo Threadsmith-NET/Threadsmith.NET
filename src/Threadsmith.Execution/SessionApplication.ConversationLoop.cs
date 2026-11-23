@@ -1796,48 +1796,6 @@ public sealed partial class SessionApplication
             cancellationToken);
     }
 
-    private bool TryAppendSingleToolCorrection(
-        ToolRequestModelOutput tool,
-        ConversationRound round,
-        ConversationLoopState loopState,
-        ModelRoundStreamState streamState,
-        CorrectiveTurnState correctiveTurns,
-        int maximumModelRounds,
-        string failureSummary,
-        out int attemptNumber)
-    {
-        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out attemptNumber))
-        {
-            return false;
-        }
-
-        var ordinal = streamState.ToolCallOrdinal;
-        var toolCallId = CreateNextToolCallId(round.ModelRound, streamState);
-        if (streamState.HasResponseEnvelope)
-        {
-            loopState.TransientState.BindToolCall(
-                round.ModelRequest.ToolContinuationRound,
-                ordinal,
-                toolCallId);
-        }
-
-        loopState.AddCurrentToolCall(CreateToolCallMessage(
-            toolCallId,
-            tool.ToolName,
-            tool.ArgumentsJson) with
-        { ModelRound = round.ModelRequest.ToolContinuationRound });
-        loopState.AddCurrentToolResult(RequireCorrectiveMessages().CreateRejectedToolResultMessage(
-            toolCallId,
-            tool.ToolName,
-            attemptNumber,
-            correctiveTurns.MaximumTurns,
-            failureSummary,
-            isFailingCall: true) with
-        { ModelRound = round.ModelRequest.ToolContinuationRound });
-        streamState.MarkCorrectiveTurnRequested();
-        return true;
-    }
-
     private bool TryAppendDeveloperCorrection(
         ConversationRound round,
         ConversationLoopState loopState,

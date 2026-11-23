@@ -1314,14 +1314,6 @@ public sealed class ContextAssembler : IContextAssembler
         };
     }
 
-    private static int EstimateWireInputTokens(
-        string modelInput,
-        int nativeToolTokens,
-        int framingTokens)
-    {
-        return checked(TokenEstimator.Estimate(modelInput) + nativeToolTokens + framingTokens);
-    }
-
     private sealed record CanonicalMessage(ModelMessageRole Role, string SectionId, string? ToolCallId, string? ToolName, string Content);
 
     private static string ComputeMessageDigest(

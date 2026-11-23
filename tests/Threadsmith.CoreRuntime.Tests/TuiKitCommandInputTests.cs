@@ -37,6 +37,24 @@ public static class TuiKitCommandInputTests
             timeout.Token);
     }
 
+    /// <summary>Terminal cancellation displaces queued nonterminal signals instead of being dropped.</summary>
+    [Fact]
+    public static async Task CancellationRequestedSurvivesFullActiveInputQueue()
+    {
+        using var backend = new HeadlessBackend(80, 24);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
+        await using var lease = new ActiveInputLease(surface, new FakeTimeProvider());
+        lease.InspectContext();
+        lease.InspectContext();
+        lease.InspectContext();
+        lease.Escape();
+        lease.Escape();
+
+        Assert.Equal(ActiveRunInputSignal.ContextMap, await lease.ReadAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(ActiveRunInputSignal.ContextMap, await lease.ReadAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(ActiveRunInputSignal.CancellationRequested, await lease.ReadAsync(TestContext.Current.CancellationToken));
+    }
+
     /// <summary>Input-lifetime transitions close the palette before a new host-owned prompt can receive input.</summary>
     [Fact]
     public static async Task CancelledReadClosesPaletteAndPreservesDraft()

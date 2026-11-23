@@ -71,12 +71,18 @@ internal sealed class Neo4jDriverSession : IGraphSession
             transaction = await session.BeginTransactionAsync(
                 readOnly ? AccessMode.Read : AccessMode.Write,
                 builder => builder.WithTimeout(_settings.QueryTimeout));
+
+            // The SDK has no cancellation overloads for explicit transactions. Preserve serial
+            // ownership of its resources, but never start another operation after observing cancellation.
+            cancellationToken.ThrowIfCancellationRequested();
             phase = GraphPhase.Execution;
             var parameters = new Dictionary<string, object?>(statement.Parameters, StringComparer.Ordinal);
             var cursor = await transaction.RunAsync(statement.Cypher, parameters);
+            cancellationToken.ThrowIfCancellationRequested();
             var keys = await cursor.KeysAsync();
             phase = GraphPhase.Consumption;
             var retained = await ReadAsync(cursor, keys, statement, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (retained.LimitsReached.Contains(GraphLimit.Rows) || retained.LimitsReached.Contains(GraphLimit.ResultBytes))
             {
@@ -269,7 +275,9 @@ internal sealed class Neo4jDriverSession : IGraphSession
             // The driver has no cancellable record API. Observe the token at record boundaries;
             // the host bounds its wait while this operation retains ownership through cleanup.
             cancellationToken.ThrowIfCancellationRequested();
-            if (!await cursor.FetchAsync())
+            var hasRecord = await cursor.FetchAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!hasRecord)
             {
                 return Build(records, limits, mapper, truncated: false);
             }

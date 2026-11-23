@@ -14,6 +14,9 @@ internal readonly record struct Choice(string Id, string Label)
 {
     /// <summary>Gets the optional non-selectable heading for this option.</summary>
     internal string? Group { get; init; }
+
+    /// <summary>Gets optional searchable text shown in the full review instead of the list.</summary>
+    internal string? Details { get; init; }
 }
 
 // A fixed authoritative option array; only the view is filtered.
@@ -21,7 +24,11 @@ internal readonly record struct Choice(string Id, string Label)
 /// <summary>Filters a fixed option set without changing selection authority.</summary>
 internal sealed class ChoiceModal : Modal
 {
+    private const int _maximumSearchableDetailCharacters = 4096;
+    private const int _maximumCachedOptions = 128;
+
     private readonly ComposerBuffer _filter;
+    private readonly Dictionary<int, OptionLayout> _layoutCache = [];
     private readonly TuiResourceLimits _limits;
     private readonly CachedTextRun _hintRun = new();
     private readonly Dictionary<string, CachedTextRun> _optionRuns = new(StringComparer.Ordinal);
@@ -33,10 +40,9 @@ internal sealed class ChoiceModal : Modal
     private readonly string? _reviewDetails;
     private readonly Choice[] _options;
     private readonly int _contentWidth;
+    private readonly bool _spaceBetweenOptions;
     private readonly SourceDocument? _scriptDocument;
     private Choice[] _matches;
-    private DisplayRow[] _rows = [];
-    private int[] _optionRows = [];
     private string _filterHint = "Filter:  | F2 details; Esc cancels";
     private string _selectionMarker = ">";
     private string _selectionPrefix = "> ";
@@ -51,7 +57,13 @@ internal sealed class ChoiceModal : Modal
     private string? _copyStatus;
 
     /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class.</summary>
-    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null, string? reviewDetails = null, ToolSourceDetail? sourceDetail = null)
+    internal ChoiceModal(
+        string title,
+        IReadOnlyList<Choice> options,
+        TuiResourceLimits? limits = null,
+        string? reviewDetails = null,
+        ToolSourceDetail? sourceDetail = null,
+        bool spaceBetweenOptions = false)
     {
         _limits = limits ?? new();
         _limits.Validate();
@@ -63,7 +75,7 @@ internal sealed class ChoiceModal : Modal
         _prompt.HandleKey(KeyEvent.Special(KeyCode.Home));
         _options = [.. options];
         _matches = _options;
-        BuildRows();
+        _spaceBetweenOptions = spaceBetweenOptions;
         if (sourceDetail is { Availability: ToolSourceAvailability.Available, Source: { } source }
             && source.Length <= ToolSourceDetail.MaximumCharacters)
         {
@@ -85,7 +97,7 @@ internal sealed class ChoiceModal : Modal
             _details = true;
         }
 
-        if (_options.Length <= 2)
+        if (!_spaceBetweenOptions && _options.Length <= 2)
         {
             _contentWidth = Math.Max(
                 UnicodeWidth.GetWidth(TranscriptView.Safe(title)),
@@ -110,7 +122,7 @@ internal sealed class ChoiceModal : Modal
             _selectionMarker = value;
             _selectionPrefix = value + " ";
             _selectionPrefixWidth = UnicodeWidth.GetWidth(_selectionPrefix);
-            _layoutWidth = 0;
+            _layoutCache.Clear();
         }
     }
 
@@ -260,8 +272,10 @@ internal sealed class ChoiceModal : Modal
         // Leave the shared status row visible even when the modal needs the full width.
         _fits = ModalFrame.Fits(surface.Size);
         Size? preferredSize = _scriptDocument is not null ? new Size(90, 24)
-            : !_details && _options.Length <= 2 && _title.Length < 80
-                ? new Size(Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4), _rows.Length + 7)
+            : !_spaceBetweenOptions && !_details && _options.Length <= 2 && _title.Length < 80
+                ? new Size(
+                    Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4),
+                    Enumerable.Range(0, _matches.Length).Sum(index => GetOptionRows(index).Rows.Length) + 7)
                 : new Size(120, 26);
         var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), expandHeight: _scriptDocument is not null, preferredSize: preferredSize);
         if (frame is null)
@@ -327,24 +341,22 @@ internal sealed class ChoiceModal : Modal
         if (_layoutWidth != area.Width)
         {
             _layoutWidth = area.Width;
-            BuildRows();
+            _layoutCache.Clear();
         }
 
-        var selectedRow = _matches.Length > 0 ? _optionRows[_selected] : 0;
-        var selectedHeight = 0;
-        while (selectedHeight < _height && selectedRow + selectedHeight < _rows.Length && _rows[selectedRow + selectedHeight].OptionIndex == _selected)
+        var rows = GetVisibleRows();
+        for (var index = 0; index < rows.Count; index++)
         {
-            selectedHeight++;
-        }
-
-        var top = Math.Max(0, selectedRow + selectedHeight - _height);
-        for (var index = top; index < Math.Min(_rows.Length, top + _height); index++)
-        {
-            var entry = _rows[index];
-            var row = index - top + contentTop;
+            var entry = rows[index];
+            var row = index + contentTop;
             if (entry.Heading is { } heading)
             {
                 _groupRuns[heading].Draw(view, 0, row, entry.Text, ResolveStyle(PresentationTextRole.SelectionPrompt));
+                continue;
+            }
+
+            if (entry.OptionIndex < 0)
+            {
                 continue;
             }
 
@@ -369,7 +381,8 @@ internal sealed class ChoiceModal : Modal
         var selectedDetail = selected.Label is null
             ? string.Empty
             : "\n\nSelected option: " + (selected.Group is null ? string.Empty : selected.Group + " / ") + selected.Label;
-        var text = _title + (_reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails) + selectedDetail;
+        var text = _title + (_reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails) + selectedDetail
+            + (selected.Details is null ? string.Empty : "\n" + selected.Details);
         var limits = _reviewDetails is { Length: <= 16384 } ? _limits with
         {
             MaximumTranscriptBytes = Math.Max(_limits.MaximumTranscriptBytes, Encoding.UTF8.GetByteCount(text) * 4),
@@ -413,16 +426,31 @@ internal sealed class ChoiceModal : Modal
             return;
         }
 
-        var targetRow = _optionRows[_selected] + (direction * _height);
-        var target = Array.BinarySearch(_optionRows, targetRow);
-        if (target < 0)
+        var current = GetOptionRows(_selected);
+        var remaining = _height;
+        var target = _selected;
+        for (var index = _selected + direction; index >= 0 && index < _matches.Length; index += direction)
         {
-            var insertion = ~target;
-            target = direction > 0 ? insertion - 1 : insertion;
+            var next = GetOptionRows(index);
+            remaining -= direction > 0
+                ? current.Rows.Length - current.LabelStart + next.LabelStart
+                : next.Rows.Length - next.LabelStart + current.LabelStart;
+            if (remaining < 0 && target != _selected)
+            {
+                break;
+            }
+
+            target = index;
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            current = next;
         }
 
-        // A heading can occupy the entire page in a short viewport; still advance one option.
-        _selected = Math.Clamp(direction > 0 ? Math.Max(_selected + 1, target) : Math.Min(_selected - 1, target), 0, _matches.Length - 1);
+        // Even when a single option spans a page, advance at least one option.
+        _selected = target;
     }
 
     private CachedTextRun GetOptionRun(Choice option)
@@ -438,80 +466,103 @@ internal sealed class ChoiceModal : Modal
 
     private void Filter()
     {
-        var count = 0;
-        foreach (var option in _options)
-        {
-            if (Matches(option))
-            {
-                count++;
-            }
-        }
-
-        if (count == _options.Length)
-        {
-            _matches = _options;
-        }
-        else
-        {
-            var matches = new Choice[count];
-            var index = 0;
-            foreach (var option in _options)
-            {
-                if (Matches(option))
-                {
-                    matches[index++] = option;
-                }
-            }
-
-            _matches = matches;
-        }
-
-        BuildRows();
-        _filterHint = $"Filter: {_filter.Text} | F2 details; Esc cancels";
+        var filter = _filter.Text;
+        _matches = filter.Length == 0 ? _options : Array.FindAll(_options, option => Matches(option, filter));
+        _layoutCache.Clear();
+        _filterHint = $"Filter: {filter} | F2 details; Esc cancels";
         _selected = 0;
     }
 
-    private bool Matches(Choice option)
+    private static bool Matches(Choice option, string filter)
     {
-        return option.Label.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase)
-            || option.Group?.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase) == true;
+        return option.Label.Contains(filter, StringComparison.OrdinalIgnoreCase)
+            || option.Group?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true
+            || (option.Details is { } details
+                && details.AsSpan(0, Math.Min(details.Length, _maximumSearchableDetailCharacters))
+                    .Contains(filter.AsSpan(), StringComparison.OrdinalIgnoreCase));
     }
 
-    private void BuildRows()
+    private List<DisplayRow> GetVisibleRows()
     {
-        var rows = new List<DisplayRow>();
-        _optionRows = new int[_matches.Length];
-        string? previousGroup = null;
-        for (var index = 0; index < _matches.Length; index++)
+        var visible = new List<DisplayRow>(_height);
+        if (_matches.Length == 0 || _height == 0)
         {
-            var option = _matches[index];
-            if (option.Group is { } group && !string.Equals(group, previousGroup, StringComparison.Ordinal))
-            {
-                foreach (var line in ModalFrame.Wrap(group, _layoutWidth))
-                {
-                    rows.Add(new DisplayRow(-1, group, line, true));
-                }
-
-                _groupRuns.TryAdd(group, new CachedTextRun());
-            }
-
-            previousGroup = option.Group;
-            _optionRows[index] = rows.Count;
-            var width = Math.Max(1, _layoutWidth - (option.Group is null ? 0 : 2) - Math.Max(2, _selectionPrefixWidth));
-            var lines = ModalFrame.Wrap(option.Label, width);
-            if (lines.Length == 0)
-            {
-                lines = [string.Empty];
-            }
-
-            for (var line = 0; line < lines.Length; line++)
-            {
-                rows.Add(new DisplayRow(index, null, lines[line], line == 0));
-            }
+            return visible;
         }
 
-        _rows = [.. rows];
+        // Keep the selected label in view before filling the space above and below it.
+        var selected = GetOptionRows(_selected);
+        var start = Math.Max(0, Math.Min(selected.Rows.Length, selected.LabelStart + _height) - _height);
+        visible.AddRange(new ArraySegment<DisplayRow>(selected.Rows, start, Math.Min(_height, selected.Rows.Length - start)));
+        for (var index = _selected - 1; index >= 0 && visible.Count < _height; index--)
+        {
+            var previous = GetOptionRows(index).Rows;
+            var count = Math.Min(_height - visible.Count, previous.Length);
+            visible.InsertRange(0, new ArraySegment<DisplayRow>(previous, previous.Length - count, count));
+        }
+
+        for (var index = _selected + 1; index < _matches.Length && visible.Count < _height; index++)
+        {
+            var next = GetOptionRows(index).Rows;
+            visible.AddRange(new ArraySegment<DisplayRow>(next, 0, Math.Min(_height - visible.Count, next.Length)));
+        }
+
+        return visible;
     }
+
+    private OptionLayout GetOptionRows(int index)
+    {
+        if (_layoutCache.TryGetValue(index, out var cached))
+        {
+            return cached;
+        }
+
+        if (_layoutCache.Count == _maximumCachedOptions)
+        {
+            _layoutCache.Clear();
+        }
+
+        var layout = WrapOption(index);
+        _layoutCache.Add(index, layout);
+        return layout;
+    }
+
+    private OptionLayout WrapOption(int index)
+    {
+        var rows = new List<DisplayRow>();
+        var option = _matches[index];
+        if (_spaceBetweenOptions && index > 0)
+        {
+            rows.Add(new DisplayRow(-1, null, string.Empty, false));
+        }
+
+        if (option.Group is { } group && (index == 0 || !string.Equals(group, _matches[index - 1].Group, StringComparison.Ordinal)))
+        {
+            foreach (var line in ModalFrame.Wrap(group, _layoutWidth))
+            {
+                rows.Add(new DisplayRow(-1, group, line, true));
+            }
+
+            _groupRuns.TryAdd(group, new CachedTextRun());
+        }
+
+        var labelStart = rows.Count;
+        var width = Math.Max(1, _layoutWidth - (option.Group is null ? 0 : 2) - Math.Max(2, _selectionPrefixWidth));
+        var lines = ModalFrame.Wrap(option.Label, width);
+        if (lines.Length == 0)
+        {
+            lines = [string.Empty];
+        }
+
+        for (var line = 0; line < lines.Length; line++)
+        {
+            rows.Add(new DisplayRow(index, null, lines[line], line == 0));
+        }
+
+        return new OptionLayout([.. rows], labelStart);
+    }
+
+    private readonly record struct OptionLayout(DisplayRow[] Rows, int LabelStart);
 
     private readonly record struct DisplayRow(int OptionIndex, string? Heading, string Text, bool First);
 }

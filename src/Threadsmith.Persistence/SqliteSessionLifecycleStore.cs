@@ -7,8 +7,21 @@ using Threadsmith.Core;
 /// <summary>SQLite-backed repository-scoped session catalog and atomic governed clone store.</summary>
 public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
 {
-    private const int MaximumPreviewCharacters = 240;
+    /// <summary>Maximum stored preview length.</summary>
+    internal const int MaximumPreviewCharacters = 240;
+
+    /// <summary>Only inline conversation bodies, not execution receipts, contribute previews.</summary>
+    internal const string VisiblePreviewPredicate = "body IS NOT NULL AND receipt_json IS NULL";
+
+    /// <summary>Finds the latest retained, visible body for a catalog row.</summary>
+    internal const string LatestVisiblePreviewSql = $"""
+        (SELECT substr(body, 1, $previewCharacters) FROM conversation_messages
+         WHERE session_id = catalog.session_id AND {VisiblePreviewPredicate}
+         ORDER BY sequence DESC LIMIT 1)
+        """;
+
     private const int MaximumRepositoryDisplayCharacters = 128;
+
     private readonly string _connectionString;
 
     /// <summary>Initializes a new instance of the <see cref="SqliteSessionLifecycleStore"/> class.</summary>
@@ -201,18 +214,18 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = """
-            SELECT COUNT(*),
-                   (SELECT body FROM conversation_messages WHERE session_id = $session
-                    AND body IS NOT NULL ORDER BY sequence DESC LIMIT 1),
-                   COALESCE((SELECT mode FROM conversation_sessions WHERE session_id = $session), $mode)
-            FROM conversation_messages WHERE session_id = $session;
+        command.CommandText = $"""
+            SELECT (SELECT COUNT(*) FROM conversation_messages WHERE session_id = catalog.session_id),
+                   {LatestVisiblePreviewSql},
+                   COALESCE((SELECT mode FROM conversation_sessions WHERE session_id = catalog.session_id), $mode)
+            FROM (SELECT $session AS session_id) AS catalog;
             """;
+        command.Parameters.AddWithValue("$previewCharacters", MaximumPreviewCharacters);
         command.Parameters.AddWithValue("$session", entry.SessionId.Value.ToString("D"));
         command.Parameters.AddWithValue("$mode", (int)entry.ConversationMode);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         _ = await reader.ReadAsync(cancellationToken);
-        var preview = await reader.IsDBNullAsync(1, cancellationToken) ? entry.Preview : Bound(reader.GetString(1), MaximumPreviewCharacters);
+        var preview = await reader.IsDBNullAsync(1, cancellationToken) ? null : Bound(reader.GetString(1), MaximumPreviewCharacters);
         var mode = reader.GetInt32(2);
         return entry with
         {
@@ -254,7 +267,7 @@ public sealed class SqliteSessionLifecycleStore : ISessionLifecycleStore
             CreatedAt = DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture),
             UpdatedAt = DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
             State = (SessionLifecycleState)reader.GetInt32(5),
-            Preview = reader.IsDBNull(6) ? null : reader.GetString(6),
+            Preview = reader.IsDBNull(6) ? null : Bound(reader.GetString(6), MaximumPreviewCharacters),
             MessageCount = reader.GetInt64(7),
             ConversationMode = (ConversationContextMode)reader.GetInt32(8),
             CloneSourceSessionId = reader.IsDBNull(9) ? null : new SessionId(Guid.Parse(reader.GetString(9))),

@@ -89,7 +89,7 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
             _leaseAuthority,
             _capabilities,
             new UnloadBlockerCatalog(logger),
-            NullLogger<UnloadProcedure>.Instance);
+            _extensionLoggerFactory.CreateLogger<UnloadProcedure>());
     }
 
     /// <summary>The capability registry populated as extensions activate.</summary>
@@ -651,9 +651,10 @@ public sealed class ExtensionHost : IExtensionHost, IExtensionManager
         catch (Exception exception)
         {
             _capabilities.RemoveGeneration(generationId);
+            _leaseAuthority.RemoveBook(generationId);
             if (activationCompleted && generation is not null)
             {
-                if (!await _unloadProcedure.RollbackActivationAsync(generation, request.SessionId))
+                if (!await _unloadProcedure.RollbackActivationAsync(generation))
                 {
                     _logger.LogWarning("ExtensionActivationRollbackIncomplete: unpublished generation {GenerationId} cleanup did not complete. A restart may be necessary.", generationId);
                 }

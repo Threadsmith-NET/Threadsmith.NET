@@ -36,9 +36,14 @@ Every capability invocation acquires an **invocation lease** from a host-owned
 
 ## Consequences
 
-- Unload is safe: no in-flight call is orphaned, and a stuck extension cannot block unload beyond
-  the bounded drain.
-- The host reports unload failures honestly (§30.9) and recommends a restart when blocked.
+- The host bounds its waits for draining and cleanup separately. A pending callback remains owned
+  by the generation; retrying unload joins that cleanup rather than invoking it concurrently.
+- Unload verification shares an outstanding collection pass across unloads. Verification does not
+  wait indefinitely for process-wide finalizers, but forced collections can still pause the process.
+- The host reports unload failures honestly (§30.9) and recommends a restart when blocked. After
+  cleanup commits, a notification failure is logged without changing the unload outcome. Each
+  generation can have one draining notification and one outcome notification in flight. If that
+  kind of delivery is still pending, a retry skips the new notification rather than queuing it.
 - The lease/budget contracts are defense-in-depth, not a security boundary (ADR-22).
 
 ## Alternatives considered

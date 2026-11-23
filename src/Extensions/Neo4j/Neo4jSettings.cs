@@ -43,13 +43,12 @@ internal sealed record Neo4jSettings
         "database",
         "username",
         "passwordReference",
-        "forceReadOnly",
+        "readOnly",
         "queryTimeoutSeconds",
         "maximumRows",
         "maximumResultBytes",
         "schemaSampleLimit",
         "allowInsecureLocalConnections",
-        "readOnlyEnforcedByServerAccount",
     ];
 
     private static readonly string[] _supportedSchemes =
@@ -81,15 +80,9 @@ internal sealed record Neo4jSettings
     /// <summary>The logical reference the host resolves during admitted execution.</summary>
     public required string PasswordReference { get; init; }
 
-    /// <summary>Whether the deployment forces read access mode. The model cannot override it.</summary>
-    public required bool ForceReadOnly { get; init; }
-
-    /// <summary>Whether the operator confirmed the database account itself denies writes.</summary>
-    /// <remarks>
-    /// The driver's read access mode is routing, not authorization. Until the operator confirms
-    /// server-side enforcement, a forced read-only deployment still requires approval per statement.
-    /// </remarks>
-    public bool ReadOnlyEnforcedByServerAccount { get; init; }
+    /// <summary>Whether execution uses driver read mode without approval. The model cannot override it.</summary>
+    /// <remarks>Database account permissions remain the operator's responsibility.</remarks>
+    public required bool ReadOnly { get; init; }
 
     /// <summary>Whether the configured scheme uses cluster routing.</summary>
     public required bool Routed { get; init; }
@@ -137,11 +130,7 @@ internal sealed record Neo4jSettings
             Database = ReadName(configuration, "database"),
             Username = ReadRequired(configuration, "username"),
             PasswordReference = ReadRequired(configuration, "passwordReference"),
-            ForceReadOnly = ReadBoolean(configuration, "forceReadOnly", defaultValue: true),
-            ReadOnlyEnforcedByServerAccount = ReadBoolean(
-                configuration,
-                "readOnlyEnforcedByServerAccount",
-                defaultValue: false),
+            ReadOnly = ReadBoolean(configuration, "readOnly", defaultValue: true),
             Routed = endpoint.Scheme.StartsWith("neo4j", StringComparison.Ordinal),
             Encrypted = encrypted,
             QueryTimeout = TimeSpan.FromSeconds(ReadInteger(

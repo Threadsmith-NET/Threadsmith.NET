@@ -119,6 +119,27 @@ public sealed class ExtensionGeneration
     /// <summary>Revokes access after draining and before deactivation.</summary>
     internal CancellationTokenSource SecretRetirement { get; } = new();
 
+    /// <summary>Serializes unload attempts and ownership of pending cleanup phases.</summary>
+    internal SemaphoreSlim UnloadGate { get; } = new(1);
+
+    /// <summary>Limits outstanding draining notifications, independently of final outcomes.</summary>
+    internal SemaphoreSlim DrainingNotificationSlot { get; } = new(1, 1);
+
+    /// <summary>Limits outstanding final notifications across unload attempts.</summary>
+    internal SemaphoreSlim OutcomeNotificationSlot { get; } = new(1, 1);
+
+    /// <summary>Retains the original retirement callback task across canceled waits.</summary>
+    internal Task? SecretRetirementCompletion { get; set; }
+
+    /// <summary>Retains a pending deactivation so a retry cannot invoke it concurrently.</summary>
+    internal Task<bool>? DeactivationCompletion { get; set; }
+
+    /// <summary>Retains the original lifetime callback task across canceled waits.</summary>
+    internal Task? LifetimeCancellationCompletion { get; set; }
+
+    /// <summary>Retains unload hooking work until the load context can safely be released.</summary>
+    internal Task? ContextUnloadCompletion { get; set; }
+
     /// <summary>The repository identity captured with this generation's configuration.</summary>
     internal string? RepositoryPath { get; init; }
 

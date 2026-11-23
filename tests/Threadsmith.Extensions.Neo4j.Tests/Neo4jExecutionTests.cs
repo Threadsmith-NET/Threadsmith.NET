@@ -61,7 +61,7 @@ public sealed class Neo4jExecutionTests
             GraphPhase.Commit,
             new GraphFailure(GraphFailureKind.Transient, "Neo.TransientError.Transaction.Terminated")));
         var factory = new FakeGraphSessionFactory(session);
-        var settings = TestGraph.Settings(TestGraph.Values(forceReadOnly: false));
+        var settings = TestGraph.Settings(TestGraph.Values(readOnly: false));
         var capability = new Neo4jExecuteCapability(settings, factory);
 
         var result = await capability.ExecuteAsync(
@@ -122,7 +122,7 @@ public sealed class Neo4jExecutionTests
                 Records = [new JsonObject { ["propertyName"] = "name" }],
             });
         var factory = new FakeGraphSessionFactory(session);
-        var values = TestGraph.Values(forceReadOnly: false);
+        var values = TestGraph.Values(readOnly: false);
         values["schemaSampleLimit"] = "250";
         var capability = new Neo4jSchemaCapability(TestGraph.Settings(values), factory);
 
@@ -154,7 +154,7 @@ public sealed class Neo4jExecutionTests
     [InlineData(false)]
     public async Task Execute_CompletePayloadFitsBoundAndPreservesCommit(bool manySmallRecords)
     {
-        var values = TestGraph.Values(forceReadOnly: false);
+        var values = TestGraph.Values(readOnly: false);
         values["maximumRows"] = "10000";
         values["maximumResultBytes"] = manySmallRecords ? "262144" : "4096";
         JsonObject[] records = manySmallRecords

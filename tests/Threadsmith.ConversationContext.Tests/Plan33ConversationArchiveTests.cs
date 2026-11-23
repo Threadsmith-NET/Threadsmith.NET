@@ -10,6 +10,78 @@ using Xunit;
 /// <summary>Plan 33 conversation archive, provenance, persistence, and tolerance tests.</summary>
 public static class Plan33ConversationArchiveTests
 {
+    /// <summary>Catalog previews exclude receipts and follow the latest retained inline body.</summary>
+    [Fact]
+    public static async Task CatalogPreviewsStayCurrentThroughUpgradeArchiveAndRetention()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var connectionString = $"Data Source=preview-{Guid.NewGuid():N};Mode=Memory;Cache=Shared;Pooling=False";
+        await using var connection = new SqliteConnection(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await new MigrationRunner(connectionString, DefaultMigrations.All.Where(migration => migration.Version < 21)).RunAsync(cancellationToken);
+        var sanitizer = new SecretOutputSanitizer();
+        var store = new SqliteConversationStore(connectionString, new ArtifactStore(connectionString, Path.GetTempPath(), sanitizer), sanitizer);
+        var catalog = new SqliteSessionLifecycleStore(connectionString);
+        var session = SessionId.New();
+        var origin = DateTimeOffset.UnixEpoch;
+        var entry = new SessionCatalogEntry
+        {
+            SessionId = session,
+            RepositoryIdentity = "preview-repository",
+            RepositoryDisplayName = "Preview fixture",
+            CreatedAt = origin,
+            UpdatedAt = origin,
+            State = SessionLifecycleState.Idle,
+            Preview = "internal receipt",
+        };
+        var first = CreateMessage(session, RunId.New(), ConversationRole.User, "visible before upgrade") with { OccurredAt = origin };
+        var receipt = CreateMessage(session, first.RunId, ConversationRole.Assistant, "internal receipt") with
+        {
+            OccurredAt = origin,
+            Receipt = new ConversationReceiptProvenance(1, session, first.RunId, first.Id),
+        };
+        await store.ArchiveMessageAsync(first, cancellationToken);
+        await store.ArchiveMessageAsync(receipt, cancellationToken);
+        await catalog.CreateAsync(entry, new SessionDurableUsage(0, 0, false, false, false), cancellationToken);
+
+        await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(cancellationToken);
+        Assert.Equal(first.Content, await GetListedPreviewAsync());
+
+        var retained = CreateMessage(session, RunId.New(), ConversationRole.User, "retained preview") with { OccurredAt = origin.AddDays(2) };
+        var expired = CreateMessage(session, RunId.New(), ConversationRole.User, "latest by sequence") with { OccurredAt = origin.AddDays(1) };
+        await store.ArchiveMessageAsync(retained, cancellationToken);
+        await store.ArchiveMessageAsync(expired, cancellationToken);
+        var laterReceipt = receipt with
+        {
+            Id = ConversationMessageId.New(),
+            RunId = expired.RunId,
+            Receipt = new ConversationReceiptProvenance(1, session, expired.RunId, expired.Id),
+        };
+        await store.ArchiveMessageAsync(laterReceipt, cancellationToken);
+        Assert.Equal(expired.Content, await GetListedPreviewAsync());
+
+        var other = entry with { SessionId = SessionId.New(), RepositoryIdentity = "other", Preview = "unchanged" };
+        var otherRun = RunId.New();
+        var otherReceipt = receipt with
+        {
+            SessionId = other.SessionId,
+            Id = ConversationMessageId.New(),
+            RunId = otherRun,
+            Receipt = new ConversationReceiptProvenance(1, other.SessionId, otherRun, ConversationMessageId.New()),
+        };
+        await store.ArchiveMessageAsync(otherReceipt, cancellationToken);
+        await catalog.CreateAsync(other, new SessionDurableUsage(0, 0, false, false, false), cancellationToken);
+
+        Assert.Equal(5, await store.RemoveMessageBodiesOlderThanAsync(origin.AddDays(2), cancellationToken));
+        Assert.Equal(retained.Content, await GetListedPreviewAsync());
+        Assert.Equal(other.Preview, (await catalog.GetAsync(other.SessionId, cancellationToken))?.Preview);
+        Assert.Equal(1, await store.RemoveMessageBodiesOlderThanAsync(origin.AddDays(3), cancellationToken));
+        Assert.Null(await GetListedPreviewAsync());
+
+        async Task<string?> GetListedPreviewAsync() =>
+            Assert.Single(await catalog.ListAsync(entry.RepositoryIdentity, 1, cancellationToken)).Preview;
+    }
+
     private static ConversationMessage CreateMessage(
         SessionId sessionId,
         RunId runId,

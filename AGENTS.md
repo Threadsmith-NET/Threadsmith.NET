@@ -54,7 +54,6 @@ This file defines repository-wide rules for AI coding agents.
 - **Never test the framework or compiler:** Do not write tests for nullability enforcement, auto-properties, simple constructors, DI registration wiring, or standard EF Core/ASP.NET Core behavior.
 
 ### Workflow & Verification
-- **Propose test cases first:** Before creating or editing test files, list the exact test names and one-line descriptions of what each verifies. Wait for approval if more than 4 tests are proposed.
 - **Run targeted tests only:** When verifying changes, run `dotnet test --filter "FullyQualifiedName~<ClassName>"` rather than the entire solution.
 - **Refactor for testability over heavy setup:** If a method requires a full `DbContext` or `HttpContext` just to test a calculation or rule, extract the pure logic into a static or isolated method instead of building a heavy test fixture.
 

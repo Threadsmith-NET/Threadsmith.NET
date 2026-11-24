@@ -15,6 +15,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
     private readonly ModelProfile _profile;
+    private readonly bool _requestPriorityTier;
     private readonly Func<string, CancellationToken, Task<string?>>? _refreshAccessTokenAsync;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCodexModelProvider"/> class.</summary>
@@ -23,7 +24,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         ModelProfile profile,
         string accessToken,
         Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        bool requestPriorityTier = false)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
@@ -31,6 +33,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         _httpClient = httpClient;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _profile = profile;
+        _requestPriorityTier = requestPriorityTier;
         AccessToken = accessToken;
         _refreshAccessTokenAsync = refreshAccessTokenAsync;
     }
@@ -250,6 +253,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             },
             ["text"] = new JsonObject { ["verbosity"] = "medium" },
         };
+
+        if (_requestPriorityTier)
+        {
+            body["service_tier"] = "priority";
+        }
 
         if (request.AllowMultipleToolCalls is { } allowMultipleToolCalls)
         {

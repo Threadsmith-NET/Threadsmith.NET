@@ -16,6 +16,9 @@ public sealed record OpenAiCodexModelConfiguration : ModelConfiguration
 {
     /// <summary>Provider model identifier.</summary>
     public required string ModelId { get; init; }
+
+    /// <summary>Whether discovery advertised priority processing; null for older cached metadata.</summary>
+    public bool? SupportsPriorityTier { get; init; }
 }
 
 /// <summary>Registers native Codex Responses models discovered after authentication.</summary>
@@ -35,6 +38,9 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
 
     /// <summary>Compiled authenticated models endpoint.</summary>
     public static readonly Uri ModelsEndpoint = new(BackendEndpoint, "models");
+
+    /// <summary>Whether trusted startup configuration requests priority processing.</summary>
+    public bool RequestPriorityTier { get; init; }
 
     /// <inheritdoc />
     public string TypeDiscriminator => "openai-codex";
@@ -143,18 +149,25 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
     {
         ArgumentNullException.ThrowIfNull(context);
         if (context.ProviderConfiguration is not OpenAiCodexProviderConfiguration
-            || context.ModelConfiguration is not OpenAiCodexModelConfiguration)
+            || context.ModelConfiguration is not OpenAiCodexModelConfiguration model)
         {
             throw new ArgumentException("The activation context does not contain Codex configuration.", nameof(context));
         }
 
         var accessToken = context.ResolvedSecret
             ?? throw new InvalidOperationException("Codex authentication is required before provider activation.");
+        if (RequestPriorityTier && model.SupportsPriorityTier != true)
+        {
+            throw new ModelProviderException(
+                $"Codex model '{model.ModelId}' does not advertise priority processing. Select a supported model or set model.openAiCodex.serviceTier to 'normal'.");
+        }
+
         return new OpenAiCodexModelProvider(
             context.HttpClient,
             context.Profile,
             accessToken,
             context.RefreshResolvedSecretAsync,
-            context.TimeProvider);
+            context.TimeProvider,
+            RequestPriorityTier);
     }
 }

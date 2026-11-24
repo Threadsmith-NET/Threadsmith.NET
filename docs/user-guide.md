@@ -1349,6 +1349,8 @@ After login, Threadsmith reads the latest stable Codex release version from Open
 
 Each native Codex request has a 600-second total deadline by default. To change it, set `model.openAiCodex.timeoutSeconds` in trusted machine or user `config.json` and restart Threadsmith. For example, `"model": { "openAiCodex": { "timeoutSeconds": 900 } }` in `~/.threadsmith/config.json` allows 15 minutes per request. Zero disables the provider deadline; the child-agent wall-time limit and caller cancellation remain separate. Repository configuration cannot override this setting, and changing it does not require another Codex login.
 
+Codex uses normal processing by default. To request Fast mode, set `"model": { "openAiCodex": { "serviceTier": "priority" } }` in your user `config.json` and restart Threadsmith. Priority processing can consume more usage and requires a model that advertises it for your account. If the model does not, Threadsmith reports an error. To switch back, set `serviceTier` to `normal` or remove it and restart.
+
 Codex authorization/resource authorities, client identity, scopes, redirect URI, and credential headers are compiled policy. Browser login requires `http://localhost:1455/auth/callback`; if that port is occupied, stop the conflicting process and retry. Headless login displays an OpenAI verification URI and one-time user code. Authentication failures never fall back silently to another provider.
 
 ### Anthropic API-key setup and discovery

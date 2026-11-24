@@ -182,6 +182,9 @@ public sealed class OpenAiCodexCatalogClient
             Id = StableProfileId(slug),
             Name = name,
             ModelId = slug,
+            SupportsPriorityTier = element.TryGetProperty("service_tiers", out var tiers)
+                && tiers.ValueKind == JsonValueKind.Array
+                && tiers.EnumerateArray().Any(tier => tier.ValueKind == JsonValueKind.Object && GetString(tier, "id") == "priority"),
             Enabled = true,
             ContextWindow = contextWindow,
             MaximumOutputTokens = contextWindow,

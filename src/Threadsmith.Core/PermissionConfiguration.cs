@@ -40,6 +40,11 @@ public sealed record PermissionConfiguration
     /// <summary>Native provider transport settings.</summary>
     public sealed record CodexSettings
     {
+        /// <summary>Gets the requested Codex processing tier (normal or priority).</summary>
+        [JsonPropertyName("serviceTier")]
+        [ConfigurationPermission(AdapterOwned = true)]
+        public string? ServiceTier { get; init; }
+
         /// <summary>Gets the trusted request deadline.</summary>
         [JsonPropertyName("timeoutSeconds")]
         [ConfigurationPermission(AdapterOwned = true)]

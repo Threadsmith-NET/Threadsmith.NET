@@ -41,6 +41,41 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
+    /// <summary>Catalog support alone must not select priority on the wire.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ServiceTierRequiresOptInEvenWhenAdvertised(bool requestPriority)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: {\"type\":\"response.completed\",\"response\":{}}\n", Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", requestPriority: requestPriority, advertisedTier: "priority");
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await provider.StreamAsync(CreateStreamRequest(), cancellationToken).ToListAsync(cancellationToken);
+
+        using var payload = JsonDocument.Parse(handler.RequestBody!);
+        Assert.Equal(requestPriority, payload.RootElement.TryGetProperty("service_tier", out var tier));
+        if (requestPriority)
+        {
+            Assert.Equal("priority", tier.GetString());
+        }
+    }
+
+    /// <summary>An unsupported opt-in must not submit a normal request instead.</summary>
+    [Fact]
+    public async Task Provider_ServiceTierRejectsUnsupportedPriorityBeforeSending()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("Unexpected submission."));
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(() => CreateProviderAsync(handler, "token", requestPriority: true));
+
+        Assert.Contains("does not advertise priority", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
     /// <summary>Response body timeout failures remain distinct from explicit caller cancellation.</summary>
     [Theory]
     [InlineData(false)]
@@ -1403,7 +1438,9 @@ public sealed class Plan50OpenAiCodexTests
         string accessToken,
         Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync = null,
         int contextWindow = 128_000,
-        Func<ModelProfile, ModelProfile>? configureProfile = null)
+        Func<ModelProfile, ModelProfile>? configureProfile = null,
+        bool requestPriority = false,
+        string advertisedTier = "default")
     {
         var catalogJson = JsonSerializer.Serialize(new
         {
@@ -1414,6 +1451,7 @@ public sealed class Plan50OpenAiCodexTests
                     slug = "dynamic",
                     display_name = "Dynamic",
                     context_window = contextWindow,
+                    service_tiers = new[] { new { id = advertisedTier } },
                 },
             },
         });
@@ -1421,7 +1459,7 @@ public sealed class Plan50OpenAiCodexTests
             new HttpClient(new RecordingHandler(_ => JsonResponse(catalogJson))) { Timeout = Timeout.InfiniteTimeSpan },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
-        var registration = new OpenAiCodexProviderRegistration();
+        var registration = new OpenAiCodexProviderRegistration { RequestPriorityTier = requestPriority };
         var profile = Assert.Single(registration.CreateProfiles(configuration)) with
         {
             Timeout = TimeSpan.Zero,

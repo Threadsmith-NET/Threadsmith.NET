@@ -615,7 +615,7 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
                 message = _sanitizer?.Sanitize(message) ?? message;
                 throw exception is TransientModelException transient
                     ? new TransientModelException(message) { IsRateLimit = transient.IsRateLimit, IsOverloaded = transient.IsOverloaded, RetryAfter = transient.RetryAfter }
-                    : new ModelProviderException(message);
+                    : new ModelProviderException(message) { IsTextOutputLimit = exception is ModelProviderException { IsTextOutputLimit: true } };
             }
 
             if (!more)

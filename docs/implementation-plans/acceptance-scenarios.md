@@ -4,6 +4,12 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario SC-GOAL-01 — Continue after a premature answer
+
+1. Set a quoted goal to run a focused test. Have the working model promise the test without calling a tool. The compaction-profile assessor receives the promise but no receipt and no tools.
+2. Return `Continue`. Check for one notice, then one test invocation without user input. Only after the receipt reaches the assessor may `Met` show its summary and clear the goal.
+3. Hold an assessment open. Request a steering pause without submitting text. Query or replace the goal before releasing the assessor. Its late result must not start work or clear the replacement.
+
 ## Scenario SC-SCRIPT-FILE-01 — Script file input
 
 1. Run inline expression and statement source. Repeat each by returned absolute `ScriptPath` and bare filename, resending the required kind. Each call returns a distinct execution copy without shared variables.

@@ -133,6 +133,7 @@ internal sealed class ConversationReceiptChecks
                 SourceProof = baseline is null ? "Unknown" : "RecordedBaseline; external changes and built inputs unverified",
                 Applicability = baseline is not null && context.Invocation.ReceiptBaseline?.Invoke()?.CapturedAt != baseline.CapturedAt ? "Indeterminate: baseline changed during check" : "Unknown",
             };
+            context.ObserveCheck?.Invoke(observation);
             lock (owner._gate)
             {
                 if (owner._checks.Any(check => check.Invocation == observation.Invocation))

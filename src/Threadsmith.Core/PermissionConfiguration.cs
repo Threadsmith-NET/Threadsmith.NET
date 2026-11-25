@@ -175,7 +175,7 @@ public sealed record PermissionConfiguration
 
         /// <summary>Default platform references and imports for C# scripts. Worker API restrictions still apply.</summary>
         public const string DefaultAllowedAssemblies =
-            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography";
+            "System.Linq,System.Collections,System.Collections.Generic,System.Text,System.Text.Json,System.Text.RegularExpressions,System.Security.Cryptography";
 
         /// <summary>Default behavior for configured C# script assemblies.</summary>
         public const string DefaultAssemblyConfigAction = "merge";

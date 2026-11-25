@@ -6,7 +6,7 @@ For execution rules, available file methods, and tested examples, see the [scrip
 
 ## Configuration and lifecycle
 
-Configure `tools:config:csharp_script:allowed_assemblies`, `assembly_config_action`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, JSON, and SHA-256 hashing of byte arrays.
+Configure `tools:config:csharp_script:allowed_assemblies`, `assembly_config_action`, `timeout_ms`, and `max_output_bytes` through the existing [security policy](security-policy.md). The default APIs include LINQ, collections, text helpers such as `StringBuilder` and `Encoding`, regular expressions, JSON, and SHA-256 hashing of byte arrays. Listing `System.Text` alone does not allow its child namespaces.
 
 - `merge` (default) adds the configured comma-separated names to the built-in list and removes exact duplicates.
 - `override` uses only the configured names. An empty `allowed_assemblies` string clears the optional list; omitting `allowed_assemblies` keeps the defaults if no trusted layer supplies a list.

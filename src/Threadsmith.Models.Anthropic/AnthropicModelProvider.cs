@@ -94,6 +94,10 @@ internal sealed class AnthropicModelProvider : IModelProvider
                         catch (Exception exception) when (IsProviderFailure(exception))
                         {
                             failure = Classify(exception, deadline, cancellationToken);
+                            if (adapter.StopOnToolInterruption && failure is TransientModelException)
+                            {
+                                failure = new ModelProviderException("Anthropic tool stream was interrupted; no tool calls were released.");
+                            }
                         }
 
                         if (failure is not null)

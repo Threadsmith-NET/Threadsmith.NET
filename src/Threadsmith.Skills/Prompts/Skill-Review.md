@@ -43,7 +43,7 @@ Read joined results once, including diagnostics. Take successful specialist resu
 Partial, failed, malformed, missing, or incomplete results are coverage limitations. Use intelligible findings, identify the affected reviewer and unassessed scope, and do not retry or clarify. If all specialists fail, report review failure. Never describe incomplete coverage as clean. Separate pre-existing observations from introduced/worsened issues unless the scope explicitly requests a broader audit.
 
 Produce Markdown with these sections:
-- **Summary**: Scope, changes, and supplied requirements. Always include every ArchitectureReviewer architectural diagram and BugReviewer Mermaid/ASCII call-trace diagram under suitable subheadings.
+- **Summary**: Scope, changes, and supplied requirements. Always include every ArchitectureReviewer architectural diagram and BugReviewer Mermaid/ASCII call-trace diagram under suitable subheadings. Include the current date/time  under the summary heading if the date/time tool is available, otherwise omit the timestamp.
 - **Changes**: Added, removed, and edited files organized by .NET project.
 - **Issues**: Actionable findings with source references and reviewer attribution, ordered P1 (Critical), P2 (Significant), P3 (Minor).
 - **Observations**: Relevant concerns that may depend on intent, with reviewer attribution.
@@ -54,8 +54,8 @@ Produce Markdown with these sections:
 
 ## Phase 4: Deliver
 
-Use datetime when available for a timestamp. If the invoking repository already has .inbox and write_file is available, save the full Markdown there as unique review-<timestamp>.md with explicit content, not useLastResponse (which refers to an earlier archived response).
+If the invoking repository already has .inbox and write_file is available, save the full Markdown there as a unique review-<timestamp>.md, using a filename-safe version of the same UTC timestamp. When the timestamp is unavailable, use a unique non-time suffix instead. Pass explicit content, not useLastResponse (which refers to an earlier archived response).
 
-Return the declared output JSON. After a successful write, use delivery "artifact", artifact.path and artifact.bytesWritten from its result, and a concise response containing verdict, coverage/failure summary, and Markdown report link; omit the full report body. Otherwise use delivery "inline" with the complete Markdown in response, including any save failure. Never claim an unconfirmed save.
+Return the declared output JSON. After a successful write, use delivery "artifact", artifact.path and artifact.bytesWritten from its result, and a concise response containing verdict, coverage/failure summary grouped by priority, and Markdown report link; omit the full report body. Otherwise use delivery "inline" with the complete Markdown in response, including any save failure. Never claim an unconfirmed save.
 
 Set succeeded false if the review could not be performed, including all specialists failing; otherwise true. Findings do not themselves mean execution failed.

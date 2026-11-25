@@ -633,6 +633,30 @@ public sealed record ToolInvocationResult
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
 
+    /// <summary>Typed outcome when returning a result does not itself establish success.</summary>
+    [JsonIgnore]
+    internal bool? ActionSucceeded { get; init; }
+
+    /// <summary>Native check observation at execution, independent of report retention.</summary>
+    [JsonIgnore]
+    internal ConversationCheckObservation? CheckObservation { get; init; }
+
+    /// <summary>Action identified from the tool's typed result before output projection.</summary>
+    [JsonIgnore]
+    internal string? ActionKind { get; init; }
+
+    /// <summary>Single applied path when the writer confirms exactly one changed file.</summary>
+    [JsonIgnore]
+    internal string? EditedPath { get; init; }
+
+    /// <summary>Exact test name from the typed execution result.</summary>
+    [JsonIgnore]
+    internal string? ExecutedTest { get; init; }
+
+    /// <summary>Action-level refusal or uncertainty even if returning the structured result succeeded.</summary>
+    [JsonIgnore]
+    internal ToolErrorClassification ActionFailure { get; init; }
+
     /// <summary>Conservative host observation boundary, before execution and its lifecycle notifications.</summary>
     [JsonIgnore]
     internal DateTimeOffset? ObservationStartedAt { get; init; }
@@ -783,6 +807,10 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Host clock used to interpret the absolute deadline.</summary>
     public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>Returns the native check observation to this invocation's pipeline.</summary>
+    [JsonIgnore]
+    internal Action<ConversationCheckObservation>? ObserveCheck { get; init; }
 
     /// <summary>Captured scripting input, excluded from durable and model output.</summary>
     [JsonIgnore]

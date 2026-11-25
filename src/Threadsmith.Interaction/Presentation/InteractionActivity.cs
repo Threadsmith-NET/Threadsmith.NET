@@ -11,6 +11,9 @@ public sealed record InteractionActivity(
     bool ShowDuration,
     TimeProvider TimeProvider)
 {
+    /// <summary>Identifies an assessment displayed below the answer rather than on the border.</summary>
+    public Guid? GoalAssessmentId { get; init; }
+
     /// <summary>Gets the workspace owning persistent semantic-refresh activity, when applicable.</summary>
     public Threadsmith.Core.WorkspaceId? SemanticWorkspaceId { get; init; }
 

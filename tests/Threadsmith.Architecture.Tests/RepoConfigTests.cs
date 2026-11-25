@@ -127,7 +127,7 @@ public static class RepoConfigTests
         Assert.Equal(30000, config.GetValue("tools:config:csharp_script:timeout_ms", 0));
         Assert.Equal(65536, config.GetValue("tools:config:csharp_script:max_output_bytes", 0));
         Assert.Equal(
-            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography",
+            PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAllowedAssemblies,
             config["tools:config:csharp_script:allowed_assemblies"]);
     }
 

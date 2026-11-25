@@ -220,6 +220,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemToolInventoryNativeSeparate prompt asset.</summary>
     public const string SystemToolInventoryNativeSeparate = "System-ToolInventory-NativeSeparate.md";
 
+    /// <summary>Instructions for assessing a goal against admitted work evidence.</summary>
+    public const string ContextGoalAssessment = "Context-GoalAssessment.md";
+
     /// <summary>Gets the stable filename for the ContextActiveTurnCompactionSystem prompt asset.</summary>
     public const string ContextActiveTurnCompactionSystem = "Context-ActiveTurnCompaction-System.md";
 
@@ -1098,6 +1101,7 @@ public static class PromptFileNames
         SystemLegacyRequestEnvelope,
         SystemToolInventoryTextFallback,
         SystemToolInventoryNativeSeparate,
+        ContextGoalAssessment,
         ContextActiveTurnCompactionSystem,
         ContextActiveTurnCompactionInitial,
         ContextActiveTurnCompactionUpdate,
@@ -1425,6 +1429,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
+            PromptFileNames.ContextGoalAssessment,
             PromptFileNames.ContextActiveTurnCompactionSystem,
             PromptFileNames.ContextActiveTurnCompactionInitial,
             PromptFileNames.ContextActiveTurnCompactionUpdate,

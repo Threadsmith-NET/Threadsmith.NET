@@ -487,11 +487,31 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         int maximumToolCalls,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        const string unconfirmedToolsMessage = "The Codex Responses stream ended with an unconfirmed tool batch. No actions were dispatched.";
         var completedItems = new SortedDictionary<int, JsonElement>();
+        var sawText = false;
+        var sawOtherOutput = false;
         long retainedItemBytes = 0;
         long streamedOutputBytes = 0;
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+        while (true)
         {
+            string? line;
+            try
+            {
+                line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (request.StopOnUnconfirmedToolStream && sawOtherOutput
+                && !cancellationToken.IsCancellationRequested && exception is IOException or HttpRequestException or OperationCanceledException)
+            {
+                throw new ModelProviderException(unconfirmedToolsMessage, exception);
+            }
+
+            if (line is null)
+            {
+                RejectUnconfirmedTools();
+                throw new TransientModelException("The Codex Responses connection ended without a completed response.");
+            }
+
             if (!line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -506,11 +526,19 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             using var document = JsonDocument.Parse(payload);
             var root = document.RootElement;
             var type = GetString(root, "type");
+            if (type is "response.output_item.added" or "response.output_item.done"
+                && root.TryGetProperty("item", out var streamedItem))
+            {
+                sawOtherOutput |= GetString(streamedItem, "type") is not ("message" or "reasoning");
+            }
+
+            sawOtherOutput |= type?.Contains("_call", StringComparison.Ordinal) == true;
             switch (type)
             {
                 case "response.output_text.delta":
                     if (GetString(root, "delta") is { Length: > 0 } text)
                     {
+                        sawText = true;
                         AddStreamedOutput(text);
                         yield return new ModelChunk { Text = text };
                     }
@@ -625,6 +653,20 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                             yield return new ModelChunk { Usage = failedUsage, IsInterruptedUsage = true };
                         }
 
+                        if (errorRoot.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.Array)
+                        {
+                            sawOtherOutput |= output.EnumerateArray().Any(item => GetString(item, "type") is not ("message" or "reasoning"));
+                        }
+
+                        RejectUnconfirmedTools();
+                        if (type == "response.incomplete" && sawText && !sawOtherOutput
+                            && errorRoot.TryGetProperty("incomplete_details", out var details) && details.ValueKind == JsonValueKind.Object
+                            && GetString(details, "reason") == "max_output_tokens"
+                            && (output.ValueKind is JsonValueKind.Undefined or JsonValueKind.Array))
+                        {
+                            throw new ModelProviderException("Codex reached the text output limit.") { IsTextOutputLimit = true };
+                        }
+
                         var rateLimited = ModelStreamRetry.IsRateLimitError(errorRoot);
                         var overloaded = ModelStreamRetry.IsOverloadError(errorRoot);
                         if (rateLimited || overloaded)
@@ -638,7 +680,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             }
         }
 
-        throw new TransientModelException("The Codex Responses connection ended without a completed response.");
+        void RejectUnconfirmedTools()
+        {
+            if (request.StopOnUnconfirmedToolStream && sawOtherOutput)
+            {
+                throw new ModelProviderException(unconfirmedToolsMessage);
+            }
+        }
 
         void RetainItem(JsonElement item)
         {

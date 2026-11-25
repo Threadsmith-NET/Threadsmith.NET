@@ -299,6 +299,14 @@ After required startup choices, the TUI paints the startup modal before loading 
 | `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
 
 
+### Session goals
+
+Use `/goal set "Describe the parser and identify its tests"` to set a goal and start work. The quotes are required. Use `\"` for a literal quote. Setting another goal replaces the first. `/goal` shows the current goal; `/goal cancel` clears it. Neither command calls a model.
+
+If you stop the turn, the goal stays active. Use `/goal` to check it, then submit `continue` as ordinary input. You can also use the three commands in the steering composer. A goal belongs to this live session, not to a clone or an application restart.
+
+When a turn would finish, `Analyzing Goal` indicates a separate check. If the assistant only promised to run a test, it can continue without another prompt. If part of the task is complete but the rest cannot be done, the summary describes the completed work and the blocker, then clears the goal. The goal does not grant permissions.
+
 ### Durable session lifecycle
 
 `/new`, `/resume`, and `/clone` use one serialized host-owned transition boundary and require active model, tool, mutation, validation, hook, skill, and delegated work to finish or be cancelled. `/resume` lists only sessions for the currently open repository, newest first; an exact ID from another repository reports a mismatch without changing repository, trust, solution, or working directory.
@@ -1003,7 +1011,7 @@ Configure it with scalar values:
         "timeout_ms": "30000",
         "max_output_bytes": "65536",
         "assembly_config_action": "merge",
-        "allowed_assemblies": "System.Text.RegularExpressions"
+        "allowed_assemblies": "System.Numerics"
       }
     }
   }

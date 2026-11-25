@@ -25,6 +25,7 @@ public sealed partial class SessionApplication :
     ICommandHandler<SubmitRunSteeringCommand, RunSteeringSubmissionResult>,
     ICommandHandler<SetConversationContextModeCommand, bool>,
     ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>,
+    ICommandHandler<SessionGoalCommand, SessionGoalResult>,
     ISemanticRefreshPublicationGate
 {
     private static readonly Meter _meter = new("Threadsmith.Execution");
@@ -55,6 +56,7 @@ public sealed partial class SessionApplication :
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
+    private readonly IModelProvider? _goalAssessmentProvider;
     private readonly IImageArtifactStore? _imageArtifacts;
     private readonly IReceiptEvidenceStore? _receiptEvidenceStore;
 
@@ -63,13 +65,14 @@ public sealed partial class SessionApplication :
     private readonly RunSteeringCoordinator _steering;
     private readonly UserQuestionCoordinator? _userQuestions;
     private readonly IOutputSanitizer _sanitizer;
-    private readonly ConcurrentDictionary<SessionId, bool> _sessions = new();
+    private readonly ConcurrentDictionary<SessionId, LiveSession> _sessions = new();
     private readonly Func<SessionId, CancellationToken, Task<ToolInvocationContext>>?
         _toolContextFactory;
 
     private readonly Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
         _userUrlIntake;
 
+    private readonly TimeProvider _outputClock;
     private readonly IToolInvocationPipeline? _toolPipeline;
     private readonly IToolRegistry? _toolRegistry;
     private readonly SessionModelPreferences? _sessionPreferences;
@@ -125,7 +128,7 @@ public sealed partial class SessionApplication :
             throw new ArgumentException("The session id cannot be default.", nameof(sessionId));
         }
 
-        _sessions[sessionId] = isWritable;
+        _sessions.AddOrUpdate(sessionId, new LiveSession(isWritable), (_, existing) => existing with { IsWritable = isWritable });
     }
 
     /// <inheritdoc />
@@ -196,7 +199,9 @@ public sealed partial class SessionApplication :
         IRepositoryIntelligenceOperations? intelligenceOperations = null,
         IImageArtifactStore? imageArtifacts = null,
         UserQuestionCoordinator? userQuestions = null,
-        IReceiptEvidenceStore? receiptEvidenceStore = null)
+        IReceiptEvidenceStore? receiptEvidenceStore = null,
+        IModelProvider? goalAssessmentProvider = null,
+        TimeProvider? outputClock = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         _receiptEvidenceStore = receiptEvidenceStore;
@@ -214,8 +219,10 @@ public sealed partial class SessionApplication :
         }
 
         _events = events;
+        _outputClock = outputClock ?? TimeProvider.System;
         _userQuestions = userQuestions;
         _model = model;
+        _goalAssessmentProvider = goalAssessmentProvider ?? (activeTurnCompactionProfile is null ? model : null);
         _imageArtifacts = imageArtifacts;
         _budgetFactory = budgetFactory ?? budget switch
         {
@@ -266,7 +273,7 @@ public sealed partial class SessionApplication :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command.Name);
         var id = SessionId.New();
-        if (!_sessions.TryAdd(id, true))
+        if (!_sessions.TryAdd(id, new LiveSession(true)))
         {
             throw new InvalidOperationException("The session identifier already exists.");
         }
@@ -302,12 +309,12 @@ public sealed partial class SessionApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_sessions.TryGetValue(command.SessionId, out var isWritable))
+        if (!_sessions.TryGetValue(command.SessionId, out var session))
         {
             throw new InvalidOperationException($"Session {command.SessionId.Value:D} does not exist.");
         }
 
-        if (!isWritable)
+        if (!session.IsWritable)
         {
             throw new InvalidOperationException($"Session {command.SessionId.Value:D} is read-only or awaiting model selection. Review the resume warnings; use /models to restore an unavailable model or /new to start a writable session.");
         }
@@ -496,7 +503,7 @@ public sealed partial class SessionApplication :
         SetConversationContextModeCommand command,
         CancellationToken cancellationToken = default)
     {
-        if (_conversationStore is null || !_sessions.TryGetValue(command.SessionId, out var isWritable) || !isWritable)
+        if (_conversationStore is null || !_sessions.TryGetValue(command.SessionId, out var session) || !session.IsWritable)
         {
             return false;
         }
@@ -523,11 +530,56 @@ public sealed partial class SessionApplication :
                 cancellationToken);
     }
 
+    /// <inheritdoc />
+    public Task<SessionGoalResult> HandleAsync(SessionGoalCommand command, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        if (command.Action == SessionGoalAction.Set)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(command.Text);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(command.Text.Length, SessionGoalCommand.MaximumGoalLength);
+        }
+        else if (command.Text is not null || command.Action is not (SessionGoalAction.Show or SessionGoalAction.Cancel))
+        {
+            throw new ArgumentException("Invalid goal operation.", nameof(command));
+        }
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!_sessions.TryGetValue(command.SessionId, out var session))
+            {
+                throw new InvalidOperationException("The session does not exist.");
+            }
+
+            if (command.Action == SessionGoalAction.Show)
+            {
+                return Task.FromResult(new SessionGoalResult(session.Goal is null ? null : _sanitizer.Sanitize(session.Goal)));
+            }
+
+            if (!session.IsWritable && command.Action == SessionGoalAction.Set)
+            {
+                throw new InvalidOperationException("Cannot set a goal in a read-only session.");
+            }
+
+            var next = session with { Goal = command.Text, GoalRevision = checked(session.GoalRevision + 1), Journal = command.Text is null ? null : new GoalJournal() };
+            if (_sessions.TryUpdate(command.SessionId, next, session))
+            {
+                session.Journal?.Replaced.TrySetResult();
+                return Task.FromResult(new SessionGoalResult(
+                    next.Goal is null ? null : _sanitizer.Sanitize(next.Goal),
+                    WasCancelled: next.Goal is null && session.Goal is not null));
+            }
+        }
+    }
+
     /// <summary>Revokes admission for a newly created session whose repository binding failed.</summary>
     internal void UnregisterPreparedSession(SessionId sessionId)
     {
         _sessions.TryRemove(sessionId, out _);
     }
+
+    private sealed record LiveSession(bool IsWritable, string? Goal = null, long GoalRevision = 0, GoalJournal? Journal = null, string? LastGoalSummary = null);
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
@@ -690,7 +742,8 @@ public sealed partial class SessionApplication :
             // Admission limits stop further work; final accounting must not discard completed results.
             _ = AccrueUnchargedWallClock(registration, stopwatch.Elapsed);
 
-            registration.Cancellation.Token.ThrowIfCancellationRequested();
+            var completionToken = registration.GoalResultCommitted ? CancellationToken.None : registration.Cancellation.Token;
+            completionToken.ThrowIfCancellationRequested();
 
             if (registration.IntelligenceRun is { } intelligenceRun)
             {
@@ -707,7 +760,7 @@ public sealed partial class SessionApplication :
 
             // Once the terminal state commits, publish its outcome and release waiters even
             // if cancellation arrives while subscribers are processing that final publication.
-            var editSucceeded = await RecordConversationOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Completed, registration.Cancellation.Token);
+            var editSucceeded = await RecordConversationOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Completed, completionToken);
             await registration.Machine.TransitionAsync(
                 editSucceeded ? RunPhase.Completion : RunPhase.Failed,
                 "scripted activity completed",
@@ -1169,6 +1222,18 @@ public sealed partial class SessionApplication :
             Machine = machine;
             Budget = budget;
         }
+
+        public LiveSession? RoundGoal { get; set; }
+
+        public bool GoalResultCommitted { get; set; }
+
+        public int GoalContinuations { get; set; }
+
+        public GoalVerdict.GoalRequirement? LastGoalGap { get; set; }
+
+        public int LastGoalEvidenceId { get; set; }
+
+        public string? SuggestedNextStep { get; set; }
 
         public WorkspaceId? ReceiptWorkspaceId { get; set; }
 

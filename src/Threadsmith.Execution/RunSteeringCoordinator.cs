@@ -197,6 +197,8 @@ public sealed class RunSteeringCoordinator
                 SteeringPauseId.New(),
                 state.Delegation?.DelegationId);
             state.CurrentPause = pause;
+            state.NextPause.TrySetResult();
+            state.NextPause = new(TaskCreationOptions.RunContinuationsAsynchronously);
             if (state.Delegation is not null)
             {
                 // The parent is awaiting its delegation; children continue independently.
@@ -316,6 +318,26 @@ public sealed class RunSteeringCoordinator
                     ? RunSteeringSubmissionStatus.Dismissed
                     : RunSteeringSubmissionStatus.Accepted,
                 sequence);
+        }
+    }
+
+    /// <summary>Serializes a goal decision with pause admission. The signal completes on the next accepted pause.</summary>
+    internal bool AtGoalBoundary(RunId runId, Func<Task, bool> apply, bool terminal = false)
+    {
+        if (!_runs.TryGetValue(runId, out var state))
+        {
+            return false;
+        }
+
+        lock (state.Gate)
+        {
+            if (state.IsComplete || state.CurrentPause is not null || state.Messages.Any(message => !message.DeliveredToParent) || !apply(state.NextPause.Task))
+            {
+                return false;
+            }
+
+            state.IsComplete = terminal;
+            return true;
         }
     }
 
@@ -439,6 +461,8 @@ public sealed class RunSteeringCoordinator
         public long LastSequence { get; set; }
 
         public List<SteeringDelivery> Messages { get; } = [];
+
+        public TaskCompletionSource NextPause { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public PauseState? CurrentPause { get; set; }
     }

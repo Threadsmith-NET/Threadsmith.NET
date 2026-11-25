@@ -150,6 +150,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
 | `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
+| `Context-GoalAssessment.md` | Tool-free goal assessment. Version 2 cites completed answers, matching action receipts, and host-recorded blockers. Historical checks have limited applicability. | `None` |
 
 #### `ActiveTurnSummary` family
 
@@ -711,7 +712,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, synthesis and delivery while preserving the active checkout and report format. | `None` |
+| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, and synthesis and delivery of a report with a UTC generation timestamp when `datetime` is available, while preserving the active checkout. | `None` |
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
 

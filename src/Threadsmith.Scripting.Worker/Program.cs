@@ -15,6 +15,7 @@ using Threadsmith.Core;
 /// <summary>Reads one bounded script request from standard input and writes one JSON result.</summary>
 public static class Program
 {
+    private const string _textNamespace = "System.Text";
     private const string _cryptographyNamespace = "System.Security.Cryptography";
     private static readonly JsonSerializerOptions RequestJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly string[] _prohibitedNamespacePrefixes =
@@ -172,7 +173,7 @@ public static class Program
 
                     if (namespaceName.StartsWith("System.", StringComparison.Ordinal)
                         && !request.AllowedAssemblies.Any(allowed => namespaceName.Equals(allowed, StringComparison.Ordinal)
-                            || namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal)
+                            || (allowed != _textNamespace && namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal))
                             || (symbol is INamespaceSymbol && allowed.StartsWith(namespaceName + ".", StringComparison.Ordinal))))
                     {
                         throw new InvalidOperationException(
@@ -285,6 +286,12 @@ public static class Program
                 || !assemblyName.StartsWith("System.", StringComparison.Ordinal))
             {
                 throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
+            }
+
+            // System.Text is an exact namespace import from the core library, not a separate assembly.
+            if (assemblyName == _textNamespace)
+            {
+                continue;
             }
 
             var referenceName = assemblyName;

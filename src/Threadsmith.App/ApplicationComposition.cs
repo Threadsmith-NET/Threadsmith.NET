@@ -488,6 +488,7 @@ internal static class ApplicationComposition
             activeTurnCompactor: activeTurnCompactor,
             activeTurnCompactionPolicy: activeTurnCompactionPolicy,
             activeTurnCompactionProfile: activeTurnCompactionProfile,
+            goalAssessmentProvider: activeTurnCandidateProvider,
             selectActiveModel: selectResolvedFallback,
             conversationToolSnapshots: conversationToolSnapshots,
             steering: runSteering,

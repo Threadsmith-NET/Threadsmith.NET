@@ -45,13 +45,16 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
 
     /// <summary>Trusted settings merge by default and can explicitly replace the defaults.</summary>
     [Fact]
-    public void ScriptDefaultsIncludeJsonAndRespectExplicitConfiguration()
+    public void ScriptDefaultsIncludeTextApisAndRespectExplicitConfiguration()
     {
-        Assert.Contains("System.Text.Json", Load().ScriptAssemblies);
-        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq,System.Text.RegularExpressions"}}}}""");
+        var defaults = Load().ScriptAssemblies;
+        Assert.Contains("System.Text", defaults);
+        Assert.Contains("System.Text.Json", defaults);
+        Assert.Contains("System.Text.RegularExpressions", defaults);
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq,System.Numerics"}}}}""");
         var merged = Load().ScriptAssemblies;
         Assert.Contains("System.Text.Json", merged);
-        Assert.Contains("System.Text.RegularExpressions", merged);
+        Assert.Contains("System.Numerics", merged);
         Assert.Single(merged, name => name == "System.Linq");
 
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq","assembly_config_action":"override"}}}}""");

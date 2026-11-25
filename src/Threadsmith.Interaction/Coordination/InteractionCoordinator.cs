@@ -586,6 +586,8 @@ public sealed partial class InteractionCoordinator
                                     turnStart,
                                     _displayOptions.ShowOperationDurations,
                                     _timeProvider),
+                            GoalAssessmentActivity { Started: true } assessment => new InteractionActivity(
+                                "Analyzing Goal", _timeProvider.GetTimestamp(), false, _timeProvider) { GoalAssessmentId = assessment.AttemptId },
                             ActiveTurnCompactionStarted started => new InteractionActivity(
                                 FormatActiveTurnCompactionActivity(started),
                                 _timeProvider.GetTimestamp(),
@@ -711,7 +713,8 @@ public sealed partial class InteractionCoordinator
                         || (domainEvent is ModelReasoningObserved && streamThinking && !retainActivityDuringOutput)
                         || directFetchApprovalRequested
                         || directFetchApprovalDenied
-                        || domainEvent is ActiveTurnCompactionCompleted;
+                        || domainEvent is ActiveTurnCompactionCompleted
+                        || (domainEvent is GoalAssessmentActivity { Started: false } ended && nextActivity?.GoalAssessmentId == ended.AttemptId);
                     if (incomingActivity is not null)
                     {
                         nextActivity = incomingActivity;
@@ -1726,7 +1729,17 @@ public sealed partial class InteractionCoordinator
                     }
                 }
 
-                if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
+                if (TryGetCommandArgument(commandText, "/goal", out var goalArgument))
+                {
+                    var goal = await HandleGoalCommandAsync(sessionId, goalArgument, lifetime.Token);
+                    if (goal is null)
+                    {
+                        continue;
+                    }
+
+                    submittedText = goal;
+                }
+                else if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
                 {
                     await _surface.WriteAsync(
                         $"Unknown command: {commandText}. Enter /help for commands.\n",
@@ -1830,10 +1843,16 @@ public sealed partial class InteractionCoordinator
                                                 continue;
                                             }
 
+                                            if (TryGetCommandArgument(steeringCommand, "/goal", out var activeGoalArgument))
+                                            {
+                                                _ = await HandleGoalCommandAsync(sessionId, activeGoalArgument, operation.Token);
+                                                continue;
+                                            }
+
                                             if (steeringCommand.StartsWith('/'))
                                             {
                                                 await _surface.WriteAsync(
-                                                    "Only /agents inspection or cancellation is available while steering is paused.\n",
+                                                    "Use /agents or /goal while steering is paused.\n",
                                                     PresentationTextRole.Warning,
                                                     operation.Token);
                                                 continue;
@@ -2676,6 +2695,31 @@ public sealed partial class InteractionCoordinator
             $"code_explore output inspection is {(snapshot.InspectCodeExploreOutput ? "on" : "off")} for this session.\n",
             PresentationTextRole.Status,
             cancellationToken);
+    }
+
+    private async Task<string?> HandleGoalCommandAsync(SessionId sessionId, string argument, CancellationToken cancellationToken)
+    {
+        var command = GoalCommandParser.Parse(sessionId, argument);
+        if (command is null)
+        {
+            await _surface.WriteAsync($"Usage: {GoalCommandParser.Usage}\n", PresentationTextRole.Warning, cancellationToken);
+            return null;
+        }
+
+        try
+        {
+            var result = await _presenter.ManageGoalAsync(command, cancellationToken);
+            var status = result.DisplayText is { } text
+                ? $"Current goal: {text}"
+                : result.WasCancelled ? "Goal cancelled." : "No active goal.";
+            await _surface.WriteAsync(status + "\n", PresentationTextRole.Status, cancellationToken);
+            return command.Text;
+        }
+        catch (InvalidOperationException exception)
+        {
+            await _surface.WriteAsync(FormatStatusError(exception) + "\n", PresentationTextRole.Error, cancellationToken);
+            return null;
+        }
     }
 
     private static bool TryGetCommandArgument(

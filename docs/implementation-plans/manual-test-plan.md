@@ -1,5 +1,11 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-GOAL-01 — Stop, continue, and cancel a session goal
+
+1. In a disposable session, enter `/goal set "Describe the parser and identify its tests"`. Stop the turn. Enter `/goal`; confirm that the goal is unchanged. Submit `continue` as normal input.
+2. During assessment, check for the `THINKING` spinner labeled `Analyzing Goal` in MAIN output with one blank line above it. Confirm that it disappears before the continuation notice or terminal summary. After a terminal result, `/goal` must show no goal.
+3. Repeat. Pause at assessment, enter `/goal cancel`, and confirm that the old verdict cannot restart work. Record the terminal, OS, and provider used. Do not report an untested platform as verified.
+
 ## MTP-MODAL-WRAP — Modal text reflow
 
 **Prerequisites:** Use non-secret fixtures with long prose, unbroken paths, explicit newlines, CJK and combining characters. Record OS, terminal/version and theme.

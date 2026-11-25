@@ -30,6 +30,7 @@ public static class InteractiveCommandCatalog
         new("/context", "/context [mode|inspect|map|compact]", "Inspect context; map shows actual request usage; compact is retired"),
         new("/extensions", "/extensions", "Browse and toggle loaded extensions"),
         new("/fetch-authorize", "/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
+        new("/goal", GoalCommandParser.Usage, "Show, set, or cancel the session goal"),
         new("/help", "/help", "Show commands"),
         new("/hooks", "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Browse and toggle lifecycle hooks"),
         new("/intelligence", "/intelligence [onboard [depth]|refresh|archeology <question>|enable|disable|reset|status]", "Collect or investigate repository architecture"),

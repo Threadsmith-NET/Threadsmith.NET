@@ -653,6 +653,35 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + "Code: invalid_request · Parameter: input", exception.Message);
     }
 
+    /// <summary>Only a confirmed text cutoff is eligible for goal continuation.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("response.function_call_arguments.delta")]
+    [InlineData("response.custom_tool_call_input.delta")]
+    public async Task IncompleteOutputLimitClassifiesOnlyText(string? pendingToolEvent)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var stream = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+            + (pendingToolEvent is null ? string.Empty : $"data: {JsonSerializer.Serialize(new { type = pendingToolEvent, delta = "{" })}\n\n")
+            + "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "fixture");
+        var chunks = new List<ModelChunk>();
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), token))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(pendingToolEvent is null, error.IsTextOutputLimit);
+        Assert.Contains(chunks, chunk => chunk.Text == "partial");
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
+    }
+
     /// <summary>A configured byte limit rejects oversized output independently of the model token ceiling.</summary>
     [Fact]
     public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
@@ -1288,6 +1317,47 @@ public sealed class Plan50OpenAiCodexTests
 
         Assert.Equal(3, attempts);
         Assert.Equal(attempts, submissions);
+    }
+
+    /// <summary>Tool fragments fence an attempt before the provider can release an invocation.</summary>
+    [Theory]
+    [InlineData("eof")]
+    [InlineData("transport")]
+    [InlineData("overloaded")]
+    public async Task Provider_UnconfirmedToolStopsRetryBeforeVisibleOutput(string failure)
+    {
+        const string partial = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"inspect_file\",\"arguments\":\"{}\"}}\n\n";
+        const string overloaded = "data: {\"type\":\"error\",\"error\":{\"code\":\"overloaded_error\",\"message\":\"retry later\"}}\n\n";
+        var attempts = 0;
+        var handler = new RecordingHandler(_ => ++attempts == 1
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = failure switch
+                {
+                    "transport" => new StreamContent(new InterruptedResponseStream(Encoding.UTF8.GetBytes(partial))),
+                    "overloaded" => new StringContent(partial + overloaded),
+                    _ => new StringContent(partial),
+                },
+            }
+            : StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.FromSeconds(2) },
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var request = CreateStreamRequest() with { StopOnUnconfirmedToolStream = true };
+        var observed = new List<ModelChunk>();
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(request, cancellationToken))
+            {
+                observed.Add(chunk);
+            }
+        });
+        Assert.Contains("unconfirmed tool batch", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.DoesNotContain(observed, chunk => chunk.Output is not null);
     }
 
     /// <summary>A partial response cannot be accepted or replayed into the same consumer.</summary>

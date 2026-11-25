@@ -792,6 +792,10 @@ public sealed record ToolExecutionContext(
     [JsonIgnore]
     internal PreparedCSharpScriptSource? PreparedScriptSource { get; init; }
 
+    /// <summary>Records when the script may have reached the worker.</summary>
+    [JsonIgnore]
+    internal Action? MarkScriptDispatched { get; init; }
+
     /// <summary>Binds one admission to this exact execution context.</summary>
     internal void AdmitSecretReferences(ITool tool, object input, IReadOnlySet<string> references)
     {

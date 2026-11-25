@@ -42,7 +42,7 @@ public sealed partial class SessionApplication
 
     private void CommitGoalContext(ConversationLoopState loop, int round, LiveSession? session, bool goalChanged, bool continuing)
     {
-        loop.DiscardUndeliveredGoalMessages(goalChanged);
+        loop.RetireGoalMessages(goalChanged);
         if (goalChanged && session?.Goal is { } goal)
         {
             var message = new ModelMessage
@@ -124,7 +124,12 @@ public sealed partial class SessionApplication
             bool? moreWork;
             if (lastLine == GoalUnfinishedStatement)
             {
-                moreWork = true;
+                // A reply consisting of the requested literal sentence is answer content,
+                // not a separate status line. Keep trusting the marker when it stands on its own as status.
+                moreWork = !reply.TrimStart().Equals(GoalUnfinishedStatement, StringComparison.Ordinal)
+                    || !(current.Goal?.Contains(GoalUnfinishedStatement, StringComparison.OrdinalIgnoreCase) == true
+                        || registration.Task.Intent.Contains(GoalUnfinishedStatement, StringComparison.OrdinalIgnoreCase)
+                        || registration.MemoryCurrentInstruction?.Contains(GoalUnfinishedStatement, StringComparison.OrdinalIgnoreCase) == true);
             }
             else if (lastLine == GoalFinishedStatement || reply.Length == 0)
             {
@@ -161,15 +166,50 @@ public sealed partial class SessionApplication
             }
 
             var terminal = !moreWork.Value;
+            var otherFeedbackReviewer = false;
+            var feedbackPending = false;
             if (!_steering.AtGoalBoundary(
                 round.RunId,
                 _ => !pause.IsCompleted && !cancellationToken.IsCancellationRequested
                 && (terminal
-                    ? registration.CancellationLifetime.TryCommitTerminal(() => _sessions.TryUpdate(sessionId, current with { Goal = null, GoalReplaced = null, GoalRevision = checked(current.GoalRevision + 1) }, current))
+                    ? registration.CancellationLifetime.TryCommitTerminal(TryFinishGoal)
                     : _sessions.TryGetValue(sessionId, out var latest) && latest.GoalReplaced == replaced),
                 terminal))
             {
+                if (otherFeedbackReviewer)
+                {
+                    await ShowGoalResultAsync(round, "Goal paused: another run is reviewing new edit diagnostics.", cancellationToken);
+                    return false;
+                }
+
+                if (feedbackPending)
+                {
+                    if (_limits.MaxModelRounds > 0 && round.ModelRound >= _limits.MaxModelRounds)
+                    {
+                        await ShowGoalResultAsync(round, "Goal paused: new edit diagnostics need review before the goal can finish.", cancellationToken);
+                        return false;
+                    }
+
+                    // The usual work-round boundary delivers the newer feedback. Do not
+                    // spend an automatic continuation on an outstanding review obligation.
+                    RetainAnswer();
+                    return true;
+                }
+
                 continue;
+            }
+
+            bool TryFinishGoal()
+            {
+                if (!_sessions.TryGetValue(sessionId, out var latest) || latest.GoalReplaced != replaced)
+                {
+                    return false;
+                }
+
+                otherFeedbackReviewer = _sourceEdits?.IsGoalFeedbackClaimedByAnotherRun(sessionId, round.RunId) == true;
+                feedbackPending = !otherFeedbackReviewer && _sourceEdits?.HasUnreviewedGoalFeedback(sessionId, round.RunId) == true;
+                return !otherFeedbackReviewer && !feedbackPending
+                    && _sessions.TryUpdate(sessionId, latest with { Goal = null, GoalReplaced = null, GoalRevision = checked(latest.GoalRevision + 1) }, latest);
             }
 
             if (terminal)

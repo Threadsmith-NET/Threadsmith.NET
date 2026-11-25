@@ -302,7 +302,7 @@ public sealed class SourceEditApplication :
             return _feedback.TryUpdate(sessionId, delivered with { Revision = latest.Revision, CarryForward = true, PausedGoalReview = new(latest.Revision, runId) }, delivered) ? latest : null;
         }
 
-        if (delivered.RunId != runId && !latest.Pending && latest.Analyzers.Status != "pending")
+        if (!retainGoalFeedback && delivered.RunId != runId && !latest.Pending && latest.Analyzers.Status != "pending")
         {
             return _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivered)) ? latest : null;
         }
@@ -833,25 +833,25 @@ public sealed class SourceEditApplication :
             return;
         }
 
-        if (delivery.PausedGoalReview is { } review)
+        if (delivery.PausedGoalReview is { } review && (review.ClaimedBy != runId || review.Revision != analysis.Revision))
         {
-            if (review.ClaimedBy != runId || review.Revision != analysis.Revision)
-            {
-                return;
-            }
-
-            if (delivery.RunId != runId && !analysis.Pending && analysis.Analyzers.Status != "pending")
-            {
-                _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivery));
-                return;
-            }
+            return;
         }
 
         if (delivery.FinalFeedbackRevision <= analysis.Revision || delivery.PausedGoalReview is not null)
         {
+            // A resumed worker only acknowledges the snapshot it received. Keep the original
+            // edit owner available for a newer publication, even if this snapshot was complete.
             var carryForward = delivery.CarryForward && (delivery.PausedGoalReview is null || delivery.RunId != runId
                 || analysis.Pending || analysis.Analyzers.Status == "pending");
-            _feedback.TryUpdate(sessionId, delivery with { FinalFeedbackRevision = null, PausedGoalReview = null, CarryForward = carryForward, Reviewed = analysis }, delivery);
+            var acknowledged = delivery with
+            {
+                FinalFeedbackRevision = delivery.FinalFeedbackRevision > analysis.Revision ? delivery.FinalFeedbackRevision : null,
+                PausedGoalReview = null,
+                CarryForward = carryForward,
+                Reviewed = analysis,
+            };
+            _feedback.TryUpdate(sessionId, acknowledged, delivery);
         }
     }
 
@@ -874,6 +874,12 @@ public sealed class SourceEditApplication :
     internal bool NeedsGoalFeedbackReview(SessionId sessionId, SourceEditAnalysis analysis) =>
         _feedback.TryGetValue(sessionId, out var delivery) && delivery.EffectId == analysis.EffectId
         && analysis.Revision >= delivery.Revision && SourceEditAnalysisProjection.HasNewActionableFindings(analysis, delivery.Reviewed);
+
+    /// <summary>Checks for actionable analysis published after the closing round's feedback check, without claiming delivery.</summary>
+    internal bool HasUnreviewedGoalFeedback(SessionId sessionId, RunId runId) =>
+        _feedback.TryGetValue(sessionId, out var delivery) && (delivery.RunId == runId || delivery.CarryForward)
+        && GetLatestFeedback(delivery, out var replacementPending) is { Obsolete: false, CommittedGeneration: not null } latest
+        && !replacementPending && NeedsGoalFeedbackReview(sessionId, latest);
 
     private SourceEditAnalysis? RequireFinalFeedbackReview(SessionId sessionId, SourceEditAnalysis? analysis)
     {

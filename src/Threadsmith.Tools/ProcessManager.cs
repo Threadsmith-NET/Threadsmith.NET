@@ -78,6 +78,10 @@ public sealed record ProcessExecutionRequest
     [System.Text.Json.Serialization.JsonIgnore]
     internal ScriptWorkerProcess? ScriptWorker { get; init; }
 
+    /// <summary>Marks the start of the private worker protocol's outbound dispatch.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    internal Action? MarkScriptDispatched { get; init; }
+
     /// <summary>Non-null only for the private worker protocol; empty grants no calls.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     internal IReadOnlyDictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>? ScriptHandlers { get; init; }
@@ -399,6 +403,8 @@ public sealed class ProcessManager : IProcessManager
         var writer = process.StandardInput.BaseStream;
         var reader = process.StandardOutput.BaseStream;
         var start = request.StandardInput ?? throw new InvalidOperationException("Missing script request.");
+        cancellationToken.ThrowIfCancellationRequested();
+        request.MarkScriptDispatched?.Invoke();
         await ScriptWorkerProtocol.WriteAsync(writer, ScriptFrameKind.Start, 0, start, 64 * 1024 * 1024, cancellationToken);
         var bytesRemaining = ScriptWorkerProtocol.ResultBytes;
         for (var sequence = 1; ; sequence++)

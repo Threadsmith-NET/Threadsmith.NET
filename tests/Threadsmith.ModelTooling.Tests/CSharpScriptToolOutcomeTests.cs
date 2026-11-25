@@ -15,17 +15,19 @@ public static class CSharpScriptToolOutcomeTests
 {
     /// <summary>A worker timeout is an unknown action outcome, not an ordinary script error.</summary>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public static async Task GoalPausesOnlyForUnconfirmedScriptOutcome(bool timedOut)
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public static async Task GoalPausesOnlyForUnconfirmedScriptOutcome(bool timedOut, bool parallel)
     {
         var ct = TestContext.Current.CancellationToken;
         var clock = new FakeTimeProvider();
         await using var events = new DomainEventStream(timeProvider: clock);
         var prompts = TestPromptLoader.Instance;
         var sanitizer = new SecretOutputSanitizer();
-        var registry = new ToolRegistry([new CSharpScriptTool(new FailedWorker(timedOut), prompts)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+        var sibling = new SiblingEdit();
+        var registry = new ToolRegistry([new CSharpScriptTool(new FailedWorker(timedOut), prompts), sibling]);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock, parallelOptions: new ToolParallelOptions { Enabled = parallel });
         var repository = Path.GetTempPath();
         var context = new ToolInvocationContext
         {
@@ -70,6 +72,7 @@ public static class CSharpScriptToolOutcomeTests
         }
 
         Assert.Equal(timedOut ? 1 : 2, model.Requests);
+        Assert.Equal(timedOut ? 0 : 1, sibling.Executions);
         var status = await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), ct);
         Assert.Equal(timedOut ? goal : null, status.DisplayText);
     }
@@ -85,12 +88,32 @@ public static class CSharpScriptToolOutcomeTests
             Requests++;
             if (Requests == 1)
             {
-                yield return new ModelChunk { Output = new ToolRequestModelOutput("csharp_script", """{"code":"1 + 1"}"""), FinishReason = ModelFinishReason.ToolCalls };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("csharp_script", """{"code":"1 + 1"}""") };
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("sibling_edit", "{}"), FinishReason = ModelFinishReason.ToolCalls };
                 yield break;
             }
 
             Assert.Contains(request.Messages, message => message.Role == ModelMessageRole.Tool && message.GetModelVisibleContent().Contains("Script failed.", StringComparison.Ordinal));
             yield return new ModelChunk { Text = "All requested work is complete.", FinishReason = ModelFinishReason.Stop };
+        }
+    }
+
+    private sealed class SiblingEdit : Tool<DateTimeInput, string>
+    {
+        public override ToolDefinition Definition { get; } = ToolDefinitionFactory.Create<DateTimeInput, string>("sibling_edit", "Sibling edit", ToolCategory.RepositoryInspection, RepositoryTrustLevel.TrustedMutation, ApprovalLevel.None, ToolSideEffect.WritesFiles, Timeout.InfiniteTimeSpan, 4096);
+
+        internal int Executions { get; private set; }
+
+        public override Task<ToolExecution<string>> ExecuteAsync(DateTimeInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Executions++;
+            return Task.FromResult(new ToolExecution<string>("Edited", []));
+        }
+
+        protected override void ValidateInput(DateTimeInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
         }
     }
 

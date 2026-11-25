@@ -594,6 +594,26 @@ public static partial class OpenRouterProviderTests
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
     }
 
+    /// <summary>Successful terminal output must confirm tool indexes seen in earlier frames.</summary>
+    [Theory]
+    [InlineData("response.output_item.added", 1)]
+    [InlineData("response.function_call_arguments.done", 0)]
+    public static async Task CompletedResponseMustConfirmEveryStreamedToolSlotAsync(string eventType, int index)
+    {
+        var prefix = new JsonObject { ["type"] = eventType, ["output_index"] = index, ["item"] = FunctionCall("omitted"), ["arguments"] = "{}" };
+        var output = index == 0 ? OutputMessage("Done") : FunctionCall("unrelated");
+        using var handler = new Handler(Frame(prefix.ToJsonString()) + Terminal("response.completed", "completed", new JsonArray(output), Usage()));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = Provider(client, Model() with { RetryMaxAttempts = 2, RetryDelayMilliseconds = 0 });
+        var chunks = new List<ModelChunk>();
+
+        await Assert.ThrowsAsync<MalformedModelOutputException>(() => CollectAsync(provider, Request(), chunks));
+
+        Assert.Equal(1, handler.Calls);
+        Assert.Single(chunks, chunk => chunk.Usage is not null);
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);
+    }
+
     /// <summary>Only an interruption without protected tool fragments may release a replacement batch.</summary>
     [Theory]
     [InlineData("eof", false, true)]

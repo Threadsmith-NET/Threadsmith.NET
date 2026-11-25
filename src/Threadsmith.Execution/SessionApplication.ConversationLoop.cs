@@ -3882,13 +3882,45 @@ public sealed partial class SessionApplication
             TransientState.Dispose();
         }
 
-        public void DiscardUndeliveredGoalMessages(bool goalChanged)
+        public void RetireGoalMessages(bool goalChanged)
         {
-            // A before-model hook can retire the prepared revision or its profile before dispatch.
+            if (goalChanged)
+            {
+                // Goal controls describe live state, not historical instructions. Remove them
+                // from both retained groups and the compaction prefix before adding the new state.
+                var rewritesDeliveredHistory = _summarizedGoalMessages.Count > 0;
+                _summarizedGoalMessages = [];
+                _goalTransitions.Clear();
+                _groups.RemoveAll(group =>
+                {
+                    if (!group.ExcludeMessagesFromSummary)
+                    {
+                        return false;
+                    }
+
+                    rewritesDeliveredHistory |= group.WasDeliveredVerbatim;
+                    return true;
+                });
+                if (rewritesDeliveredHistory)
+                {
+                    if (TransientState.HasResponses)
+                    {
+                        ReleaseCompletedReplay();
+                    }
+                    else
+                    {
+                        _sourceProjection = null;
+                        HistoryRewriteGeneration++;
+                    }
+                }
+
+                return;
+            }
+
+            // A before-model hook can retire the prepared profile before dispatch.
             for (var index = _groups.Count - 1; index >= 0 && !_groups[index].WasDeliveredVerbatim; index--)
             {
-                if (_groups[index].Messages is [{ SectionId: _goalContextSection or _goalClearedSection }]
-                    || (goalChanged && _groups[index].Messages is [{ SectionId: _goalSection }]))
+                if (_groups[index].Messages is [{ SectionId: _goalContextSection or _goalClearedSection }])
                 {
                     var sequence = _groups[index].Sequence;
                     _goalTransitions.RemoveAll(transition => transition.Sequence == sequence);
@@ -3916,6 +3948,7 @@ public sealed partial class SessionApplication
 
             var sequence = _nextGroupSequence++;
             var messages = new[] { message };
+            var isLiveGoalMessage = message.SectionId is _goalSection or _goalContextSection or _goalClearedSection;
             var estimate = ModelWireEstimator.Estimate(
                 messages,
                 [],
@@ -3927,6 +3960,7 @@ public sealed partial class SessionApplication
                 Sequence = sequence,
                 CompletedModelRound = modelRound,
                 Messages = messages,
+                ExcludeMessagesFromSummary = isLiveGoalMessage,
                 Sources =
                 [
                     new ActiveTurnSourceReference(
@@ -3941,7 +3975,7 @@ public sealed partial class SessionApplication
                 Sensitivity = sensitivity,
                 WasDeliveredVerbatim = false,
             });
-            if (message.SectionId is _goalSection or _goalContextSection or _goalClearedSection)
+            if (isLiveGoalMessage)
             {
                 _goalTransitions.Add((sequence, message));
             }

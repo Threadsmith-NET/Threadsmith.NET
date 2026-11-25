@@ -486,7 +486,7 @@ internal static class ModelComposition
         {
             refreshed = await discoverAsync(attemptCancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
         {
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Fail("Refresh unavailable; using cached model capabilities.");

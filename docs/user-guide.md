@@ -303,7 +303,7 @@ After required startup choices, the TUI paints the startup modal before loading 
 
 Use `/goal set "Describe the parser and identify its tests"` to set a goal and start work. The quotes are required. Use `\"` for a literal quote. Setting another goal replaces the first. `/goal` shows the current goal; `/goal cancel` clears it. Neither command calls a model.
 
-If you stop the turn, the goal stays active. Use `/goal` to check it, then submit `continue` as ordinary input. You can also use the three commands in the steering composer. A goal belongs to this live session, not to a clone or an application restart.
+If you stop the turn, the goal stays active. Use `/goal` to check it, then submit `continue` as ordinary input. All three goal commands also work in the steering composer. A successful `/goal set` there resumes the same run with the new objective; it does not submit steering text. URLs in a goal use the normal inline approval path. A goal belongs to this live session, not to a clone or an application restart.
 
 A normal final answer ends the goal. Threadsmith continues only when the assistant says requested work remains and it can do that work now. An explicit completion statement is sufficient. If new actionable compiler or analyzer feedback arrives during the closing reply, the worker sees it before the goal closes. If the round limit prevents that, the goal pauses. A question for you or an optional suggestion ends the turn. An interrupted or cut-off reply leaves the goal active for you to resume.
 

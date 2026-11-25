@@ -264,6 +264,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
                 ToolInvocationId = context.ToolInvocationId,
                 RunId = context.RunId,
                 ScriptWorker = worker,
+                MarkScriptDispatched = context.MarkScriptDispatched,
                 ScriptHandlers = context.Invocation.ScriptHandlers ?? new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>(),
                 WorkingDirectory = scope.ScratchpadPath,
                 EnvironmentVariables = ScriptFilePolicy.TemporaryEnvironment(scope.ScratchpadPath, scope.RepositoryPath),
@@ -427,6 +428,11 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
 
         var kind = Enum.Parse<ScriptKind>(input.Kind, ignoreCase: true);
         var output = await _engine.ExecuteAsync(source.Code, kind, context, cancellationToken);
+        if (output.TimedOut)
+        {
+            context.MarkScriptDispatched?.Invoke();
+        }
+
         var sources = new List<ToolProvenanceSource>();
         if (source.SourcePath is { } original)
         {

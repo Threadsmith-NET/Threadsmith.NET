@@ -104,6 +104,8 @@ public sealed partial class SourceEditApplicationTests
     [InlineData("unconfirmed-reply", 3, false)]
     [InlineData("known", 2, false)]
     [InlineData("replacement", 3, false)]
+    [InlineData("resumed", 2, false)]
+    [InlineData("assessment", 3, false)]
     public async Task GoalHandlesLateEditDiagnosticsAtCompletion(string producer, int maxRounds, bool interruptBeforeRetry)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -121,14 +123,16 @@ public sealed partial class SourceEditApplicationTests
         var stopEditingRun = producer == "same-run-stop";
         var continueAfterClean = producer == "clean-continue";
         var cleanUpdate = producer == "clean" || continueAfterClean;
+        var duringAssessment = producer == "assessment";
+        var resumed = producer == "resumed";
         var provider = new CompletionProvider(1)
         {
-            FinalText = "All requested work is complete.",
+            FinalText = duringAssessment ? "The edit is complete." : "All requested work is complete.",
             FirstFinalText = continueAfterClean ? "Requested work remains." : null,
             UnconfirmedRound = producer == "unconfirmed-reply" ? 3 : null,
-            RequestObserved = _ =>
+            RequestObserved = request =>
             {
-                if (++calls == 2 && !stopEditingRun)
+                if (++calls == 2 && !stopEditingRun && !duringAssessment)
                 {
                     // Publish after the second request has been assembled, before the closing statement.
                     var clean = CreateCleanCompletionAnalysis(analyzer);
@@ -138,6 +142,24 @@ public sealed partial class SourceEditApplicationTests
                         CurrentErrors = finding.Producer == "compiler" ? 1 : 0,
                         Analyzers = clean.Analyzers with { Errors = finding.Producer == "analyzer" ? 1 : 0 },
                     });
+                }
+                else if (resumed && calls == 3)
+                {
+                    Assert.Contains(request.Messages, message => message.SectionId == "source-edit-feedback"
+                        && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+                    var prior = Assert.IsType<SourceEditAnalysis>(analyzer.Latest);
+                    analyzer.Publish(prior with { Revision = prior.Revision + 1, CurrentErrors = 2, Diagnostics = [finding, finding with { Code = "LATE002" }] });
+                }
+            },
+        };
+        var assessor = new CompletionProvider(0)
+        {
+            FinalText = "STOP",
+            RequestObserved = _ =>
+            {
+                if (calls == 2)
+                {
+                    analyzer.Publish(CreateCleanCompletionAnalysis(analyzer) with { Diagnostics = [finding], CurrentErrors = 1 });
                 }
             },
         };
@@ -163,6 +185,7 @@ public sealed partial class SourceEditApplicationTests
             correctiveMessages: new CorrectiveMessageFactory(prompts),
             prompts: prompts,
             sourceEdits: edits,
+            goalAssessmentProvider: duringAssessment ? assessor : null,
             outputClock: clock);
         sessions.RegisterRestoredSession(fixture.SessionId);
         const string goal = "Edit Example.cs";
@@ -209,17 +232,27 @@ public sealed partial class SourceEditApplicationTests
             return;
         }
 
-        var paused = producer == "analyzer" && maxRounds == 2;
+        var paused = (producer == "analyzer" && maxRounds == 2) || resumed;
         Assert.Equal(cleanUpdate, succeeded);
         Assert.Equal(paused ? goal : null, (await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
         Assert.Equal(maxRounds, provider.Requests.Count);
         if (paused)
         {
-            await InterruptBeforeFeedbackDispatchAsync();
+            if (!resumed)
+            {
+                await InterruptBeforeFeedbackDispatchAsync();
+            }
+
             Assert.Equal(2, provider.Requests.Count);
             var resume = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Continue"), ct);
             Assert.True(await sessions.HandleAsync(new WaitForRunCommand(resume), ct));
             Assert.Null((await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+            if (resumed)
+            {
+                Assert.Equal(4, provider.Requests.Count);
+                Assert.Contains(provider.Requests[3].Messages, message => message.SectionId == "source-edit-feedback"
+                    && message.GetModelVisibleContent().Contains("LATE002", StringComparison.Ordinal));
+            }
         }
 
         if (continueAfterClean)

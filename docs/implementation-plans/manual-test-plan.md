@@ -10,6 +10,7 @@ Use a disposable session. For repeatable replies, use a scripted provider that s
 4. Stop a work round and use `/goal` to verify the goal remains active. Submit `continue` to resume. During a held status check, pause and enter `/goal cancel`. Release the old check and verify it cannot restart that goal.
 5. Set `execution:maxGoalContinuations` to `2` before startup. Have the worker close each reply with `Requested work remains.`. Expect the initial work round and two automatic continuations, then a pause with the goal still active. Submit `continue` to resume.
 6. Set the trusted ceiling to `0` and a positive value in repository configuration. Restart and submit a goal whose first reply says `Requested work remains.`. Expect the goal to pause after the first reply, with no second work round until you submit `continue`.
+7. Pause during a held status check and enter `/goal set "Write a one-sentence farewell"` at `steer >`. Confirm the same run resumes without another input and its next work request carries the farewell goal instead of the greeting goal.
 
 ## MTP-MODAL-WRAP — Modal text reflow
 

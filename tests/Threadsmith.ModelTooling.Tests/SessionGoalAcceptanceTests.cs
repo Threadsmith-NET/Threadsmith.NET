@@ -404,15 +404,18 @@ public static class SessionGoalAcceptanceTests
     }
 
     /// <summary>The active composer consumes goal controls locally and never submits them as work.</summary>
-    [Fact]
-    public static async Task ActiveComposerShowsAndClearsGoalWithoutRestartingWork()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Write replacement text")]
+    public static async Task ActiveComposerHandlesGoalChangesWithoutRestartingWork(string? replacement)
     {
         var token = TestContext.Current.CancellationToken;
         var clock = new FakeTimeProvider();
         await using var events = new DomainEventStream(timeProvider: clock);
         var held = new HeldAssessor();
         var prompts = TestPromptLoader.Instance;
-        var app = new SessionApplication(events, new WorkModel(), new ExecutionBudget(new BudgetDimensions(200000, 20, TimeSpan.MaxValue)), new SecretOutputSanitizer(), NullLogger<SessionApplication>.Instance, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, goalAssessmentProvider: held, outputClock: clock);
+        var model = new WorkModel { FinishAfterFirstRound = true };
+        var app = new SessionApplication(events, model, new ExecutionBudget(new BudgetDimensions(200000, 20, TimeSpan.MaxValue)), new SecretOutputSanitizer(), NullLogger<SessionApplication>.Instance, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, goalAssessmentProvider: held, outputClock: clock);
         var dispatcher = new CommandDispatcher([app]);
         var projections = new InMemoryProjectionStore();
         await using var subscription = events.Subscribe(projections.ApplyAsync);
@@ -422,13 +425,26 @@ public static class SessionGoalAcceptanceTests
             observed.Enqueue(item);
             return Task.CompletedTask;
         });
-        var surface = new GoalSurface(held.Entered.Task);
+        var surface = new GoalSurface(held.Entered.Task) { SteeringReplacement = replacement };
         try
         {
             await new InteractionCoordinator(new InteractionPresenter(dispatcher, projections), events, surface, timeProvider: clock).RunAsync(cancellationToken: token);
             var run = Assert.Single(observed.OfType<RunCompleted>());
-            Assert.Equal(3, surface.SteeringReads);
+            Assert.True(run.Succeeded);
+            Assert.Equal(replacement is null ? 3 : 1, surface.SteeringReads);
             Assert.False(Assert.Single(observed.OfType<RunSteeringSubmitted>()).HasText);
+            var requests = model.Requests.ToArray();
+            Assert.Equal(replacement is null ? 1 : 2, requests.Length);
+            Assert.Contains(requests[0].Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(Goal, StringComparison.Ordinal));
+            Assert.DoesNotContain(requests[0].Messages, message => message.SectionId != "session-goal" && message.GetModelVisibleContent().Contains(Goal, StringComparison.Ordinal));
+            if (replacement is not null)
+            {
+                var updated = requests[1];
+                Assert.Contains(updated.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(replacement, StringComparison.Ordinal));
+                Assert.DoesNotContain(Goal, updated.Input, StringComparison.Ordinal);
+                Assert.DoesNotContain(updated.Messages, message => message.GetModelVisibleContent().Contains(Goal, StringComparison.Ordinal));
+            }
+
             Assert.Equal([true, false], observed.OfType<GoalAssessmentActivity>().Select(item => item.Started));
             Assert.Null((await dispatcher.DispatchAsync(new SessionGoalCommand(run.SessionId, SessionGoalAction.Show), token)).DisplayText);
         }
@@ -629,6 +645,29 @@ public static class SessionGoalAcceptanceTests
         Assert.Equal(expectedRounds, model.WorkRounds);
         Assert.Equal(status is null ? 0 : 1, model.StatusChecks);
         Assert.Equal(limitReached ? Goal : null, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), token)).DisplayText);
+    }
+
+    /// <summary>An exact requested answer does not count as a separate work status.</summary>
+    [Fact]
+    public static async Task RequestedLiteralContinuationSentenceEndsGoalAsync()
+    {
+        const string literal = "Requested work remains.";
+        const string goal = $"Reply with exactly this sentence: {literal}";
+        var ct = TestContext.Current.CancellationToken;
+        var clock = new FakeTimeProvider();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var model = new AnswerModel(goal, literal);
+        var prompts = TestPromptLoader.Instance;
+        var app = new SessionApplication(events, model, UnboundedBudget.Instance, new SecretOutputSanitizer(), NullLogger<SessionApplication>.Instance, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, outputClock: clock);
+        var dispatcher = new CommandDispatcher([app]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("literal status"), ct);
+        await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Set, goal), ct);
+
+        var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "continue"), ct);
+
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(1, model.WorkRounds);
+        Assert.Null((await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), ct)).DisplayText);
     }
 
     /// <summary>An incomplete stream cannot request an automatic continuation.</summary>
@@ -837,6 +876,8 @@ public static class SessionGoalAcceptanceTests
 
         internal int SteeringReads { get; private set; }
 
+        internal string? SteeringReplacement { get; init; }
+
         public IActiveRunInputLease? BeginActiveRunInput(TimeProvider timeProvider)
         {
             if (_pauseIssued || assessmentStarted is null)
@@ -852,6 +893,8 @@ public static class SessionGoalAcceptanceTests
         {
             var text = request.Purpose != ComposerPurpose.Steering ? _inputs.Dequeue() : ++SteeringReads switch
             {
+                1 when SteeringReplacement is { } replacement => $"/goal set \"{replacement}\"",
+                _ when SteeringReplacement is not null => throw new InvalidOperationException("The replacement must resume without another input."),
                 1 => "/goal",
                 2 => "/goal cancel",
                 3 => null,
@@ -1023,6 +1066,8 @@ public static class SessionGoalAcceptanceTests
 
         internal int Calls => Volatile.Read(ref _calls);
 
+        internal ConcurrentQueue<ModelStreamRequest> Requests { get; } = new();
+
         public ModelStreamRequest Prepare(ModelStreamRequest request) => FixedAdmissionEstimate ? request with
         {
             WireEstimate = new ModelWireEstimate { WireInputTokens = 20, OutputReserveTokens = 96 },
@@ -1034,6 +1079,7 @@ public static class SessionGoalAcceptanceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
+            Requests.Enqueue(request);
             var call = Interlocked.Increment(ref _calls);
             if (FinishAfterFirstRound && call > 1)
             {

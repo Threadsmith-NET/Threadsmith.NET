@@ -199,6 +199,24 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.True(model.Requests[2].WireEstimate?.WireInputTokens > estimate.WireInputTokens);
     }
 
+    /// <summary>Live state keeps its group coverage without becoming historical summary text.</summary>
+    [Fact]
+    public static async Task Live_messages_are_not_sent_to_the_summary_model()
+    {
+        var model = new TextModelProvider("Working notes.");
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, new ActiveTurnCompactionPolicy(), TestPromptLoader.Instance);
+        var request = CreateRequest([CreateGroup(1) with { ExcludeMessagesFromSummary = true }, CreateGroup(2)]);
+
+        await provider.PrepareCandidate(request).ExecuteAsync(TestContext.Current.CancellationToken);
+
+        using var input = JsonDocument.Parse(Assert.Single(model.Requests).Input);
+        var groups = input.RootElement.GetProperty("newToolActivity").EnumerateArray().ToArray();
+        Assert.Equal(2, groups.Length);
+        Assert.Equal(1, groups[0].GetProperty("sequence").GetInt64());
+        Assert.Empty(groups[0].GetProperty("messages").EnumerateArray());
+        Assert.NotEmpty(groups[1].GetProperty("messages").EnumerateArray());
+    }
+
     /// <summary>Authority-bearing text is rejected before it can replace raw history.</summary>
     [Fact]
     public static void Authority_markers_are_rejected()

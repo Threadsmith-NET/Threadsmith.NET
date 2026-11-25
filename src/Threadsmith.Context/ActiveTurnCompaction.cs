@@ -274,6 +274,9 @@ public sealed record ActiveTurnContinuationGroup
     /// <summary>Complete provider-neutral messages in original order.</summary>
     public required IReadOnlyList<ModelMessage> Messages { get; init; }
 
+    /// <summary>Whether the host carries these live messages separately from historical summary text.</summary>
+    public bool ExcludeMessagesFromSummary { get; init; }
+
     /// <summary>Bounded host identities for the group's correlated tool results.</summary>
     public IReadOnlyList<ActiveTurnResultReference> Results { get; init; } = [];
 
@@ -1337,7 +1340,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             newToolActivity = selectedGroups.Select(group => new
             {
                 group.Sequence,
-                messages = group.Messages.Select(message => new
+                messages = (group.ExcludeMessagesFromSummary ? [] : group.Messages).Select(message => new
                 {
                     role = message.Role.ToString(),
                     message.ToolCallId,

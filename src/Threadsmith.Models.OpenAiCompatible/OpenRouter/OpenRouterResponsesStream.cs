@@ -293,6 +293,12 @@ internal sealed class OpenRouterResponsesStream
             throw new ModelProviderException("OpenRouter refused the response.");
         }
 
+        if (_toolIndices.Any(index => index >= finalItems.Count
+            || finalItems[index] is not JsonObject item || String(item, "type") != "function_call"))
+        {
+            throw new MalformedModelOutputException("OpenRouter terminal output omitted a streamed tool call.");
+        }
+
         var calls = new List<JsonObject>();
         var seenCallIds = new HashSet<string>(StringComparer.Ordinal);
         var requiresPrivate = false;

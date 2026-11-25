@@ -1732,13 +1732,12 @@ public sealed partial class InteractionCoordinator
 
                 if (TryGetCommandArgument(commandText, "/goal", out var goalArgument))
                 {
-                    var goal = await HandleGoalCommandAsync(sessionId, goalArgument, lifetime.Token);
-                    if (goal is null)
+                    if (!await HandleGoalCommandAsync(sessionId, goalArgument, lifetime.Token))
                     {
                         continue;
                     }
 
-                    submittedText = goal;
+                    submittedText = "continue";
                 }
                 else if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
                 {
@@ -1846,7 +1845,11 @@ public sealed partial class InteractionCoordinator
 
                                             if (TryGetCommandArgument(steeringCommand, "/goal", out var activeGoalArgument))
                                             {
-                                                _ = await HandleGoalCommandAsync(sessionId, activeGoalArgument, operation.Token);
+                                                if (await HandleGoalCommandAsync(sessionId, activeGoalArgument, operation.Token))
+                                                {
+                                                    break;
+                                                }
+
                                                 continue;
                                             }
 
@@ -2697,13 +2700,13 @@ public sealed partial class InteractionCoordinator
             cancellationToken);
     }
 
-    private async Task<string?> HandleGoalCommandAsync(SessionId sessionId, string argument, CancellationToken cancellationToken)
+    private async Task<bool> HandleGoalCommandAsync(SessionId sessionId, string argument, CancellationToken cancellationToken)
     {
         var command = GoalCommandParser.Parse(sessionId, argument);
         if (command is null)
         {
             await _surface.WriteAsync($"Usage: {GoalCommandParser.Usage}\n", PresentationTextRole.Warning, cancellationToken);
-            return null;
+            return false;
         }
 
         try
@@ -2713,12 +2716,12 @@ public sealed partial class InteractionCoordinator
                 ? $"Current goal: {text}"
                 : result.WasCancelled ? "Goal cancelled." : "No active goal.";
             await _surface.WriteAsync(status + "\n", PresentationTextRole.Status, cancellationToken);
-            return command.Text;
+            return command.Action == SessionGoalAction.Set;
         }
         catch (InvalidOperationException exception)
         {
             await _surface.WriteAsync(FormatStatusError(exception) + "\n", PresentationTextRole.Error, cancellationToken);
-            return null;
+            return false;
         }
     }
 

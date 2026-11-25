@@ -64,4 +64,24 @@ public static class ModelCompositionCodexServiceTierTests
         Assert.Same(discovered, attemptedWrite);
         Assert.Same(discovered, active);
     }
+
+    /// <summary>Malformed optional discovery leaves the original cache usable and untouched.</summary>
+    [Fact]
+    public static async Task InvalidDiscoveryKeepsCachedCapabilitiesAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var model = new OpenAiCodexModelConfiguration { Id = ModelProfileId.New(), Name = "Fixture", ModelId = "fixture" };
+        var cached = new OpenAiCodexProviderConfiguration { Id = "openai-codex", Name = "Codex", Models = [model] };
+
+        var active = await ModelComposition.RefreshCodexCatalogAsync(
+            cached,
+            _ => Task.FromException<OpenAiCodexProviderConfiguration>(new InvalidDataException("Missing models.")),
+            (_, _) => throw new InvalidOperationException("A failed discovery must not write the cache."),
+            NullLogger.Instance,
+            progress: null,
+            attemptCancellationToken: cancellationToken,
+            cancellationToken: cancellationToken);
+
+        Assert.Same(cached, active);
+    }
 }

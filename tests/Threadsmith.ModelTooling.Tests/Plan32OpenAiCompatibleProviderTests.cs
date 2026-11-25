@@ -22,14 +22,13 @@ public static class Plan32OpenAiCompatibleProviderTests
     private static readonly ModelProfileId SecondModelId = new(
         Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
 
-    /// <summary>A confirmed provider cutoff continues the same goal without repeating its partial answer.</summary>
+    /// <summary>A cutoff preserves the partial answer and pauses the goal without dispatching another request.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task ForegroundGoalContinuesTextCutoffButNotUnconfirmedTools(bool unconfirmedTool)
+    public static async Task ForegroundGoalPausesOnTextCutoffOrUnconfirmedTools(bool unconfirmedTool)
     {
         const string goal = "Write a greeting";
-        const string verdict = """{"version":2,"verdict":"Met","summary":"Delivered a greeting.","reason":"The answer says hello.","nextStep":"","evidence":[2],"requirements":[{"clause":"Write a greeting","kind":"text","tool":"","scope":"","evidence":[2]}]}""";
         var token = TestContext.Current.CancellationToken;
         var requests = 0;
         using var client = new HttpClient(new RecordingHandler((_, _) =>
@@ -42,13 +41,9 @@ public static class Plan32OpenAiCompatibleProviderTests
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"data: {partial}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream") });
             }
 
-            var (text, finish) = requests switch
-            {
-                1 => ("Starting a greeting", "length"),
-                2 => ("Hello!", "stop"),
-                3 => (verdict, "stop"),
-                _ => throw new InvalidOperationException("Unexpected additional dispatch."),
-            };
+            Assert.Equal(1, requests);
+            const string text = "Starting a greeting";
+            const string finish = "length";
             var json = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = text }, finish_reason = finish } } });
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"data: {json}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream") });
         })) { Timeout = Timeout.InfiniteTimeSpan };
@@ -87,16 +82,11 @@ public static class Plan32OpenAiCompatibleProviderTests
         }
 
         Assert.True(await done);
-        Assert.Equal(3, requests);
-        Assert.Null((await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), token)).DisplayText);
+        Assert.Equal(1, requests);
+        Assert.Equal(goal, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), token)).DisplayText);
         var transcript = string.Concat(output);
-        Assert.Equal(transcript.IndexOf("Starting a greeting", StringComparison.Ordinal), transcript.LastIndexOf("Starting a greeting", StringComparison.Ordinal));
         Assert.Contains("Starting a greeting\n[Incomplete:", transcript, StringComparison.Ordinal);
-        Assert.Contains("Continuing to work toward the goal.", transcript, StringComparison.Ordinal);
-        Assert.Contains("Met: Delivered a greeting.", transcript, StringComparison.Ordinal);
-        var answer = transcript.IndexOf("Hello!", StringComparison.Ordinal);
-        Assert.InRange(answer, 0, transcript.IndexOf("Met:", StringComparison.Ordinal) - 1);
-        Assert.Equal(answer, transcript.LastIndexOf("Hello!", StringComparison.Ordinal));
+        Assert.Contains("Goal paused", transcript, StringComparison.Ordinal);
     }
 
     /// <summary>Custom names survive catalog serialization and reach effort-based providers verbatim.</summary>

@@ -1,9 +1,12 @@
 namespace Threadsmith.Architecture.Tests;
 
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.App;
 using Threadsmith.Core;
 using Threadsmith.Telemetry;
@@ -59,6 +62,58 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
 
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Linq","assembly_config_action":"override"}}}}""");
         Assert.Equal(["System.Linq"], Load().ScriptAssemblies);
+    }
+
+    /// <summary>Verifies the compiled text defaults and exact namespace admission in the real worker.</summary>
+    [Fact]
+    public async Task ScriptWorkerResolvesTextDefaultsAndRejectsUnlistedDescendantsAsync()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var launch = new MemoryConfigurationSource();
+        var repository = _paths.RepositoryRoot;
+        var scratchpad = Directory.CreateDirectory(Path.Combine(repository, ".threadsmith", ".scratchpad")).FullName;
+        var invocation = new ToolInvocationContext
+        {
+            RepositoryPath = repository,
+            RequestedBy = "test",
+            TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
+            Scratchpad = new ScratchpadSessionCapability { IsActive = true, RootPath = scratchpad },
+            SecurityPolicy = SecurityPolicyConfigurationLoader.Load(_paths, Guid.NewGuid(), 1, launch),
+        };
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation)
+        {
+            ExecutionTimeout = Timeout.InfiniteTimeSpan,
+        };
+        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+        var hostName = OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet";
+        var dotnetHost = Path.GetFullPath(Path.Combine(RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", hostName));
+        await using var engine = new CSharpScriptEngine(
+            processes,
+            new ToolConfig(new ConfigurationBuilder().Build()),
+            Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"),
+            workerOptions: new ScriptWorkerOptions { NumberOfWarmWorkersInPool = 0 },
+            dotnetHostPath: dotnetHost);
+
+        var allowed = await engine.ExecuteAsync(
+            """new StringBuilder().Append(Regex.Replace("a1b2", "[0-9]", "", RegexOptions.None, Regex.InfiniteMatchTimeout)).ToString()""",
+            ScriptKind.Expression,
+            context,
+            cancellationToken);
+        Assert.True(allowed.Success, allowed.Error);
+        Assert.Equal("ab", allowed.Output);
+
+        await File.WriteAllTextAsync(
+            _paths.UserConfiguration,
+            """{"tools":{"config":{"csharp_script":{"allowed_assemblies":"System.Text","assembly_config_action":"override"}}}}""",
+            cancellationToken);
+        var restrictedPolicy = SecurityPolicyConfigurationLoader.Load(_paths, Guid.NewGuid(), 2, launch);
+        Assert.Equal(["System.Text"], restrictedPolicy.ScriptAssemblies);
+        var restricted = context with { Invocation = invocation with { SecurityPolicy = restrictedPolicy } };
+
+        // Utf8 is in the core library, so a missing reference cannot satisfy this check.
+        var denied = await engine.ExecuteAsync("nameof(System.Text.Unicode.Utf8)", ScriptKind.Expression, restricted, cancellationToken);
+        Assert.False(denied.Success);
+        Assert.Contains("Namespace 'System.Text.Unicode' is not permitted", denied.Error, StringComparison.Ordinal);
     }
 
     /// <summary>The removed assembly-count setting does not prevent existing machine policy from loading.</summary>

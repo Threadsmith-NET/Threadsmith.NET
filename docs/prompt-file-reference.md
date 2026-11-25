@@ -46,13 +46,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 24 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 38 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 28 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **305** | Complete deployed catalog. |
+| **Total** | **307** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -150,8 +150,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
 | `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
-| `Context-GoalAssessment.md` | Tool-free assessment of the overall turn. The assessor compares the goal and submitted request with user steering, delivered answers, command arguments and tool results in chronological order. Multiple receipts can establish one outcome. Version 2 accepts a next step for `Continue` and requires evidence of completed work or blockers for terminal verdicts. An optional `correction` input supplies the host's prior validation error. | `None` |
-| `Context-GoalReconcile.md` | Next step for the work model when both assessment attempts return invalid verdicts. | `None` |
+| `Context-GoalContinuationStatus.md` | Reads the worker's sanitized final reply or a bounded closing excerpt marked `replyPrefixOmitted`. Returns CONTINUE only for explicit unfinished work and defaults to STOP on ambiguity. | `None` |
+| `Context-GoalWorkContext.md` | Explains the worker's optional closing statements and same-goal continuation. | [`FinishedStatement`](#placeholder-finishedstatement), [`UnfinishedStatement`](#placeholder-unfinishedstatement) |
 
 #### `ActiveTurnSummary` family
 
@@ -713,7 +713,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, and synthesis and delivery of a report with a UTC generation timestamp when `datetime` is available, while preserving the active checkout. | `None` |
+| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, and synthesis and delivery of a report with a `Generated at:` line above Summary, showing UTC from `datetime` or `Unavailable`, while preserving the active checkout. | `None` |
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
 
@@ -940,6 +940,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-totalprojects"></a>`TotalProjects` | Total project count before projection bounds. |
 | <a id="placeholder-totalsources"></a>`TotalSources` | Cumulative number of distinct attributable evidence sources observed by the delegated child after the current tool round. |
 | <a id="placeholder-totaltests"></a>`TotalTests` | Total test count before projection bounds. |
+| <a id="placeholder-unfinishedstatement"></a>`UnfinishedStatement` | Standalone closing sentence the worker can use to report that it can continue requested work. |
 | <a id="placeholder-uncertainty"></a>`Uncertainty` | Bounded uncertainty statement attached to a delegated finding. |
 | <a id="placeholder-uncertaintyblock"></a>`UncertaintyBlock` | Already-rendered optional uncertainty line inserted into a finding. |
 | <a id="placeholder-undelivered"></a>`Undelivered` | Number of submitted steering messages not delivered. |
@@ -950,6 +951,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 
 | <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned initial-survey-required phase, or final-review total/required-open/optional/blocked counts, preserved initial areas, pending reconciliation keys, invalid memory links and first-review indicator. Detailed investigation notes and paged pending proposal text remain available through the memories tool. |
 | <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
+| <a id="placeholder-finishedstatement"></a>`FinishedStatement` | Standalone closing sentence the worker can use to report completion. |
 | <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with generation, independent compiler/analyzer status and coverage, diagnostic producer identities and omissions; pending, obsolete or unmeasured counts and unavailable comparisons are omitted. |
 
 Repository-intelligence coverage admission: `Context-RepositoryIntelligenceCollection.md` and `Context-RepositoryIntelligenceHistory.md` direct atomic initial survey submission through `memories initializeCoverage(survey)` before history advances. `Context-RepositoryIntelligenceCoverage.md` uses its existing `CoverageJson` token for either initial-survey recovery or final review, including preserved initial areas, pending reconciliation keys, and invalid memory links. `Tool-memories-Description.md` explains cumulative collection confirmations, unchanged-proposal metadata, pending-proposal inspection with `coverage(proposalKey[,proposalOffset])`, explicit `noMemoryReason`/`resolvedProposalKeys`, and evidence-backed `outOfScope` dispositions. These assets provide wording; code owns atomic admission, identity preservation, revision checks, bounded paging, and publication gates. No token names or asset filenames changed.

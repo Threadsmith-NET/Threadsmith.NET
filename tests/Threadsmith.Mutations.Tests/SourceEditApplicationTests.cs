@@ -510,7 +510,7 @@ public sealed partial class SourceEditApplicationTests
             var root = Directory.CreateTempSubdirectory("threadsmith-direct-edit-").FullName;
             var repo = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
             await File.WriteAllTextAsync(Path.Combine(repo, "Example.cs"), "class Example { }", ct);
-            var events = new DomainEventStream();
+            var events = new DomainEventStream(timeProvider: new FakeTimeProvider());
             var policy = new MutationApprovalPolicyService();
             await policy.SetPolicyAsync(approvalPolicy, ct);
             limits ??= new WorkspaceResourceLimits();

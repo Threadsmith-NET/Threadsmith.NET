@@ -350,6 +350,7 @@ internal static class ApplicationComposition
                 EnforcesRequestOutputTokenLimit =
                     activeTurnCompactionModelProfile.EnforcesRequestOutputTokenLimit,
                 ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
+                SupportsReasoningOff = activeTurnCompactionModelProfile.SupportsReasoningLevel(ReasoningLevel.None),
                 SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
                 Cost = activeTurnCompactionModelProfile.Cost,
                 ProviderInstructions = trustedProviderInstructionResolver.Resolve(

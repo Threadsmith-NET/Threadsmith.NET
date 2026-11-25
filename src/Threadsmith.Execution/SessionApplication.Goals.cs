@@ -1,7 +1,7 @@
 namespace Threadsmith.Execution;
 
 using System.Diagnostics;
-using System.Runtime.ExceptionServices;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
@@ -10,41 +10,71 @@ using Threadsmith.Models;
 /// <content>Handles the natural foreground exit while a live goal is active.</content>
 public sealed partial class SessionApplication
 {
+    private const string _goalSection = "session-goal";
+    private const string _goalContextSection = "session-goal-context";
+    private const string _goalClearedSection = "session-goal-cleared";
+    private const string GoalFinishedStatement = "All requested work is complete.";
+    private const string GoalUnfinishedStatement = "Requested work remains.";
+
+    private static readonly TimeSpan _assessmentShutdownTimeout = TimeSpan.FromSeconds(5);
     private readonly Lock _assessmentGate = new();
-    private readonly Dictionary<SessionId, HashSet<GoalJournal>> _assessmentSlots = [];
+    private readonly Dictionary<SessionId, Dictionary<TaskCompletionSource, TaskCompletionSource>> _assessmentSlots = [];
+    private int _assessmentShutdownExpired;
 
-    private void CommitGoalContext(ConversationLoopState loop, int round, LiveSession? session, string? nextStep)
+    private async Task JoinGoalAssessmentsAsync(CancellationToken cancellationToken)
     {
-        var receipts = new List<string>();
-        if (nextStep is null && session?.Journal is { } journal)
+        Task[] assessments;
+        lock (_assessmentGate)
         {
-            var snapshot = journal.Capture();
-            if (snapshot.Sensitive && !loop.GoalHistorySensitive)
-            {
-                loop.GoalHistorySensitive = true;
-                loop.InvalidateFrozenContext();
-            }
-
-            foreach (var item in snapshot.Evidence.Where(item => item.Receipt is not null).TakeLast(4))
-            {
-                receipts.Add(BoundedText.Truncate($"{item.Kind}: {item.Text}", 256, out _));
-            }
+            assessments = [.. _assessmentSlots.Values.SelectMany(slots => slots.Values.Select(retired => retired.Task))];
         }
 
-        var message = new ModelMessage
+        try
         {
-            Role = ModelMessageRole.User,
-            SectionId = "session-goal",
-            Content = [new ModelContentPart { Content = JsonSerializer.Serialize(new { userGoal = session?.Goal is { } goal ? _sanitizer.Sanitize(goal) : null, suggestedNextStep = nextStep is null ? null : _sanitizer.Sanitize(nextStep), receipts }) }],
-        };
-        loop.CommitStandaloneMessage(round, message, purgeAfterCorrection: false, sensitivity: loop.GoalHistorySensitive ? ConversationSensitivity.Sensitive : ConversationSensitivity.None);
+            await Task.WhenAll(assessments).WaitAsync(_assessmentShutdownTimeout, _outputClock, cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            Volatile.Write(ref _assessmentShutdownExpired, 1);
+            _logger.LogWarning("Goal assessment cleanup did not finish before shutdown.");
+        }
     }
 
-    private async Task<bool> ContinueGoalAsync(ConversationRound round, ConversationRoundOutcome outcome, ConversationLoopState loopState, LiveSession goal, CancellationToken cancellationToken)
+    private void CommitGoalContext(ConversationLoopState loop, int round, LiveSession? session, bool goalChanged, bool continuing)
     {
+        loop.DiscardUndeliveredGoalMessages(goalChanged);
+        if (goalChanged && session?.Goal is { } goal)
+        {
+            var message = new ModelMessage
+            {
+                Role = ModelMessageRole.User,
+                SectionId = _goalSection,
+                Content = [new ModelContentPart { Content = JsonSerializer.Serialize(new { userGoal = _sanitizer.Sanitize(goal) }) }],
+            };
+            loop.CommitStandaloneMessage(round, message, purgeAfterCorrection: false);
+        }
+
+        var instructions = _prompts.Render(PromptFileNames.ContextGoalWorkContext, new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["FinishedStatement"] = GoalFinishedStatement,
+            ["UnfinishedStatement"] = GoalUnfinishedStatement,
+        });
+        var status = JsonSerializer.Serialize(new { goalActive = session?.Goal is not null, continuing });
+        var contextMessage = new ModelMessage
+        {
+            Role = ModelMessageRole.HostContext,
+            SectionId = session is null ? _goalClearedSection : _goalContextSection,
+            Content = [new ModelContentPart { Content = $"{instructions.TrimEnd()}\n\n{status}" }],
+        };
+        loop.CommitStandaloneMessage(round, contextMessage, purgeAfterCorrection: false);
+    }
+
+    private async Task<bool> ContinueGoalAsync(ConversationRoundOutcome outcome, ConversationLoopState loopState, LiveSession goal, CancellationToken cancellationToken)
+    {
+        var round = outcome.DispatchedRound;
         var registration = round.Registration;
         var sessionId = registration.SessionId;
-        var journal = goal.Journal ?? throw new InvalidOperationException("Missing goal journal.");
+        var replaced = goal.GoalReplaced ?? throw new InvalidOperationException("Missing active goal.");
         var retained = outcome.TextRetainedInToolGroup;
         void RetainAnswer()
         {
@@ -66,15 +96,16 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            if (!_sessions.TryGetValue(sessionId, out var current) || current.Journal != journal)
+            if (!_sessions.TryGetValue(sessionId, out var current) || current.GoalReplaced != replaced)
             {
                 RetainAnswer();
-                return current?.Journal is not null;
+                return current?.Goal is not null;
             }
 
-            if (!outcome.PolicyBlocked && outcome.FinishReason is not (ModelFinishReason.Stop or ModelFinishReason.Length))
+            if (outcome.PolicyBlocked || outcome.FinishReason != ModelFinishReason.Stop)
             {
-                await ShowGoalResultAsync(round, "Goal paused: the provider did not confirm a normal text finish.", cancellationToken);
+                var reason = outcome.PolicyBlocked ? "a tool was blocked by policy" : "the provider did not confirm a complete reply";
+                await ShowGoalResultAsync(round, $"Goal paused: {reason}.", cancellationToken);
                 return false;
             }
 
@@ -88,49 +119,63 @@ public sealed partial class SessionApplication
                 continue;
             }
 
-            var cutoff = !outcome.PolicyBlocked && outcome.FinishReason == ModelFinishReason.Length;
-            registration.EvaluatingGoal = !cutoff;
-            var verdict = cutoff
-                ? new GoalVerdict("Continue", string.Empty, string.Empty, "Continue the incomplete answer from confirmed work.")
-                : await AssessGoalWithCorrectionAsync(round, goal, journal, pause, cancellationToken);
-            registration.EvaluatingGoal = false;
+            var reply = outcome.TextOutput.TrimEnd();
+            var lastLine = reply[(reply.LastIndexOf('\n') + 1)..];
+            bool? moreWork;
+            if (lastLine == GoalUnfinishedStatement)
+            {
+                moreWork = true;
+            }
+            else if (lastLine == GoalFinishedStatement || reply.Length == 0)
+            {
+                moreWork = false;
+            }
+            else
+            {
+                registration.EvaluatingGoal = true;
+                try
+                {
+                    moreWork = await ReadContinuationStatusAsync(round, goal, replaced, reply, pause, cancellationToken);
+                }
+                catch (Exception) when (cancellationToken.IsCancellationRequested || pause.IsCompleted
+                    || !_sessions.TryGetValue(sessionId, out var live) || live.GoalReplaced != replaced)
+                {
+                    // The provider or its settlement hook failed for a retired assessment.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    moreWork = null;
+                }
+
+                registration.EvaluatingGoal = false;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            if (pause.IsCompleted || journal.Replaced.Task.IsCompleted || !_sessions.TryGetValue(sessionId, out var assessed) || assessed.Journal != journal)
+            if (pause.IsCompleted || replaced.Task.IsCompleted || !_sessions.TryGetValue(sessionId, out var assessed) || assessed.GoalReplaced != replaced)
             {
                 continue;
             }
 
-            if (verdict is null)
+            if (moreWork is null)
             {
-                await ShowGoalResultAsync(round, "Goal paused: the previous assessment is still closing. The goal remains active.", cancellationToken);
+                await ShowGoalResultAsync(round, "Goal paused: the previous continuation check is still closing. The goal remains active.", cancellationToken);
                 return false;
             }
 
-            var terminal = verdict.Verdict != "Continue";
-            var summary = terminal ? _sanitizer.Sanitize($"{verdict.Verdict}: {verdict.Summary}\n{verdict.Reason}") : null;
+            var terminal = !moreWork.Value;
             if (!_steering.AtGoalBoundary(
                 round.RunId,
                 _ => !pause.IsCompleted && !cancellationToken.IsCancellationRequested
                 && (terminal
-                    ? registration.CancellationLifetime.TryCommitTerminal(() => _sessions.TryUpdate(sessionId, current with { Goal = null, Journal = null, GoalRevision = checked(current.GoalRevision + 1), LastGoalSummary = summary }, current))
-                    : _sessions.TryGetValue(sessionId, out var latest) && latest.Journal == journal),
+                    ? registration.CancellationLifetime.TryCommitTerminal(() => _sessions.TryUpdate(sessionId, current with { Goal = null, GoalReplaced = null, GoalRevision = checked(current.GoalRevision + 1) }, current))
+                    : _sessions.TryGetValue(sessionId, out var latest) && latest.GoalReplaced == replaced),
                 terminal))
             {
                 continue;
             }
 
-            if (summary is not null)
+            if (terminal)
             {
+                replaced.TrySetResult();
                 registration.GoalResultCommitted = true;
-                try
-                {
-                    await ArchiveVisibleMessageAsync(sessionId, round.RunId, ConversationRole.Assistant, summary, CancellationToken.None);
-                }
-                finally
-                {
-                    await PublishGoalResultAsync(round, summary, CancellationToken.None);
-                }
-
                 return false;
             }
 
@@ -149,7 +194,7 @@ public sealed partial class SessionApplication
 
             registration.GoalContinuations++;
             RetainAnswer();
-            registration.SuggestedNextStep = verdict.NextStep;
+            registration.ContinueUnfinishedGoal = true;
             await ShowGoalResultAsync(round, "Continuing to work toward the goal.", cancellationToken);
             return true;
         }
@@ -167,80 +212,24 @@ public sealed partial class SessionApplication
         return _events.PublishAsync(new ModelOutputObserved(round.Registration.SessionId, DateTimeOffset.UtcNow, $"\n\n{text}\n"), cancellationToken);
     }
 
-    private async Task<GoalVerdict?> AssessGoalWithCorrectionAsync(ConversationRound round, LiveSession goal, GoalJournal journal, Task pause, CancellationToken cancellationToken)
+    private async Task<bool?> ReadContinuationStatusAsync(
+        ConversationRound round,
+        LiveSession goal,
+        TaskCompletionSource replaced,
+        string reply,
+        Task pause,
+        CancellationToken cancellationToken)
     {
-        var registration = round.Registration;
-#pragma warning disable VSTHRD003 // The steering task is a signal raced by each attempt; this method only awaits the attempts it starts.
-        var response = await AssessGoalAsync(round, goal, journal, pause, null, cancellationToken);
-        if (response?.Rejection is { } rejected)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (pause.IsCompleted || journal.Replaced.Task.IsCompleted)
-            {
-                return null;
-            }
-
-            await ShowGoalResultAsync(round, $"Retrying the goal assessment. {rejected.Message}", cancellationToken);
-            response = await AssessGoalAsync(round, goal, journal, pause, rejected.Message, cancellationToken);
-        }
-#pragma warning restore VSTHRD003
-
-        cancellationToken.ThrowIfCancellationRequested();
-        if (pause.IsCompleted || journal.Replaced.Task.IsCompleted)
-        {
-            return null;
-        }
-
-        if (response?.Rejection is { } rejection)
-        {
-            if (registration.UsedGoalAssessmentFallback || (_limits.MaxModelRounds > 0 && round.ModelRound >= _limits.MaxModelRounds))
-            {
-                ExceptionDispatchInfo.Throw(rejection);
-            }
-
-            registration.UsedGoalAssessmentFallback = true;
-            return new GoalVerdict(
-                "Continue",
-                string.Empty,
-                string.Empty,
-                _prompts.Get(PromptFileNames.ContextGoalReconcile).Trim());
-        }
-
-        if (response?.Verdict is not null)
-        {
-            registration.UsedGoalAssessmentFallback = false;
-        }
-
-        return response?.Verdict;
-    }
-
-    private async Task<GoalAssessmentResponse?> AssessGoalAsync(ConversationRound round, LiveSession goal, GoalJournal journal, Task pause, string? correction, CancellationToken cancellationToken)
-    {
-        var provider = _goalAssessmentProvider ?? throw new InvalidOperationException("The configured goal assessment provider is unavailable.");
-        var (evidence, sensitive, omittedEarlier) = journal.Capture();
-        var baseline = round.InvocationContext?.ReceiptBaseline?.Invoke();
-        for (var index = 0; index < evidence.Length; index++)
-        {
-            if (evidence[index].Receipt is { } check && check.IsHistorical(round.RunId, round.InvocationContext?.WorkspaceId, baseline))
-            {
-                evidence[index] = evidence[index] with { Receipt = check with { Historical = true } };
-            }
-        }
-
-        if (round.ModelTools.Count == 0)
-        {
-            evidence = [.. evidence, new GoalEvidence(0, "no-working-tools", string.Empty, false)];
-        }
-
+        var provider = _goalAssessmentProvider ?? throw new InvalidOperationException("The configured goal status provider is unavailable.");
         var work = round.ModelRequest;
         var profile = _activeTurnCompactionProfile;
-        sensitive |= work.ContainsSensitiveData || work.SelectionConstraints.ContainsSensitiveData;
+        var sensitive = work.ContainsSensitiveData || work.SelectionConstraints.ContainsSensitiveData;
         var cost = profile is null ? work.AdmissionCost : profile.Cost;
         if ((sensitive && profile?.SensitiveDataPolicy == ModelSensitiveDataPolicy.Prohibited)
             || (work.SelectionConstraints.MaximumCombinedCostPerMillionTokens is { } max
                 && (cost?.AdmissionCombinedPerMillionTokens is not { } rate || rate > max)))
         {
-            throw new ModelProviderException("Goal assessment is not allowed by the receiving profile or cost policy.");
+            throw new ModelProviderException("The goal continuation check is not allowed by the receiving profile or cost policy.");
         }
 
         var profileId = profile?.ProfileId ?? work.ResolvedProfileId;
@@ -254,6 +243,7 @@ public sealed partial class SessionApplication
         var boundary = new ModelRequestHookBoundary(session, round.RunId, round.InvocationContext?.RepositoryPath, id, round.ModelRound - 1, "goal-assessment", workload, sensitive, 0);
         var activity = new GoalAssessmentActivity(session, DateTimeOffset.UtcNow, round.RunId, goal.GoalRevision, id, true) { ProfileId = profileId, Continuations = registration.GoalContinuations };
         CheckRunWallClockBudget(registration);
+        var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_assessmentGate)
         {
             if (!_assessmentSlots.TryGetValue(session, out var slots))
@@ -263,7 +253,7 @@ public sealed partial class SessionApplication
             }
 
             // Permit one replacement revision while the interrupted provider drains.
-            if (slots.Count >= 2 || !slots.Add(journal))
+            if (slots.Count >= 2 || !slots.TryAdd(replaced, retired))
             {
                 return null;
             }
@@ -271,15 +261,15 @@ public sealed partial class SessionApplication
 
         var stop = new CancellationTokenSource();
         Task? pending = null;
-        var hookCompleted = false;
+        Task? before = null;
         var budget = new ModelRequestBudgetUsage();
         var observed = false;
-        GoalVerdict? result = null;
-        InvalidDataException? rejection = null;
+        bool? result = null;
         var exhausted = false;
+        var activityStarted = false;
         var watch = new Stopwatch();
         var cancellation = Task.CompletedTask;
-        bool IsStale() => pause.IsCompleted || !_sessions.TryGetValue(session, out var live) || live.Journal != journal;
+        bool IsStale() => pause.IsCompleted || !_sessions.TryGetValue(session, out var live) || live.GoalReplaced != replaced;
         try
         {
             if (IsStale())
@@ -287,52 +277,26 @@ public sealed partial class SessionApplication
                 return null;
             }
 
-            // Read at most the latest completed deliverable. The journal keeps its bounded head and tail.
-            var clipped = Array.FindLastIndex(evidence, item => item.Kind == "answer" && item.Omitted);
-            if (clipped >= 0 && evidence[clipped].ArchivedAnswer is { } messageId && _conversationStore is not null)
-            {
-                var hydration = _conversationStore.GetMessagesAsync(session, [messageId], stop.Token);
-                pending = hydration;
-                if (await Task.WhenAny(hydration, pause, journal.Replaced.Task).WaitAsync(cancellationToken) != hydration)
-                {
-                    return null;
-                }
+            var resolution = round.Context?.ModelResolution;
+            var supportsReasoningOff = profile is null ? resolution?.SupportsReasoningOff : profile.SupportsReasoningOff;
+            var defaultReasoning = profile?.ReasoningLevel ?? resolution?.DefaultReasoningLevel ?? work.ReasoningLevel;
+            var reasoning = supportsReasoningOff == true ? ReasoningLevel.None : defaultReasoning;
 
-                var archived = await hydration;
-                cancellationToken.ThrowIfCancellationRequested();
-                if (IsStale())
-                {
-                    return null;
-                }
-
-                if (archived.Count == 1 && archived[0].Content is { } body)
-                {
-                    evidence[clipped] = evidence[clipped] with { Text = GoalJournal.Excerpt(body, 8192), Omitted = body.Length > 8192 };
-                }
-            }
-
-            var goalText = _sanitizer.Sanitize(goal.Goal ?? string.Empty);
-            var submitted = _sanitizer.Sanitize(registration.Task.Intent);
-            var turnRequest = GoalJournal.Excerpt(submitted, 2048);
-            var turnRequestClipped = submitted.Length > turnRequest.Length;
-            var input = correction is null
-                ? JsonSerializer.Serialize(new { goal = goalText, turnRequest, turnRequestClipped, evidence, omittedEarlier })
-                : JsonSerializer.Serialize(new { goal = goalText, turnRequest, turnRequestClipped, evidence, omittedEarlier, correction });
-            var reserve = Math.Min(4096, profile?.OutputReserveTokens ?? work.MaximumOutputTokens ?? 4096);
+            // Required thinking shares the response cap with the verdict. Do not use the
+            // small verdict-only cap on profiles that cannot turn thinking off.
+            var reserve = Math.Min(reasoning == ReasoningLevel.None ? 64 : 4096, profile?.OutputReserveTokens ?? work.MaximumOutputTokens ?? 4096);
+            var outputCeiling = profile is not null
+                ? profile.EnforcesRequestOutputTokenLimit ? reserve : profile.MaximumOutputTokens
+                : resolution is not null ? ResolveAdmissionOutputCeiling(resolution, reserve) : work.AdmissionOutputTokenCeiling ?? reserve;
             var window = profile?.ContextWindowTokens ?? work.AdmissionContextWindowTokens;
             var instructions = profile is null ? work.ProviderInstructions : profile.ProviderInstructions?.Resolve(_prompts);
-            ModelMessage[] messages =
-            [
-                new() { Role = ModelMessageRole.System, SectionId = "goal-assessment", Content = [new ModelContentPart { Content = _prompts.Get(PromptFileNames.ContextGoalAssessment) }] },
-                new() { Role = ModelMessageRole.User, SectionId = "goal-evidence", Content = [new ModelContentPart { Content = input }] },
-            ];
-            var request = ModelRequestPreparation.Prepare(provider, new ModelStreamRequest
+            var system = new ModelMessage { Role = ModelMessageRole.System, SectionId = "goal-assessment", Content = [new ModelContentPart { Content = _prompts.Get(PromptFileNames.ContextGoalContinuationStatus) }] };
+            var template = new ModelStreamRequest
             {
                 RunId = round.RunId,
-                Input = input,
-                Messages = messages,
+                Input = string.Empty,
                 ResolvedProfileId = profileId,
-                ReasoningLevel = profile?.ReasoningLevel ?? work.ReasoningLevel,
+                ReasoningLevel = reasoning,
                 WorkloadClass = workload,
                 ContainsSensitiveData = sensitive,
                 SelectionConstraints = new ModelSelectionConstraints { ContainsSensitiveData = sensitive, MaximumCombinedCostPerMillionTokens = work.SelectionConstraints.MaximumCombinedCostPerMillionTokens },
@@ -342,25 +306,24 @@ public sealed partial class SessionApplication
                 AdmissionCost = cost,
                 MaximumOutputTokens = reserve,
                 AdmissionContextWindowTokens = window,
-                AdmissionOutputTokenCeiling = profile is null
-                    ? round.Context?.ModelResolution is { } resolution ? ResolveAdmissionOutputCeiling(resolution, reserve) : work.AdmissionOutputTokenCeiling
-                    : profile.EnforcesRequestOutputTokenLimit ? reserve : profile.MaximumOutputTokens,
-                WireEstimate = ModelWireEstimator.Estimate(messages, [], ToolTransportMode.Native, 0, reserve, instructions),
-            });
-            if (request.WireEstimate?.TotalCapacityTokens > window)
+                AdmissionOutputTokenCeiling = outputCeiling,
+            };
+            var request = PrepareGoalStatusRequest(provider, template, system, _sanitizer.Sanitize(reply), cancellationToken);
+            if (request is null)
             {
-                throw new BudgetExceededException("The goal assessment does not fit the receiving profile.");
+                // Without a complete statement to classify, a normal final reply ends the goal.
+                return false;
             }
 
             ModelRequestBudgetUsage.CheckAdmission(registration.Budget, request);
-            pending = InvokeBeforeModelRequestHookAsync(boundary, stop.Token);
-            if (await Task.WhenAny(pending, pause, journal.Replaced.Task).WaitAsync(cancellationToken) != pending)
+            before = InvokeBeforeModelRequestHookAsync(boundary, stop.Token);
+            pending = before;
+            if (await Task.WhenAny(pending, pause, replaced.Task).WaitAsync(cancellationToken) != pending)
             {
                 return null;
             }
 
             await pending;
-            hookCompleted = true;
             cancellationToken.ThrowIfCancellationRequested();
             if (IsStale())
             {
@@ -369,8 +332,7 @@ public sealed partial class SessionApplication
 
             CheckRunWallClockBudget(registration);
             request = _sessionUsage?.ObservePreparedRequest(session, usageId, request, window) ?? request;
-            budget.Start(registration.Budget, request);
-            watch.Start();
+            activityStarted = true;
             await _events.PublishAsync(activity, cancellationToken);
             void ObserveUsage(ModelUsage usage)
             {
@@ -378,7 +340,7 @@ public sealed partial class SessionApplication
                 _sessionUsage?.Observe(session, usageId, usage);
                 if (budget.Accrue(registration.Budget, usage).IsExhausted)
                 {
-                    throw new BudgetExceededException("Goal assessment exhausted the run budget.");
+                    throw new BudgetExceededException("The goal continuation check exhausted the run budget.");
                 }
             }
 
@@ -388,25 +350,16 @@ public sealed partial class SessionApplication
                 return null;
             }
 
-            var read = GoalVerdict.ReadAsync(provider, request, goalText, evidence, ObserveUsage, stop.Token);
+            budget.Start(registration.Budget, request);
+            watch.Start();
+            var read = ReadStatusAsync(provider, request, ObserveUsage, stop.Token);
             pending = read;
-            if (await Task.WhenAny(read, pause, journal.Replaced.Task).WaitAsync(cancellationToken) != read)
+            if (await Task.WhenAny(read, pause, replaced.Task).WaitAsync(cancellationToken) != read)
             {
                 return null;
             }
 
-            (result, rejection) = await read;
-            var currentBaseline = round.InvocationContext?.ReceiptBaseline?.Invoke();
-            if (result is { Verdict: not "Continue" } && evidence.Any(entry => entry.Receipt is { Check: true } receipt
-                && result.Requirements.Any(requirement => requirement.Evidence.Contains(entry.Id))
-                && receipt.IsHistorical(round.RunId, round.InvocationContext?.WorkspaceId, currentBaseline)))
-            {
-                result = new GoalVerdict("Continue", string.Empty, string.Empty, goal.Goal ?? string.Empty);
-            }
-        }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested && IsStale())
-        {
-            return null;
+            result = await read;
         }
         finally
         {
@@ -417,9 +370,9 @@ public sealed partial class SessionApplication
 
             try
             {
-                if (budget.HasStarted)
+                if (activityStarted)
                 {
-                    await _events.PublishAsync(activity with { OccurredAt = DateTimeOffset.UtcNow, Started = false, Outcome = pause.IsCompleted || journal.Replaced.Task.IsCompleted || cancellationToken.IsCancellationRequested ? "Interrupted" : result?.Verdict ?? "Failed" }, CancellationToken.None);
+                    await _events.PublishAsync(activity with { OccurredAt = DateTimeOffset.UtcNow, Started = false, Outcome = pause.IsCompleted || replaced.Task.IsCompleted || cancellationToken.IsCancellationRequested ? "Interrupted" : result switch { true => "Continue", false => "Stop", null => "Failed" } }, CancellationToken.None);
 
                     var elapsed = watch.Elapsed;
                     registration.ModelRequestWallClockAccrued += elapsed;
@@ -428,36 +381,49 @@ public sealed partial class SessionApplication
             }
             finally
             {
-                if (pending is not null && result is null && rejection is null)
+                var settlement = SettleAsync();
+                var foregroundOwnsSettlement = false;
+                try
                 {
-                    // Also observe a discarded task that faulted between WhenAny and cleanup.
-                    _ = SettleAsync(pending, cancellation);
+                    foregroundOwnsSettlement = await Task.WhenAny(settlement, pause, replaced.Task).WaitAsync(cancellationToken) == settlement;
+                    if (foregroundOwnsSettlement)
+                    {
+                        await settlement;
+                    }
                 }
-                else
+                finally
                 {
-                    await SettleAsync(null, Task.CompletedTask);
+                    if (!foregroundOwnsSettlement)
+                    {
+                        _ = ObserveDetachedGoalSettlementAsync(settlement);
+                    }
                 }
             }
         }
 
         if (exhausted)
         {
-            throw new BudgetExceededException("Goal assessment exhausted the run budget.");
+            throw new BudgetExceededException("The goal continuation check exhausted the run budget.");
         }
 
-        return new GoalAssessmentResponse(result, rejection);
+        return result;
 
-        async Task SettleAsync(Task? draining, Task cancellation)
+        async Task SettleAsync()
         {
             try
             {
-                if (draining is not null)
+                if (pending is not null)
                 {
-                    // The foreground has already discarded this attempt. Observe both tasks,
-                    // including faults, but never project a late result or its raw payload.
-#pragma warning disable VSTHRD003 // Both tasks are started by this assessment and run independently of the foreground composer.
-                    await Task.WhenAll(draining, cancellation).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+                    // Observe the previous phase, including faults, without adopting a discarded result.
+#pragma warning disable VSTHRD003 // These tasks were started by this assessment before ownership passed to settlement.
+                    await Task.WhenAll(pending, cancellation).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
 #pragma warning restore VSTHRD003
+                }
+
+                budget.Finish(registration.Budget);
+                if (Volatile.Read(ref _assessmentShutdownExpired) != 0)
+                {
+                    return;
                 }
 
                 if (budget.HasStarted && !observed)
@@ -465,14 +431,10 @@ public sealed partial class SessionApplication
                     _sessionUsage?.ObserveMissing(session, usageId);
                 }
 
-                if (hookCompleted)
+                if (before?.IsCompletedSuccessfully == true)
                 {
                     await InvokeAfterModelRequestHookAsync(boundary, result is not null, observed);
                 }
-            }
-            catch (Exception exception) when (draining is not null)
-            {
-                _logger.LogWarning("Could not complete detached goal assessment accounting: {FailureType}", exception.GetType().Name);
             }
             finally
             {
@@ -480,13 +442,138 @@ public sealed partial class SessionApplication
                 lock (_assessmentGate)
                 {
                     var slots = _assessmentSlots[session];
-                    slots.Remove(journal);
+                    slots.Remove(replaced);
                     if (slots.Count == 0)
                     {
                         _assessmentSlots.Remove(session);
                     }
+
+                    retired.TrySetResult();
                 }
             }
         }
+    }
+
+    private async Task ObserveDetachedGoalSettlementAsync(Task settlement)
+    {
+        try
+        {
+#pragma warning disable VSTHRD003 // The foreground transfers ownership here on interruption.
+            await settlement;
+#pragma warning restore VSTHRD003
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning("Could not complete detached goal assessment accounting: {FailureType}", exception.GetType().Name);
+        }
+    }
+
+    private static ModelStreamRequest? PrepareGoalStatusRequest(
+        IModelProvider provider,
+        ModelStreamRequest template,
+        ModelMessage system,
+        string reply,
+        CancellationToken cancellationToken)
+    {
+        const int maximumExcerptCharacters = 8192;
+        var window = template.AdmissionContextWindowTokens ?? int.MaxValue;
+        var reserve = template.MaximumOutputTokens.GetValueOrDefault();
+        if (window <= reserve || reply.Length == 0)
+        {
+            return null;
+        }
+
+        var characterLimit = (int)Math.Min(maximumExcerptCharacters, 4L * (window - reserve));
+        var earliest = Math.Max(0, reply.Length - characterLimit);
+        if (earliest == 0 && TryPrepare(0) is { } full)
+        {
+            return full;
+        }
+
+        // Keep complete trailing lines or sentences. An arbitrary cut could drop a negation
+        // or manufacture a continuation statement from the middle of a word.
+        var starts = new List<int>();
+        for (var offset = Math.Max(1, earliest); offset < reply.Length; offset++)
+        {
+            var previous = reply[offset - 1];
+            if (previous is '\n' or '\r' or '\u2028' or '\u2029' or '。' or '！' or '？'
+                || (previous is '.' or '!' or '?' && char.IsWhiteSpace(reply[offset])))
+            {
+                starts.Add(offset);
+            }
+        }
+
+        ModelStreamRequest? best = null;
+        var low = 0;
+        var high = starts.Count - 1;
+        while (low <= high)
+        {
+            // Usually the entire bounded tail fits on the first attempt.
+            var index = low == 0 && best is null ? 0 : low + ((high - low) / 2);
+            if (TryPrepare(starts[index]) is { } candidate)
+            {
+                best = candidate;
+                high = index - 1;
+            }
+            else
+            {
+                low = index + 1;
+            }
+        }
+
+        return best;
+
+        ModelStreamRequest? TryPrepare(int start)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (reply.AsSpan(start).IsWhiteSpace())
+            {
+                return null;
+            }
+
+            var input = start == 0
+                ? JsonSerializer.Serialize(new { reply })
+                : JsonSerializer.Serialize(new { replyPrefixOmitted = true, reply = reply[start..] });
+            ModelMessage[] messages = [system, new() { Role = ModelMessageRole.User, SectionId = "goal-reply", Content = [new ModelContentPart { Content = input }] }];
+            var estimate = ModelWireEstimator.Estimate(messages, [], ToolTransportMode.Native, 0, reserve, template.ProviderInstructions);
+            var prepared = ModelRequestPreparation.Prepare(provider, template with { Input = input, Messages = messages, WireEstimate = estimate });
+            return prepared.WireEstimate?.TotalCapacityTokens <= window ? prepared : null;
+        }
+    }
+
+    private static async Task<bool> ReadStatusAsync(IModelProvider provider, ModelStreamRequest request, Action<ModelUsage> observeUsage, CancellationToken cancellationToken)
+    {
+        var text = new StringBuilder();
+        ModelFinishReason? finish = null;
+        var invalid = false;
+        await foreach (var chunk in provider.StreamAsync(request, cancellationToken).WithCancellation(cancellationToken))
+        {
+            if (chunk.Usage is { } usage)
+            {
+                observeUsage(usage);
+            }
+
+            invalid |= chunk.Output is not null || chunk.GeneratedImage is not null || chunk.ResponseEnvelope is not null || chunk.Text?.Length > 64 - text.Length;
+            if (!invalid)
+            {
+                text.Append(chunk.Text);
+            }
+
+            finish = chunk.FinishReason ?? finish;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!invalid && finish == ModelFinishReason.Stop)
+        {
+            switch (text.ToString().Trim())
+            {
+                case "STOP":
+                    return false;
+                case "CONTINUE":
+                    return true;
+            }
+        }
+
+        throw new InvalidDataException("Could not read the worker's continuation status. The goal remains active.");
     }
 }

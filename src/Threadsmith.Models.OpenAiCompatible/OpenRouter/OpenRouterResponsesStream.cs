@@ -15,6 +15,10 @@ internal sealed class OpenRouterResponsesStream
     private readonly string _secret;
     private readonly string _protocol;
     private readonly IReadOnlyList<OpenRouterUpstreamConfiguration> _upstreams;
+    private readonly HashSet<int> _toolIndices = [];
+
+    /// <summary>Whether this attempt has received tool output that has not reached the caller.</summary>
+    internal bool HasUnconfirmedToolOutput { get; private set; }
 
     /// <summary>Initializes a new instance of the <see cref="OpenRouterResponsesStream"/> class.</summary>
     internal OpenRouterResponsesStream(ModelProfile profile, OpenRouterModelConfiguration model, string secret, string protocol)
@@ -35,7 +39,6 @@ internal sealed class OpenRouterResponsesStream
         var items = new SortedDictionary<int, JsonNode>();
         var text = new Dictionary<(int Item, int Part, int Channel), StringBuilder>();
         var argumentDeltas = new Dictionary<int, StringBuilder>();
-        var toolIndices = new HashSet<int>();
         JsonObject? completed = null;
         ModelUsage? usage = null;
         var outputLimitReached = false;
@@ -66,6 +69,18 @@ internal sealed class OpenRouterResponsesStream
             var overloaded = ModelStreamRetry.IsOverloadError(result)
                 || String(result, "error_type") is "provider_unavailable" or "provider_overloaded";
             var retryable = rateLimited || overloaded;
+            if ((isError || type == "response.completed") && result["output"] is JsonArray terminalOutput)
+            {
+                for (var index = 0; index < terminalOutput.Count; index++)
+                {
+                    if (terminalOutput[index] is JsonObject item && String(item, "type") == "function_call")
+                    {
+                        _toolIndices.Add(index);
+                    }
+                }
+            }
+
+            HasUnconfirmedToolOutput |= _toolIndices.Count > 0;
             if (result["usage"] is JsonObject report)
             {
                 var nextUsage = OpenRouterResponsesUsage.Read(report, request, _profile, Math.Max(characters, OutputCharacters(result)));
@@ -102,24 +117,13 @@ internal sealed class OpenRouterResponsesStream
                     && type is not ("response.failed" or "error") && status != "failed" && result["error"] is null
                     && result["incomplete_details"] is JsonObject details && String(details, "reason") == "max_output_tokens")
                 {
-                    if (result["output"] is JsonArray partialOutput)
-                    {
-                        for (var index = 0; index < partialOutput.Count; index++)
-                        {
-                            if (partialOutput[index] is JsonObject item && String(item, "type") == "function_call")
-                            {
-                                toolIndices.Add(index);
-                            }
-                        }
-                    }
-
-                    if (toolIndices.Count > 0)
+                    if (_toolIndices.Count > 0)
                     {
                         throw new MalformedInvocationException(new MalformedInvocationDiagnostic
                         {
                             Kind = MalformedInvocationFailureKind.TruncatedArguments,
                             ProviderFamily = "openrouter",
-                            ToolCallCount = toolIndices.Count,
+                            ToolCallCount = _toolIndices.Count,
                             SafeMessage = ModelOutputValidator.TruncatedInvocationMessage,
                         });
                     }
@@ -188,7 +192,8 @@ internal sealed class OpenRouterResponsesStream
             {
                 if (root["item"] is JsonObject item && String(item, "type") == "function_call")
                 {
-                    toolIndices.Add(Index(root, "output_index"));
+                    _toolIndices.Add(Index(root, "output_index"));
+                    HasUnconfirmedToolOutput = true;
                 }
             }
             else if (type == "response.output_item.done")
@@ -203,7 +208,8 @@ internal sealed class OpenRouterResponsesStream
 
                 if (String(item, "type") == "function_call")
                 {
-                    toolIndices.Add(index);
+                    _toolIndices.Add(index);
+                    HasUnconfirmedToolOutput = true;
                 }
 
                 if (!items.ContainsKey(index))
@@ -220,12 +226,18 @@ internal sealed class OpenRouterResponsesStream
                 refused = true;
                 AddBytes(String(root, type == "response.refusal.delta" ? "delta" : "refusal") ?? string.Empty);
             }
+            else if (type == "response.function_call_arguments.done")
+            {
+                _toolIndices.Add(Index(root, "output_index"));
+                HasUnconfirmedToolOutput = true;
+            }
             else if (type == "response.function_call_arguments.delta")
             {
                 var delta = String(root, "delta") ?? throw new MalformedModelOutputException("Invalid tool argument delta.");
                 AddBytes(delta);
                 var index = Index(root, "output_index");
-                toolIndices.Add(index);
+                _toolIndices.Add(index);
+                HasUnconfirmedToolOutput = true;
                 if (!argumentDeltas.TryGetValue(index, out var buffer))
                 {
                     buffer = new StringBuilder();

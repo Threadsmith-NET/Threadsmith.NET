@@ -392,6 +392,17 @@ internal sealed class HostFoundation : IAsyncDisposable
         return new(Math.Min(Math.Min(effective.MaximumFileBytes, trusted.MaximumFileBytes), total), total);
     }
 
+    /// <summary>Allows effective preferences to narrow, but not raise, the trusted goal continuation limit.</summary>
+    internal static int LoadGoalContinuationLimit(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        const string key = "execution:maxGoalContinuations";
+        var ceiling = trustedConfiguration.GetValue(key, ExecutionLimits.DefaultMaxGoalContinuations);
+        var requested = configuration.GetValue(key, ceiling);
+        ArgumentOutOfRangeException.ThrowIfNegative(ceiling, key);
+        ArgumentOutOfRangeException.ThrowIfNegative(requested, key);
+        return Math.Min(ceiling, requested);
+    }
+
     /// <summary>Initializes persistence before subscribers, then semantic and tool services in dependency order.</summary>
     internal static async Task<HostFoundation> CreateAsync(
         IConfiguration configuration,
@@ -418,9 +429,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxModelRounds = configuration.GetValue(
                 "execution:maxModelRounds",
                 ExecutionLimits.DefaultMaxModelRounds),
-            MaxGoalContinuations = configuration.GetValue(
-                "execution:maxGoalContinuations",
-                ExecutionLimits.DefaultMaxGoalContinuations),
+            MaxGoalContinuations = LoadGoalContinuationLimit(configuration, trustedConfiguration),
             MaxCorrectiveTurns = maximumCorrectiveTurns,
             MaxSourceFrontierEntries = configuration.GetValue("execution:maxSourceFrontierEntries", 256),
             MaxSteeringCharacters = configuration.GetValue("execution:maxSteeringCharacters", 100000),

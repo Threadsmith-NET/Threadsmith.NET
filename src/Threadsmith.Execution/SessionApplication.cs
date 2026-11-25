@@ -110,6 +110,8 @@ public sealed partial class SessionApplication :
                 }
             }
         }
+
+        await JoinGoalAssessmentsAsync(cancellationToken);
     }
 
     /// <summary>Creates and registers one session using the ordinary durable event boundary.</summary>
@@ -562,10 +564,10 @@ public sealed partial class SessionApplication :
                 throw new InvalidOperationException("Cannot set a goal in a read-only session.");
             }
 
-            var next = session with { Goal = command.Text, GoalRevision = checked(session.GoalRevision + 1), Journal = command.Text is null ? null : new GoalJournal() };
+            var next = session with { Goal = command.Text, GoalRevision = checked(session.GoalRevision + 1), GoalReplaced = command.Text is null ? null : new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
             if (_sessions.TryUpdate(command.SessionId, next, session))
             {
-                session.Journal?.Replaced.TrySetResult();
+                session.GoalReplaced?.TrySetResult();
                 return Task.FromResult(new SessionGoalResult(
                     next.Goal is null ? null : _sanitizer.Sanitize(next.Goal),
                     WasCancelled: next.Goal is null && session.Goal is not null));
@@ -579,7 +581,7 @@ public sealed partial class SessionApplication :
         _sessions.TryRemove(sessionId, out _);
     }
 
-    private sealed record LiveSession(bool IsWritable, string? Goal = null, long GoalRevision = 0, GoalJournal? Journal = null, string? LastGoalSummary = null);
+    private sealed record LiveSession(bool IsWritable, string? Goal = null, long GoalRevision = 0, TaskCompletionSource? GoalReplaced = null);
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
@@ -804,7 +806,7 @@ public sealed partial class SessionApplication :
                 CancellationToken.None);
             var diagnosticCode = registration.EvaluatingGoal
                 && _sessions.TryGetValue(command.SessionId, out var live)
-                && live.Goal is not null
+                && live.GoalReplaced is not null && live.GoalReplaced == registration.RoundGoal?.GoalReplaced
                 ? "GoalAssessmentFailed"
                 : classification.ToString();
             await _events.PublishAsync(
@@ -821,7 +823,7 @@ public sealed partial class SessionApplication :
         }
         finally
         {
-            _sourceEdits?.CompleteRun(runId, cancelled || registration.Cancellation.IsCancellationRequested);
+            _sourceEdits?.CompleteRun(runId, cancelled || registration.Cancellation.IsCancellationRequested, command.SessionId);
             _steering.CompleteRun(command.SessionId, runId);
             if (_userQuestions is not null)
             {
@@ -1225,7 +1227,7 @@ public sealed partial class SessionApplication :
             CancellationLifetime = new RunCancellationLifetime(cancellation);
             Task = task;
             Machine = machine;
-            Budget = budget;
+            Budget = new RunRequestBudget(budget);
         }
 
         public LiveSession? RoundGoal { get; set; }
@@ -1236,9 +1238,7 @@ public sealed partial class SessionApplication :
 
         public int GoalContinuations { get; set; }
 
-        public bool UsedGoalAssessmentFallback { get; set; }
-
-        public string? SuggestedNextStep { get; set; }
+        public bool ContinueUnfinishedGoal { get; set; }
 
         public WorkspaceId? ReceiptWorkspaceId { get; set; }
 
@@ -1246,7 +1246,7 @@ public sealed partial class SessionApplication :
 
         public ConversationReceiptChecks ReceiptChecks { get; } = new();
 
-        public IBudget Budget { get; }
+        public RunRequestBudget Budget { get; }
 
         public CancellationTokenSource Cancellation => CancellationLifetime.Source;
 

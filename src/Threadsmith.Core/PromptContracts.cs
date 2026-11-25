@@ -220,11 +220,11 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemToolInventoryNativeSeparate prompt asset.</summary>
     public const string SystemToolInventoryNativeSeparate = "System-ToolInventory-NativeSeparate.md";
 
-    /// <summary>Instructions for assessing a goal against admitted work evidence.</summary>
-    public const string ContextGoalAssessment = "Context-GoalAssessment.md";
+    /// <summary>Reads a continuation signal from the wording of the final reply.</summary>
+    public const string ContextGoalContinuationStatus = "Context-GoalContinuationStatus.md";
 
-    /// <summary>Guidance for reviewing the work after a goal assessment remains inconclusive.</summary>
-    public const string ContextGoalReconcile = "Context-GoalReconcile.md";
+    /// <summary>Explains how the worker can report its own completion status.</summary>
+    public const string ContextGoalWorkContext = "Context-GoalWorkContext.md";
 
     /// <summary>Gets the stable filename for the ContextActiveTurnCompactionSystem prompt asset.</summary>
     public const string ContextActiveTurnCompactionSystem = "Context-ActiveTurnCompaction-System.md";
@@ -1104,8 +1104,8 @@ public static class PromptFileNames
         SystemLegacyRequestEnvelope,
         SystemToolInventoryTextFallback,
         SystemToolInventoryNativeSeparate,
-        ContextGoalAssessment,
-        ContextGoalReconcile,
+        ContextGoalContinuationStatus,
+        ContextGoalWorkContext,
         ContextActiveTurnCompactionSystem,
         ContextActiveTurnCompactionInitial,
         ContextActiveTurnCompactionUpdate,
@@ -1433,8 +1433,8 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
-            PromptFileNames.ContextGoalAssessment,
-            PromptFileNames.ContextGoalReconcile,
+            PromptFileNames.ContextGoalContinuationStatus,
+            PromptFileNames.ContextGoalWorkContext,
             PromptFileNames.ContextActiveTurnCompactionSystem,
             PromptFileNames.ContextActiveTurnCompactionInitial,
             PromptFileNames.ContextActiveTurnCompactionUpdate,
@@ -1664,6 +1664,7 @@ public static class PromptAssetCatalog
                         "RequiredOutput"),
                     [PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper] = Set("Version", "SummaryContent"),
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
+                    [PromptFileNames.ContextGoalWorkContext] = Set("FinishedStatement", "UnfinishedStatement"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.ContextSourceEditFeedback] = Set("FeedbackJson"),
                     [PromptFileNames.ContextSourceEditOmittedProjectCoverage] = Set("ProjectCount"),

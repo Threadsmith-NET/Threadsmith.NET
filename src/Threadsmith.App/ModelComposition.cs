@@ -126,19 +126,15 @@ internal static class ModelComposition
                 && (codexConfiguration.RequiresCapabilityRefresh || (requestPriorityTier
                     && codexConfiguration.Models.Cast<OpenAiCodexModelConfiguration>().Any(model => model.SupportsPriorityTier is null))))
             {
-                try
-                {
-                    var refreshed = await new OpenAiCodexCatalogClient(httpClient).DiscoverAsync(codexAccessToken, cancellationToken: codexStartupToken.Token).ConfigureAwait(false);
-                    await codexCache.SaveAsync(refreshed, codexStartupToken.Token).ConfigureAwait(false);
-                    codexConfiguration = refreshed;
-                    refresh?.Complete();
-                }
-                catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    refresh?.Fail("Refresh unavailable; using cached model capabilities.");
-                    loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup").LogWarning("Codex capability refresh unavailable; using cached model capabilities.");
-                }
+                var catalogClient = new OpenAiCodexCatalogClient(httpClient);
+                codexConfiguration = await RefreshCodexCatalogAsync(
+                    codexConfiguration,
+                    token => catalogClient.DiscoverAsync(codexAccessToken, cancellationToken: token),
+                    codexCache.SaveAsync,
+                    loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup"),
+                    refresh,
+                    codexStartupToken.Token,
+                    cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -473,6 +469,44 @@ internal static class ModelComposition
                 exception.GetType().Name);
             return null;
         }
+    }
+
+    /// <summary>Refreshes live capabilities independently of optional cache persistence.</summary>
+    internal static async Task<OpenAiCodexProviderConfiguration> RefreshCodexCatalogAsync(
+        OpenAiCodexProviderConfiguration cached,
+        Func<CancellationToken, Task<OpenAiCodexProviderConfiguration>> discoverAsync,
+        Func<OpenAiCodexProviderConfiguration, CancellationToken, Task> saveAsync,
+        ILogger logger,
+        SemanticStartupProgress.Operation? progress,
+        CancellationToken attemptCancellationToken,
+        CancellationToken cancellationToken)
+    {
+        OpenAiCodexProviderConfiguration refreshed;
+        try
+        {
+            refreshed = await discoverAsync(attemptCancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Fail("Refresh unavailable; using cached model capabilities.");
+            logger.LogWarning("Codex capability refresh unavailable; using cached model capabilities.");
+            return cached;
+        }
+
+        try
+        {
+            await saveAsync(refreshed, attemptCancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or IOException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            logger.LogWarning("Could not save the Codex capability cache; using refreshed capabilities for this session.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Complete();
+        return refreshed;
     }
 
     /// <summary>Resolves a typed model credential only at the outbound provider boundary.</summary>

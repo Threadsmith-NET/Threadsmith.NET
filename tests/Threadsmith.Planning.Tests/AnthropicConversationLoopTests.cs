@@ -42,6 +42,85 @@ public static class AnthropicConversationLoopTests
         Assert.Equal("private native reasoning", thinking.GetProperty("thinking").GetString());
     }
 
+    /// <summary>Compaction preserves the active goal and its host instructions, or the later cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task CompactionPreservesGoalStateAsHostContext(bool cancelGoal)
+    {
+        const string goal = "Inspect the old parser fixture.";
+        await using var harness = new NativeLoopHarness(
+            ToolStream([("first_tool", "deterministic_output", "{\"sequence\":1}")]),
+            ToolStream([("second_tool", "deterministic_output", "{\"sequence\":2}")]),
+            ToolStream([("third_tool", "deterministic_output", "{\"sequence\":3}")]),
+            TextStream("All requested work is complete."));
+        harness.Goal = goal;
+        harness.ToolEvidence = new string('e', 4096);
+        harness.Compactor = new ReasoningReplayConversationTests.ReplayCompactor();
+        harness.CompactionPolicy = new ActiveTurnCompactionPolicy
+        {
+            PressureTargetPercent = 1,
+            RetainedRecentTokens = 1,
+            FailureBackoffRounds = 0,
+        };
+
+        await harness.RunToCompletionAsync(cancelGoalAfterFirstTool: cancelGoal);
+
+        var initial = Assert.Single(harness.Model.Requests[0].Messages, message => message.SectionId == "session-goal");
+        Assert.Equal(ModelMessageRole.User, initial.Role);
+        Assert.Contains(goal, initial.GetModelVisibleContent(), StringComparison.Ordinal);
+        var compacted = harness.Model.Requests[^1];
+        Assert.True(compacted.HistoryRewriteGeneration > 0);
+        var wireText = harness.Handler.Requests[^1].GetProperty("messages").EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray())
+            .Where(block => block.GetProperty("type").GetString() == "text")
+            .Select(block => block.GetProperty("text").GetString())
+            .ToArray();
+        if (cancelGoal)
+        {
+            Assert.DoesNotContain(compacted.Messages, message => message.SectionId is "session-goal" or "session-goal-context");
+            Assert.DoesNotContain(wireText, text => text?.Contains(goal, StringComparison.Ordinal) == true);
+        }
+        else
+        {
+            Assert.Equal(initial, Assert.Single(compacted.Messages, message => message.SectionId == "session-goal"));
+            Assert.Single(wireText, text => text?.Contains(goal, StringComparison.Ordinal) == true);
+        }
+
+        var expectedSection = cancelGoal ? "session-goal-cleared" : "session-goal-context";
+        var host = Assert.Single(compacted.Messages, message => message.SectionId == expectedSection);
+        Assert.Equal(ModelMessageRole.HostContext, host.Role);
+        var notice = Assert.Single(wireText, text => text?.Contains(host.GetModelVisibleContent(), StringComparison.Ordinal) == true);
+        Assert.Contains(cancelGoal ? "\"goalActive\":false" : "\"goalActive\":true", notice, StringComparison.Ordinal);
+        Assert.StartsWith("<threadsmith_host_context>\n", notice, StringComparison.Ordinal);
+        Assert.EndsWith("\n</threadsmith_host_context>", notice, StringComparison.Ordinal);
+    }
+
+    /// <summary>Goal wording on the native wire comes from the resolved fallback's prompt view.</summary>
+    [Fact]
+    public static async Task GoalInstructionsUseResolvedFallbackBeforeDispatch()
+    {
+        var preferred = ModelProfileId.New();
+        await using var harness = new NativeLoopHarness(TextStream("All requested work is complete."))
+        {
+            Goal = "Write a greeting.",
+            InitialPreference = new SessionModelPreferences(preferred, ReasoningLevel.None),
+            Prompts = new ProfileTaggedGoalPrompts(),
+        };
+
+        await harness.RunToCompletionAsync();
+
+        var fallback = Assert.Single(harness.Observed.OfType<ModelFallbackSelected>());
+        var request = Assert.Single(harness.Model.Requests);
+        Assert.NotEqual(preferred, request.ResolvedProfileId);
+        var host = Assert.Single(request.Messages, message => message.SectionId == "session-goal-context");
+        Assert.Contains($"Goal wording for {request.ResolvedProfileId?.Value:D}", host.GetModelVisibleContent(), StringComparison.Ordinal);
+        var body = Assert.Single(harness.Handler.Requests).GetRawText();
+        Assert.Contains($"Goal wording for {request.ResolvedProfileId?.Value:D}", body, StringComparison.Ordinal);
+        Assert.DoesNotContain($"Goal wording for {preferred.Value:D}", body, StringComparison.Ordinal);
+        Assert.Equal(request.ResolvedProfileId, fallback.SelectedProfileId);
+    }
+
     /// <summary>Steering that cancels a native pending batch retains its prose through replay without adding a second copy.</summary>
     [Fact]
     public static async Task SteeringBeforeTools_RetainsCommentaryOnce()
@@ -71,6 +150,62 @@ public static class AnthropicConversationLoopTests
         Assert.Single(messages, message => message.GetModelVisibleContent() == commentary);
         Assert.Single(messages, message => message.SectionId == "run-user-steering");
         Assert.Contains(messages, message => message.IsError == true && message.GetModelVisibleContent().Contains("cancelledByUserSteering", StringComparison.Ordinal));
+        AssertSignedReplay(harness.Handler.Requests[1]);
+    }
+
+    /// <summary>Goal-only steering retires queued work and preserves native replay when a replacement continues.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Inspect the parser instead.")]
+    public static async Task GoalChangeBeforeToolsDiscardsNativeBatchWithoutSteering(string? replacement)
+    {
+        const string commentary = "Starting the inspection.";
+        const string callId = "wire_retired";
+        var ct = TestContext.Current.CancellationToken;
+        await using var harness = new NativeLoopHarness(
+            ToolStream([(callId, "deterministic_output", "{\"sequence\":1}")], commentary),
+            TextStream("All requested work is complete.")) { Goal = "Inspect the repository." };
+        var paused = new TaskCompletionSource<RunSteeringPauseRequestResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.OnEvent = item =>
+        {
+            if (item is ModelOutputObserved output && harness.Model.Requests.Count == 1)
+            {
+                paused.TrySetResult(harness.Steering.RequestPause(output.SessionId, harness.Model.Requests[0].RunId));
+            }
+        };
+
+        await harness.RunToCompletionAsync(beforeWait: async (dispatcher, token) =>
+        {
+            var pause = await paused.Task.WaitAsync(token);
+            var ready = await harness.Steering.WaitForPauseAsync(harness.SessionId, harness.RunId, pause.PauseId, token);
+            Assert.Equal(RunSteeringPauseWaitStatus.Ready, ready.Status);
+            try
+            {
+                var action = replacement is null ? SessionGoalAction.Cancel : SessionGoalAction.Set;
+                await dispatcher.DispatchAsync(new SessionGoalCommand(harness.SessionId, action, replacement), token);
+            }
+            finally
+            {
+                harness.Steering.Submit(harness.SessionId, harness.RunId, pause.PauseId, null);
+            }
+        });
+        ct.ThrowIfCancellationRequested();
+        Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
+        Assert.Empty(harness.ExecutedSequences);
+        if (replacement is null)
+        {
+            Assert.Single(harness.Handler.Requests);
+            return;
+        }
+
+        var replay = Assert.Single(harness.Model.Requests.Skip(1));
+        Assert.Single(replay.Messages, message => message.GetModelVisibleContent() == commentary);
+        Assert.DoesNotContain(replay.Messages, message => message.SectionId == "run-user-steering");
+        Assert.Contains(replay.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(replacement, StringComparison.Ordinal));
+        var result = Assert.Single(replay.Messages, message => message.Role == ModelMessageRole.Tool);
+        Assert.True(result.IsError);
+        Assert.Contains("cancelledByGoalChange", result.GetModelVisibleContent(), StringComparison.Ordinal);
+        AssertRejectedResults(harness.Handler.Requests[1], [callId]);
         AssertSignedReplay(harness.Handler.Requests[1]);
     }
 
@@ -318,7 +453,7 @@ public static class AnthropicConversationLoopTests
             Evidence = new EvidenceStore(Events, new SecretOutputSanitizer());
         }
 
-        internal DomainEventStream Events { get; } = new();
+        internal DomainEventStream Events { get; } = new(timeProvider: new FakeTimeProvider());
 
         internal EvidenceStore Evidence { get; }
 
@@ -340,6 +475,12 @@ public static class AnthropicConversationLoopTests
 
         internal ActiveTurnCompactionPolicy? CompactionPolicy { get; set; }
 
+        internal string? Goal { get; set; }
+
+        internal SessionModelPreferences? InitialPreference { get; init; }
+
+        internal IPromptLoader Prompts { get; init; } = TestPromptLoader.Instance;
+
         internal string ToolEvidence { get; set; } = "Tool evidence collected.";
 
         internal ConcurrentQueue<int> ExecutedSequences { get; } = new();
@@ -357,7 +498,7 @@ public static class AnthropicConversationLoopTests
             Directory.Delete(_root, recursive: true);
         }
 
-        internal async Task RunToCompletionAsync(bool cancelAfterTool = false)
+        internal async Task RunToCompletionAsync(bool cancelAfterTool = false, bool cancelGoalAfterFirstTool = false, Func<CommandDispatcher, CancellationToken, Task>? beforeWait = null)
         {
             await using var capture = Events.Subscribe((domainEvent, _) =>
             {
@@ -369,7 +510,7 @@ public static class AnthropicConversationLoopTests
             var registry = new ToolRegistry([new TestDeterministicOutputTool(ToolEvidence, onExecute: ExecutedSequences.Enqueue)]);
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance, timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
-            var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
+            var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, Prompts, modelResolver: resolver, providerInstructionResolver: new ReasoningReplayFixture.InstructionResolver(_catalog));
             Assembler = assembler;
             var projections = new InMemoryProjectionStore();
             await using var project = Events.Subscribe(projections.ApplyAsync);
@@ -386,33 +527,68 @@ public static class AnthropicConversationLoopTests
                 registry,
                 _catalog.DefaultModelId,
                 Limits,
+                sessionPreferences: InitialPreference,
                 sessionUsage: Usage,
                 activeTurnCompactor: Compactor,
                 activeTurnCompactionPolicy: CompactionPolicy,
+                selectActiveModel: InitialPreference is null ? null : SelectFallbackAsync,
                 steering: Steering,
-                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                correctiveMessages: new CorrectiveMessageFactory(Prompts),
+                prompts: Prompts,
+                outputClock: new FakeTimeProvider());
             var dispatcher = new CommandDispatcher([application]);
+            var cancellationToken = TestContext.Current.CancellationToken;
+            var cancelGoalPending = cancelGoalAfterFirstTool;
             await using var cancel = Events.Subscribe(async (item, ct) =>
             {
-                if (cancelAfterTool && item is ToolInvocationCompleted tool)
+                if (item is ToolInvocationCompleted tool)
                 {
-                    await dispatcher.DispatchAsync(new CancelRunCommand(tool.SessionId, tool.RunId), ct);
+                    if (cancelAfterTool)
+                    {
+                        await dispatcher.DispatchAsync(new CancelRunCommand(tool.SessionId, tool.RunId), ct);
+                    }
+
+                    if (cancelGoalPending)
+                    {
+                        cancelGoalPending = false;
+                        await dispatcher.DispatchAsync(new SessionGoalCommand(tool.SessionId, SessionGoalAction.Cancel), ct);
+                    }
                 }
             });
-            SessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("native loop integration"));
-            RunId = await dispatcher.DispatchAsync(new SubmitRequestCommand(SessionId, "Inspect the repository and report."));
-            var ct = TestContext.Current.CancellationToken;
+            SessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("native loop integration"), cancellationToken);
+            if (Goal is { } goal)
+            {
+                await dispatcher.DispatchAsync(new SessionGoalCommand(SessionId, SessionGoalAction.Set, goal), cancellationToken);
+            }
+
+            RunId = await dispatcher.DispatchAsync(new SubmitRequestCommand(SessionId, "Inspect the repository and report."), cancellationToken);
+            if (beforeWait is not null)
+            {
+                await beforeWait(dispatcher, cancellationToken);
+            }
+
             if (cancelAfterTool)
             {
-                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct));
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(RunId), cancellationToken));
             }
             else
             {
-                var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct);
-                var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), ct);
+                var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), cancellationToken);
+                var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), cancellationToken);
                 Assert.True(succeeded, projection?.Error);
             }
+        }
+
+        private Task<ActiveModelSelectionResult> SelectFallbackAsync(ModelProfileId id, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var profile = _catalog.ModelCatalog.Get(id);
+            InitialPreference!.SetReasoning(id, profile.DefaultReasoningLevel);
+            return Task.FromResult(new ActiveModelSelectionResult
+            {
+                Persisted = true,
+                Selection = new ActiveModelSelectionSnapshot { Profile = profile, ProviderId = profile.Provider },
+            });
         }
     }
 
@@ -469,6 +645,38 @@ public static class AnthropicConversationLoopTests
             {
                 Content = FragmentResponses ? ReasoningReplayFixture.FragmentedContent(response) : new StringContent(response, Encoding.UTF8, "text/event-stream"),
             };
+        }
+    }
+
+    private sealed class ProfileTaggedGoalPrompts : IPromptLoader
+    {
+        private readonly AsyncLocal<ModelProfileId?> _profile = new();
+
+        public IDisposable BeginModelScope(ModelProfileId? modelProfileId)
+        {
+            var previous = _profile.Value;
+            _profile.Value = modelProfileId;
+            return new RestoreScope(() => _profile.Value = previous);
+        }
+
+        public string Get(string promptFileName) => TestPromptLoader.Instance.Get(promptFileName);
+
+        public string Render(string promptFileName, IReadOnlyDictionary<string, string> tokens)
+        {
+            var content = TestPromptLoader.Instance.Render(promptFileName, tokens);
+            return promptFileName == PromptFileNames.ContextGoalWorkContext ? $"Goal wording for {_profile.Value?.Value:D}\n{content}" : content;
+        }
+
+        private sealed class RestoreScope : IDisposable
+        {
+            private readonly Action _restore;
+
+            public RestoreScope(Action restore)
+            {
+                _restore = restore;
+            }
+
+            public void Dispose() => _restore();
         }
     }
 }

@@ -103,7 +103,8 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             goalRows = remaining >= 3 ? 2 : Math.Min(1, remaining);
         }
 
-        _height = Math.Max(1, surface.Size.Height - notice - activityRows - goalRows);
+        var transcriptRows = surface.Size.Height - notice - activityRows - goalRows;
+        _height = Math.Max(1, transcriptRows);
         _top = AtBottom ? Math.Max(0, rowCount - _height) : Math.Min(_top, Math.Max(0, rowCount - _height));
         if (_clearBeforeId is { } clearBefore)
         {
@@ -118,7 +119,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
         var hasSelection = _anchor is not null && _end is not null;
         var (first, last) = OrderedSelection();
-        for (var index = _top; index < Math.Min(rowCount, _top + _height); index++)
+        for (var index = _top; index < Math.Min(rowCount, _top + transcriptRows); index++)
         {
             var row = _rows[index];
             var selected = hasSelection && row.Line.Id >= first.Line && row.Line.Id <= last.Line;
@@ -133,7 +134,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         var tick = Environment.TickCount64 / 250;
         var advance = tick != _activityTick;
         _activityTick = tick;
-        var activityRow = notice + Math.Min(_height, Math.Max(0, rowCount - _top));
+        var activityRow = notice + Math.Min(transcriptRows, Math.Max(0, rowCount - _top));
         if (GoalActivityFrame is { } goalFrame && goalRows > 0)
         {
             activityRow += goalRows;

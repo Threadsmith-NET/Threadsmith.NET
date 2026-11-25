@@ -69,6 +69,20 @@ public static partial class AppBootstrapTests
         Assert.False(File.Exists(database));
     }
 
+    /// <summary>Repository preferences cannot raise the trusted automatic continuation limit.</summary>
+    [Theory]
+    [InlineData("0", "8", 0)]
+    [InlineData("20", "12", 12)]
+    [InlineData(null, "20", 10)]
+    public static void GoalContinuationLimitCanOnlyNarrowTrustedCeiling(string? trustedLimit, string preferredLimit, int expected)
+    {
+        const string key = "execution:maxGoalContinuations";
+        var trusted = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { [key] = trustedLimit }).Build();
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { [key] = preferredLimit }).Build();
+
+        Assert.Equal(expected, HostFoundation.LoadGoalContinuationLimit(effective, trusted));
+    }
+
     /// <summary>Omitted and zero execution quotas retain usage accounting without a cumulative ceiling.</summary>
     [Theory]
     [InlineData(false)]

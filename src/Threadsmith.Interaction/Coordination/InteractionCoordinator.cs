@@ -587,7 +587,8 @@ public sealed partial class InteractionCoordinator
                                     _displayOptions.ShowOperationDurations,
                                     _timeProvider),
                             GoalAssessmentActivity { Started: true } assessment => new InteractionActivity(
-                                "Analyzing Goal", _timeProvider.GetTimestamp(), false, _timeProvider) { GoalAssessmentId = assessment.AttemptId },
+                                "Checking continuation", _timeProvider.GetTimestamp(), false, _timeProvider)
+                            { GoalAssessmentId = assessment.AttemptId },
                             ActiveTurnCompactionStarted started => new InteractionActivity(
                                 FormatActiveTurnCompactionActivity(started),
                                 _timeProvider.GetTimestamp(),
@@ -2358,10 +2359,9 @@ public sealed partial class InteractionCoordinator
         ArgumentNullException.ThrowIfNull(started);
         return string.Format(
             CultureInfo.InvariantCulture,
-            "COMPACTING CONTEXT: {0:N0} tokens; target {1:N0}; profile {2:D}",
+            "COMPACTING CONTEXT: {0:N0} tokens; pressure threshold {1:N0}",
             started.BeforeInputTokens,
-            started.PressureTargetTokens,
-            started.CandidateProfileId.Value);
+            started.PressureTargetTokens);
     }
 
     /// <summary>Formats one bounded active-turn completion notice with no summary or tool content.</summary>
@@ -2406,7 +2406,7 @@ public sealed partial class InteractionCoordinator
             ? string.Empty
             : $"  active-turn {activeTurn.Status}: input {activeTurn.BeforeInputTokens}"
                 + (activeTurn.AfterInputTokens is { } afterTokens ? $" -> {afterTokens}" : string.Empty)
-                + $"; target/max {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
+                + $"; pressure threshold/max input {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
                 + $"reserve {activeTurn.OutputReserveTokens}; retention target effective/configured "
                 + $"{activeTurn.EffectiveRetentionTargetTokens}/{activeTurn.ConfiguredRetentionTargetTokens}; "
                 + "groups eligible/compacted/retained "

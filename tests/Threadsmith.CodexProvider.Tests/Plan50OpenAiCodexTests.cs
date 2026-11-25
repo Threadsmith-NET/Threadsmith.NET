@@ -225,7 +225,7 @@ public sealed class Plan50OpenAiCodexTests
         var cache = new OpenAiCodexCatalogCache(path);
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
-                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}")))
+                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000,\"service_tiers\":[{\"id\":\"priority\"}]}]}")))
             { Timeout = Timeout.InfiniteTimeSpan },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
@@ -235,15 +235,21 @@ public sealed class Plan50OpenAiCodexTests
             await cache.SaveAsync(configuration, TestContext.Current.CancellationToken);
             var loaded = await cache.LoadAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal("dynamic", Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(loaded?.Models ?? [])).ModelId);
+            var discovered = Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(loaded?.Models ?? []));
+            Assert.Equal("dynamic", discovered.ModelId);
+            Assert.True(discovered.SupportsPriorityTier);
             Assert.DoesNotContain("not-a-jwt", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
             Assert.Equal(3, payload.RootElement.GetProperty("SchemaVersion").GetInt32());
             Assert.Equal("dynamic", payload.RootElement.GetProperty("Models")[0].GetProperty("ModelId").GetString());
 
-            var replacement = configuration with { Models = [configuration.Models[0] with { Name = "Replacement" }] };
+            var replacement = configuration with { Models = [discovered with { Name = "Replacement", SupportsPriorityTier = false }] };
             await cache.SaveAsync(replacement, TestContext.Current.CancellationToken);
-            Assert.Equal("Replacement", Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models).Name);
+            var refreshed = Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models));
+            Assert.Equal("Replacement", refreshed.Name);
+            Assert.False(refreshed.SupportsPriorityTier);
+            await cache.SaveAsync(configuration, TestContext.Current.CancellationToken);
+            Assert.True(Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models)).SupportsPriorityTier);
 
             var previous = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
             using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -653,7 +659,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + "Code: invalid_request · Parameter: input", exception.Message);
     }
 
-    /// <summary>Only a confirmed text cutoff is eligible for goal continuation.</summary>
+    /// <summary>Distinguishes a confirmed text cutoff from an uncertain tool response.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("response.function_call_arguments.delta")]

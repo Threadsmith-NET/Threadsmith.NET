@@ -1528,7 +1528,8 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024) with { VisibleToScriptingHost = true };
+            256 * 1024) with
+        { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1613,7 +1614,8 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024) with { VisibleToScriptingHost = true };
+            256 * 1024) with
+        { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1880,47 +1882,6 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         {
             ["Metacharacter"] = metacharacter.ToString(),
         });
-
-    /// <summary>Identifies a confirmed native Git commit and whether it supplied its message inline.</summary>
-    internal static bool? ObserveGitCommit(RunProcessInput input, ProcessExecutionResult result)
-    {
-        if (result is not { ExitCode: 0, TimedOut: false }
-            || input.PreparedCommand?.Actions is not [var action]
-            || action.CommandKind is not (CommandPolicyNames.External or CommandPolicyNames.ExplicitExternal)
-            || !action.ExecutableName.Equals("git", StringComparison.OrdinalIgnoreCase)
-            || action.Arguments.IsDefaultOrEmpty || action.Arguments[0] != "commit")
-        {
-            return null;
-        }
-
-        var options = action.Arguments.Skip(1).TakeWhile(argument => argument != "--");
-        if (options.Any(argument => argument is "--dry-run" or "--short" or "--long" or "--porcelain" or "-z" or "--null"
-            || argument.StartsWith("--porcelain=", StringComparison.Ordinal)))
-        {
-            return null;
-        }
-
-        foreach (var line in result.StandardOutput.AsSpan().EnumerateLines())
-        {
-            var end = line.IndexOf("] ", StringComparison.Ordinal);
-            if (end < 3 || line[0] != '[')
-            {
-                continue;
-            }
-
-            var header = line[1..end];
-            var separator = header.LastIndexOf(' ');
-            var revision = header[(separator + 1)..];
-            if (separator > 0 && revision.Length is >= 4 and <= 64 && revision.IndexOfAnyExcept("0123456789abcdefABCDEF") < 0)
-            {
-                return !line[(end + 2)..].Trim().IsEmpty && options.Any(argument => argument is "-m" or "--message"
-                    || argument.StartsWith("--message=", StringComparison.Ordinal)
-                    || (argument.Length > 2 && argument.StartsWith("-m", StringComparison.Ordinal)));
-            }
-        }
-
-        return null;
-    }
 
     /// <summary>Gets host-owned deterministic preparation environment additions, never tool input.</summary>
     internal IReadOnlyDictionary<string, string> PreparationEnvironment { get; init; } = new Dictionary<string, string>();

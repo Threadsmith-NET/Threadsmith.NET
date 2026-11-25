@@ -28,7 +28,7 @@ public static class GoalIndicatorTests
             var size = new Size(80, 16);
             await surface.PresentAsync(new PresentationBatch([new PresentationSourceItem(answer, answer, false)]), token);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var activity = new InteractionActivity("Analyzing Goal", 0, false, TimeProvider.System) { GoalAssessmentId = Guid.NewGuid() };
+            var activity = new InteractionActivity("Checking continuation", 0, false, TimeProvider.System) { GoalAssessmentId = Guid.NewGuid() };
             var presentation = surface.PresentActivityUntilAsync(activity, release.Task, token);
             try
             {
@@ -64,11 +64,11 @@ public static class GoalIndicatorTests
 
         var cells = new CellBuffer(72, 2);
         var surface = new BufferSurface(cells);
-        view.GoalActivityFrame = "| Analyzing Goal";
+        view.GoalActivityFrame = "| Checking continuation";
         view.Render(surface);
         var rows = Snapshot.ToText(cells).Split('\n');
         Assert.Equal("Answer", rows[0].Trim());
-        Assert.Equal("| Analyzing Goal", rows[1].Trim());
+        Assert.Equal("| Checking continuation", rows[1].Trim());
         view.GoalActivityFrame = null;
         view.Render(surface);
         Assert.Contains("Older visible output omitted", Snapshot.ToText(cells), StringComparison.Ordinal);
@@ -78,6 +78,7 @@ public static class GoalIndicatorTests
     [Theory]
     [InlineData(5, 2)]
     [InlineData(2, 1)]
+    [InlineData(1, 0)]
     public static void OutputShowsOneTransientGapWhenSpacePermits(int height, int indicatorRow)
     {
         var view = new TranscriptView();
@@ -86,11 +87,15 @@ public static class GoalIndicatorTests
         var surface = new BufferSurface(cells);
         view.Render(surface);
         var original = Snapshot.ToText(cells);
-        view.GoalActivityFrame = "| Analyzing Goal";
+        view.GoalActivityFrame = "| Checking continuation";
         view.Render(surface);
         var rows = Snapshot.ToText(cells).Split('\n');
-        Assert.Equal("Answer", rows[0].Trim());
-        Assert.Equal("| Analyzing Goal", rows[indicatorRow].Trim());
+        if (height > 1)
+        {
+            Assert.Equal("Answer", rows[0].Trim());
+        }
+
+        Assert.Equal("| Checking continuation", rows[indicatorRow].Trim());
         if (indicatorRow == 2)
         {
             Assert.Empty(rows[1].Trim());

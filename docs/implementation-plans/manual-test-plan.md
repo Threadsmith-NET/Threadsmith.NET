@@ -2,11 +2,14 @@
 
 ## MTP-GOAL-01 — Stop, continue, and cancel a session goal
 
-1. In a disposable session, enter `/goal set "Describe the parser and identify its tests"`. Stop the turn. Enter `/goal`; confirm that the goal is unchanged. Submit `continue` as normal input.
-2. During assessment, check for the `THINKING` spinner labeled `Analyzing Goal` in MAIN output with one blank line above it. Confirm that it disappears before the continuation notice or terminal summary. After a terminal result, `/goal` must show no goal.
-3. Repeat. Pause at assessment, enter `/goal cancel`, and confirm that the old verdict cannot restart work. Record the terminal, OS, and provider used. Do not report an untested platform as verified.
-4. With a test assessor that cites an unknown evidence ID on every attempt, let the turn reach assessment. Confirm that MAIN announces the correction attempt and that the work gets one review round. After the assessment still fails, confirm that MAIN reports the reason and offers `continue`. With a child tab selected, confirm that the failure notification points to MAIN. Enter `/goal` and confirm the goal is still active.
-5. With `execution:maxGoalContinuations` set to `2`, use an assessor that keeps returning `Continue`. Confirm that the host assesses the initial response and both follow-up responses, then displays the continuation limit and keeps the goal active. Submit `continue` and confirm that a new run can continue work again.
+Use a disposable session. For repeatable replies, use a scripted provider that supports normal text finishes and can hold a work response or a continuation check open. Record the terminal, OS, and provider used.
+
+1. Enter `/goal set "Write a two-sentence greeting"`. Have the worker return the greeting followed by the standalone sentence `All requested work is complete.`. Confirm the answer appears once, the run ends, and `/goal` shows no active goal. There should be one work request.
+2. Set the goal again. Return the first sentence followed by `Requested work remains.`. Confirm MAIN shows a continuation notice and the next work request arrives without user input. Finish the greeting and report completion.
+3. Repeat with a free-form reply such as “I still have the second sentence to write.” Hold the tool-free status request open and observe `Checking continuation`. Return `CONTINUE` and finish the greeting on the next round. Repeat with “I finished the greeting.” and return `STOP`. Confirm the goal clears with the worker's answer as the final output.
+4. Stop a work round and use `/goal` to verify the goal remains active. Submit `continue` to resume. During a held status check, pause and enter `/goal cancel`. Release the old check and verify it cannot restart that goal.
+5. Set `execution:maxGoalContinuations` to `2` before startup. Have the worker close each reply with `Requested work remains.`. Expect the initial work round and two automatic continuations, then a pause with the goal still active. Submit `continue` to resume.
+6. Set the trusted ceiling to `0` and a positive value in repository configuration. Restart and submit a goal whose first reply says `Requested work remains.`. Expect the goal to pause after the first reply, with no second work round until you submit `continue`.
 
 ## MTP-MODAL-WRAP — Modal text reflow
 
@@ -1956,7 +1959,7 @@ Expected: the original 14 mapped profiles remain unchanged and all seven reviewe
 
 ### MTP-211 — Independent Codex OAuth lifecycle and privacy
 
-1. Complete interactive browser login, restart, force expiry/refresh, logout, and re-login; repeat with the headless pasted-callback path.
+1. Complete interactive browser login, restart, force expiry/refresh, logout, and re-login; repeat with the headless pasted-callback path. After an account's priority eligibility changes, run `threadsmith --codex-login` without logging out, wait for model discovery, and restart. Verify that priority activation uses the newly advertised capability and never falls back to normal.
 2. Exercise denied consent, wrong state/issuer/redirect, callback-port collision, malformed token response, concurrent refresh, network failure, timeout, and cancellation.
 3. Inspect owner permissions and recovery behavior for the user token cache on Windows, Linux, and macOS.
 4. Search repository files, catalogs, SQLite, archive/memory, prompts, hooks, logs, telemetry, diagnostics, errors, and Pi configuration for side effects or credential material.

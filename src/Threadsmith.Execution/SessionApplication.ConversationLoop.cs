@@ -58,6 +58,7 @@ public sealed partial class SessionApplication
         }
 
         SourceEditAnalysis? deferredFeedback = null;
+        SourceEditAnalysis? feedbackAwaitingReview = null;
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
             using var roundPromptScope = _prompts.BeginModelScope(_sessionPreferences?.Capture().ProfileId ?? _defaultModelProfileId);
@@ -65,7 +66,11 @@ public sealed partial class SessionApplication
             // Finish pending edit checks before the model chooses its next tools, including
             // builds and tests. Reuse the final-feedback owner, deadline and cancellation.
             var boundaryFeedback = deferredFeedback ?? (_sourceEdits is null ? null
-                : await _sourceEdits.WaitForFinalFeedbackAsync(registration.SessionId, runId, cancellationToken));
+                : await _sourceEdits.WaitForFinalFeedbackAsync(
+                    registration.SessionId,
+                    runId,
+                    _sessions.TryGetValue(registration.SessionId, out var session) && session.Goal is not null,
+                    cancellationToken));
             if (boundaryFeedback is { } feedback)
             {
                 if (deferredFeedback is null)
@@ -76,6 +81,7 @@ public sealed partial class SessionApplication
                 }
 
                 deferredFeedback = null;
+                feedbackAwaitingReview = feedback;
                 loopState.CommitStandaloneMessage(
                     modelRound,
                     new ModelMessage
@@ -94,8 +100,6 @@ public sealed partial class SessionApplication
                         ],
                     },
                     purgeAfterCorrection: false);
-                registration.RoundGoal?.Journal?.Add("edit-feedback", _sanitizer.Sanitize(SourceEditAnalysisProjection.Create(feedback).ToJsonString()), sensitive: true);
-                _sourceEdits?.AcknowledgeFeedback(registration.SessionId, feedback);
             }
 
             var boundarySteering = await _steering.PauseParentAtBoundaryAsync(
@@ -115,21 +119,6 @@ public sealed partial class SessionApplication
                 invocationContext = operationScope.RefreshCommandPolicy(invocationContext);
             }
 
-            var activeGoal = registration.IntelligenceOperation == RepositoryIntelligenceOperation.None
-                && _sessions.TryGetValue(registration.SessionId, out var live) && live.Journal is not null ? live : null;
-            if (activeGoal?.Journal != registration.RoundGoal?.Journal)
-            {
-                registration.UsedGoalAssessmentFallback = false;
-                registration.SuggestedNextStep = null;
-                CommitGoalContext(loopState, modelRound, activeGoal, null);
-            }
-            else if (registration.SuggestedNextStep is { } nextStep)
-            {
-                CommitGoalContext(loopState, modelRound, activeGoal, nextStep);
-                registration.SuggestedNextStep = null;
-            }
-
-            registration.RoundGoal = activeGoal;
             var round = await PrepareConversationRoundAsync(
                 runId,
                 registration,
@@ -172,6 +161,14 @@ public sealed partial class SessionApplication
                 }
             }
 
+            if (feedbackAwaitingReview is not null && outcome.AcceptedWorkReply)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _sourceEdits?.ReleaseFeedbackReview(registration.SessionId, runId, feedbackAwaitingReview);
+                feedbackAwaitingReview = null;
+            }
+
+            registration.ContinueUnfinishedGoal = false;
             if (registration.IntelligenceRun is { IsCoverageReviewActive: true } coverageRun)
             {
                 await coverageRun.SaveCheckpointAsync(_sanitizer.Sanitize(string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content)), cancellationToken);
@@ -213,6 +210,28 @@ public sealed partial class SessionApplication
                 continue;
             }
 
+            if (outcome.GoalSupersededBeforeTools)
+            {
+                if (!_sessions.TryGetValue(registration.SessionId, out var current) || current.Goal is null)
+                {
+                    return;
+                }
+
+                if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
+                {
+                    await ShowGoalResultAsync(round, "Goal paused: the model round limit was reached.", cancellationToken);
+                    return;
+                }
+
+                if (!outcome.TextRetainedInToolGroup && !string.IsNullOrWhiteSpace(outcome.TextOutput))
+                {
+                    loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
+                }
+
+                continue;
+            }
+
+            var activeGoal = registration.RoundGoal;
             if (!outcome.ToolInvoked || outcome.PolicyBlocked)
             {
                 if (registration.IntelligenceRun is { } coverage
@@ -261,17 +280,28 @@ public sealed partial class SessionApplication
                 }
 
                 var finalFeedback = _sourceEdits is null ? null
-                    : await _sourceEdits.WaitForFinalFeedbackAsync(registration.SessionId, runId, cancellationToken);
-                if (finalFeedback is not null)
+                    : await _sourceEdits.WaitForFinalFeedbackAsync(registration.SessionId, runId, activeGoal is not null, cancellationToken);
+                if (_sourceEdits is not null && finalFeedback is not null)
                 {
+                    var needsReview = activeGoal is null || _sourceEdits.NeedsGoalFeedbackReview(registration.SessionId, finalFeedback);
+                    if (activeGoal is not null && needsReview)
+                    {
+                        _sourceEdits.DeferFeedbackReview(registration.SessionId, runId, finalFeedback, keepClaim: true);
+                    }
+
                     await _events.PublishAsync(
                         new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(finalFeedback)) { EditAnalysis = finalFeedback },
                         cancellationToken);
-                    if (!outcome.PolicyBlocked && (maximumModelRounds <= 0 || modelRound < maximumModelRounds))
+                    if (!needsReview)
+                    {
+                        _sourceEdits.ReleaseFeedbackReview(registration.SessionId, runId, finalFeedback);
+                    }
+                    else if (!outcome.PolicyBlocked && (activeGoal is null || outcome.FinishReason == ModelFinishReason.Stop)
+                        && (maximumModelRounds <= 0 || modelRound < maximumModelRounds))
                     {
                         // Evidence completed during this response must reach the model before it finishes.
                         deferredFeedback = finalFeedback;
-                        if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                        if (!outcome.TextRetainedInToolGroup && !string.IsNullOrWhiteSpace(outcome.TextOutput))
                         {
                             loopState.CommitStandaloneMessage(
                                 modelRound,
@@ -281,11 +311,23 @@ public sealed partial class SessionApplication
 
                         continue;
                     }
+                    else if (activeGoal is not null)
+                    {
+                        _sourceEdits.DeferFeedbackReview(registration.SessionId, runId, finalFeedback);
+                        await ShowGoalResultAsync(round, "Goal paused: new edit diagnostics need review before the goal can finish.", cancellationToken);
+                        return;
+                    }
+                }
+
+                if (activeGoal is not null && _sourceEdits?.IsGoalFeedbackClaimedByAnotherRun(registration.SessionId, runId) == true)
+                {
+                    await ShowGoalResultAsync(round, "Goal paused: another run is reviewing new edit diagnostics.", cancellationToken);
+                    return;
                 }
 
                 // A goal can be set while this round is paused even when no steering text is submitted.
                 if (activeGoal is null && registration.IntelligenceOperation == RepositoryIntelligenceOperation.None
-                    && _sessions.TryGetValue(registration.SessionId, out var updated) && updated.Journal is not null)
+                    && _sessions.TryGetValue(registration.SessionId, out var updated) && updated.Goal is not null)
                 {
                     if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
                     {
@@ -301,17 +343,7 @@ public sealed partial class SessionApplication
                     continue;
                 }
 
-                if (activeGoal is not null && finalFeedback is not null)
-                {
-                    activeGoal.Journal?.Add("edit-feedback", _sanitizer.Sanitize(SourceEditAnalysisProjection.Create(finalFeedback).ToJsonString()), sensitive: true);
-                    if (!outcome.PolicyBlocked)
-                    {
-                        await ShowGoalResultAsync(round, "Goal paused: the model round limit was reached before final edit feedback could be addressed.", cancellationToken);
-                        return;
-                    }
-                }
-
-                if (activeGoal is not null && await ContinueGoalAsync(round, outcome, loopState, activeGoal, cancellationToken))
+                if (activeGoal is not null && await ContinueGoalAsync(outcome, loopState, activeGoal, cancellationToken))
                 {
                     if (maximumModelRounds > 0 && modelRound >= maximumModelRounds)
                     {
@@ -345,11 +377,6 @@ public sealed partial class SessionApplication
     {
         foreach (var message in messages)
         {
-            if (_sessions.TryGetValue(registration.SessionId, out var live))
-            {
-                live.Journal?.Add("user-steering", _sanitizer.Sanitize(message.Text), sensitive: true);
-            }
-
             registration.MemoryCurrentInstruction = message.Text;
             registration.MemoryIntent.Advance();
             if (!loopState.TransientState.HasResponses || registration.UsesConceptDiscovery
@@ -559,7 +586,6 @@ public sealed partial class SessionApplication
                 modelPreference,
                 _defaultModelProfileId) with
             {
-                ModelConstraints = new() { ContainsSensitiveData = loopState.GoalHistorySensitive },
                 RepositoryMemoriesEnabled = memoriesEnabled,
                 IntelligenceEnabled = registration.IntelligenceEnabled,
                 RepositoryMemoryOptions = registration.MemoryOptions,
@@ -589,6 +615,26 @@ public sealed partial class SessionApplication
 
         var resolvedProfileId = context?.ModelResolution?.ProfileId ?? modelPreference?.ProfileId ?? _defaultModelProfileId;
         using var resolvedPromptScope = _prompts.BeginModelScope(resolvedProfileId);
+        var live = registration.IntelligenceOperation == RepositoryIntelligenceOperation.None
+            ? _sessions.GetValueOrDefault(registration.SessionId)
+            : null;
+        var activeGoal = live?.Goal is not null ? live : null;
+
+        var goalChanged = activeGoal?.GoalRevision != registration.RoundGoal?.GoalRevision;
+        if (goalChanged || registration.ContinueUnfinishedGoal
+            || (loopState.GoalPromptProfileId != resolvedProfileId && (activeGoal is not null || loopState.GoalContextRound == modelRound)))
+        {
+            if (goalChanged)
+            {
+                registration.ContinueUnfinishedGoal = false;
+            }
+
+            CommitGoalContext(loopState, modelRound, activeGoal, goalChanged, registration.ContinueUnfinishedGoal);
+            loopState.GoalPromptProfileId = resolvedProfileId;
+            loopState.GoalContextRound = modelRound;
+        }
+
+        registration.RoundGoal = activeGoal;
         if (inventory is null || initialProfileId != resolvedProfileId)
         {
             inventory = new(conversationDefinitions, workspaceAvailable);
@@ -716,7 +762,7 @@ public sealed partial class SessionApplication
             requestEnvelope,
             modelVisibleContinuation.Messages,
             loopState.HistoryRewriteGeneration,
-            loopState.GoalHistorySensitive || loopState.CompactionSummary is not null || loopState.Groups.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive),
+            loopState.CompactionSummary is not null || loopState.Groups.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive),
             _sessionPreferences?.IncludeReasoningText ?? false);
         modelRequest = modelRequest with { TransientState = loopState.TransientState };
         modelRequest = ModelRequestPreparation.Prepare(_model, modelRequest);
@@ -758,7 +804,8 @@ public sealed partial class SessionApplication
             context,
             usageRequestId,
             modelRequest,
-            loopState.LastGroupSequence)
+            loopState.LastGroupSequence,
+            live?.GoalRevision)
         {
             ToolRegistrations = conversationTools.Registrations,
         };
@@ -843,13 +890,13 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         loopState.BeginCurrentGroup(round.ModelRequest.ToolContinuationRound);
-        ConversationMessage? archivedAnswer = null;
         var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters, _sanitizer);
         ModelRequestHookBoundary? modelHookBoundary = null;
         var originalToolSnapshot = round.InvocationContext?.ModelVisibleToolSnapshotId;
         BudgetStatus? modelWallClockBudget = null;
         IReadOnlyList<RunSteeringMessage> preToolSteering = [];
         var textRetainedInToolGroup = false;
+        var goalSupersededBeforeTools = false;
 
         try
         {
@@ -870,7 +917,7 @@ public sealed partial class SessionApplication
                 await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
                 var previousContext = loopState.FrozenContext;
                 await RefreshMemoryContextAsync(round.Registration, round.InvocationContext, round.Registration.MemoriesEnabled, loopState, cancellationToken);
-                if (ReferenceEquals(previousContext, loopState.FrozenContext))
+                if (ReferenceEquals(previousContext, loopState.FrozenContext) && IsPreparedGoalCurrent(round))
                 {
                     break;
                 }
@@ -969,7 +1016,7 @@ public sealed partial class SessionApplication
                             try
                             {
                                 // Accepted visible output survives cancellation and provider failure; it is not a success receipt.
-                                archivedAnswer = await ArchiveVisibleMessageAsync(
+                                await ArchiveVisibleMessageAsync(
                                     round.Registration.SessionId,
                                     round.RunId,
                                     ConversationRole.Assistant,
@@ -1008,6 +1055,7 @@ public sealed partial class SessionApplication
             }
             finally
             {
+                streamState.BudgetUsage.Finish(round.Registration.Budget);
                 requestStopwatch.Stop();
                 var requestElapsed = requestStopwatch.Elapsed;
                 modelWallClockBudget = round.Registration.Budget.Accrue(new BudgetDimensions(
@@ -1027,17 +1075,9 @@ public sealed partial class SessionApplication
                     modelWallClockBudget.Reason ?? "Execution budget exhausted.");
             }
 
-            if (round.Registration.RoundGoal is { Journal: { } journal })
+            if (round.Registration.RoundGoal is not null && streamState.PendingToolCalls.Count > 0 && streamState.FinishReason != ModelFinishReason.ToolCalls)
             {
-                if (streamState.PendingToolCalls.Count > 0 && streamState.FinishReason != ModelFinishReason.ToolCalls)
-                {
-                    throw new InvalidOperationException("Goal paused: unconfirmed tool batch; no actions were dispatched.");
-                }
-
-                if (streamState.TextOutput.Length > 0)
-                {
-                    journal.Add(streamState.FinishReason == ModelFinishReason.Stop ? "answer" : "incomplete-answer", _sanitizer.Sanitize(streamState.TextOutput.ToString()), round.ModelRequest.ContainsSensitiveData, archivedAnswer?.Id);
-                }
+                throw new InvalidOperationException("Goal paused: unconfirmed tool batch; no actions were dispatched.");
             }
 
             if (streamState.HasResponseEnvelope && !streamState.CorrectiveTurnRequested)
@@ -1057,9 +1097,11 @@ public sealed partial class SessionApplication
                     round.Registration.SessionId,
                     round.RunId,
                     cancellationToken);
+                goalSupersededBeforeTools = !IsPreparedGoalCurrent(round);
             }
 
             if (preToolSteering.Count == 0
+                && !goalSupersededBeforeTools
                 && !streamState.CorrectiveTurnRequested
                 && await InvokePendingToolBatchAsync(
                     round,
@@ -1071,7 +1113,7 @@ public sealed partial class SessionApplication
             {
                 streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
             }
-            else if (preToolSteering.Count > 0)
+            else if (preToolSteering.Count > 0 || goalSupersededBeforeTools)
             {
                 if (streamState.HasResponseEnvelope)
                 {
@@ -1080,7 +1122,7 @@ public sealed partial class SessionApplication
                         loopState.AddCurrentToolResult(CreateToolResultMessage(
                             call.ToolCallId,
                             call.ToolName,
-                            JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
+                            JsonSerializer.Serialize(new { error = goalSupersededBeforeTools ? "cancelledByGoalChange" : "cancelledByUserSteering" }),
                             isJson: true,
                             structuredContent: null,
                             modelRound: round.ModelRequest.ToolContinuationRound,
@@ -1190,13 +1232,20 @@ public sealed partial class SessionApplication
         }
 
         return new ConversationRoundOutcome(
+            round,
             streamState.TextOutput.ToString(),
             streamState.ToolInvoked,
             preToolSteering,
             textRetainedInToolGroup,
             streamState.FinishReason,
-            streamState.PolicyBlocked);
+            streamState.PolicyBlocked,
+            goalSupersededBeforeTools,
+            !streamState.CorrectiveTurnRequested && streamState.FinishReason is ModelFinishReason.Stop or ModelFinishReason.ToolCalls);
     }
+
+    private bool IsPreparedGoalCurrent(ConversationRound round) =>
+        round.Registration.IntelligenceOperation != RepositoryIntelligenceOperation.None
+        || _sessions.GetValueOrDefault(round.Registration.SessionId)?.GoalRevision == round.GoalRevision;
 
     private async Task ProcessModelChunkAsync(
         ModelChunk chunk,
@@ -1590,69 +1639,8 @@ public sealed partial class SessionApplication
                 round.Registration.RunStopwatch.Start();
                 return Task.CompletedTask;
             });
-        var journal = round.Registration.RoundGoal?.Journal;
-        void RecordReceipt(ToolBatchResult batchResult)
-        {
-            if (journal is null || batchResult.Result.Suspension is not null)
-            {
-                return;
-            }
-
-            var result = batchResult.Result;
-            var id = result.ToolInvocationId.Value;
-            var check = result.CheckObservation;
-            var arguments = JsonOutputSanitizer.Sanitize(streamState.PendingToolCalls[batchResult.Ordinal].ArgumentsJson, _sanitizer);
-            var failure = result.ActionFailure != default ? result.ActionFailure : result.ErrorClassification;
-            var outcome = failure is ToolErrorClassification.Timeout or ToolErrorClassification.Cancelled ? "OutcomeUnknown" : check?.Result ?? failure.ToString();
-            var receipt = new GoalReceipt(
-                id,
-                result.ToolId,
-                GoalJournal.Excerpt(arguments, 512),
-                outcome,
-                result.Succeeded && result.ActionSucceeded != false && check?.Succeeded != false,
-                check is not null || result.ActionKind is not (null or "edit" or "process"),
-                check is { Target.Length: <= 512 } ? _sanitizer.Sanitize(check.Target) : result.EditedPath is { } path ? _sanitizer.Sanitize(path) : null,
-                check?.Filter is { Length: <= 512 } filter ? _sanitizer.Sanitize(filter) : null)
-            {
-                Run = round.RunId,
-                ActionKind = result.ActionKind,
-                GitCommitHasExplicitMessage = result.GitCommitHasExplicitMessage,
-                ExecutedTest = result.ExecutedTest is { } executedTest ? _sanitizer.Sanitize(executedTest) : null,
-                Workspace = check?.Workspace,
-                Historical = check is not null && check.Applicability != "Unknown",
-                SourceProof = check?.SourceProof,
-                Baseline = check?.Baseline,
-                Revision = check?.Revision,
-                CanChangeFiles = check is null
-                    && failure is not (ToolErrorClassification.PolicyDenied or ToolErrorClassification.ApprovalDenied or ToolErrorClassification.InvalidArguments or ToolErrorClassification.DirectAuthorizationRequired)
-                    && registrationByOrdinal[batchResult.Ordinal].Tool.Definition.SideEffect is ToolSideEffect.ExecutesCode or ToolSideEffect.WritesFiles,
-            };
-            journal.AddReceipt(receipt, _sanitizer.Sanitize(result.ModelResultContent ?? result.ResultJson ?? result.Error ?? string.Empty), result.IsTruncated);
-        }
-
-        IReadOnlyList<ToolBatchResult> batchResults;
-        try
-        {
-            batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
-        }
-        catch (ToolBatchCancelledException exception) when (journal is not null)
-        {
-            foreach (var item in exception.Results)
-            {
-                RecordReceipt(item);
-            }
-
-            throw;
-        }
-
+        var batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
         string? pauseReason = null;
-        if (journal is not null)
-        {
-            foreach (var item in batchResults)
-            {
-                RecordReceipt(item);
-            }
-        }
 
         // Historical user pixels can yield during context selection; current attachments and
         // already delivered tool pixels keep their capacity. Each result reserves capacity for the next.
@@ -1676,11 +1664,6 @@ public sealed partial class SessionApplication
                     result,
                     token => CreateToolInvocationContextAsync(round.Registration, token),
                     cancellationToken);
-            }
-
-            if (batchResult.Result.Suspension is not null)
-            {
-                RecordReceipt(batchResult with { Result = result });
             }
 
             if (round.Registration.UsesMemoryConcepts)
@@ -1756,7 +1739,7 @@ public sealed partial class SessionApplication
                     evidenceId.Value.ToString("D"));
             }
 
-            if (journal is not null)
+            if (round.Registration.RoundGoal is not null)
             {
                 var failure = result.ActionFailure != default ? result.ActionFailure : result.ErrorClassification;
                 streamState.PolicyBlocked |= failure == ToolErrorClassification.PolicyDenied;
@@ -3127,18 +3110,22 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? Context,
         ModelRequestUsageId UsageRequestId,
         ModelStreamRequest ModelRequest,
-        long DeliveredThroughGroupSequence)
+        long DeliveredThroughGroupSequence,
+        long? GoalRevision)
     {
         public IReadOnlyList<ToolRegistration> ToolRegistrations { get; init; } = [];
     }
 
     private sealed record ConversationRoundOutcome(
+        ConversationRound DispatchedRound,
         string TextOutput,
         bool ToolInvoked,
         IReadOnlyList<RunSteeringMessage> PreToolSteering,
         bool TextRetainedInToolGroup,
         ModelFinishReason? FinishReason,
-        bool PolicyBlocked);
+        bool PolicyBlocked,
+        bool GoalSupersededBeforeTools,
+        bool AcceptedWorkReply);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,
@@ -3373,13 +3360,14 @@ public sealed partial class SessionApplication
             new(StringComparer.Ordinal);
 
         private readonly List<ActiveTurnContinuationGroup> _groups = [];
+        private readonly List<(long Sequence, ModelMessage Message)> _goalTransitions = [];
         private readonly HashSet<EvidenceId> _summarizedEvidenceIds = [];
         private readonly int _maximumSourcesPerGroup;
         private readonly IPromptLoader _prompts;
         private readonly List<string> _pendingFilesRead = [];
         private readonly HashSet<long> _purgeableGroupSequences = [];
         private readonly List<PendingActiveTurnSource> _pendingSources = [];
-        private ModelMessage? _summarizedGoal;
+        private IReadOnlyList<ModelMessage> _summarizedGoalMessages = [];
         private int _currentModelRound;
         private ActiveTurnSourceProjection? _sourceProjection;
         private string? _sourceProjectionAttemptIdentity;
@@ -3576,6 +3564,10 @@ public sealed partial class SessionApplication
 
         public ModelRequestTransientState TransientState { get; } = new();
 
+        public ModelProfileId? GoalPromptProfileId { get; set; }
+
+        public int GoalContextRound { get; set; }
+
         public ToolCallHistory InvokedToolCalls { get; } = new();
 
         public long LastGroupSequence => _nextGroupSequence - 1;
@@ -3641,7 +3633,9 @@ public sealed partial class SessionApplication
 
             var effectiveSourceProjection = sourceProjection ?? _sourceProjection;
             _summarizedEvidenceIds.UnionWith(GetEvidenceIds(compactedPrefix));
-            _summarizedGoal = GoalThrough(compactedPrefix.Count);
+            var throughSequence = compactedPrefix[^1].Sequence;
+            _summarizedGoalMessages = GoalMessagesThrough(throughSequence);
+            _goalTransitions.RemoveAll(transition => transition.Sequence <= throughSequence);
             _groups.RemoveRange(0, compactedPrefix.Count);
 
             // These bounds protect retained streaming allocations, not lifetime work. Compaction
@@ -3888,6 +3882,21 @@ public sealed partial class SessionApplication
             TransientState.Dispose();
         }
 
+        public void DiscardUndeliveredGoalMessages(bool goalChanged)
+        {
+            // A before-model hook can retire the prepared revision or its profile before dispatch.
+            for (var index = _groups.Count - 1; index >= 0 && !_groups[index].WasDeliveredVerbatim; index--)
+            {
+                if (_groups[index].Messages is [{ SectionId: _goalContextSection or _goalClearedSection }]
+                    || (goalChanged && _groups[index].Messages is [{ SectionId: _goalSection }]))
+                {
+                    var sequence = _groups[index].Sequence;
+                    _goalTransitions.RemoveAll(transition => transition.Sequence == sequence);
+                    _groups.RemoveAt(index);
+                }
+            }
+        }
+
         public void CommitStandaloneMessage(
             int modelRound,
             ModelMessage message,
@@ -3932,6 +3941,11 @@ public sealed partial class SessionApplication
                 Sensitivity = sensitivity,
                 WasDeliveredVerbatim = false,
             });
+            if (message.SectionId is _goalSection or _goalContextSection or _goalClearedSection)
+            {
+                _goalTransitions.Add((sequence, message));
+            }
+
             if (purgeAfterCorrection)
             {
                 _purgeableGroupSequences.Add(sequence);
@@ -3948,8 +3962,6 @@ public sealed partial class SessionApplication
             BackoffRoundsRemaining--;
             return true;
         }
-
-        public bool GoalHistorySensitive { get; set; }
 
         public ModelVisibleContinuation CreateModelVisibleContinuation()
         {
@@ -3972,10 +3984,7 @@ public sealed partial class SessionApplication
                     summary.Version,
                     summary.Content,
                     _prompts));
-                if (_summarizedGoal is not null)
-                {
-                    messages.Add(_summarizedGoal);
-                }
+                messages.AddRange(_summarizedGoalMessages);
             }
 
             int? firstNeverDeliveredMessageIndex = null;
@@ -4016,10 +4025,7 @@ public sealed partial class SessionApplication
                     summary.Content,
                     _prompts),
             };
-            if (GoalThrough(compactedGroupCount) is { } goal)
-            {
-                messages.Add(goal);
-            }
+            messages.AddRange(GoalMessagesThrough(_groups[compactedGroupCount - 1].Sequence));
 
             int? firstNeverDeliveredMessageIndex = null;
             foreach (var group in _groups.Skip(compactedGroupCount))
@@ -4135,8 +4141,42 @@ public sealed partial class SessionApplication
             BackoffRoundsRemaining = rounds;
         }
 
-        private ModelMessage? GoalThrough(int groupCount) => _groups.Take(groupCount)
-            .SelectMany(group => group.Messages).LastOrDefault(message => message.SectionId == "session-goal") ?? _summarizedGoal;
+        private IReadOnlyList<ModelMessage> GoalMessagesThrough(long throughSequence)
+        {
+            if (_goalTransitions.Count == 0 || _goalTransitions[0].Sequence > throughSequence)
+            {
+                return _summarizedGoalMessages;
+            }
+
+            ModelMessage? objectiveOrClear = null;
+            ModelMessage? instructions = null;
+            foreach (var message in _summarizedGoalMessages.Concat(_goalTransitions.TakeWhile(transition => transition.Sequence <= throughSequence).Select(transition => transition.Message)))
+            {
+                switch (message.SectionId)
+                {
+                    case _goalSection:
+                    case _goalClearedSection:
+                        {
+                            objectiveOrClear = message;
+                            instructions = null;
+                            break;
+                        }
+
+                    case _goalContextSection:
+                        {
+                            instructions = message;
+                            break;
+                        }
+                }
+            }
+
+            if (objectiveOrClear is null)
+            {
+                return [];
+            }
+
+            return instructions is null ? [objectiveOrClear] : [objectiveOrClear, instructions];
+        }
 
         private void FlushCurrentAssistantText()
         {

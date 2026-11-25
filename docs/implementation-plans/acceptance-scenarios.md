@@ -6,10 +6,11 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario SC-GOAL-01 — Continue after a premature answer
 
-1. Set a quoted goal to run a focused test. Have the working model promise the test without calling a tool. The compaction-profile assessor receives the promise but no receipt and no tools.
-2. Return `Continue`. Check for one notice, then one test invocation without user input. Only after the receipt reaches the assessor may `Met` show its summary and clear the goal.
-3. Hold an assessment open. Request a steering pause without submitting text. Query or replace the goal before releasing the assessor. Its late result must not start work or clear the replacement.
-4. Return a terminal verdict that omits a scope exclusion. Confirm that the assessor gets one tool-free correction request with the validation reason. Return `Continue` with a next step and confirm that work resumes without input or a required tool selector. With a fixture that rejects both assessments again after a review round, confirm that MAIN output reports the final failure reason, offers `continue`, and leaves the goal active.
+1. Set a goal and have the worker reply that it finished all requested work. With the standalone closing sentence `All requested work is complete.`, expect the answer once, a cleared goal, and no further model call. A free-form completion report also clears the goal. The tool-free continuation check sees only the worker's reply, within the receiving profile's budget.
+2. Have the worker say it still has a requested step it can perform now. Expect one continuation notice and another work round in the same run. Repeat with the standalone sentence `Requested work remains.` and confirm it continues directly. An ordinary final answer, an optional follow-up suggestion, or a question requiring user input ends the loop.
+3. Deliver a new actionable edit diagnostic while the worker writes its closing answer. Confirm the worker receives it before the goal can close. If the model-round limit prevents delivery, the goal pauses and the resumed worker receives the diagnostic. Repeat with a clean report and with an analyzer that finishes by repeating a finding the worker already saw. In both cases the closing answer ends the goal.
+4. Hold a free-form status check open. Complete the same goal in another run, or replace it while the old check is settling. The old run must observe the retired revision and discard its obsolete result or failure. Confirm the replacement goal can proceed.
+5. Compact a tool-heavy run and confirm the worker still receives the current user goal and its matching host instructions. Cancel or replace the goal and repeat. The old objective must not return. A cutoff, user stop, or exhausted continuation limit leaves the goal available to resume.
 
 ## Scenario SC-SCRIPT-FILE-01 — Script file input
 

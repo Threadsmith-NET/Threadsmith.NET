@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Models.Anthropic;
 using Xunit;
@@ -181,13 +182,15 @@ public sealed partial class SessionConversationTests
         scenario.Memory.DirectRevisionAvailable = directRevisionAvailable;
         var originalText = scenario.Memory.Entry.Text;
         const string updatedText = "Updated cancellation guidance from the before-request hook.";
-        hooks.BeforeRequest = invocation =>
+        hooks.BeforeRequest = (invocation, _) =>
         {
             // Round one discovers the concept; round two has assembled the original memory.
             if (invocation == 2)
             {
                 scenario.Memory.Entry = scenario.Memory.Entry with { Text = updatedText, Revision = 2 };
             }
+
+            return Task.CompletedTask;
         };
 
         var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
@@ -202,6 +205,99 @@ public sealed partial class SessionConversationTests
         var currentSnapshot = provider.Requests[1].Messages.Last(message => message.SectionId == "repository-memory").GetModelVisibleContent();
         Assert.Contains(updatedText, currentSnapshot, StringComparison.Ordinal);
         Assert.DoesNotContain(originalText, currentSnapshot, StringComparison.Ordinal);
+    }
+
+    /// <summary>Repreparing before dispatch updates the goal instructions and the profile used to read the final status.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(SessionGoalAction.Set)]
+    [InlineData(SessionGoalAction.Cancel)]
+    public async Task GoalRepreparedAfterHookUsesDispatchedProfile(SessionGoalAction? change)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var preferred = ModelProfileId.New();
+        var receiving = ModelProfileId.New();
+        var preferences = new SessionModelPreferences(preferred, ReasoningLevel.None);
+        var provider = new GoalStatusProvider(preferences);
+        var hooks = new MemoryMutationHooks();
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, hooks: hooks, preferences: preferences);
+        const string initial = "Write the first greeting.";
+        const string replacement = "Write a replacement greeting.";
+        await scenario.Dispatcher.DispatchAsync(new SessionGoalCommand(scenario.SessionId, SessionGoalAction.Set, initial), ct);
+        hooks.BeforeRequest = async (invocation, token) =>
+        {
+            if (invocation == 1)
+            {
+                preferences.SetReasoning(change == SessionGoalAction.Cancel ? ModelProfileId.New() : receiving, ReasoningLevel.None);
+                scenario.Memory.Entry = scenario.Memory.Entry with { Revision = 2 };
+                if (change is { } action)
+                {
+                    await scenario.Dispatcher.DispatchAsync(new SessionGoalCommand(scenario.SessionId, action, action == SessionGoalAction.Set ? replacement : null), token);
+                }
+            }
+            else if (invocation == 2 && change == SessionGoalAction.Cancel)
+            {
+                preferences.SetReasoning(receiving, ReasoningLevel.None);
+                scenario.Memory.Entry = scenario.Memory.Entry with { Revision = 3 };
+            }
+        };
+
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Write a greeting."), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        var work = provider.Requests[0];
+        Assert.Equal(receiving, work.ResolvedProfileId);
+        if (change == SessionGoalAction.Cancel)
+        {
+            Assert.Single(provider.Requests);
+            Assert.Single(work.Messages, message => message.SectionId == "session-goal-cleared");
+            Assert.DoesNotContain(work.Messages, message => message.SectionId is "session-goal" or "session-goal-context");
+        }
+        else
+        {
+            var objective = Assert.Single(work.Messages, message => message.SectionId == "session-goal");
+            Assert.Contains(change == SessionGoalAction.Set ? replacement : initial, objective.GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Single(work.Messages, message => message.SectionId == "session-goal-context");
+            var status = Assert.Single(provider.Requests.Skip(1));
+            Assert.Equal(receiving, status.ResolvedProfileId);
+            Assert.Contains(status.Messages, message => message.SectionId == "goal-assessment");
+        }
+    }
+
+    /// <summary>Changes the goal alone after request preparation and verifies what is actually dispatched.</summary>
+    [Theory]
+    [InlineData(SessionGoalAction.Set, "Write the replacement greeting.")]
+    [InlineData(SessionGoalAction.Cancel, null)]
+    public async Task GoalOnlyChangeInBeforeHookInvalidatesPreparedRequest(SessionGoalAction action, string? replacement)
+    {
+        const string original = "Write the original greeting.";
+        var ct = TestContext.Current.CancellationToken;
+        var preferences = new SessionModelPreferences(ModelProfileId.New(), ReasoningLevel.None);
+        var provider = new GoalStatusProvider(preferences);
+        var hooks = new MemoryMutationHooks();
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true, hooks: hooks, preferences: preferences);
+        await scenario.Dispatcher.DispatchAsync(new SessionGoalCommand(scenario.SessionId, SessionGoalAction.Set, original), ct);
+        hooks.BeforeRequest = async (invocation, token) =>
+        {
+            if (invocation == 1)
+            {
+                await scenario.Dispatcher.DispatchAsync(new SessionGoalCommand(scenario.SessionId, action, replacement), token);
+            }
+        };
+
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Write a greeting."), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        var work = Assert.Single(provider.Requests, request => request.Messages.All(message => message.SectionId != "goal-assessment"));
+        Assert.DoesNotContain(work.Messages, message => message.GetModelVisibleContent().Contains(original, StringComparison.Ordinal));
+        if (replacement is null)
+        {
+            Assert.Single(provider.Requests);
+            Assert.Single(work.Messages, message => message.SectionId == "session-goal-cleared");
+        }
+        else
+        {
+            var objective = Assert.Single(work.Messages, message => message.SectionId == "session-goal");
+            Assert.Contains(replacement, objective.GetModelVisibleContent(), StringComparison.Ordinal);
+        }
     }
 
     /// <summary>Revision lookup failure retains the established retrieval fallback without inventing a revision.</summary>
@@ -225,7 +321,7 @@ public sealed partial class SessionConversationTests
 
     private sealed class MemoryMutationHooks : IHookCoordinator
     {
-        public Action<int>? BeforeRequest { get; set; }
+        public Func<int, CancellationToken, Task>? BeforeRequest { get; set; }
 
         public int BeforeRequestCount { get; private set; }
 
@@ -235,7 +331,7 @@ public sealed partial class SessionConversationTests
 
         public bool SetEnabled(HookHandlerId handlerId, bool enabled) => false;
 
-        public Task<HookBoundaryDecision> InvokeAsync(
+        public async Task<HookBoundaryDecision> InvokeAsync(
             HookPoint point,
             SessionId sessionId,
             RunId? runId,
@@ -252,10 +348,13 @@ public sealed partial class SessionConversationTests
             if (point == HookPoint.BeforeModelRequest)
             {
                 BeforeRequestCount++;
-                BeforeRequest?.Invoke(BeforeRequestCount);
+                if (BeforeRequest is { } beforeRequest)
+                {
+                    await beforeRequest(BeforeRequestCount, cancellationToken);
+                }
             }
 
-            return Task.FromResult(new HookBoundaryDecision(HookDecisionKind.Continue, [], []));
+            return new HookBoundaryDecision(HookDecisionKind.Continue, [], []);
         }
 
         public Task<HookBoundaryDecision> InvokeHandlerAsync(
@@ -362,6 +461,24 @@ public sealed partial class SessionConversationTests
         public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
         {
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class GoalStatusProvider(SessionModelPreferences preferences) : IModelProvider, IModelRequestPreparationResolver
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public ModelStreamRequest Prepare(ModelStreamRequest request) =>
+            request.Messages.Any(message => message.SectionId == "goal-assessment")
+                ? request
+                : request with { ResolvedProfileId = preferences.Capture().ProfileId };
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests.Add(request);
+            await Task.CompletedTask;
+            yield return new ModelChunk { Text = Requests.Count == 1 ? "Greeting delivered." : "STOP", FinishReason = ModelFinishReason.Stop };
         }
     }
 

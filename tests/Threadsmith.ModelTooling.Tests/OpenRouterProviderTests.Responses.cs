@@ -594,6 +594,52 @@ public static partial class OpenRouterProviderTests
         Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null);
     }
 
+    /// <summary>Only an interruption without protected tool fragments may release a replacement batch.</summary>
+    [Theory]
+    [InlineData("eof", false, true)]
+    [InlineData("done", true, true)]
+    [InlineData("eof", true, true)]
+    [InlineData("unavailable", true, true)]
+    [InlineData("eof", true, false)]
+    [InlineData("completed arguments", true, true)]
+    public static async Task ResponsesInterruptionStopsRetryAfterProtectedToolFragmentsAsync(string interruption, bool hasFragment, bool stopOnUnconfirmedTools)
+    {
+        const string replacementArguments = """{"optional":"replacement"}""";
+        var replacement = FunctionCall("replacement");
+        replacement["arguments"] = replacementArguments;
+        var suffix = interruption switch
+        {
+            "eof" or "completed arguments" => string.Empty,
+            "done" => Frame("[DONE]"),
+            "unavailable" => Failed(503),
+            _ => throw new ArgumentOutOfRangeException(nameof(interruption)),
+        };
+        var prefix = interruption == "completed arguments"
+            ? Frame("""{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{}"}""")
+            : hasFragment ? Frame("""{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{"}""") : string.Empty;
+        using var handler = new Handler(prefix + suffix, Completed(replacement));
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        var provider = Provider(client, Model() with { RetryMaxAttempts = 2, RetryDelayMilliseconds = 0 });
+        var request = Request() with { StopOnUnconfirmedToolStream = stopOnUnconfirmedTools };
+        var chunks = new List<ModelChunk>();
+
+        if (hasFragment && stopOnUnconfirmedTools)
+        {
+            var error = await Assert.ThrowsAsync<ModelProviderException>(() => CollectAsync(provider, request, chunks));
+
+            Assert.Contains("unconfirmed tool calls", error.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.Calls);
+            Assert.Empty(chunks);
+            return;
+        }
+
+        await CollectAsync(provider, request, chunks);
+        Assert.Equal(2, handler.Calls);
+        var tool = Assert.Single(chunks.Select(chunk => chunk.Output).OfType<ToolRequestModelOutput>());
+        Assert.Equal(replacementArguments, tool.ArgumentsJson);
+        Assert.Equal(ModelFinishReason.ToolCalls, chunks[^1].FinishReason);
+    }
+
     private static OpenRouterModelConfiguration ReplayModel() => Model() with
     {
         ReasoningControl = ReasoningControllability.AlwaysOn,

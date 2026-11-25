@@ -7,6 +7,32 @@ using Threadsmith.Core;
 /// <summary>Projects advisory evidence without presenting unmeasured error counts as validation.</summary>
 internal static class SourceEditAnalysisProjection
 {
+    /// <summary>Finds new errors or warnings relative to the bounded diagnostics already supplied for the same edit.</summary>
+    public static bool HasNewActionableFindings(SourceEditAnalysis analysis, SourceEditAnalysis reviewed)
+    {
+        if (analysis.Obsolete)
+        {
+            return false;
+        }
+
+        if (analysis.Diagnostics.Except(reviewed.Diagnostics).Any(item => item.Origin != "initial" && item.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning))
+        {
+            return true;
+        }
+
+        // Counts can exceed the retained detail limit. An unchanged total accompanying only
+        // a revision or coverage change provides no additional finding to send back to the model.
+        return (analysis.NewErrors > reviewed.NewErrors && analysis.NewErrors > analysis.Diagnostics.Count(item => item.Producer == "compiler"
+                && item.Origin != "initial" && item.Severity == DiagnosticSeverity.Error))
+            || HasUnseenCount("compiler", DiagnosticSeverity.Error, Math.Max(analysis.CurrentErrors, analysis.SyntaxErrors.GetValueOrDefault()), Math.Max(reviewed.CurrentErrors, reviewed.SyntaxErrors.GetValueOrDefault()))
+            || HasUnseenCount("compiler", DiagnosticSeverity.Warning, analysis.CurrentWarnings, reviewed.CurrentWarnings)
+            || HasUnseenCount("analyzer", DiagnosticSeverity.Error, analysis.Analyzers.Errors, reviewed.Analyzers.Errors)
+            || HasUnseenCount("analyzer", DiagnosticSeverity.Warning, analysis.Analyzers.Warnings, reviewed.Analyzers.Warnings);
+
+        bool HasUnseenCount(string producer, DiagnosticSeverity severity, int? count, int? previous) =>
+            count > previous.GetValueOrDefault() && count > analysis.Diagnostics.Count(item => item.Producer == producer && item.Severity == severity);
+    }
+
     /// <summary>Formats user-visible advisory status without exposing the internal analysis payload.</summary>
     public static string CreateDisplaySummary(SourceEditAnalysis analysis)
     {

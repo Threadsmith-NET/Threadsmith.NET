@@ -56,7 +56,7 @@ internal static class InteractionEventSegments
                 Add(segments, $"{Environment.NewLine}{busy.Message}{Environment.NewLine}", PresentationTextRole.Warning);
                 break;
             case DiagnosticObserved { Code: "GoalAssessmentFailed" } assessment:
-                var notice = $"{Environment.NewLine}Goal assessment failed. {assessment.Message}{Environment.NewLine}"
+                var notice = $"{Environment.NewLine}Goal continuation check failed. {assessment.Message}{Environment.NewLine}"
                     + $"The goal remains active. Submit continue to resume.{Environment.NewLine}";
                 Add(segments, notice, PresentationTextRole.Error);
                 break;
@@ -196,7 +196,7 @@ internal static class InteractionEventSegments
             SemanticRefreshFailed { Reason: SemanticRefreshReason.ExternalChange or SemanticRefreshReason.Recovery } =>
                 new("Semantic refresh failed; see output", PresentationTextRole.Error),
             DiagnosticObserved { Code: "GoalAssessmentFailed" } =>
-                new("Goal assessment failed. See MAIN.", PresentationTextRole.Error),
+                new("Goal continuation check failed. See MAIN.", PresentationTextRole.Error),
             _ => null,
         };
     }

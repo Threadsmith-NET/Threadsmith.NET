@@ -627,7 +627,6 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
-        ConversationCheckObservation? checkObservation = null;
         var executionContext = new ToolExecutionContext(invocationId, request.SessionId, request.RunId, request.Context)
         {
             Phase = request.Phase,
@@ -635,7 +634,6 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
             Deadline = AdmissionDeadline(tool.Definition, admittedAt),
             CallerCancellation = cancellationToken,
-            ObserveCheck = observation => checkObservation = observation,
             TimeProvider = _timeProvider,
         };
         var activityDetail = CreateActivityDetail(tool, input);
@@ -1262,27 +1260,6 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                     ProcessExecutionResult { TimedOut: true } or ValidationToolResult { TimedOut: true } or TargetedTestResult { TimedOut: true } or SourceEditReceipt { Status: SourceEditStatus.RecoveryRequired } => ToolErrorClassification.Timeout,
                     SourceEditReceipt { Status: SourceEditStatus.Denied } => ToolErrorClassification.ApprovalDenied,
                     _ => classification,
-                },
-                CheckObservation = checkObservation,
-                ActionKind = execution.Value switch
-                {
-                    TargetedTestResult => "test",
-                    ValidationToolResult validation => validation.Kind.ToString(),
-                    SourceEditReceipt => "edit",
-                    ProcessExecutionResult => "process",
-                    _ => null,
-                },
-                GitCommitHasExplicitMessage = succeeded && input is RunProcessInput shellInput && execution.Value is ProcessExecutionResult shellResult
-                    ? RunProcessTool.ObserveGitCommit(shellInput, shellResult) : null,
-                EditedPath = execution.Value is SourceEditReceipt { Status: SourceEditStatus.Applied, ChangedFiles: [var path] } && path.Length <= 512 ? path : null,
-                ExecutedTest = execution.Value is TargetedTestResult { Test.FullyQualifiedName.Length: <= 512 } tested ? tested.Test.FullyQualifiedName : null,
-                ActionSucceeded = execution.Value switch
-                {
-                    ProcessExecutionResult process => !process.TimedOut && process.ExitCode == 0,
-                    SourceEditReceipt edit => edit.Status == SourceEditStatus.Applied,
-                    ValidationToolResult check => check.Succeeded && !check.TimedOut,
-                    TargetedTestResult test => test.Outcome == TestOutcome.Passed && test.Passed > 0 && !test.TimedOut,
-                    _ => null,
                 },
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,

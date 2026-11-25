@@ -65,6 +65,7 @@ public static class Program
         ScriptTools? tools = null;
         var maximumFinalBytes = 4096;
         ScriptWorkerResult result;
+        var deadlineToken = CancellationToken.None;
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -84,6 +85,7 @@ public static class Program
 
             var scope = request.FileScope ?? throw new InvalidOperationException("Scratchpad file authority is required.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(request.TimeoutMilliseconds));
+            deadlineToken = deadline.Token;
             maximumFinalBytes = checked((request.MaximumOutputBytes * 6) + 4096);
             tools = new ScriptTools(request.Available, input, outputPipe, deadline.Token);
             var globals = new ScriptGlobals(scope, tools, deadline.Token);
@@ -214,6 +216,13 @@ public static class Program
                 (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue),
                 truncated);
         }
+        catch (OperationCanceledException) when (deadlineToken.IsCancellationRequested)
+        {
+            result = new ScriptWorkerResult(false, null, "The script execution deadline expired.", (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), false)
+            {
+                TimedOut = true,
+            };
+        }
         catch (CompilationErrorException exception)
         {
             result = new ScriptWorkerResult(
@@ -339,5 +348,8 @@ public static class Program
         string? Output,
         string? Error,
         int ExecutionMs,
-        bool IsTruncated);
+        bool IsTruncated)
+    {
+        public bool TimedOut { get; init; }
+    }
 }

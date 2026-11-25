@@ -105,6 +105,9 @@ public sealed record CSharpScriptOutput(
 {
     /// <summary>Gets the saved session script, including failed worker executions.</summary>
     public string? ScriptPath { get; init; }
+
+    /// <summary>Indicates that a worker deadline expired before a confirmed result.</summary>
+    public bool TimedOut { get; init; }
 }
 
 /// <summary>Executes C# in a fresh isolated worker process.</summary>
@@ -124,6 +127,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
     private readonly IProcessManager _processManager;
     private readonly IToolConfig _toolConfig;
     private readonly string _workerPath;
+    private readonly string _dotnetHostPath;
     private readonly int _maximumWriteBytes;
     private readonly ScriptWorkerPool<ScriptWorkerProcess>? _workerPool;
     private static readonly JsonSerializerOptions OutputJsonOptions = new() { PropertyNameCaseInsensitive = true };
@@ -135,7 +139,8 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
         string workerPath,
         int maximumWriteBytes = 1024 * 1024,
         ScriptWorkerOptions? workerOptions = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        string? dotnetHostPath = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(toolConfig);
@@ -143,6 +148,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
         _processManager = processManager;
         _toolConfig = toolConfig;
         _workerPath = Path.GetFullPath(workerPath);
+        _dotnetHostPath = dotnetHostPath is null ? "dotnet" : Path.GetFullPath(dotnetHostPath);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWriteBytes);
         _maximumWriteBytes = maximumWriteBytes;
         var options = workerOptions ?? new ScriptWorkerOptions
@@ -275,7 +281,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
                 $"Script execution exceeded {timeoutMilliseconds} ms and the worker was terminated.",
                 (int)Math.Min(result.Duration.TotalMilliseconds, int.MaxValue),
                 false)
-            { ScriptPath = scriptPath };
+            { ScriptPath = scriptPath, TimedOut = true };
         }
 
         if (result.ExitCode != 0 || result.StandardOutputTruncated || result.StandardOutput.Length == 0)
@@ -321,7 +327,7 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
         {
             ToolInvocationId = default,
             RunId = default,
-            FileName = launchAppHost ? _workerPath : "dotnet",
+            FileName = launchAppHost ? _workerPath : _dotnetHostPath,
             Arguments = launchAppHost ? [] :
             [
                 "exec",
@@ -435,7 +441,7 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         var failure = output.Success
             ? null
             : new ToolExecutionFailure(
-                ToolErrorClassification.ExecutionFailure,
+                output.TimedOut ? ToolErrorClassification.Timeout : ToolErrorClassification.ExecutionFailure,
                 string.IsNullOrWhiteSpace(output.Error) ? "C# script execution failed." : output.Error);
         return new ToolExecution<CSharpScriptOutput>(output, sources, output.IsTruncated, Failure: failure);
     }

@@ -13,7 +13,7 @@ internal sealed class ModelRequestBudgetUsage
     public bool HasStarted { get; private set; }
 
     /// <summary>Admits one estimated provider request and charges its call once.</summary>
-    public void Start(IBudget budget, ModelStreamRequest request)
+    public void Start(RunRequestBudget budget, ModelStreamRequest request)
     {
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(request);
@@ -22,9 +22,12 @@ internal sealed class ModelRequestBudgetUsage
             return;
         }
 
-        CheckAdmission(budget, request);
+        var estimate = ModelRequestAdmissionEstimator.Estimate(request);
+        if (!budget.TryReserve(this, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate)))
+        {
+            throw CreateAdmissionFailure(estimate);
+        }
 
-        budget.Accrue(new BudgetDimensions(0, 1, TimeSpan.Zero));
         HasStarted = true;
     }
 
@@ -37,15 +40,15 @@ internal sealed class ModelRequestBudgetUsage
         var status = budget.Check(ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate));
         if (status.IsExhausted)
         {
-            throw new BudgetExceededException(
-                "Execution budget cannot admit a model request estimated to require "
-                + $"{estimate.InputTokens} input tokens, {estimate.OutputTokens} output tokens, "
-                + $"and {estimate.Calls} call.");
+            throw CreateAdmissionFailure(estimate);
         }
     }
 
-    /// <summary>Accrues only newly reported usage; operational budgets do not refund earlier estimates.</summary>
-    public BudgetStatus Accrue(IBudget budget, ModelUsage usage)
+    /// <summary>Releases unused exposure after the provider no longer reports usage.</summary>
+    public void Finish(RunRequestBudget budget) => budget.Release(this);
+
+    /// <summary>Replaces reserved exposure with newly reported actual usage.</summary>
+    public BudgetStatus Accrue(RunRequestBudget budget, ModelUsage usage)
     {
         ArgumentNullException.ThrowIfNull(budget);
         ArgumentNullException.ThrowIfNull(usage);
@@ -63,6 +66,11 @@ internal sealed class ModelRequestBudgetUsage
             Math.Max(0, usage.BudgetCost - _chargedCost));
         _chargedTokens = Math.Max(_chargedTokens, tokens);
         _chargedCost = Math.Max(_chargedCost, usage.BudgetCost);
-        return budget.Accrue(delta);
+        return budget.AccrueReservedUsage(this, delta);
     }
+
+    private static BudgetExceededException CreateAdmissionFailure(ModelRequestAdmissionEstimate estimate) => new(
+        "Execution budget cannot admit a model request estimated to require "
+        + $"{estimate.InputTokens} input tokens, {estimate.OutputTokens} output tokens, "
+        + $"and {estimate.Calls} call.");
 }

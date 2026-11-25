@@ -39,9 +39,7 @@ public static class Plan80ActiveTurnInspectionTests
             completedEvent,
             showOperationDuration: false);
 
-        Assert.Contains("COMPACTING CONTEXT: 87,434 tokens", activity, StringComparison.Ordinal);
-        Assert.Contains("target 73,728", activity, StringComparison.Ordinal);
-        Assert.Contains(profileId.Value.ToString("D"), activity, StringComparison.Ordinal);
+        Assert.Equal("COMPACTING CONTEXT: 87,434 tokens; pressure threshold 73,728", activity);
         Assert.Contains("CONTEXT COMPACTED: 87,434 → 31,699 tokens", completion, StringComparison.Ordinal);
         Assert.Contains("saved 55,735 (63.7%)", completion, StringComparison.Ordinal);
         Assert.Contains("15.3s", completion, StringComparison.Ordinal);

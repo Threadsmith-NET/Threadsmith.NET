@@ -213,7 +213,7 @@ public sealed class SourceEditApplication :
 
                 if (analysis is not null)
                 {
-                    _feedback[command.SessionId] = new(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId, analysis.Revision);
+                    _feedback[command.SessionId] = new(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId, analysis.Revision, analysis);
                 }
             }
 
@@ -258,7 +258,10 @@ public sealed class SourceEditApplication :
     }
 
     /// <summary>Consumes a newer bounded advisory result at an ordinary provider boundary.</summary>
-    public SourceEditAnalysis? TakeFeedback(SessionId sessionId, RunId runId)
+    public SourceEditAnalysis? TakeFeedback(SessionId sessionId, RunId runId) => TakeFeedback(sessionId, runId, retainGoalFeedback: false);
+
+    /// <summary>Claims actionable goal feedback through provider dispatch when requested.</summary>
+    public SourceEditAnalysis? TakeFeedback(SessionId sessionId, RunId runId, bool retainGoalFeedback)
     {
         if (!_feedback.TryGetValue(sessionId, out var delivered) || (delivered.RunId != runId && !delivered.CarryForward))
         {
@@ -268,7 +271,8 @@ public sealed class SourceEditApplication :
         var latest = GetLatestFeedback(delivered, out var replacementPending);
 
         // A failed lookup may have recorded its first failure on this delivery.
-        if (!_feedback.TryGetValue(sessionId, out var current) || current.EffectId != delivered.EffectId)
+        if (!_feedback.TryGetValue(sessionId, out var current) || current.EffectId != delivered.EffectId
+            || (current.Revision > delivered.Revision && (latest is null || latest.Revision < current.Revision)))
         {
             return null;
         }
@@ -286,9 +290,16 @@ public sealed class SourceEditApplication :
             return TakeUnavailableFeedback(delivered, latest);
         }
 
-        if (latest.Revision <= delivered.Revision || latest.CommittedGeneration is null)
+        var resumeReview = delivered.PausedGoalReview is { ClaimedBy: null } review && latest.Revision == review.Revision;
+        if (latest.Revision < delivered.Revision || (latest.Revision == delivered.Revision && !resumeReview) || latest.CommittedGeneration is null)
         {
             return null;
+        }
+
+        if (delivered.PausedGoalReview is not null || (retainGoalFeedback
+            && SourceEditAnalysisProjection.HasNewActionableFindings(latest, delivered.Reviewed)))
+        {
+            return _feedback.TryUpdate(sessionId, delivered with { Revision = latest.Revision, CarryForward = true, PausedGoalReview = new(latest.Revision, runId) }, delivered) ? latest : null;
         }
 
         if (delivered.RunId != runId && !latest.Pending && latest.Analyzers.Status != "pending")
@@ -300,10 +311,14 @@ public sealed class SourceEditApplication :
     }
 
     /// <summary>Observes pending compiler and enabled analyzer work once per applied effect before model continuation or final completion.</summary>
-    public async Task<SourceEditAnalysis?> WaitForFinalFeedbackAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default)
+    public Task<SourceEditAnalysis?> WaitForFinalFeedbackAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default) =>
+        WaitForFinalFeedbackAsync(sessionId, runId, retainGoalFeedback: false, cancellationToken);
+
+    /// <summary>Retains newly actionable goal feedback until a receiving work round succeeds.</summary>
+    public async Task<SourceEditAnalysis?> WaitForFinalFeedbackAsync(SessionId sessionId, RunId runId, bool retainGoalFeedback, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var feedback = TakeFeedback(sessionId, runId);
+        var feedback = TakeFeedback(sessionId, runId, retainGoalFeedback);
         if (!_feedback.TryGetValue(sessionId, out var delivery) || delivery.SessionId != sessionId
             || delivery.FinalWaitAttempted || !HasPendingFeedback(delivery, runId)
             || !_feedback.TryUpdate(sessionId, delivery with { FinalWaitAttempted = true }, delivery))
@@ -313,14 +328,16 @@ public sealed class SourceEditApplication :
 
         if (_finalFeedbackWait == TimeSpan.Zero)
         {
-            return RequireFinalFeedbackReview(sessionId, GetLatestFeedback(delivery) ?? feedback);
+            var available = TakeFeedback(sessionId, runId, retainGoalFeedback)
+                ?? (retainGoalFeedback ? feedback : GetLatestFeedback(delivery) ?? feedback);
+            return RequireFinalFeedbackReview(sessionId, available);
         }
 
         using var deadline = new CancellationTokenSource(_finalFeedbackWait, _timeProvider);
         using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
         if (!HasPendingFeedback(delivery, runId))
         {
-            return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? feedback);
+            return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId, retainGoalFeedback) ?? feedback);
         }
 
         var pending = GetLatestFeedback(delivery);
@@ -355,7 +372,9 @@ public sealed class SourceEditApplication :
             await _events.PublishAsync(
                 new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", "Validation incomplete: semantic checks did not finish before the final-feedback deadline. Still-current results may reach a future turn."),
                 cancellationToken);
-            return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? GetLatestFeedback(delivery) ?? feedback);
+            var available = TakeFeedback(sessionId, runId, retainGoalFeedback)
+                ?? (retainGoalFeedback ? feedback : GetLatestFeedback(delivery) ?? feedback);
+            return RequireFinalFeedbackReview(sessionId, available);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -368,25 +387,42 @@ public sealed class SourceEditApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId) ?? feedback);
+        return RequireFinalFeedbackReview(sessionId, TakeFeedback(sessionId, runId, retainGoalFeedback) ?? feedback);
     }
 
     /// <summary>Releases delivery bookkeeping when its ordinary conversation run ends.</summary>
-    public void CompleteRun(RunId runId, bool cancelled = false)
+    public void CompleteRun(RunId runId, bool cancelled = false, SessionId? sessionId = null)
     {
-        if (!_runs.TryRemove(runId, out var owner))
+        var ownedEdit = _runs.TryRemove(runId, out var owner);
+        if (ownedEdit)
+        {
+            sessionId = owner.SessionId;
+        }
+
+        while (sessionId is { } session && _feedback.TryGetValue(session, out var claimed)
+            && claimed.PausedGoalReview is { } review && review.ClaimedBy == runId)
+        {
+            if (_feedback.TryUpdate(session, claimed with { PausedGoalReview = review with { ClaimedBy = null } }, claimed))
+            {
+                break;
+            }
+        }
+
+        if (!ownedEdit)
         {
             return;
         }
 
         if (cancelled)
         {
-            if (_rollbackEdits.TryGetValue(owner.WorkspaceId, out var applied) && applied.RunId == runId)
+            _feedback.TryGetValue(owner.SessionId, out var cancelledDelivery);
+            var retainedEffect = cancelledDelivery?.PausedGoalReview is null ? (Guid?)null : cancelledDelivery.EffectId;
+            if (_rollbackEdits.TryGetValue(owner.WorkspaceId, out var applied) && applied.RunId == runId && applied.EffectId != retainedEffect)
             {
                 _analyzer?.DiscardCandidate(owner.WorkspaceId, applied.EffectId);
             }
 
-            if (_feedback.TryGetValue(owner.SessionId, out var cancelledDelivery) && cancelledDelivery.RunId == runId)
+            if (cancelledDelivery?.RunId == runId && cancelledDelivery.EffectId != retainedEffect)
             {
                 _analyzer?.DiscardCandidate(cancelledDelivery.WorkspaceId, cancelledDelivery.EffectId);
                 _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(owner.SessionId, cancelledDelivery));
@@ -789,19 +825,60 @@ public sealed class SourceEditApplication :
         }
     }
 
-    /// <summary>Records delivery through the ordinary model boundary, including deferred final feedback.</summary>
-    internal void AcknowledgeFeedback(SessionId sessionId, SourceEditAnalysis analysis)
+    /// <summary>Releases a review obligation after delivery or when an active goal receives only informational feedback.</summary>
+    internal void ReleaseFeedbackReview(SessionId sessionId, RunId runId, SourceEditAnalysis analysis)
     {
-        if (_feedback.TryGetValue(sessionId, out var delivery) && delivery.EffectId == analysis.EffectId
-            && delivery.FinalFeedbackRevision <= analysis.Revision)
+        if (!_feedback.TryGetValue(sessionId, out var delivery) || delivery.EffectId != analysis.EffectId)
         {
-            _feedback.TryUpdate(sessionId, delivery with { FinalFeedbackRevision = null }, delivery);
+            return;
+        }
+
+        if (delivery.PausedGoalReview is { } review)
+        {
+            if (review.ClaimedBy != runId || review.Revision != analysis.Revision)
+            {
+                return;
+            }
+
+            if (delivery.RunId != runId && !analysis.Pending && analysis.Analyzers.Status != "pending")
+            {
+                _feedback.TryRemove(new KeyValuePair<SessionId, FeedbackDelivery>(sessionId, delivery));
+                return;
+            }
+        }
+
+        if (delivery.FinalFeedbackRevision <= analysis.Revision || delivery.PausedGoalReview is not null)
+        {
+            var carryForward = delivery.CarryForward && (delivery.PausedGoalReview is null || delivery.RunId != runId
+                || analysis.Pending || analysis.Analyzers.Status == "pending");
+            _feedback.TryUpdate(sessionId, delivery with { FinalFeedbackRevision = null, PausedGoalReview = null, CarryForward = carryForward, Reviewed = analysis }, delivery);
         }
     }
 
+    /// <summary>Tracks undelivered goal diagnostics for the next work round or a later resumed run.</summary>
+    internal void DeferFeedbackReview(SessionId sessionId, RunId runId, SourceEditAnalysis analysis, bool keepClaim = false)
+    {
+        if (_feedback.TryGetValue(sessionId, out var delivery)
+            && (delivery.PausedGoalReview is { } review ? review.ClaimedBy : delivery.RunId) == runId
+            && delivery.EffectId == analysis.EffectId && delivery.FinalFeedbackRevision == analysis.Revision && delivery.Revision <= analysis.Revision)
+        {
+            _feedback.TryUpdate(sessionId, delivery with { CarryForward = true, PausedGoalReview = new(analysis.Revision, keepClaim ? runId : null) }, delivery);
+        }
+    }
+
+    /// <summary>Reports whether another worker still owes delivery of this goal's edit diagnostics.</summary>
+    internal bool IsGoalFeedbackClaimedByAnotherRun(SessionId sessionId, RunId runId) =>
+        _feedback.TryGetValue(sessionId, out var delivery) && delivery.PausedGoalReview?.ClaimedBy is { } owner && owner != runId;
+
+    /// <summary>Checks for actionable changes since the worker received the edit receipt or a later diagnostic update.</summary>
+    internal bool NeedsGoalFeedbackReview(SessionId sessionId, SourceEditAnalysis analysis) =>
+        _feedback.TryGetValue(sessionId, out var delivery) && delivery.EffectId == analysis.EffectId
+        && analysis.Revision >= delivery.Revision && SourceEditAnalysisProjection.HasNewActionableFindings(analysis, delivery.Reviewed);
+
     private SourceEditAnalysis? RequireFinalFeedbackReview(SessionId sessionId, SourceEditAnalysis? analysis)
     {
-        if (analysis is not null && _feedback.TryGetValue(sessionId, out var delivery) && delivery.EffectId == analysis.EffectId)
+        if (analysis is not null && _feedback.TryGetValue(sessionId, out var delivery) && delivery.EffectId == analysis.EffectId
+            && delivery.Revision <= analysis.Revision)
         {
             _feedback.TryUpdate(sessionId, delivery with { FinalFeedbackRevision = analysis.Revision }, delivery);
         }
@@ -821,7 +898,7 @@ public sealed class SourceEditApplication :
         // Retain the validation obligation even after its one-time unavailable notice is consumed.
         // Preserve omissions, but never present retired coverage as current coverage.
         return !delivery.UnavailableDelivered
-            && _feedback.TryUpdate(delivery.SessionId, delivery with { UnavailableDelivered = true }, delivery)
+            && _feedback.TryUpdate(delivery.SessionId, delivery with { UnavailableDelivered = true, PausedGoalReview = null }, delivery)
             ? new SourceEditAnalysis
             {
                 EffectId = delivery.EffectId,
@@ -972,11 +1049,15 @@ public sealed class SourceEditApplication :
         return pending;
     }
 
-    private sealed record FeedbackDelivery(SessionId SessionId, RunId RunId, WorkspaceId WorkspaceId, Guid EffectId, long Revision)
+    private sealed record PausedReview(long Revision, RunId? ClaimedBy);
+
+    private sealed record FeedbackDelivery(SessionId SessionId, RunId RunId, WorkspaceId WorkspaceId, Guid EffectId, long Revision, SourceEditAnalysis Reviewed)
     {
         public bool FinalWaitAttempted { get; init; }
 
         public long? FinalFeedbackRevision { get; init; }
+
+        public PausedReview? PausedGoalReview { get; init; }
 
         public bool UnavailableDelivered { get; init; }
 

@@ -713,6 +713,8 @@
   "execution": {
     // Optional model continuation-round cutoff. 0 disables the separate cutoff.
     "maxModelRounds": 0,
+    // Automatic goal continuations per run. 0 runs the initial work and assessment only.
+    "maxGoalContinuations": 10,
     // Active-turn corrective attempts for recoverable malformed or invalid
     // model-authored requests before the host fails closed.
     "maxCorrectiveTurns": 3,

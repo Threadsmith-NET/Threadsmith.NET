@@ -68,4 +68,61 @@ public static class GoalReceiptTests
         Assert.False(required.Matches(receipt with { Filter = "ParserTests", Succeeded = false }));
         Assert.True(required.Matches(receipt with { Arguments = """{"filter":"ParserTests"}""" }));
     }
+
+    /// <summary>Scope and exclusions carried in an action clause still require a matching action receipt.</summary>
+    [Fact]
+    public static void DefectRemediationMatchesEditWithScopeAndExclusions()
+    {
+        const string clause = "Address the remaining defects above. Linux support is in scope. Ignore feedback on missing tests or manual verification for now.";
+        var requirement = new GoalVerdict.GoalRequirement(clause, "action", "edit_source", string.Empty, []);
+        var edit = new GoalReceipt(Guid.NewGuid(), "edit_source", "{}", "Applied", true, false) { ActionKind = "edit" };
+
+        Assert.True(requirement.Matches(edit));
+        Assert.False(requirement.Matches(edit with { Succeeded = false }));
+    }
+
+    /// <summary>The build and test receipts in the Chaos run jointly prove the goal before the final status message.</summary>
+    [Fact]
+    public static void AssessesBuildAndTestsAcrossTheTurn()
+    {
+        const string goal = "do a full build and run all tests and verify no errors or failed tests";
+        const string response = """
+            {"version":2,"verdict":"Met","summary":"The solution built and all 158 tests passed.","reason":"The rebuild had zero errors and the solution test run had zero failures.","evidence":[1,2],"nextStep":"","requirements":[
+            {"clause":"do a full build","kind":"action","tool":"run_process","scope":"src/CHAOS.sln","evidence":[1]},
+            {"clause":"run all tests","kind":"action","tool":"run_process","scope":"src/CHAOS.sln","evidence":[2]},
+            {"clause":"verify no errors or failed tests","kind":"action","tool":"run_process","scope":"src/CHAOS.sln","evidence":[1,2]}]}
+            """;
+        var journal = new GoalJournal();
+        var build = new GoalReceipt(Guid.NewGuid(), "run_process", """{"command":"dotnet build src/CHAOS.sln --no-incremental"}""", "None", true, false) { ActionKind = "process", CanChangeFiles = true };
+        var test = build with { Invocation = Guid.NewGuid(), Arguments = """{"command":"dotnet test --solution src/CHAOS.sln --no-build"}""" };
+        journal.AddReceipt(build, "0 Warning(s)\n0 Error(s)", false);
+        journal.AddReceipt(test, "failed: 0\nsucceeded: 158\nskipped: 0", false);
+        journal.AddReceipt(build with { Invocation = Guid.NewGuid(), Arguments = """{"command":"git status --short --branch"}""" }, "## main", false);
+        journal.Add("answer", "The working tree is clean.", false);
+        var evidence = journal.Capture().Evidence;
+
+        Assert.Equal("Met", GoalVerdict.Parse(response, goal, evidence).Verdict);
+        evidence[1] = evidence[1] with { Receipt = test with { Succeeded = false }, Text = "failed: 1" };
+        Assert.Throws<InvalidDataException>(() => GoalVerdict.Parse(response, goal, evidence));
+    }
+
+    /// <summary>A confirmed Git commit can prove both the action and the message it supplied.</summary>
+    [Theory]
+    [InlineData("action", "run_process")]
+    [InlineData("text", "")]
+    public static void CommitGoalUsesObservedGitResult(string messageKind, string messageTool)
+    {
+        const string goal = "create a commit message and commit all changes";
+        var response = $$"""
+            {"version":2,"verdict":"Met","summary":"Committed all changes.","reason":"Git confirmed the commit and message.","evidence":[1],"nextStep":"","requirements":[
+            {"clause":"create a commit message","kind":"{{messageKind}}","tool":"{{messageTool}}","scope":"","evidence":[1]},
+            {"clause":"commit all changes","kind":"action","tool":"run_process","scope":"","evidence":[1]}]}
+            """;
+        var generic = new GoalReceipt(Guid.NewGuid(), "run_process", "[omitted: overlong arguments]", "None", true, false) { ActionKind = "process" };
+        var entry = new GoalEvidence(1, "tool:run_process:None", "[main 9708c98] A useful subject", false, generic);
+        var confirmed = entry with { Receipt = generic with { GitCommitHasExplicitMessage = true } };
+
+        Assert.Throws<InvalidDataException>(() => GoalVerdict.Parse(response, goal, [entry]));
+        Assert.Equal("Met", GoalVerdict.Parse(response, goal, [confirmed]).Verdict);
+    }
 }

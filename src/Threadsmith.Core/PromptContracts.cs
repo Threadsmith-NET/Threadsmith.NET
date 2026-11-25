@@ -223,6 +223,9 @@ public static class PromptFileNames
     /// <summary>Instructions for assessing a goal against admitted work evidence.</summary>
     public const string ContextGoalAssessment = "Context-GoalAssessment.md";
 
+    /// <summary>Guidance for reviewing the work after a goal assessment remains inconclusive.</summary>
+    public const string ContextGoalReconcile = "Context-GoalReconcile.md";
+
     /// <summary>Gets the stable filename for the ContextActiveTurnCompactionSystem prompt asset.</summary>
     public const string ContextActiveTurnCompactionSystem = "Context-ActiveTurnCompaction-System.md";
 
@@ -1102,6 +1105,7 @@ public static class PromptFileNames
         SystemToolInventoryTextFallback,
         SystemToolInventoryNativeSeparate,
         ContextGoalAssessment,
+        ContextGoalReconcile,
         ContextActiveTurnCompactionSystem,
         ContextActiveTurnCompactionInitial,
         ContextActiveTurnCompactionUpdate,
@@ -1430,6 +1434,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
             PromptFileNames.ContextGoalAssessment,
+            PromptFileNames.ContextGoalReconcile,
             PromptFileNames.ContextActiveTurnCompactionSystem,
             PromptFileNames.ContextActiveTurnCompactionInitial,
             PromptFileNames.ContextActiveTurnCompactionUpdate,

@@ -645,6 +645,10 @@ public sealed record ToolInvocationResult
     [JsonIgnore]
     internal string? ActionKind { get; init; }
 
+    /// <summary>Whether a confirmed Git commit used an inline message. Null indicates no confirmed commit.</summary>
+    [JsonIgnore]
+    internal bool? GitCommitHasExplicitMessage { get; init; }
+
     /// <summary>Single applied path when the writer confirms exactly one changed file.</summary>
     [JsonIgnore]
     internal string? EditedPath { get; init; }

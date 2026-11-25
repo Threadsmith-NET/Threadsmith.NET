@@ -305,7 +305,11 @@ Use `/goal set "Describe the parser and identify its tests"` to set a goal and s
 
 If you stop the turn, the goal stays active. Use `/goal` to check it, then submit `continue` as ordinary input. You can also use the three commands in the steering composer. A goal belongs to this live session, not to a clone or an application restart.
 
-When a turn would finish, `Analyzing Goal` indicates a separate check. If the assistant only promised to run a test, it can continue without another prompt. If part of the task is complete but the rest cannot be done, the summary describes the completed work and the blocker, then clears the goal. The goal does not grant permissions.
+When a turn would finish, `Analyzing Goal` indicates a separate check of the overall turn. Earlier commands, their output and delivered answers can establish completion together. If the assistant only promised to run a test, it can continue without another prompt. If part of the task is complete but the rest cannot be done, the summary describes the completed work and the blocker, then clears the goal. The goal does not grant permissions.
+
+If the host cannot validate an assessment, MAIN shows the reason while Threadsmith asks the assessor to correct it. It can return to the work for another review if needed. If a blocker prevents further work or assessment, MAIN output explains what happened and the goal stays active. Submit `continue` to resume after resolving the blocker.
+
+Threadsmith allows up to 10 automatic goal continuations per run by default. Set `execution:maxGoalContinuations` in `~/.threadsmith/config.json` or your repository configuration to change the limit. A value of `0` runs the initial work and assessment only. When the limit is reached, MAIN explains the pause, the goal remains active, and submitting `continue` starts a new run.
 
 ### Durable session lifecycle
 

@@ -214,7 +214,7 @@ public static class SessionGoalAcceptanceTests
         Assert.DoesNotContain(observed.OfType<ModelOutputObserved>(), item => item.Text.Contains("stale verdict", StringComparison.Ordinal));
     }
 
-    /// <summary>A confirmed denial reaches assessment and never sends a second work request.</summary>
+    /// <summary>A confirmed denial either establishes a blocker or allows work through a permitted alternative.</summary>
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -228,7 +228,7 @@ public static class SessionGoalAcceptanceTests
         var prompts = TestPromptLoader.Instance;
         var evidence = new EvidenceStore(events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, prompts);
-        var registry = new ToolRegistry([new ParserTestTool("test_run_targeted")]);
+        var registry = new ToolRegistry([new ParserTestTool("test_run_targeted"), new ParserTestTool()]);
         var policy = new BlockTestPolicy();
         var pipeline = new ToolInvocationPipeline(registry, policy, new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
         var model = new PolicyDenialModel(terminal);
@@ -253,9 +253,9 @@ public static class SessionGoalAcceptanceTests
         var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, goal), cancellationToken);
         Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), cancellationToken));
         Assert.Equal(1, policy.Denials);
-        Assert.Equal(2, model.WorkCalls);
-        Assert.Equal(2, model.Assessments);
-        Assert.Equal(terminal ? null : goal, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), cancellationToken)).DisplayText);
+        Assert.Equal(terminal ? 2 : 4, model.WorkCalls);
+        Assert.Equal(terminal ? 2 : 3, model.Assessments);
+        Assert.Null((await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), cancellationToken)).DisplayText);
     }
 
     /// <summary>A passing native check keeps its own identity when all report slots hold failures.</summary>
@@ -389,7 +389,7 @@ public static class SessionGoalAcceptanceTests
             Assert.DoesNotContain(output, text => text.Contains("Met:", StringComparison.Ordinal));
         }
 
-        Assert.Equal(2, model.Calls);
+        Assert.Equal(reference == 0 ? 2 : 6, model.Calls);
     }
 
     /// <summary>The active composer consumes goal controls locally and never submits them as work.</summary>
@@ -511,8 +511,112 @@ public static class SessionGoalAcceptanceTests
         Assert.Null((await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), cancellationToken)).DisplayText);
     }
 
-    private sealed class AnswerModel(string goal, string answer) : IModelProvider
+    /// <summary>A rejected assessment explains the failed turn and how to resume in the output.</summary>
+    [Fact]
+    public static async Task RejectedAssessmentExplainsWhyGoalRemainsActive()
     {
+        const string goal = Goal + " and explain the available runner";
+        const string reason = "The cited evidence does not confirm the requirement “" + Goal + "”.";
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new FakeTimeProvider();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var model = new BlockedWorkModel { Verdict = "Met", Reference = 1 };
+        var prompts = TestPromptLoader.Instance;
+        var app = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(200000, 20, TimeSpan.MaxValue)),
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(prompts),
+            prompts: prompts,
+            outputClock: clock);
+        var dispatcher = new CommandDispatcher([app]);
+        var projections = new InMemoryProjectionStore();
+        await using var subscription = events.Subscribe(projections.ApplyAsync);
+        var finished = new TaskCompletionSource<RunCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var observer = events.Subscribe((item, _) =>
+        {
+            if (item is RunCompleted completion)
+            {
+                finished.TrySetResult(completion);
+            }
+
+            return Task.CompletedTask;
+        });
+        var surface = new GoalSurface(goal: goal);
+
+        await new InteractionCoordinator(new InteractionPresenter(dispatcher, projections), events, surface, timeProvider: clock)
+            .RunAsync(cancellationToken: cancellationToken);
+
+        var run = await finished.Task.WaitAsync(cancellationToken);
+        Assert.False(run.Succeeded);
+        var notice = Assert.Single(surface.Answers, text => text.Contains("Goal assessment failed.", StringComparison.Ordinal));
+        Assert.Contains(reason, notice, StringComparison.Ordinal);
+        Assert.Contains("The goal remains active. Submit continue to resume.", notice, StringComparison.Ordinal);
+        Assert.Contains(surface.Answers, text => text.Contains("Retrying the goal assessment. " + reason, StringComparison.Ordinal));
+        Assert.Equal(new PresentationNotification("Goal assessment failed. See MAIN.", PresentationTextRole.Error), Assert.Single(surface.Notifications));
+        Assert.Equal(goal, (await dispatcher.DispatchAsync(new SessionGoalCommand(run.SessionId, SessionGoalAction.Show), cancellationToken)).DisplayText);
+        Assert.Equal(6, model.Calls);
+    }
+
+    /// <summary>Continues through a rejected verdict and honors default and configured continuation limits.</summary>
+    [Theory]
+    [InlineData(true, 0, 3, null)]
+    [InlineData(false, 10, 22, null)]
+    [InlineData(false, 11, 22, null)]
+    [InlineData(false, 11, 6, 2)]
+    [InlineData(false, 11, 2, 0)]
+    public static async Task GoalWorksUntilCompletionOrContinuationLimit(bool omitScopeInitially, int continuations, int expectedRequests, int? configuredLimit)
+    {
+        const string request = "Assess the defects in the review.";
+        const string goal = request + " Ignore feedback on missing tests or manual verification for now.";
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var clock = new FakeTimeProvider();
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var output = new ConcurrentQueue<string>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            if (item is ModelOutputObserved observed)
+            {
+                output.Enqueue(observed.Text);
+            }
+
+            return Task.CompletedTask;
+        });
+        var model = new AnswerModel(goal, "The remaining defect is in workspace startup.", omitScopeInitially ? request : null, continuations);
+        var prompts = TestPromptLoader.Instance;
+        var app = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(200000, 100, TimeSpan.MaxValue)),
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: configuredLimit is { } value ? new ExecutionLimits { MaxGoalContinuations = value } : null,
+            correctiveMessages: new CorrectiveMessageFactory(prompts),
+            prompts: prompts,
+            outputClock: clock);
+        var dispatcher = new CommandDispatcher([app]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("assessment"), cancellationToken);
+        await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Set, goal), cancellationToken);
+
+        var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, goal), cancellationToken);
+
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), cancellationToken));
+        Assert.Equal(expectedRequests, model.Dispatches);
+        var limit = configuredLimit ?? 10;
+        var paused = continuations > limit;
+        Assert.Equal(paused ? goal : null, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), cancellationToken)).DisplayText);
+        if (paused)
+        {
+            Assert.Single(output, text => text.Contains($"the limit of {limit} automatic continuations was reached", StringComparison.Ordinal));
+        }
+    }
+
+    private sealed class AnswerModel(string goal, string answer, string? firstAssessmentClause = null, int continuations = 0) : IModelProvider
+    {
+        private int _assessments;
+
         internal int Dispatches { get; private set; }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -520,18 +624,50 @@ public static class SessionGoalAcceptanceTests
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
             Dispatches++;
-            var assessment = request.Messages.Any(message => message.SectionId == "goal-assessment");
-            if (assessment)
+            if (request.Messages.All(message => message.SectionId != "goal-assessment"))
             {
-                using var input = JsonDocument.Parse(request.Input);
-                var delivered = Assert.Single(input.RootElement.GetProperty("evidence").EnumerateArray(), item => item.GetProperty("Kind").GetString() == "answer");
-                Assert.Equal(answer, delivered.GetProperty("Text").GetString());
-                Assert.False(delivered.GetProperty("Omitted").GetBoolean());
+                if (_assessments > 0 && _assessments <= continuations)
+                {
+                    var goalContext = request.Messages.Last(message => message.SectionId == "session-goal");
+                    Assert.Contains("Complete the defect assessment.", goalContext.GetModelVisibleContent(), StringComparison.Ordinal);
+                }
+
+                yield return new ModelChunk { Text = answer, FinishReason = ModelFinishReason.Stop };
+                yield break;
             }
 
-            var text = assessment
-                ? JsonSerializer.Serialize(new { version = 2, verdict = "Met", reason = "The answer was displayed.", summary = "Delivered.", nextStep = string.Empty, evidence = new[] { 1 }, requirements = new[] { new { clause = goal, kind = "text", scope = string.Empty, tool = string.Empty, evidence = new[] { 1 } } } })
-                : answer;
+            _assessments++;
+            Assert.Empty(request.Tools);
+            using var input = JsonDocument.Parse(request.Input);
+            var delivered = input.RootElement.GetProperty("evidence").EnumerateArray().Last(item => item.GetProperty("Kind").GetString() == "answer");
+            Assert.Equal(answer, delivered.GetProperty("Text").GetString());
+            Assert.False(delivered.GetProperty("Omitted").GetBoolean());
+            if (firstAssessmentClause is not null && _assessments == 2)
+            {
+                Assert.Equal("The assessment omitted a goal requirement.", input.RootElement.GetProperty("correction").GetString());
+            }
+
+            if (_assessments <= continuations)
+            {
+                var continuation = _assessments == 1
+                    ? """{"version":2,"verdict":"Continue","summary":"More analysis is needed.","reason":"The review is incomplete.","nextStep":"Complete the defect assessment.","evidence":[1],"requirements":[{"clause":"Assess the defects in the review.","kind":"action","scope":"","tool":"","evidence":[]}]}"""
+                    : """{"version":2,"verdict":"Continue","nextStep":"Complete the defect assessment."}""";
+                yield return new ModelChunk { Text = continuation, FinishReason = ModelFinishReason.Stop };
+                yield break;
+            }
+
+            var evidenceId = delivered.GetProperty("Id").GetInt32();
+            var clause = _assessments == 1 ? firstAssessmentClause ?? goal : goal;
+            var text = JsonSerializer.Serialize(new
+            {
+                version = 2,
+                verdict = "Met",
+                reason = "The answer was displayed.",
+                summary = "Delivered.",
+                nextStep = string.Empty,
+                evidence = new[] { evidenceId },
+                requirements = new[] { new { clause, kind = "text", scope = string.Empty, tool = string.Empty, evidence = new[] { evidenceId } } },
+            });
             yield return new ModelChunk { Text = text, FinishReason = ModelFinishReason.Stop };
         }
     }
@@ -573,6 +709,8 @@ public static class SessionGoalAcceptanceTests
 
         internal ConcurrentQueue<string> Answers { get; } = new();
 
+        internal ConcurrentQueue<PresentationNotification> Notifications { get; } = new();
+
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
             foreach (var item in batch.Items)
@@ -588,6 +726,10 @@ public static class SessionGoalAcceptanceTests
                 else if (item is PresentationTextItem text)
                 {
                     Answers.Enqueue(string.Concat(text.Segments.Select(segment => segment.Text)));
+                    if (text.Notification is { } notification)
+                    {
+                        Notifications.Enqueue(notification);
+                    }
                 }
             }
 
@@ -633,7 +775,7 @@ public static class SessionGoalAcceptanceTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            Assert.InRange(++Calls, 1, 2);
+            Assert.InRange(++Calls, 1, 6);
             var assessment = request.Messages.Any(message => message.SectionId == "goal-assessment");
             var text = assessment
                 ? JsonSerializer.Serialize(new { version = 2, verdict = Verdict, summary = "Work reviewed.", reason = "No permitted test runner.", evidence = new[] { Reference }, nextStep = string.Empty, requirements = new[] { new { clause = Goal, kind = Verdict == "Met" ? "text" : "action", tool = Verdict == "Met" ? string.Empty : "parser_test", scope = string.Empty, evidence = Verdict == "Met" ? new[] { Reference } : [] }, new { clause = "explain the available runner", kind = "text", tool = string.Empty, scope = string.Empty, evidence = Verdict == "PartiallyMet" ? new[] { 1 } : [] } } })
@@ -807,6 +949,11 @@ public static class SessionGoalAcceptanceTests
 
         public ToolPolicyDecision Evaluate(ITool tool, object input, ToolInvocationContext context)
         {
+            if (tool.Definition.Id == "parser_test")
+            {
+                return new(true, ApprovalLevel.None, "The alternative test runner is permitted.");
+            }
+
             Assert.Equal("test_run_targeted", tool.Definition.Id);
             Denials++;
             return new(false, ApprovalLevel.None, "Repository policy disables tests.");
@@ -825,9 +972,14 @@ public static class SessionGoalAcceptanceTests
             await Task.Yield();
             if (request.Messages.All(message => message.SectionId != "goal-assessment"))
             {
-                yield return ++WorkCalls == 1
-                    ? new ModelChunk { Text = "A completed summary.", FinishReason = ModelFinishReason.Stop }
-                    : new ModelChunk { Output = new ToolRequestModelOutput("test_run_targeted", "{}"), FinishReason = ModelFinishReason.ToolCalls };
+                yield return ++WorkCalls switch
+                {
+                    1 => new ModelChunk { Text = "A completed summary.", FinishReason = ModelFinishReason.Stop },
+                    2 => new ModelChunk { Output = new ToolRequestModelOutput("test_run_targeted", "{}"), FinishReason = ModelFinishReason.ToolCalls },
+                    3 => new ModelChunk { Output = new ToolRequestModelOutput("parser_test", "{}"), FinishReason = ModelFinishReason.ToolCalls },
+                    4 => new ModelChunk { Text = "The permitted runner passed.", FinishReason = ModelFinishReason.Stop },
+                    _ => throw new InvalidOperationException("Unexpected goal continuation."),
+                };
                 yield break;
             }
 
@@ -835,23 +987,28 @@ public static class SessionGoalAcceptanceTests
             Assert.Empty(request.Tools);
             using var packet = JsonDocument.Parse(request.Input);
             var evidence = packet.RootElement.GetProperty("evidence").EnumerateArray().ToArray();
-            var answer = Assert.Single(evidence, entry => entry.GetProperty("Kind").GetString() == "answer").GetProperty("Id").GetInt32();
+            var answer = Assert.Single(evidence, entry => entry.GetProperty("Text").GetString() == "A completed summary.").GetProperty("Id").GetInt32();
             var blocker = evidence.SingleOrDefault(entry => entry.GetProperty("Kind").GetString() == "tool:test_run_targeted:PolicyDenied");
-            var blocked = Assessments == 2;
+            var blocked = Assessments >= 2;
             Assert.Equal(blocked, blocker.ValueKind == JsonValueKind.Object);
             var partial = blocked && terminal;
+            var met = Assessments == 3;
+            var passed = evidence.SingleOrDefault(entry => entry.GetProperty("Kind").GetString()?.StartsWith("tool:parser_test:", StringComparison.Ordinal) == true);
+            Assert.Equal(met, passed.ValueKind == JsonValueKind.Object);
+            int[] support = met ? [passed.GetProperty("Id").GetInt32()] : [];
+            int[] citedEvidence = met ? [answer, .. support] : blocked ? [answer, blocker.GetProperty("Id").GetInt32()] : [answer];
             var response = JsonSerializer.Serialize(new
             {
                 version = 2,
-                verdict = partial ? "PartiallyMet" : "Continue",
+                verdict = met ? "Met" : partial ? "PartiallyMet" : "Continue",
                 summary = "Summary delivered.",
-                reason = blocked ? "Repository policy disables tests." : "Tests still needed.",
-                evidence = blocked ? new[] { answer, blocker.GetProperty("Id").GetInt32() } : [answer],
-                nextStep = partial ? string.Empty : "Run the tests.",
+                reason = met ? "The alternative test runner passed." : blocked ? "Repository policy disables the first runner." : "Tests still needed.",
+                evidence = citedEvidence,
+                nextStep = met || partial ? string.Empty : blocked ? "Use the permitted test runner." : "Run the tests.",
                 requirements = new[]
                 {
                     new { clause = "Write a summary", kind = "text", tool = string.Empty, scope = string.Empty, evidence = new[] { answer } },
-                    new { clause = "run the tests", kind = "action", tool = "test_run_targeted", scope = string.Empty, evidence = Array.Empty<int>() },
+                    new { clause = "run the tests", kind = "action", tool = met ? "parser_test" : "test_run_targeted", scope = string.Empty, evidence = support },
                 },
             });
             yield return new ModelChunk { Text = response, FinishReason = ModelFinishReason.Stop };

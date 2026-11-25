@@ -1272,6 +1272,8 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                     ProcessExecutionResult => "process",
                     _ => null,
                 },
+                GitCommitHasExplicitMessage = succeeded && input is RunProcessInput shellInput && execution.Value is ProcessExecutionResult shellResult
+                    ? RunProcessTool.ObserveGitCommit(shellInput, shellResult) : null,
                 EditedPath = execution.Value is SourceEditReceipt { Status: SourceEditStatus.Applied, ChangedFiles: [var path] } && path.Length <= 512 ? path : null,
                 ExecutedTest = execution.Value is TargetedTestResult { Test.FullyQualifiedName.Length: <= 512 } tested ? tested.Test.FullyQualifiedName : null,
                 ActionSucceeded = execution.Value switch

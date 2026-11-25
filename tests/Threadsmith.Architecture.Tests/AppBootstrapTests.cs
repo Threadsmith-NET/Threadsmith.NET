@@ -45,18 +45,19 @@ public static partial class AppBootstrapTests
         Assert.False(File.Exists(database));
     }
 
-    /// <summary>Corrective-turn configuration is consumed as a typed value before persistence begins.</summary>
-    [Fact]
-    public static async Task InvalidCorrectiveTurnConfigurationPrecedesPersistence()
+    /// <summary>Execution limits are consumed as typed values before persistence begins.</summary>
+    [Theory]
+    [InlineData("execution:maxCorrectiveTurns")]
+    [InlineData("execution:maxGoalContinuations")]
+    public static async Task InvalidExecutionLimitConfigurationPrecedesPersistence(string key)
     {
         using var temporary = new TemporaryDirectory("invalid-corrective-turn-policy");
         var database = temporary.GetPath("must-not-create.db");
-        const string key = "execution:maxCorrectiveTurns";
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["persistence:path"] = database,
             [key] = "invalid",
-            // Stop before persistence even if the corrective-turn binding is accidentally removed.
+            // Stop before persistence even if the execution-limit binding is accidentally removed.
             ["events:subscriberCapacity"] = "0",
         }).Build();
         using var loggerFactory = LoggerFactory.Create(_ => { });

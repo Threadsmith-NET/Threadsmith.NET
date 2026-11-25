@@ -169,6 +169,7 @@ internal static class ConfigurationBootstrap
             ["budget:wallClockSeconds"] = "0",
             ["budget:cost"] = "0",
             ["execution:maxModelRounds"] = ExecutionLimits.DefaultMaxModelRounds.ToString(CultureInfo.InvariantCulture),
+            ["execution:maxGoalContinuations"] = ExecutionLimits.DefaultMaxGoalContinuations.ToString(CultureInfo.InvariantCulture),
             ["execution:maxCorrectiveTurns"] = "3",
             ["execution:maxStructuredOutputCharacters"] = (8 * 1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["execution:toolResultPreviewCharacters"] = "4096",

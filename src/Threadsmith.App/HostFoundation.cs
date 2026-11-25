@@ -418,6 +418,9 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxModelRounds = configuration.GetValue(
                 "execution:maxModelRounds",
                 ExecutionLimits.DefaultMaxModelRounds),
+            MaxGoalContinuations = configuration.GetValue(
+                "execution:maxGoalContinuations",
+                ExecutionLimits.DefaultMaxGoalContinuations),
             MaxCorrectiveTurns = maximumCorrectiveTurns,
             MaxSourceFrontierEntries = configuration.GetValue("execution:maxSourceFrontierEntries", 256),
             MaxSteeringCharacters = configuration.GetValue("execution:maxSteeringCharacters", 100000),

@@ -119,7 +119,7 @@ public sealed partial class SessionApplication
                 && _sessions.TryGetValue(registration.SessionId, out var live) && live.Journal is not null ? live : null;
             if (activeGoal?.Journal != registration.RoundGoal?.Journal)
             {
-                registration.LastGoalGap = null;
+                registration.UsedGoalAssessmentFallback = false;
                 registration.SuggestedNextStep = null;
                 CommitGoalContext(loopState, modelRound, activeGoal, null);
             }
@@ -345,6 +345,11 @@ public sealed partial class SessionApplication
     {
         foreach (var message in messages)
         {
+            if (_sessions.TryGetValue(registration.SessionId, out var live))
+            {
+                live.Journal?.Add("user-steering", _sanitizer.Sanitize(message.Text), sensitive: true);
+            }
+
             registration.MemoryCurrentInstruction = message.Text;
             registration.MemoryIntent.Advance();
             if (!loopState.TransientState.HasResponses || registration.UsesConceptDiscovery
@@ -1602,7 +1607,7 @@ public sealed partial class SessionApplication
             var receipt = new GoalReceipt(
                 id,
                 result.ToolId,
-                arguments.Length <= 512 ? arguments : "[omitted: overlong arguments]",
+                GoalJournal.Excerpt(arguments, 512),
                 outcome,
                 result.Succeeded && result.ActionSucceeded != false && check?.Succeeded != false,
                 check is not null || result.ActionKind is not (null or "edit" or "process"),
@@ -1611,6 +1616,7 @@ public sealed partial class SessionApplication
             {
                 Run = round.RunId,
                 ActionKind = result.ActionKind,
+                GitCommitHasExplicitMessage = result.GitCommitHasExplicitMessage,
                 ExecutedTest = result.ExecutedTest is { } executedTest ? _sanitizer.Sanitize(executedTest) : null,
                 Workspace = check?.Workspace,
                 Historical = check is not null && check.Applicability != "Unknown",

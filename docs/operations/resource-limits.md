@@ -597,6 +597,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimi
 
 | Field | Default | Purpose |
 |---|---:|---|
+| `maxGoalContinuations` | `10` | Maximum automatic goal continuations per run after the initial work. Zero disables automatic goal continuation. Assessments and corrections are accounted for in the run budget. |
 | `maxRetainedToolCalls` | `256` | Conversation tool-call count; zero disables this cap. |
 | `maxSourceFrontierEntries` | `256` | Maximum model-visible source references. |
 | `maxSteeringCharacters` | `100000` | Maximum steering input characters. |

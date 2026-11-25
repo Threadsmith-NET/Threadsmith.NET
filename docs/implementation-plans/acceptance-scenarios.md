@@ -9,6 +9,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 1. Set a quoted goal to run a focused test. Have the working model promise the test without calling a tool. The compaction-profile assessor receives the promise but no receipt and no tools.
 2. Return `Continue`. Check for one notice, then one test invocation without user input. Only after the receipt reaches the assessor may `Met` show its summary and clear the goal.
 3. Hold an assessment open. Request a steering pause without submitting text. Query or replace the goal before releasing the assessor. Its late result must not start work or clear the replacement.
+4. Return a terminal verdict that omits a scope exclusion. Confirm that the assessor gets one tool-free correction request with the validation reason. Return `Continue` with a next step and confirm that work resumes without input or a required tool selector. With a fixture that rejects both assessments again after a review round, confirm that MAIN output reports the final failure reason, offers `continue`, and leaves the goal active.
 
 ## Scenario SC-SCRIPT-FILE-01 — Script file input
 

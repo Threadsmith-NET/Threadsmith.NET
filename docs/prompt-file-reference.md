@@ -150,7 +150,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
 | `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
-| `Context-GoalAssessment.md` | Tool-free goal assessment. Version 2 cites completed answers, matching action receipts, and host-recorded blockers. Historical checks have limited applicability. | `None` |
+| `Context-GoalAssessment.md` | Tool-free assessment of the overall turn. The assessor compares the goal and submitted request with user steering, delivered answers, command arguments and tool results in chronological order. Multiple receipts can establish one outcome. Version 2 accepts a next step for `Continue` and requires evidence of completed work or blockers for terminal verdicts. An optional `correction` input supplies the host's prior validation error. | `None` |
+| `Context-GoalReconcile.md` | Next step for the work model when both assessment attempts return invalid verdicts. | `None` |
 
 #### `ActiveTurnSummary` family
 

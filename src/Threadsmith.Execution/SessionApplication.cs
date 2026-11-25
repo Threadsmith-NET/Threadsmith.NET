@@ -802,11 +802,16 @@ public sealed partial class SessionApplication :
                 RunPhase.Failed,
                 "run failed",
                 CancellationToken.None);
+            var diagnosticCode = registration.EvaluatingGoal
+                && _sessions.TryGetValue(command.SessionId, out var live)
+                && live.Goal is not null
+                ? "GoalAssessmentFailed"
+                : classification.ToString();
             await _events.PublishAsync(
                 new DiagnosticObserved(
                     command.SessionId,
                     DateTimeOffset.UtcNow,
-                    classification.ToString(),
+                    diagnosticCode,
                     sanitizedMessage),
                 CancellationToken.None);
             await _events.PublishAsync(
@@ -1225,13 +1230,13 @@ public sealed partial class SessionApplication :
 
         public LiveSession? RoundGoal { get; set; }
 
+        public bool EvaluatingGoal { get; set; }
+
         public bool GoalResultCommitted { get; set; }
 
         public int GoalContinuations { get; set; }
 
-        public GoalVerdict.GoalRequirement? LastGoalGap { get; set; }
-
-        public int LastGoalEvidenceId { get; set; }
+        public bool UsedGoalAssessmentFallback { get; set; }
 
         public string? SuggestedNextStep { get; set; }
 

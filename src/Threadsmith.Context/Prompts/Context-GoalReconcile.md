@@ -1,0 +1,1 @@
+Review the full goal against the work and confirmed tool results. Address any missing requirements using actions that are permitted and within the user's scope. Reuse evidence of completed work and avoid repeating completed actions. If all work is complete, summarize the evidence.

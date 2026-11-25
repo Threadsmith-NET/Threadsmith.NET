@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Threadsmith.Core;
 using Threadsmith.Models;
 
@@ -13,6 +14,10 @@ internal sealed record GoalReceipt(Guid Invocation, string Tool, string Argument
 {
     /// <summary>Kind of action confirmed by the typed tool adapter.</summary>
     public string? ActionKind { get; init; }
+
+    /// <summary>Whether a confirmed Git commit included an inline message.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? GitCommitHasExplicitMessage { get; init; }
 
     /// <summary>Exact fully qualified name of the executed test when available.</summary>
     public string? ExecutedTest { get; init; }
@@ -131,6 +136,9 @@ internal sealed class GoalJournal
     private static int Priority(GoalReceipt receipt) => receipt.MayHaveEdited || (receipt.Check && receipt.Succeeded) ? 2 : receipt.Succeeded ? 1 : 0;
 }
 
+/// <summary>A validated verdict or the host's reason for rejecting a completed response.</summary>
+internal sealed record GoalAssessmentResponse(GoalVerdict? Verdict, InvalidDataException? Rejection = null);
+
 /// <summary>Validated model output. Only the foreground loop can apply it.</summary>
 internal sealed record GoalVerdict(string Verdict, string Summary, string Reason, string NextStep)
 {
@@ -150,7 +158,7 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
                 || Clause.Contains("current checkout", StringComparison.OrdinalIgnoreCase));
 
         /// <summary>Checks an invocation independently of the model's explanation.</summary>
-        internal bool Matches(GoalReceipt receipt)
+        internal bool Matches(GoalReceipt receipt, string observedOutput = "")
         {
             if (receipt.Tool != Tool || receipt.Historical || !receipt.Succeeded || Scope.Contains("[REDACTED]", StringComparison.OrdinalIgnoreCase))
             {
@@ -158,6 +166,19 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             }
 
             var instruction = Instruction(Clause);
+            if (receipt.ActionKind == "process")
+            {
+                // A process can implement many operations. The assessor has the command, output
+                // and surrounding observations to judge its effect, including the effective scope.
+                if (ExpectedAction(instruction) is { Kind: "git-commit" or "git-commit-message" } git)
+                {
+                    return MatchesAction(git, receipt);
+                }
+
+                return !string.IsNullOrWhiteSpace(observedOutput) && !string.IsNullOrWhiteSpace(receipt.Arguments)
+                    && !receipt.Arguments.StartsWith("[omitted:", StringComparison.Ordinal);
+            }
+
             var words = instruction.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             var targets = words.Select(word => word.Trim('`', '"', '\'', '.', ',', '(', ')')).Where(IsNamedTarget);
             if (targets.Any(target => !string.Equals(target, Scope, StringComparison.Ordinal)
@@ -174,13 +195,7 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             }
 
             var expected = actions.FirstOrDefault();
-            if (expected is null && !words.Any(word => word.Trim('`', '"', '.', ',') == receipt.Tool))
-            {
-                return false;
-            }
-
-            if (expected is { } action && receipt.ActionKind != action.Kind
-                && !(receipt.Tool == action.Tool && (receipt.Outcome == "PolicyDenied" || action.Kind is "read" or "search")))
+            if (expected is { } action && !MatchesAction(action, receipt))
             {
                 return false;
             }
@@ -195,11 +210,6 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             if (Scope.Length == 0)
             {
                 return !targets.Any();
-            }
-
-            if (!Clause.Contains(Scope, StringComparison.Ordinal))
-            {
-                return false;
             }
 
             if (receipt.Target is not null || receipt.Filter is not null || receipt.ExecutedTest is not null)
@@ -219,6 +229,14 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
                 return false;
             }
         }
+
+        private static bool MatchesAction((string Kind, string Tool) action, GoalReceipt receipt) => action.Kind switch
+        {
+            "git-commit" => receipt.Tool == action.Tool && receipt.GitCommitHasExplicitMessage.HasValue,
+            "git-commit-message" => receipt.Tool == action.Tool && receipt.GitCommitHasExplicitMessage == true,
+            _ => receipt.ActionKind == action.Kind
+                || (receipt.Tool == action.Tool && (receipt.Outcome == "PolicyDenied" || action.Kind is "read" or "search")),
+        };
     }
 
     /// <summary>Validates an exact clause and its receipt selector against this assessment input.</summary>
@@ -236,7 +254,7 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
     }
 
     /// <summary>Reads a complete text-only verdict without forwarding raw model output.</summary>
-    internal static async Task<GoalVerdict> ReadAsync(IModelProvider provider, ModelStreamRequest request, string goal, GoalEvidence[] evidence, Action<ModelUsage> observeUsage, CancellationToken cancellationToken)
+    internal static async Task<GoalAssessmentResponse> ReadAsync(IModelProvider provider, ModelStreamRequest request, string goal, GoalEvidence[] evidence, Action<ModelUsage> observeUsage, CancellationToken cancellationToken)
     {
         var text = new StringBuilder();
         ModelFinishReason? finish = null;
@@ -262,18 +280,54 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             throw new InvalidDataException("The goal assessment did not finish normally.");
         }
 
-        using var json = JsonDocument.Parse(text.ToString(), new JsonDocumentOptions { AllowDuplicateProperties = false, MaxDepth = 4 });
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            return new GoalAssessmentResponse(Parse(text.ToString(), goal, evidence));
+        }
+        catch (InvalidDataException exception)
+        {
+            return new GoalAssessmentResponse(null, exception);
+        }
+        catch (Exception exception) when (exception is JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+        {
+            return new GoalAssessmentResponse(null, new InvalidDataException("Invalid goal assessment format.", exception));
+        }
+    }
+
+    /// <summary>Validates a completed assessment against the supplied goal and evidence.</summary>
+    internal static GoalVerdict Parse(string text, string goal, GoalEvidence[] evidence)
+    {
+        using var json = JsonDocument.Parse(text, new JsonDocumentOptions { AllowDuplicateProperties = false, MaxDepth = 4 });
         var root = json.RootElement;
-        if (root.ValueKind != JsonValueKind.Object || root.EnumerateObject().Count() != 7 || root.GetProperty("version").GetInt32() != 2)
+        if (root.ValueKind != JsonValueKind.Object || root.GetProperty("version").GetInt32() != 2)
         {
             throw new InvalidDataException("Invalid goal assessment format.");
         }
 
-        var result = new GoalVerdict(root.GetProperty("verdict").GetString() ?? string.Empty, root.GetProperty("summary").GetString() ?? string.Empty, root.GetProperty("reason").GetString() ?? string.Empty, root.GetProperty("nextStep").GetString() ?? string.Empty);
+        var verdict = root.GetProperty("verdict").GetString() ?? string.Empty;
+        var nextStep = root.GetProperty("nextStep").GetString() ?? string.Empty;
+        if (verdict == "Continue")
+        {
+            if (string.IsNullOrWhiteSpace(nextStep))
+            {
+                throw new InvalidDataException("The goal continuation did not specify a next step.");
+            }
+
+            // The next step is advisory. Only terminal verdicts can establish work or blockers.
+            return new GoalVerdict(verdict, string.Empty, string.Empty, nextStep);
+        }
+
+        if (root.EnumerateObject().Count() != 7)
+        {
+            throw new InvalidDataException("Invalid goal assessment format.");
+        }
+
+        var result = new GoalVerdict(verdict, root.GetProperty("summary").GetString() ?? string.Empty, root.GetProperty("reason").GetString() ?? string.Empty, nextStep);
         var references = root.GetProperty("evidence");
-        if (result.Verdict is not ("Continue" or "Met" or "PartiallyMet" or "CannotMeet")
+        if (result.Verdict is not ("Met" or "PartiallyMet" or "CannotMeet")
             || string.IsNullOrWhiteSpace(result.Summary) || string.IsNullOrWhiteSpace(result.Reason)
-            || ((result.Verdict == "Continue") == string.IsNullOrWhiteSpace(result.NextStep))
+            || !string.IsNullOrWhiteSpace(nextStep)
             || references.GetArrayLength() == 0 || references.GetArrayLength() > evidence.Length
             || references.EnumerateArray().Any(reference => !reference.TryGetInt32(out var id) || !evidence.Any(item => item.Id == id)))
         {
@@ -286,24 +340,21 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             throw new InvalidDataException("Missing or oversized goal requirement list.");
         }
 
-        if (result.Verdict != "Continue")
+        var remaining = goal.AsSpan();
+        foreach (var requirement in requirements)
         {
-            var remaining = goal.AsSpan();
-            foreach (var requirement in requirements)
+            var start = remaining.IndexOf(requirement.Clause, StringComparison.Ordinal);
+            if (start < 0 || !IsSeparator(remaining[..start]))
             {
-                var start = remaining.IndexOf(requirement.Clause, StringComparison.Ordinal);
-                if (start < 0 || !IsSeparator(remaining[..start]))
-                {
-                    throw new InvalidDataException("The assessment did not account for the complete goal.");
-                }
-
-                remaining = remaining[(start + requirement.Clause.Length)..];
+                throw new InvalidDataException("The assessment did not account for the complete goal.");
             }
 
-            if (!IsSeparator(remaining))
-            {
-                throw new InvalidDataException("The assessment omitted a goal requirement.");
-            }
+            remaining = remaining[(start + requirement.Clause.Length)..];
+        }
+
+        if (!IsSeparator(remaining))
+        {
+            throw new InvalidDataException("The assessment omitted a goal requirement.");
         }
 
         var lastEdit = evidence.Where(entry => entry.Receipt is { MayHaveEdited: true }).Select(entry => entry.Id).DefaultIfEmpty().Max();
@@ -311,20 +362,19 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
         {
             var claimed = evidence.Where(entry => requirement.Evidence.Contains(entry.Id));
             var supported = requirement.Kind == "text"
-                ? IsWritingRequest(requirement.Clause) && claimed.Any(entry => entry.Kind == "answer")
-                : claimed.Any(entry => entry.Receipt is { } receipt && requirement.Matches(receipt)
+                ? IsWritingRequest(requirement.Clause) && claimed.Any(entry => entry.Kind == "answer"
+                    || (IsCommitMessageRequest(Instruction(requirement.Clause))
+                        && entry.Receipt is { Succeeded: true, Historical: false, GitCommitHasExplicitMessage: true }))
+                : claimed.Any(entry => entry.Receipt is { } receipt && requirement.Matches(receipt, entry.Text)
                     && (!receipt.Check || (entry.Id >= lastEdit && !requirement.NeedsUnavailableSourceProof(receipt))));
             if ((result.Verdict == "Met" || requirement.Evidence.Length > 0) && !supported)
             {
-                if (claimed.Any(entry => entry.Receipt is { Check: true } receipt && requirement.Matches(receipt with { Historical = false })))
+                if (claimed.Any(entry => entry.Receipt is { Check: true } receipt && requirement.Matches(receipt with { Historical = false }, entry.Text)))
                 {
-                    return new GoalVerdict("Continue", string.Empty, string.Empty, requirement.Clause)
-                    {
-                        Requirements = [requirement with { Evidence = [] }],
-                    };
+                    return new GoalVerdict("Continue", string.Empty, string.Empty, requirement.Clause);
                 }
 
-                throw new InvalidDataException("The cited evidence does not confirm the required work on the current source.");
+                throw new InvalidDataException($"The cited evidence does not confirm the requirement “{requirement.Clause}”.");
             }
         }
 
@@ -337,15 +387,14 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
                     && evidence.Any(entry => entry.Kind == "no-working-tools" && cited.Contains(entry.Id));
                 if (!unavailable && (missing.Kind != "action" || !evidence.Any(entry => cited.Contains(entry.Id)
                     && entry.Receipt is { Succeeded: false, Historical: false, Outcome: "PolicyDenied" } blocker
-                    && missing.Matches(blocker with { Succeeded = true }))))
+                    && missing.Matches(blocker with { Succeeded = true }, entry.Text))))
                 {
                     throw new InvalidDataException("No matching action failure supports the claimed blocker.");
                 }
             }
         }
 
-        if ((result.Verdict == "Continue" && requirements.All(requirement => requirement.Evidence.Length != 0))
-            || (result.Verdict == "CannotMeet" && requirements.Any(requirement => requirement.Evidence.Length != 0))
+        if ((result.Verdict == "CannotMeet" && requirements.Any(requirement => requirement.Evidence.Length != 0))
             || (result.Verdict == "PartiallyMet" && (!requirements.Any(requirement => requirement.Evidence.Length > 0) || requirements.All(requirement => requirement.Evidence.Length > 0))))
         {
             throw new InvalidDataException("The verdict conflicts with the supported requirements.");
@@ -363,6 +412,11 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
 
     private static bool IsWritingRequest(string clause)
     {
+        if (IsCommitMessageRequest(Instruction(clause)))
+        {
+            return true;
+        }
+
         var parts = SplitClauses(clause);
         if (parts.Length == 0 || parts.Any(part => ExpectedAction(Instruction(part)) is not null))
         {
@@ -405,11 +459,13 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
         var verb = instruction.Split(' ', 2)[0].ToLowerInvariant();
         return verb switch
         {
+            "commit" => ("git-commit", "run_process"),
+            "create" or "write" or "draft" or "generate" when IsCommitMessageRequest(instruction) => ("git-commit-message", "run_process"),
             "test" => ("test", "test_run_targeted"),
             "run" or "execute" or "verify" or "ensure" or "check" when instruction.Contains("test", StringComparison.OrdinalIgnoreCase) => ("test", "test_run_targeted"),
             "run" or "execute" or "install" or "deploy" => ("process", "run_process"),
             "build" or "compile" => ("Build", "dotnet_build"),
-            "edit" or "modify" or "update" or "patch" or "fix" or "delete" => ("edit", "edit_source"),
+            "edit" or "modify" or "update" or "patch" or "fix" or "address" or "delete" => ("edit", "edit_source"),
             "read" or "inspect" => ("read", "read_file"),
             "search" => ("search", "search"),
             "write" or "create" when instruction.Split(' ').Skip(1).Any(word => word.Contains('/') || word.Contains('\\')
@@ -417,6 +473,9 @@ internal sealed record GoalVerdict(string Verdict, string Summary, string Reason
             _ => null,
         };
     }
+
+    private static bool IsCommitMessageRequest(string instruction) => instruction.TrimEnd('.', '!', '?').ToLowerInvariant() is
+        "create a commit message" or "write a commit message" or "draft a commit message" or "generate a commit message";
 
     private static bool IsGenericTarget(string word) => word.Trim('.', ',').ToLowerInvariant() is
         "tests" or "it" or "this" or "everything" or "all";

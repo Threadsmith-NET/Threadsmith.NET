@@ -10,12 +10,18 @@ public sealed record ExecutionLimits
     /// <summary>Default model continuation-round limit. Zero means disabled.</summary>
     public const int DefaultMaxModelRounds = 0;
 
+    /// <summary>Default number of automatic goal continuations per run.</summary>
+    public const int DefaultMaxGoalContinuations = 10;
+
     /// <summary>
     /// Optional maximum number of model continuation rounds within one conversation.
     /// A value of zero or less disables the separate continuation-round cutoff so cancellation,
     /// tool policy, output accounting, and user-controlled budgets govern the run. Default: 0.
     /// </summary>
     public int MaxModelRounds { get; init; } = DefaultMaxModelRounds;
+
+    /// <summary>Maximum automatic goal continuations per run. Zero disables automatic goal continuation.</summary>
+    public int MaxGoalContinuations { get; init; } = DefaultMaxGoalContinuations;
 
     /// <summary>
     /// Maximum active-turn corrective messages for recoverable malformed or invalid model requests.
@@ -60,9 +66,10 @@ public sealed record ExecutionLimits
     /// <summary>Maximum child display line retained before complete-line sanitization.</summary>
     public int MaxAgentDisplayLineCharacters { get; init; } = 16384;
 
-    /// <summary>Validates operational buffer limits.</summary>
+    /// <summary>Validates operational limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(MaxGoalContinuations);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxModelOutputBatchCharacters, 2);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelOutputFlushIntervalMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSourceFrontierEntries);

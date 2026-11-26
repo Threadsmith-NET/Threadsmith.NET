@@ -48,7 +48,7 @@ Native validation's explicit `limits.validation.timeoutMilliseconds` remains an 
 | `tools:parallel:failureMode` | Ordinary; `CompleteStarted` | Existing scheduler failure handling |
 | `tools:runProcess:defaultTimeoutSeconds`, `maxTimeoutSeconds` | Narrow; 30/60; effective default fits maximum | `RunProcessTool` |
 | `tools:readFile:allowedFolders` | Explicit read-only roots; empty by default; trusted sources and enforced narrowing | Shared file-read policy and C# worker |
-| `tools:config:csharp_script:allowed_assemblies` | Comma-separated references and imports; defaults to System.Linq, System.Collections, System.Collections.Generic, System.Text.Json, System.Security.Cryptography; machine enforcement narrows the list | Existing script engine and worker; only `SHA256.HashData(byte[])` is permitted for cryptography |
+| `tools:config:csharp_script:allowed_assemblies` | Comma-separated references and imports; defaults to System.Linq, System.Collections, System.Collections.Generic, System.Text, System.Text.Json, System.Text.RegularExpressions, System.Security.Cryptography; machine enforcement narrows the list | Existing script engine and worker; only `SHA256.HashData(byte[])` is permitted for cryptography |
 | `tools:config:csharp_script:assembly_config_action` | Trusted; `merge` (default) or `override`; not valid in the `enforced` block | Resolves the script assembly list before enforcement |
 | `tools:config:csharp_script:timeout_ms`, `max_output_bytes`, `max_code_characters` | Narrow; 30000/65536/65536 | Script input/worker limits |
 | `tools:config:csharp_script:max_assembly_name_characters`, `max_assembly_setting_characters` | Narrow; 128/4096 | Script validation |

@@ -40,6 +40,11 @@ public sealed record PermissionConfiguration
     /// <summary>Native provider transport settings.</summary>
     public sealed record CodexSettings
     {
+        /// <summary>Gets the requested Codex processing tier (normal or priority).</summary>
+        [JsonPropertyName("serviceTier")]
+        [ConfigurationPermission(AdapterOwned = true)]
+        public string? ServiceTier { get; init; }
+
         /// <summary>Gets the trusted request deadline.</summary>
         [JsonPropertyName("timeoutSeconds")]
         [ConfigurationPermission(AdapterOwned = true)]
@@ -170,7 +175,7 @@ public sealed record PermissionConfiguration
 
         /// <summary>Default platform references and imports for C# scripts. Worker API restrictions still apply.</summary>
         public const string DefaultAllowedAssemblies =
-            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography";
+            "System.Linq,System.Collections,System.Collections.Generic,System.Text,System.Text.Json,System.Text.RegularExpressions,System.Security.Cryptography";
 
         /// <summary>Default behavior for configured C# script assemblies.</summary>
         public const string DefaultAssemblyConfigAction = "merge";

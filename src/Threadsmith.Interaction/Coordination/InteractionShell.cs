@@ -115,6 +115,10 @@ public class InteractionPresenter
             cancellationToken);
     }
 
+    /// <summary>Reads or changes the session goal through the local command boundary.</summary>
+    public Task<SessionGoalResult> ManageGoalAsync(SessionGoalCommand command, CancellationToken cancellationToken = default) =>
+        _dispatcher.DispatchAsync(command, cancellationToken);
+
     /// <summary>Claims coalesced automatic work at the ordinary composer admission boundary.</summary>
     public Task<bool> TakeIntelligenceRefreshAsync(SessionId sessionId, string repositoryPath, CancellationToken cancellationToken = default)
     {

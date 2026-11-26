@@ -4,9 +4,13 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCompatible;
+using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Verifies Plan 32 provider extraction, endpoint safety, activation, and legacy migration.</summary>
@@ -17,6 +21,73 @@ public static class Plan32OpenAiCompatibleProviderTests
 
     private static readonly ModelProfileId SecondModelId = new(
         Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"));
+
+    /// <summary>A cutoff preserves the partial answer and pauses the goal without dispatching another request.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task ForegroundGoalPausesOnTextCutoffOrUnconfirmedTools(bool unconfirmedTool)
+    {
+        const string goal = "Write a greeting";
+        var token = TestContext.Current.CancellationToken;
+        var requests = 0;
+        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            requests++;
+            if (unconfirmedTool)
+            {
+                Assert.Equal(1, requests);
+                const string partial = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"unconfirmed","function":{"name":"test","arguments":"{"}}]}}]}""";
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"data: {partial}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream") });
+            }
+
+            Assert.Equal(1, requests);
+            const string text = "Starting a greeting";
+            const string finish = "length";
+            var json = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = text }, finish_reason = finish } } });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent($"data: {json}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream") });
+        })) { Timeout = Timeout.InfiniteTimeSpan };
+        var clock = new FakeTimeProvider();
+        var catalog = CreateEffectiveCatalog(CreateModel(FirstModelId, "fixture") with { SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed });
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null), timeProvider: clock);
+        await using var events = new DomainEventStream(timeProvider: clock);
+        var output = new List<string>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            if (item is ModelOutputObserved observed)
+            {
+                output.Add(observed.Text);
+            }
+
+            return Task.CompletedTask;
+        });
+        var prompts = TestPromptLoader.Instance;
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var resolver = new ModelResolver(catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
+        var context = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, prompts, modelResolver: resolver);
+        var app = new SessionApplication(events, provider, new ExecutionBudget(new BudgetDimensions(200000, 20, TimeSpan.MaxValue)), sanitizer, NullLogger<SessionApplication>.Instance, contextAssembler: context, evidenceStore: evidence, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, outputClock: clock);
+        var dispatcher = new CommandDispatcher([app]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("cutoff"), token);
+        await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Set, goal), token);
+        var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, goal), token);
+        var done = dispatcher.DispatchAsync(new WaitForRunCommand(run), token);
+        if (unconfirmedTool)
+        {
+            var error = await Assert.ThrowsAsync<ModelProviderException>(() => done.WaitAsync(token));
+            Assert.Contains("no tools were released", error.Message, StringComparison.Ordinal);
+            Assert.Equal(1, requests);
+            Assert.Equal(goal, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), token)).DisplayText);
+            return;
+        }
+
+        Assert.True(await done);
+        Assert.Equal(1, requests);
+        Assert.Equal(goal, (await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), token)).DisplayText);
+        var transcript = string.Concat(output);
+        Assert.Contains("Starting a greeting\n[Incomplete:", transcript, StringComparison.Ordinal);
+        Assert.Contains("Goal paused", transcript, StringComparison.Ordinal);
+    }
 
     /// <summary>Custom names survive catalog serialization and reach effort-based providers verbatim.</summary>
     [Theory]

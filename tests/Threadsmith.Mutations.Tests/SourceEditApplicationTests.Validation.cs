@@ -82,7 +82,8 @@ public sealed partial class SourceEditApplicationTests
             toolRegistry: registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance,
-            sourceEdits: edits);
+            sourceEdits: edits,
+            outputClock: new FakeTimeProvider());
         sessions.RegisterRestoredSession(fixture.SessionId);
         var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Apply the edits."), ct);
 
@@ -90,6 +91,214 @@ public sealed partial class SourceEditApplicationTests
         Assert.False(Assert.Single(observed.OfType<RunCompleted>()).Succeeded);
         Assert.Contains(observed.OfType<DiagnosticObserved>(), item => item.Code == "SourceEditCompletionFailed" && item.Message.Contains("unresolved", StringComparison.Ordinal));
         Assert.Single(await fixture.Store.GetUnresolvedEffectsAsync(RepositoryIdentity.Create(fixture.Repository), ct));
+    }
+
+    /// <summary>Only late actionable findings delay a goal finish, including delivery after a round-limit pause.</summary>
+    [Theory]
+    [InlineData("compiler", 3, false)]
+    [InlineData("compiler", 3, true)]
+    [InlineData("analyzer", 2, false)]
+    [InlineData("clean", 2, false)]
+    [InlineData("clean-continue", 3, false)]
+    [InlineData("same-run-stop", 3, true)]
+    [InlineData("unconfirmed-reply", 3, false)]
+    [InlineData("known", 2, false)]
+    [InlineData("replacement", 3, false)]
+    [InlineData("resumed", 2, false)]
+    [InlineData("assessment", 3, false)]
+    public async Task GoalHandlesLateEditDiagnosticsAtCompletion(string producer, int maxRounds, bool interruptBeforeRetry)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var finding = new SourceEditDiagnostic("LATE001", "Late diagnostic", "Example.cs", 1, "Example", "net10.0", "introduced")
+        {
+            Producer = producer == "analyzer" ? "analyzer" : "compiler",
+        };
+        var analyzer = new AdvisoryAnalyzer([])
+        {
+            InitialDiagnostic = producer switch { "known" => finding, "replacement" => finding with { Code = "EARLIER001" }, _ => null },
+        };
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        var calls = 0;
+        var stopEditingRun = producer == "same-run-stop";
+        var continueAfterClean = producer == "clean-continue";
+        var cleanUpdate = producer == "clean" || continueAfterClean;
+        var duringAssessment = producer == "assessment";
+        var resumed = producer == "resumed";
+        var provider = new CompletionProvider(1)
+        {
+            FinalText = duringAssessment ? "The edit is complete." : "All requested work is complete.",
+            FirstFinalText = continueAfterClean ? "Requested work remains." : null,
+            UnconfirmedRound = producer == "unconfirmed-reply" ? 3 : null,
+            RequestObserved = request =>
+            {
+                if (++calls == 2 && !stopEditingRun && !duringAssessment)
+                {
+                    // Publish after the second request has been assembled, before the closing statement.
+                    var clean = CreateCleanCompletionAnalysis(analyzer);
+                    analyzer.Publish(cleanUpdate ? clean : clean with
+                    {
+                        Diagnostics = [finding],
+                        CurrentErrors = finding.Producer == "compiler" ? 1 : 0,
+                        Analyzers = clean.Analyzers with { Errors = finding.Producer == "analyzer" ? 1 : 0 },
+                    });
+                }
+                else if (resumed && calls == 3)
+                {
+                    Assert.Contains(request.Messages, message => message.SectionId == "source-edit-feedback"
+                        && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+                    var prior = Assert.IsType<SourceEditAnalysis>(analyzer.Latest);
+                    analyzer.Publish(prior with { Revision = prior.Revision + 1, CurrentErrors = 2, Diagnostics = [finding, finding with { Code = "LATE002" }] });
+                }
+            },
+        };
+        var assessor = new CompletionProvider(0)
+        {
+            FinalText = "STOP",
+            RequestObserved = _ =>
+            {
+                if (calls == 2)
+                {
+                    analyzer.Publish(CreateCleanCompletionAnalysis(analyzer) with { Diagnostics = [finding], CurrentErrors = 1 });
+                }
+            },
+        };
+        var prompts = TestPromptLoader.Instance;
+        var sanitizer = new SecretOutputSanitizer();
+        var registry = new ToolRegistry([new SourceEditTool(edits, prompts)]);
+        var clock = new FakeTimeProvider();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock);
+        var evidence = new EvidenceStore(fixture.Events, sanitizer);
+        var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, prompts);
+        var sessions = new SessionApplication(
+            fixture.Events,
+            provider,
+            UnboundedBudget.Instance,
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            pipeline,
+            (_, _) => Task.FromResult(new ToolInvocationContext { RepositoryPath = fixture.Repository, WorkspaceId = fixture.WorkspaceId, TrustLevel = RepositoryTrustLevel.TrustedMutation, RequestedBy = "model" }),
+            contextAssembler: assembler,
+            evidenceStore: evidence,
+            toolRegistry: registry,
+            limits: new ExecutionLimits { MaxModelRounds = maxRounds },
+            correctiveMessages: new CorrectiveMessageFactory(prompts),
+            prompts: prompts,
+            sourceEdits: edits,
+            goalAssessmentProvider: duringAssessment ? assessor : null,
+            outputClock: clock);
+        sessions.RegisterRestoredSession(fixture.SessionId);
+        const string goal = "Edit Example.cs";
+        await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Set, goal), ct);
+        var observations = new ConcurrentQueue<SourceEditAnalysis>();
+        await using var observe = fixture.Events.Subscribe((item, _) =>
+        {
+            if (item is DiagnosticObserved { EditAnalysis: { } analysis })
+            {
+                observations.Enqueue(analysis);
+            }
+
+            return Task.CompletedTask;
+        });
+        if (interruptBeforeRetry)
+        {
+            await InterruptBeforeFeedbackDispatchAsync(startWithEdit: stopEditingRun);
+            var dispatchedBeforeStop = stopEditingRun ? 1 : 2;
+            Assert.Equal(dispatchedBeforeStop, provider.Requests.Count);
+            var retry = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Continue"), ct);
+            Assert.True(await sessions.HandleAsync(new WaitForRunCommand(retry), ct));
+            Assert.Contains(provider.Requests[dispatchedBeforeStop].Messages, message => message.SectionId == "source-edit-feedback"
+                && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+            Assert.Null((await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+            return;
+        }
+
+        var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, goal), ct);
+        var succeeded = await sessions.HandleAsync(new WaitForRunCommand(run), ct);
+
+        if (producer == "unconfirmed-reply")
+        {
+            Assert.False(succeeded);
+            Assert.Equal(3, provider.Requests.Count);
+            Assert.Equal(goal, (await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+            Assert.Contains(provider.Requests[2].Messages, message => message.SectionId == "source-edit-feedback"
+                && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+
+            var resume = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Continue"), ct);
+            Assert.True(await sessions.HandleAsync(new WaitForRunCommand(resume), ct));
+            Assert.Contains(provider.Requests[3].Messages, message => message.SectionId == "source-edit-feedback"
+                && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+            Assert.Null((await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+            return;
+        }
+
+        var paused = (producer == "analyzer" && maxRounds == 2) || resumed;
+        Assert.Equal(cleanUpdate, succeeded);
+        Assert.Equal(paused ? goal : null, (await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+        Assert.Equal(maxRounds, provider.Requests.Count);
+        if (paused)
+        {
+            if (!resumed)
+            {
+                await InterruptBeforeFeedbackDispatchAsync();
+            }
+
+            Assert.Equal(2, provider.Requests.Count);
+            var resume = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Continue"), ct);
+            Assert.True(await sessions.HandleAsync(new WaitForRunCommand(resume), ct));
+            Assert.Null((await sessions.HandleAsync(new SessionGoalCommand(fixture.SessionId, SessionGoalAction.Show), ct)).DisplayText);
+            if (resumed)
+            {
+                Assert.Equal(4, provider.Requests.Count);
+                Assert.Contains(provider.Requests[3].Messages, message => message.SectionId == "source-edit-feedback"
+                    && message.GetModelVisibleContent().Contains("LATE002", StringComparison.Ordinal));
+            }
+        }
+
+        if (continueAfterClean)
+        {
+            Assert.Contains(observations, analysis => analysis is { Pending: false, CurrentErrors: 0 });
+            Assert.DoesNotContain(provider.Requests[2].Messages, message => message.SectionId == "source-edit-feedback");
+        }
+        else if (!cleanUpdate && producer != "known")
+        {
+            Assert.Contains(provider.Requests[2].Messages, message => message.SectionId == "source-edit-feedback"
+                && message.GetModelVisibleContent().Contains("LATE001", StringComparison.Ordinal));
+        }
+
+        async Task InterruptBeforeFeedbackDispatchAsync(bool startWithEdit = false)
+        {
+            var claimed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var subscription = fixture.Events.Subscribe(async (item, _) =>
+            {
+                if (startWithEdit && item is ToolInvocationCompleted { Succeeded: true })
+                {
+                    var current = CreateCleanCompletionAnalysis(analyzer);
+                    analyzer.Publish(current with { Diagnostics = [finding], CurrentErrors = 1 });
+                }
+
+                if (item is DiagnosticObserved { Code: "AdvisorySemanticFeedback", EditAnalysis: { } analysis }
+                    && analysis.Diagnostics.Any(diagnostic => diagnostic.Code == "LATE001"))
+                {
+                    claimed.TrySetResult();
+                    await release.Task.WaitAsync(ct);
+                }
+            });
+            var interrupted = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, startWithEdit ? goal : "Continue"), ct);
+            var done = sessions.HandleAsync(new WaitForRunCommand(interrupted), ct);
+            try
+            {
+                Assert.Same(claimed.Task, await Task.WhenAny(done, claimed.Task).WaitAsync(ct));
+                Assert.True(await sessions.HandleAsync(new CancelRunCommand(fixture.SessionId, interrupted), ct));
+            }
+            finally
+            {
+                release.TrySetResult();
+            }
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => done.WaitAsync(ct));
+        }
     }
 
     /// <summary>Completion records source effects and advisory errors without launching validation.</summary>
@@ -235,7 +444,11 @@ public sealed partial class SourceEditApplicationTests
 
         public Action? BeforeRead { get; set; }
 
+        public Action? AfterRead { get; set; }
+
         public bool PendingAnalyzers { get; init; }
+
+        public SourceEditDiagnostic? InitialDiagnostic { get; init; }
 
         public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
         {
@@ -254,7 +467,8 @@ public sealed partial class SourceEditApplicationTests
                 ProjectsAnalyzed = 1,
                 ProjectsInScope = 1,
                 ErrorComparisonAvailable = true,
-                CurrentErrors = 0,
+                CurrentErrors = InitialDiagnostic is null ? 0 : 1,
+                Diagnostics = InitialDiagnostic is null ? [] : [InitialDiagnostic],
                 CurrentWarnings = 0,
                 Omissions = _omissions,
             };
@@ -264,8 +478,10 @@ public sealed partial class SourceEditApplicationTests
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
         {
             BeforeRead?.Invoke();
-            return _command is { } owner && owner.SessionId == sessionId && owner.RunId == runId
+            var snapshot = _command is { } owner && owner.SessionId == sessionId && owner.RunId == runId
                 && owner.WorkspaceId == workspaceId && owner.EffectId == effectId ? _analysis : null;
+            AfterRead?.Invoke();
+            return snapshot;
         }
 
         public void Publish(SourceEditAnalysis analysis)
@@ -306,6 +522,12 @@ public sealed partial class SourceEditApplicationTests
 
         public Action<ModelStreamRequest>? RequestObserved { get; init; }
 
+        public string FinalText { get; init; } = "Done.";
+
+        public string? FirstFinalText { get; init; }
+
+        public int? UnconfirmedRound { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -322,7 +544,8 @@ public sealed partial class SourceEditApplicationTests
             var editRound = _round - (ValidateBeforeEdits ? 1 : 0);
             if (editRound > _editCount)
             {
-                yield return new() { Text = "Done.", FinishReason = ModelFinishReason.Stop };
+                var reply = editRound == _editCount + 1 ? FirstFinalText ?? FinalText : FinalText;
+                yield return new() { Text = reply, FinishReason = _round == UnconfirmedRound ? ModelFinishReason.Other : ModelFinishReason.Stop };
                 yield break;
             }
 

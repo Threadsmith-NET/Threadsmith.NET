@@ -54,8 +54,10 @@ Produce Markdown with these sections:
 
 ## Phase 4: Deliver
 
-Use datetime when available for a timestamp. If the invoking repository already has .inbox and write_file is available, save the full Markdown there as unique review-<timestamp>.md with explicit content, not useLastResponse (which refers to an earlier archived response).
+Just before delivery, get the UTC date and time from `datetime`. Put `**Generated at:** <UTC date and time>` above Summary in both saved and inline reports. If the tool cannot supply the time, use `**Generated at:** Unavailable`.
 
-Return the declared output JSON. After a successful write, use delivery "artifact", artifact.path and artifact.bytesWritten from its result, and a concise response containing verdict, coverage/failure summary, and Markdown report link; omit the full report body. Otherwise use delivery "inline" with the complete Markdown in response, including any save failure. Never claim an unconfirmed save.
+If the invoking repository already has .inbox and write_file is available, save the full Markdown there as a unique review-<timestamp>.md, using a filename-safe version of the same UTC timestamp. When the timestamp is unavailable, use a unique non-time suffix instead. Pass explicit content, not useLastResponse (which refers to an earlier archived response).
+
+Return the declared output JSON. After a successful write, use delivery "artifact", artifact.path and artifact.bytesWritten from its result, and a concise response containing verdict, coverage/failure summary grouped by priority, and Markdown report link; omit the full report body. Otherwise use delivery "inline" with the complete Markdown in response, including any save failure. Never claim an unconfirmed save.
 
 Set succeeded false if the review could not be performed, including all specialists failing; otherwise true. Findings do not themselves mean execution failed.

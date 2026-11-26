@@ -55,6 +55,11 @@ internal static class InteractionEventSegments
             case DiagnosticObserved { Code: "ModelProviderBusy" } busy:
                 Add(segments, $"{Environment.NewLine}{busy.Message}{Environment.NewLine}", PresentationTextRole.Warning);
                 break;
+            case DiagnosticObserved { Code: "GoalAssessmentFailed" } assessment:
+                var notice = $"{Environment.NewLine}Goal continuation check failed. {assessment.Message}{Environment.NewLine}"
+                    + $"The goal remains active. Submit continue to resume.{Environment.NewLine}";
+                Add(segments, notice, PresentationTextRole.Error);
+                break;
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {
@@ -177,7 +182,7 @@ internal static class InteractionEventSegments
             });
     }
 
-    /// <summary>Creates transient echoes from external refresh events, independently of output wording.</summary>
+    /// <summary>Creates transient notifications for events that may occur outside the visible transcript.</summary>
     internal static PresentationNotification? CreateNotification(IDomainEvent domainEvent)
     {
         return domainEvent switch
@@ -190,6 +195,8 @@ internal static class InteractionEventSegments
                 new("Semantic model updated", PresentationTextRole.Success),
             SemanticRefreshFailed { Reason: SemanticRefreshReason.ExternalChange or SemanticRefreshReason.Recovery } =>
                 new("Semantic refresh failed; see output", PresentationTextRole.Error),
+            DiagnosticObserved { Code: "GoalAssessmentFailed" } =>
+                new("Goal continuation check failed. See MAIN.", PresentationTextRole.Error),
             _ => null,
         };
     }

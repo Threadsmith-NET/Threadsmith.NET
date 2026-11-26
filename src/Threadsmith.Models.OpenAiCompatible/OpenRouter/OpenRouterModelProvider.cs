@@ -147,13 +147,21 @@ internal sealed class OpenRouterModelProvider : IModelProvider
                     throw new ModelProviderException(ProviderErrorDetails.PreferMessage(details, $"OpenRouter rejected the request with HTTP {(int)response.StatusCode}."));
                 }
 
-                await using var chunks = new OpenRouterResponsesStream(_profile, _model, _secret, _protocol).ReadAsync(response, request, names, maximum, token).GetAsyncEnumerator(token);
+                var stream = new OpenRouterResponsesStream(_profile, _model, _secret, _protocol);
+                await using var chunks = stream.ReadAsync(response, request, names, maximum, token).GetAsyncEnumerator(token);
                 while (true)
                 {
                     bool hasNext;
                     try
                     {
                         hasNext = await chunks.MoveNextAsync();
+                    }
+                    catch (Exception exception) when (request.StopOnUnconfirmedToolStream && stream.HasUnconfirmedToolOutput
+                        && !token.IsCancellationRequested
+                        && (exception is TransientModelException or IOException or OperationCanceledException
+                            || (exception is HttpRequestException http && IsTransient(http))))
+                    {
+                        throw new ModelProviderException("OpenRouter interrupted a response with unconfirmed tool calls. No tool calls were executed.", exception);
                     }
                     catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
                     {

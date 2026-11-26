@@ -14,6 +14,97 @@ using Xunit;
 
 public sealed partial class SourceEditApplicationTests
 {
+    /// <summary>Stopping the original editor releases its claim and prevents it from releasing the next worker's claim.</summary>
+    [Fact]
+    public async Task StoppedEditOwnerLeavesFeedbackWithTheResumedRun()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]);
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        var final = CreateCleanCompletionAnalysis(analyzer) with { NewErrors = 1 };
+        analyzer.Publish(final);
+
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, retainGoalFeedback: true, ct));
+        edits.CompleteRun(fixture.RunId, cancelled: true);
+        var resumed = RunId.New();
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, resumed, retainGoalFeedback: true, ct));
+
+        edits.DeferFeedbackReview(fixture.SessionId, fixture.RunId, final);
+        Assert.True(edits.IsGoalFeedbackClaimedByAnotherRun(fixture.SessionId, fixture.RunId));
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
+        edits.ReleaseFeedbackReview(fixture.SessionId, resumed, final);
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, RunId.New()));
+    }
+
+    /// <summary>A finding first observed by another goal run at its round limit remains available after that run pauses.</summary>
+    [Fact]
+    public async Task GoalCanDeferNewlyActionableCarriedAnalysis()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]) { PendingAnalyzers = true };
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        edits.CompleteRun(fixture.RunId);
+        var final = CreateCleanCompletionAnalysis(analyzer) with { Analyzers = new() { Status = "completed", Errors = 1 } };
+        analyzer.Publish(final);
+        var paused = RunId.New();
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, paused, retainGoalFeedback: true, ct));
+        Assert.True(edits.NeedsGoalFeedbackReview(fixture.SessionId, final));
+        edits.DeferFeedbackReview(fixture.SessionId, paused, final);
+        var resumed = RunId.New();
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, resumed, retainGoalFeedback: true, ct));
+        edits.ReleaseFeedbackReview(fixture.SessionId, resumed, final);
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, paused));
+    }
+
+    /// <summary>Overlapping resumed runs consume each pending revision once and discard older snapshots.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PausedGoalFeedbackIsClaimedOnceAcrossOverlappingRuns(bool obsolete)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]);
+        var edits = fixture.CreateApplication(analyzer: analyzer, editOptions: new() { FinalFeedbackWaitMilliseconds = 0 });
+        await edits.HandleAsync(fixture.Replace("Example", "Changed", false), ct);
+        var pending = CreateCleanCompletionAnalysis(analyzer) with { Pending = true, NewErrors = 1 };
+        analyzer.Publish(pending);
+        Assert.Equal(pending, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, fixture.RunId, ct));
+        edits.DeferFeedbackReview(fixture.SessionId, fixture.RunId, pending);
+        edits.CompleteRun(fixture.RunId);
+
+        var first = RunId.New();
+        var second = RunId.New();
+        Assert.Equal(pending, edits.TakeFeedback(fixture.SessionId, first));
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, second));
+
+        var older = CreateCleanCompletionAnalysis(analyzer) with { Obsolete = obsolete };
+        var newer = pending with { Revision = older.Revision + 1 };
+        analyzer.Publish(older);
+        SourceEditAnalysis? competing = null;
+        analyzer.AfterRead = () =>
+        {
+            analyzer.AfterRead = null;
+            analyzer.Publish(newer);
+            competing = edits.TakeFeedback(fixture.SessionId, second);
+        };
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, first));
+        Assert.Equal(newer, competing);
+        var final = CreateCleanCompletionAnalysis(analyzer) with { NewErrors = 1 };
+        analyzer.Publish(final);
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, first, ct));
+        Assert.True(edits.IsGoalFeedbackClaimedByAnotherRun(fixture.SessionId, second));
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, second));
+        edits.DeferFeedbackReview(fixture.SessionId, first, final);
+        Assert.Equal(final, await edits.WaitForFinalFeedbackAsync(fixture.SessionId, second, ct));
+        edits.ReleaseFeedbackReview(fixture.SessionId, second, final);
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, first));
+    }
+
     /// <summary>A settling refresh cannot turn an already-installed replacement into unavailable feedback.</summary>
     [Theory]
     [InlineData(true, false)]

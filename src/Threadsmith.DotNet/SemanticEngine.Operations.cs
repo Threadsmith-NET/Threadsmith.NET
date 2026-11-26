@@ -1,8 +1,6 @@
 namespace Threadsmith.DotNet;
 
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Host;
-using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.Extensions.Logging;
 
 /// <content>Retains compiler resources through actual completion, including work abandoned by its caller.</content>
@@ -138,18 +136,7 @@ public sealed partial class SemanticEngine
 
     private void DisposeCompilerWorkspace(Workspace workspace)
     {
-        var loader = workspace is MSBuildWorkspace
-            ? workspace.Services.GetService<IAnalyzerService>() as WorkspaceAnalyzerLoader
-            : null;
-        try
-        {
-            workspace.Dispose();
-        }
-        finally
-        {
-            loader?.Dispose();
-        }
-
+        workspace.Dispose();
         WorkspaceDisposalObserver?.Invoke(workspace);
     }
 

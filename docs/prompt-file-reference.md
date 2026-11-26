@@ -46,13 +46,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 24 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 36 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 38 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 28 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **305** | Complete deployed catalog. |
+| **Total** | **307** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -137,9 +137,9 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
-| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare 1–2 sentence implementation hints with short verified supporting file lists and concepts using the ordinary memory guidance, plus covered changes; survey and prioritize a deduplicated checklist, use bounded exploration and caller/reference navigation with primary source receipts, stop at supported recipes, and audit checklist conclusions against accepted memory text before publication. | `None` |
-| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological discovery signals, resumable checkpoints, checklist reconciliation between batches, and focused current-source verification; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
-| `Context-RepositoryIntelligenceCoverage.md` | Atomic initial-survey recovery and final coverage review with up to two brief-only read-only investigators and parent evidence verification for missing major areas, unsupported generalizations, and material contradictions; distinguish required investigation from optional research, audit useful conclusions against actual accepted memory text, repair missing recipes and bundled advice through normal reconciliation, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
+| `Context-RepositoryIntelligenceCollection.md` | Discover contributor tasks in current code. Use AGENTS.md and other docs, when present, as leads rather than answers. Scope advice to the task; verify working examples, required companion steps, and any recommended check. Refresh investigates affected guidance. | `None` |
+| `Context-RepositoryIntelligenceHistory.md` | Process each host-supplied history batch and checkpoint progress. Read historical code to resolve a current design question, not to produce a memory per batch. | [`HistoryJson`](#placeholder-historyjson) |
+| `Context-RepositoryIntelligenceCoverage.md` | Recover the initial survey or review the actual saved advice: what would a developer do differently? Correct vague or overbroad hints, check original answers against evidence, and find missed contributor paths by comparing the advice with the repository rather than just the checklist. The parent verifies any delegated findings. | [`CoverageJson`](#placeholder-coveragejson) |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -150,6 +150,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveTurnCompaction-OutputContract.md` | Working-note headings for parent and child compaction; file inventories are managed separately. | `None` |
 | `Context-ActiveTurnCompaction-System.md` | Context framing for `ActiveTurnCompaction-System`. | `None` |
 | `Context-ActiveTurnCompaction-Update.md` | Updated parent/child working notes, retaining useful evidence-ID associations. | `None` |
+| `Context-GoalContinuationStatus.md` | Reads the worker's sanitized final reply or a bounded closing excerpt marked `replyPrefixOmitted`. Returns CONTINUE only for explicit unfinished work and defaults to STOP on ambiguity. | `None` |
+| `Context-GoalWorkContext.md` | Explains the worker's optional closing statements and same-goal continuation. | [`FinishedStatement`](#placeholder-finishedstatement), [`UnfinishedStatement`](#placeholder-unfinishedstatement) |
 
 #### `ActiveTurnSummary` family
 
@@ -711,7 +713,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, synthesis and delivery while preserving the active checkout and report format. | `None` |
+| `Skill-Review.md` | Lead review acquisition, one shared handoff with five focused specialist assignments, and synthesis and delivery of a report with a `Generated at:` line above Summary, showing UTC from `datetime` or `Unavailable`, while preserving the active checkout. | `None` |
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
 
@@ -938,6 +940,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-totalprojects"></a>`TotalProjects` | Total project count before projection bounds. |
 | <a id="placeholder-totalsources"></a>`TotalSources` | Cumulative number of distinct attributable evidence sources observed by the delegated child after the current tool round. |
 | <a id="placeholder-totaltests"></a>`TotalTests` | Total test count before projection bounds. |
+| <a id="placeholder-unfinishedstatement"></a>`UnfinishedStatement` | Standalone closing sentence the worker can use to report that it can continue requested work. |
 | <a id="placeholder-uncertainty"></a>`Uncertainty` | Bounded uncertainty statement attached to a delegated finding. |
 | <a id="placeholder-uncertaintyblock"></a>`UncertaintyBlock` | Already-rendered optional uncertainty line inserted into a finding. |
 | <a id="placeholder-undelivered"></a>`Undelivered` | Number of submitted steering messages not delivered. |
@@ -948,6 +951,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 
 | <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned initial-survey-required phase, or final-review total/required-open/optional/blocked counts, preserved initial areas, pending reconciliation keys, invalid memory links and first-review indicator. Detailed investigation notes and paged pending proposal text remain available through the memories tool. |
 | <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
+| <a id="placeholder-finishedstatement"></a>`FinishedStatement` | Standalone closing sentence the worker can use to report completion. |
 | <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with generation, independent compiler/analyzer status and coverage, diagnostic producer identities and omissions; pending, obsolete or unmeasured counts and unavailable comparisons are omitted. |
 
 Repository-intelligence coverage admission: `Context-RepositoryIntelligenceCollection.md` and `Context-RepositoryIntelligenceHistory.md` direct atomic initial survey submission through `memories initializeCoverage(survey)` before history advances. `Context-RepositoryIntelligenceCoverage.md` uses its existing `CoverageJson` token for either initial-survey recovery or final review, including preserved initial areas, pending reconciliation keys, and invalid memory links. `Tool-memories-Description.md` explains cumulative collection confirmations, unchanged-proposal metadata, pending-proposal inspection with `coverage(proposalKey[,proposalOffset])`, explicit `noMemoryReason`/`resolvedProposalKeys`, and evidence-backed `outOfScope` dispositions. These assets provide wording; code owns atomic admission, identity preservation, revision checks, bounded paging, and publication gates. No token names or asset filenames changed.

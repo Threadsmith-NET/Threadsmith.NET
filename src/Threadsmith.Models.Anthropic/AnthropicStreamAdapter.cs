@@ -41,6 +41,9 @@ internal sealed class AnthropicStreamAdapter
         _usage = new AnthropicUsageAccumulator(profile, compatibility, request.WireEstimate?.WireInputTokens ?? 0);
     }
 
+    /// <summary>Whether a goal request has received tool fragments that cannot safely be retried.</summary>
+    internal bool StopOnToolInterruption => _request.StopOnUnconfirmedToolStream && _wireIds.Count > 0;
+
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal IReadOnlyList<ModelChunk> Accept(RawMessageStreamEvent item)
     {
@@ -216,7 +219,10 @@ internal sealed class AnthropicStreamAdapter
         var usage = _usage.Snapshot(EstimatedOutput());
         if (finish == ModelFinishReason.Length)
         {
-            throw new ModelProviderException("Anthropic stopped before completing the response because its token or context limit was reached.");
+            throw new ModelProviderException("Anthropic stopped before completing the response because its token or context limit was reached.")
+            {
+                IsTextOutputLimit = _stopReason == "max_tokens" && _wireIds.Count == 0,
+            };
         }
 
         if (finish == ModelFinishReason.Other)

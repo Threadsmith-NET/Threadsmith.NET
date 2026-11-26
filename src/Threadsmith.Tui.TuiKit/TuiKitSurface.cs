@@ -1183,7 +1183,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return PrependUnseenOutput(child.Activity ?? child.State.ToString());
         }
 
-        const string frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+        if (_activity?.GoalAssessmentId is not null)
+        {
+            return ActiveRunNotice(_notice);
+        }
+
         if (_activity is null || _toolActivities.Count > 0)
         {
             _formattedActivity = null;
@@ -1191,16 +1195,21 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return ActiveRunNotice(_notice);
         }
 
+        return ActiveRunNotice(FormatActivityFrame(_activity));
+    }
+
+    private string FormatActivityFrame(InteractionActivity activity)
+    {
+        const string frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
         var frame = (int)((Environment.TickCount64 / 250) % frames.Length);
-        if (!ReferenceEquals(_formattedActivity, _activity) || frame != _activityFrame)
+        if (!ReferenceEquals(_formattedActivity, activity) || frame != _activityFrame)
         {
-            _formattedActivity = _activity;
+            _formattedActivity = activity;
             _activityFrame = frame;
-            var activity = $"{frames[frame]} {_activity.Format()}";
-            _activityText = activity;
+            _activityText = $"{frames[frame]} {activity.Format()}";
         }
 
-        return ActiveRunNotice(_activityText);
+        return _activityText;
     }
 
     private string ActiveRunNotice(string text)

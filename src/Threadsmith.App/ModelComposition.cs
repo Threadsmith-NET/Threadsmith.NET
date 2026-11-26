@@ -71,6 +71,7 @@ internal static class ModelComposition
         // request deadlines, while bounded handler settings refresh DNS and constrain connection resources.
         var transportOptions = ModelHttpTransportOptions.Load(configuration);
         var codexTimeoutSeconds = LoadCodexTimeoutSeconds(trustedConfiguration);
+        var requestPriorityTier = LoadCodexPriorityTier(trustedConfiguration);
         var httpClient = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = transportOptions.PooledConnectionLifetime,
@@ -88,7 +89,7 @@ internal static class ModelComposition
         try
         {
             var openAiRegistration = new OpenAiCompatibleProviderRegistration();
-            var codexRegistration = new OpenAiCodexProviderRegistration();
+            var codexRegistration = new OpenAiCodexProviderRegistration { RequestPriorityTier = requestPriorityTier };
             var anthropicRegistration = new AnthropicProviderRegistration();
             var registry = new ModelProviderRegistry([openAiRegistration, codexRegistration, anthropicRegistration, new OpenRouterProviderRegistration()]);
             var (effectiveCatalog, trustedCatalog) = await progress.RunAsync("models.catalogs", "Model configuration and catalogs", token => LoadCatalogsAsync(configuration, trustedConfiguration, paths, openAiRegistration, registry, loggerFactory, secretResolver, httpClient, progress, token), cancellationToken).ConfigureAwait(false);
@@ -121,21 +122,19 @@ internal static class ModelComposition
                 ? null
                 : await codexCache.LoadAsync(codexStartupToken.Token).ConfigureAwait(false);
             using var refresh = progress.Begin("models.codex.refresh", "Codex catalog refresh", cancellationToken: cancellationToken);
-            if (codexConfiguration is { RequiresCapabilityRefresh: true } && codexAccessToken is not null)
+            if (codexConfiguration is not null && codexAccessToken is not null
+                && (codexConfiguration.RequiresCapabilityRefresh || (requestPriorityTier
+                    && codexConfiguration.Models.Cast<OpenAiCodexModelConfiguration>().Any(model => model.SupportsPriorityTier is null))))
             {
-                try
-                {
-                    var refreshed = await new OpenAiCodexCatalogClient(httpClient).DiscoverAsync(codexAccessToken, cancellationToken: codexStartupToken.Token).ConfigureAwait(false);
-                    await codexCache.SaveAsync(refreshed, codexStartupToken.Token).ConfigureAwait(false);
-                    codexConfiguration = refreshed;
-                    refresh?.Complete();
-                }
-                catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    refresh?.Fail("Refresh unavailable; cached models remain text-only.");
-                    loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup").LogWarning("Codex modality refresh unavailable; legacy cached models remain text-only.");
-                }
+                var catalogClient = new OpenAiCodexCatalogClient(httpClient);
+                codexConfiguration = await RefreshCodexCatalogAsync(
+                    codexConfiguration,
+                    token => catalogClient.DiscoverAsync(codexAccessToken, cancellationToken: token),
+                    codexCache.SaveAsync,
+                    loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup"),
+                    refresh,
+                    codexStartupToken.Token,
+                    cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -472,6 +471,44 @@ internal static class ModelComposition
         }
     }
 
+    /// <summary>Refreshes live capabilities independently of optional cache persistence.</summary>
+    internal static async Task<OpenAiCodexProviderConfiguration> RefreshCodexCatalogAsync(
+        OpenAiCodexProviderConfiguration cached,
+        Func<CancellationToken, Task<OpenAiCodexProviderConfiguration>> discoverAsync,
+        Func<OpenAiCodexProviderConfiguration, CancellationToken, Task> saveAsync,
+        ILogger logger,
+        SemanticStartupProgress.Operation? progress,
+        CancellationToken attemptCancellationToken,
+        CancellationToken cancellationToken)
+    {
+        OpenAiCodexProviderConfiguration refreshed;
+        try
+        {
+            refreshed = await discoverAsync(attemptCancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Fail("Refresh unavailable; using cached model capabilities.");
+            logger.LogWarning("Codex capability refresh unavailable; using cached model capabilities.");
+            return cached;
+        }
+
+        try
+        {
+            await saveAsync(refreshed, attemptCancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or IOException or UnauthorizedAccessException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            logger.LogWarning("Could not save the Codex capability cache; using refreshed capabilities for this session.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        progress?.Complete();
+        return refreshed;
+    }
+
     /// <summary>Resolves a typed model credential only at the outbound provider boundary.</summary>
     internal static async Task<string?> ResolveModelSecretAsync(
         ISecretResolver secretResolver,
@@ -600,7 +637,21 @@ internal static class ModelComposition
         return (ordinary, trusted);
     }
 
-    /// <summary>Returns whether the path is inside the directory, including equality.</summary>
+    /// <summary>Reads the trusted opt-in to priority processing for native Codex requests.</summary>
+    internal static bool LoadCodexPriorityTier(IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string path = "model:openAiCodex:serviceTier";
+        var section = trustedConfiguration.GetSection(path);
+        return section.Value switch
+        {
+            null when !section.GetChildren().Any() => false,
+            "normal" => false,
+            "priority" => true,
+            _ => throw new InvalidOperationException($"Trusted configuration '{path}' must be 'normal' or 'priority'."),
+        };
+    }
+
     /// <summary>Loads the trusted total deadline for each native Codex request.</summary>
     internal static int LoadCodexTimeoutSeconds(IConfiguration trustedConfiguration)
     {

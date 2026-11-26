@@ -140,7 +140,7 @@ public sealed class ModelResolver : IModelResolver
             selectedProfile.EffectiveRequestOutputTokenReserve)
         {
             DefaultReasoningLevel = selectedProfile.DefaultReasoningLevel,
-            SupportsReasoningOff = selectedProfile.ReasoningCapability.SupportsReasoningOff,
+            SupportsReasoningOff = selectedProfile.SupportsReasoningLevel(ReasoningLevel.None),
             Cost = selectedProfile.Cost,
             EnforcesRequestOutputTokenLimit = selectedProfile.EnforcesRequestOutputTokenLimit,
         };

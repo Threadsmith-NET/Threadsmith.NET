@@ -29,6 +29,9 @@ internal sealed class ToolSuspensionCompletion
     /// <summary>Whether an external write was dispatched. Null for other tools.</summary>
     internal bool? ExternalWriteDispatched { get; set; }
 
+    /// <summary>Whether the script worker may have received the start frame.</summary>
+    internal bool ScriptDispatched { get; set; }
+
     /// <summary>Execution measurement retained across the suspended user wait.</summary>
     internal long? SuspendedElapsedMilliseconds { get; set; }
 

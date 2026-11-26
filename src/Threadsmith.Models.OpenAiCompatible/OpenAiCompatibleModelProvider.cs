@@ -349,6 +349,14 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
             var orphanedToolArguments = false;
             var completed = false;
             var receivedDone = false;
+            void RejectUnconfirmedTools()
+            {
+                if (request.StopOnUnconfirmedToolStream && toolCalls.Count != 0)
+                {
+                    throw new ModelProviderException("The tool stream ended without confirmed tool-call completion; no tools were released.");
+                }
+            }
+
             string? terminalReason = null;
             var reasoningState = CreateReasoningAccumulator();
             var replayReasoning = SupportsReasoningReplay ? new StringBuilder() : null;
@@ -362,6 +370,10 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 {
                     line = await reader.ReadLineAsync(cancellationToken);
                 }
+                catch (Exception exception) when (request.StopOnUnconfirmedToolStream && toolCalls.Count != 0 && !cancellationToken.IsCancellationRequested && exception is IOException or HttpRequestException or OperationCanceledException)
+                {
+                    throw new ModelProviderException("The connection was interrupted during a tool call; no tools were released.");
+                }
                 catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
                 {
                     throw requestCancellation.IsCancellationRequested
@@ -373,6 +385,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 {
                     if (!completed)
                     {
+                        RejectUnconfirmedTools();
                         throw new TransientModelException("Model endpoint connection ended without a completed response.");
                     }
 
@@ -455,6 +468,7 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
 
                 if (retryable)
                 {
+                    RejectUnconfirmedTools();
                     throw new TransientModelException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(envelope.Error ?? default, _apiKey, envelope.Provider, envelope.RequestId, envelope.Id), "The model endpoint reported temporary provider unavailability inside the response stream."))
                     { IsRateLimit = rateLimited, IsOverloaded = overloaded };
                 }
@@ -597,6 +611,11 @@ internal class OpenAiCompatibleModelProvider : IModelProvider
                 {
                     yield return new ModelChunk { Text = remainingText };
                 }
+            }
+
+            if (!completed || (RequiresDoneMarker && !receivedDone))
+            {
+                RejectUnconfirmedTools();
             }
 
             if (RequiresDoneMarker && (!completed || !receivedDone))

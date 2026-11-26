@@ -16,10 +16,12 @@ internal static class SecurityPolicyConfigurationLoader
     internal const long TrustedConfigurationMaximumBytes = int.MaxValue;
 
     /// <summary>Builds a detached trusted adapter view with whole-array replacement; runtime preferences can defer enforcement to the captured policy.</summary>
-    internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths, bool includeEnforced = true)
+    internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths, bool includeEnforced = true, IConfigurationSource? launchSource = null)
     {
+        var launch = ReadLaunchConfiguration(launchSource);
+        using var launchLifetime = launch as IDisposable;
         var merged = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        var trustedSources = ReadTrustedSources(paths, []);
+        var trustedSources = ReadTrustedSources(paths, [], launch);
         foreach (var source in trustedSources.Where(source => source.Kind != "Environment"))
         {
             foreach (var (key, node) in source.Values.Where(item => item.Value.ValueKind == JsonValueKind.Array))
@@ -35,8 +37,7 @@ internal static class SecurityPolicyConfigurationLoader
             }
         }
 
-        var environment = new ConfigurationBuilder().Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_")).Build();
-        var environmentValues = environment.AsEnumerable().Where(pair => pair.Value is not null).ToArray();
+        var environmentValues = launch.AsEnumerable().Where(pair => pair.Value is not null).ToArray();
         foreach (var key in environmentValues.Select(pair => pair.Key))
         {
             var segments = key.Split(':');
@@ -131,11 +132,13 @@ internal static class SecurityPolicyConfigurationLoader
         .ToDictionary(property => property.Path, property => property.DefaultLimit.GetValueOrDefault(), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Resolves a detached candidate without changing any live authority or settings.</summary>
-    internal static EffectiveSessionPolicy Load(ConfigurationPaths paths, Guid bindingId, long generation)
+    internal static EffectiveSessionPolicy Load(ConfigurationPaths paths, Guid bindingId, long generation, IConfigurationSource? launchSource = null)
     {
         var sources = new List<PolicyInputSource>();
         var diagnostics = new List<string>();
-        var trusted = ReadTrustedSources(paths, sources);
+        var launch = ReadLaunchConfiguration(launchSource);
+        using var launchLifetime = launch as IDisposable;
+        var trusted = ReadTrustedSources(paths, sources, launch);
         var maximumConfigurationBytes = 1024L * 1024;
         foreach (var source in trusted)
         {
@@ -398,7 +401,7 @@ internal static class SecurityPolicyConfigurationLoader
             Generation = generation,
             RepositoryPath = repository,
             Fingerprint = string.Empty,
-            StartupAuthorityFingerprint = CaptureStartupAuthority(paths, projectSources),
+            StartupAuthorityFingerprint = CaptureStartupAuthority(paths, projectSources, launchSource),
             CommandPolicies = commandPolicies,
             AllowedExecutables = executables,
             AllowedTools = ResolveList("tools:allow", null),
@@ -521,11 +524,11 @@ internal static class SecurityPolicyConfigurationLoader
             ? Threadsmith.Policies.Configuration.PolicyJson.Parse(document.GetRawText()) : null;
     }
 
-    private static string CaptureStartupAuthority(ConfigurationPaths paths, Source[] restrictions)
+    private static string CaptureStartupAuthority(ConfigurationPaths paths, Source[] restrictions, IConfigurationSource? launchSource)
     {
         // Existing MCP, hook, skill, provider and secret adapters retain their own validators
         // and live revocation stores. Their immutable definitions are rebuilt only at restart.
-        var trusted = BuildTrusted(paths);
+        var trusted = BuildTrusted(paths, launchSource: launchSource);
         using var lifetime = trusted as IDisposable;
         var keys = ConfigurationPermissionCatalog.Properties.Where(property => property.StartupBound).Select(property => property.Path).ToArray();
         var entries = trusted.AsEnumerable()
@@ -536,7 +539,7 @@ internal static class SecurityPolicyConfigurationLoader
 
         // The registry captures ordinary preferences separately from machine enforcement.
         // An enforced byTool array must not hide changes to those startup-bound values.
-        var runtimePreferences = BuildTrusted(paths, includeEnforced: false);
+        var runtimePreferences = BuildTrusted(paths, includeEnforced: false, launchSource: launchSource);
         using var runtimePreferencesLifetime = runtimePreferences as IDisposable;
         var runtimeEntries = runtimePreferences.AsEnumerable()
             .Where(pair => pair.Key.StartsWith("tools:runtime:", StringComparison.OrdinalIgnoreCase)
@@ -573,7 +576,7 @@ internal static class SecurityPolicyConfigurationLoader
         return new Source(kind, path, values);
     }
 
-    private static Source[] ReadTrustedSources(ConfigurationPaths paths, List<PolicyInputSource> provenance)
+    private static Source[] ReadTrustedSources(ConfigurationPaths paths, List<PolicyInputSource> provenance, IConfiguration launch)
     {
         var store = new RepositoryPermissionStore(paths.UserConfiguration);
         var local = store.Read(paths.RepositoryRoot);
@@ -587,7 +590,7 @@ internal static class SecurityPolicyConfigurationLoader
             ReadFile(paths.MachineConfiguration, "Machine", provenance),
             ReadFile(paths.UserConfiguration, "User", provenance),
             new Source("UserRepository", store.GetPath(paths.RepositoryRoot), local.Settings.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase)),
-            ReadEnvironment(provenance),
+            ReadEnvironment(provenance, launch),
         ];
     }
 
@@ -599,10 +602,12 @@ internal static class SecurityPolicyConfigurationLoader
             ? MutationApprovalPolicy.ReviewAll : left == MutationApprovalPolicy.ReviewRisky || right == MutationApprovalPolicy.ReviewRisky
                 ? MutationApprovalPolicy.ReviewRisky : MutationApprovalPolicy.AlwaysTrustRepo;
 
-    private static Source ReadEnvironment(List<PolicyInputSource> provenance)
+    private static IConfigurationRoot ReadLaunchConfiguration(IConfigurationSource? launchSource) =>
+        new ConfigurationBuilder().Add(launchSource ?? new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_")).Build();
+
+    private static Source ReadEnvironment(List<PolicyInputSource> provenance, IConfiguration configuration)
     {
         // Only these exact existing launch inputs are authority; arbitrary new environment keys are not grants.
-        var configuration = new ConfigurationBuilder().Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_")).Build();
         var values = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
         var runtimeOverrides = configuration.GetSection("tools:runtime:byTool").GetChildren().ToArray();
         if (runtimeOverrides.Length > 0)

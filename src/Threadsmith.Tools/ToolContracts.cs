@@ -633,6 +633,14 @@ public sealed record ToolInvocationResult
     /// <summary>Authoritative execution-boundary duration.</summary>
     public TimeSpan Duration { get; init; }
 
+    /// <summary>Action-level refusal or uncertainty even if returning the structured result succeeded.</summary>
+    [JsonIgnore]
+    internal ToolErrorClassification ActionFailure { get; init; }
+
+    /// <summary>Whether a batch invocation began sending the script to its worker.</summary>
+    [JsonIgnore]
+    internal bool ScriptDispatched { get; init; }
+
     /// <summary>Conservative host observation boundary, before execution and its lifecycle notifications.</summary>
     [JsonIgnore]
     internal DateTimeOffset? ObservationStartedAt { get; init; }
@@ -787,6 +795,10 @@ public sealed record ToolExecutionContext(
     /// <summary>Captured scripting input, excluded from durable and model output.</summary>
     [JsonIgnore]
     internal PreparedCSharpScriptSource? PreparedScriptSource { get; init; }
+
+    /// <summary>Records when the script may have reached the worker.</summary>
+    [JsonIgnore]
+    internal Action? MarkScriptDispatched { get; init; }
 
     /// <summary>Binds one admission to this exact execution context.</summary>
     internal void AdmitSecretReferences(ITool tool, object input, IReadOnlySet<string> references)

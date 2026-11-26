@@ -302,10 +302,12 @@ public static partial class Plan80ActiveTurnContinuationTests
 
     /// <summary>The summary headroom check applies the existing delivered-result reducer before rejecting capacity.</summary>
     [Theory]
-    [InlineData(0)]
-    [InlineData(8192)]
-    public static async Task Summary_continuation_headroom_uses_delivered_result_capacity_fallback(int additionalPromptCharacters)
+    [InlineData(0, false)]
+    [InlineData(8192, false)]
+    [InlineData(0, true)]
+    public static async Task Summary_continuation_headroom_uses_delivered_result_capacity_fallback(int additionalPromptCharacters, bool replaceGoal)
     {
+        var ct = TestContext.Current.CancellationToken;
         var prompts = TestPromptLoader.Instance.WithPrompt(
             PromptFileNames.SystemRepositoryInspection,
             TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)
@@ -320,7 +322,7 @@ public static partial class Plan80ActiveTurnContinuationTests
             var budget = new ExecutionBudget(new BudgetDimensions(
                 1_000_000,
                 100,
-                TimeSpan.FromMinutes(2)));
+                TimeSpan.MaxValue));
             var registry = new ToolRegistry(
                 [new VariableDeterministicOutputTool()]);
             var pipeline = new ToolInvocationPipeline(
@@ -352,11 +354,12 @@ public static partial class Plan80ActiveTurnContinuationTests
             var recentResultTokens = TokenEstimator.Estimate(JsonSerializer.Serialize(
                 new TestDeterministicOutput(new string('y', 2_500))));
 
-            // Fit the retained results, but require reduction when summary and exchange framing
-            // are added. Prompt growth changes the envelope allowance, not payload headroom.
+            // The fallback cases fit the results but not the added summary framing. The goal
+            // case needs capacity for the preserved goal context and the next request's reply.
+            var goalContextHeadroom = replaceGoal ? 512 : 0;
             var profile = measurementProfile with
             {
-                ContextWindow = envelopeTokens + largeResultTokens + recentResultTokens
+                ContextWindow = envelopeTokens + largeResultTokens + recentResultTokens + goalContextHeadroom
                     + measurementProfile.EffectiveRequestOutputTokenReserve,
             };
             var assembler = CreateAssembler(
@@ -367,7 +370,11 @@ public static partial class Plan80ActiveTurnContinuationTests
                     new InMemoryModelPreferenceSnapshotProvider()),
                 sanitizer,
                 prompts);
-            var model = new ToolsThenTextProvider { ToolRounds = 3 };
+            var model = new ToolsThenTextProvider
+            {
+                ToolRounds = 3,
+                FinalText = replaceGoal ? "All requested work is complete." : "Inspection complete.",
+            };
             var policy = new ActiveTurnCompactionPolicy
             {
                 PressureTargetPercent = 70,
@@ -376,6 +383,8 @@ public static partial class Plan80ActiveTurnContinuationTests
                 MaximumRenderedSummaryCharacters = 256,
                 MinimumSavingsTokens = 1,
                 RetainedRecentTokens = 800,
+                // A goal-only prefix cannot save tokens; reassess once a tool group is eligible.
+                FailureBackoffRounds = replaceGoal ? 0 : 2,
             };
             var candidateProvider = new RequestCandidateProvider();
             var compactor = new ActiveTurnCompactor(
@@ -406,13 +415,39 @@ public static partial class Plan80ActiveTurnContinuationTests
                 correctiveMessages: new CorrectiveMessageFactory(prompts),
                 prompts: prompts);
             var dispatcher = new CommandDispatcher([application]);
-            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-fallback"));
-            var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."));
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-fallback"), ct);
+            const string original = "Check the original fixture";
+            const string replacement = "Check the replacement fixture";
+            if (replaceGoal)
+            {
+                await dispatcher.DispatchAsync(new SessionGoalCommand(sessionId, SessionGoalAction.Set, original), ct);
+                model.BeforeReplyAsync = async (request, token) =>
+                {
+                    if (model.Requests.Count == 4)
+                    {
+                        var inspection = assembler.GetInspection(request.RunId)?.ActiveTurnCompaction;
+                        Assert.True(request.Messages.Any(message => message.SectionId == "active-turn-summary"), $"Expected an applied summary: {inspection?.Status}, {inspection?.Rationale}");
+                        Assert.Contains(request.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(original, StringComparison.Ordinal));
+                        await dispatcher.DispatchAsync(new SessionGoalCommand(sessionId, SessionGoalAction.Set, replacement), token);
+                    }
+                };
+            }
 
-            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."), ct);
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), ct));
             Assert.NotEmpty(candidateProvider.Requests);
-            Assert.Equal(4, model.Requests.Count);
+            Assert.Equal(replaceGoal ? 5 : 4, model.Requests.Count);
+            if (replaceGoal)
+            {
+                var final = model.Requests[^1];
+                Assert.Contains(final.Messages, message => message.SectionId == "active-turn-summary");
+                Assert.Contains(final.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(replacement, StringComparison.Ordinal));
+                Assert.DoesNotContain(final.Messages, message => message.GetModelVisibleContent().Contains(original, StringComparison.Ordinal));
+                return;
+            }
+
             Assert.Equal(
                 ActiveTurnCompactionInspectionStatus.EmergencyReduction,
                 assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
@@ -1253,6 +1288,10 @@ public static partial class Plan80ActiveTurnContinuationTests
 
         public string? Commentary { get; init; }
 
+        public string FinalText { get; init; } = "Inspection complete.";
+
+        public Func<ModelStreamRequest, CancellationToken, Task>? BeforeReplyAsync { get; set; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -1260,6 +1299,11 @@ public static partial class Plan80ActiveTurnContinuationTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
+            if (BeforeReplyAsync is { } beforeReply)
+            {
+                await beforeReply(request, cancellationToken);
+            }
+
             if (Requests.Count <= ToolRounds)
             {
                 if (Commentary is not null)
@@ -1280,7 +1324,7 @@ public static partial class Plan80ActiveTurnContinuationTests
 
             yield return new ModelChunk
             {
-                Text = "Inspection complete.",
+                Text = FinalText,
                 Usage = new ModelUsage(10, 5),
                 FinishReason = ModelFinishReason.Stop,
             };

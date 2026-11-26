@@ -57,6 +57,14 @@ internal sealed partial class TuiKitSurface
             cancellationToken);
     }
 
+    /// <summary>Renders an isolated output-pane snapshot on the workspace owner.</summary>
+    internal async Task<CellBuffer> CaptureOutputAsync(Size size, CancellationToken cancellationToken)
+    {
+        var cells = new CellBuffer(size.Width, size.Height);
+        await EnqueueAsync(() => _outputPane.Render(new BufferSurface(cells)), cancellationToken);
+        return cells;
+    }
+
     private static Rect ComposerScreenRect(Rect region)
     {
         var content = WorkspaceLayout.ComposerContent(new Size(region.Width, region.Height));
@@ -256,6 +264,9 @@ internal sealed partial class TuiKitSurface
             var content = buffer.CreateView(WorkspaceLayout.OutputContent(surface.Size));
             _owner.SelectedTranscript.ToolActivities = _owner.Agents.Selected.Snapshot?.ToolActivities
                 ?? _owner._toolActivities;
+            _owner.SelectedTranscript.GoalActivityFrame = _owner.Agents.Selected.Snapshot is null && _owner._activity is { GoalAssessmentId: not null } assessment
+                ? _owner.FormatActivityFrame(assessment)
+                : null;
             _owner.SelectedTranscript.Render(content);
             NotificationOverlay.Render(content, _owner._app.Notifications, _owner._app.NowMilliseconds, _owner.ResolveOutputStyle);
             _activity.Draw(buffer.CreateView(WorkspaceLayout.OutputNotice(surface.Size)), 0, 0, _owner.ActivityText(), _owner.ResolveOutputStyle(PresentationTextRole.Status));

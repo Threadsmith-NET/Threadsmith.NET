@@ -48,6 +48,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
     private readonly Dictionary<long, string> _disclosureLines = [];
     private string? _focusedDisclosure;
     private long _activityTick;
+    private int _transcriptStartRow;
     private int _activityTop;
     private int _activityBottom;
     private int _width;
@@ -87,11 +88,26 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             ReprojectForWidth(topId);
         }
 
-        var notice = Evicted > 0 ? 1 : 0;
-        var availableActivityRows = Math.Max(0, surface.Size.Height - notice - 1);
+        var notice = Evicted > 0 && (GoalActivityFrame is null || surface.Size.Height > 2) ? 1 : 0;
+        _transcriptStartRow = notice;
+        var availableActivityRows = Math.Max(0, surface.Size.Height - notice - (GoalActivityFrame is null ? 1 : 2));
         var activityRows = (int)Math.Min(ToolActivities.Sum(activity => 2L + activity.ToolProgress.Count), availableActivityRows);
-        _height = Math.Max(1, surface.Size.Height - notice - activityRows);
-        _top = AtBottom ? Math.Max(0, _rows.Count - _height) : Math.Min(_top, Math.Max(0, _rows.Count - _height));
+        var rowCount = _rows.Count;
+        var goalRows = 0;
+        if (GoalActivityFrame is not null)
+        {
+            while (rowCount > 0 && _rows[rowCount - 1].Line.Text.Length == 0)
+            {
+                rowCount--;
+            }
+
+            var remaining = surface.Size.Height - notice - activityRows;
+            goalRows = remaining >= 3 ? 2 : Math.Min(1, remaining);
+        }
+
+        var transcriptRows = surface.Size.Height - notice - activityRows - goalRows;
+        _height = Math.Max(1, transcriptRows);
+        _top = AtBottom ? Math.Max(0, rowCount - _height) : Math.Min(_top, Math.Max(0, rowCount - _height));
         if (_clearBeforeId is { } clearBefore)
         {
             var firstNew = _rows.FindIndex(row => row.Line.Id >= clearBefore);
@@ -105,7 +121,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
         var hasSelection = _anchor is not null && _end is not null;
         var (first, last) = OrderedSelection();
-        for (var index = _top; index < Math.Min(_rows.Count, _top + _height); index++)
+        for (var index = _top; index < Math.Min(rowCount, _top + transcriptRows); index++)
         {
             var row = _rows[index];
             var selected = hasSelection && row.Line.Id >= first.Line && row.Line.Id <= last.Line;
@@ -120,8 +136,17 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         var tick = Environment.TickCount64 / 250;
         var advance = tick != _activityTick;
         _activityTick = tick;
-        var activityRow = notice + Math.Min(_height, Math.Max(0, _rows.Count - _top));
+        var activityRow = notice + Math.Min(transcriptRows, Math.Max(0, rowCount - _top));
         _activityTop = activityRow;
+        if (GoalActivityFrame is { } goalFrame && goalRows > 0)
+        {
+            activityRow += goalRows;
+            if (activityRow <= surface.Size.Height)
+            {
+                _activityHeader.Draw(surface, 0, activityRow - 1, goalFrame, ResolveStyle(PresentationTextRole.Status));
+            }
+        }
+
         _activityBottom = activityRow + activityRows;
         var visibleTools = Math.Min(ToolActivities.Count, activityRows);
         for (var index = 0; index < visibleTools; index++)
@@ -279,7 +304,7 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
             return false;
         }
 
-        var clickedRow = _top + mouse.Y - (Evicted > 0 ? 1 : 0);
+        var clickedRow = TranscriptRowAt(mouse.Y);
         if (mouse.Kind == MouseEventKind.Press && mouse.Modifiers == KeyModifiers.None
             && clickedRow >= _top && clickedRow < Math.Min(_rows.Count, _top + _height)
             && HitDisclosure(_rows[clickedRow], mouse.X) is { } disclosure)
@@ -299,6 +324,9 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
 
         return true;
     }
+
+    /// <summary>Gets or sets the current goal spinner frame without retaining it in the transcript.</summary>
+    internal string? GoalActivityFrame { get; set; }
 
     /// <summary>Gets or sets the transient tool blocks rendered after visible output without retaining timer frames.</summary>
     internal IReadOnlyList<InteractionActivity> ToolActivities { get; set; } = [];
@@ -732,9 +760,11 @@ internal sealed partial class TranscriptView : IWidget, IFocusable, IMouseAware
         return glyphs;
     }
 
+    private int TranscriptRowAt(int surfaceRow) => _top + surfaceRow - _transcriptStartRow;
+
     private void MoveSelectionEnd(MouseEvent mouse)
     {
-        var row = _rows[Math.Clamp(_top + mouse.Y - (Evicted > 0 ? 1 : 0), 0, _rows.Count - 1)];
+        var row = _rows[Math.Clamp(TranscriptRowAt(mouse.Y), 0, _rows.Count - 1)];
         var offset = row.Start;
         var column = _fencedRows.TryGetValue(row.Line.Id, out var frame) && frame.Part == 1 && frame.DecorationCharacters == 0
             ? UnicodeWidth.GetWidth(frame.Prefix) + 2 : 0;

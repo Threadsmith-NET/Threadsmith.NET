@@ -373,12 +373,13 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         var admittedAt = _timeProvider.GetUtcNow();
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var tasks = new List<Task<ToolBatchResult>>(requests.Count);
+        var admission = new BatchAdmission();
         var previousWave = Task.CompletedTask;
         foreach (var wave in waves)
         {
             var prerequisite = previousWave;
 #pragma warning disable VSTHRD003 // The batch owns and joins every prerequisite wave; these are context-free scheduling dependencies.
-            var waveTasks = wave.Select(planned => InvokeAfterWaveAsync(planned, prerequisite, usePreparedSnapshot, admittedAt, batchCancellation)).ToArray();
+            var waveTasks = wave.Select(planned => InvokeAfterWaveAsync(planned, prerequisite, usePreparedSnapshot, admittedAt, admission, batchCancellation)).ToArray();
 #pragma warning restore VSTHRD003
             tasks.AddRange(waveTasks);
 
@@ -412,7 +413,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
     }
 
     private async Task<ToolBatchResult> InvokeAfterWaveAsync(
-        PlannedToolInvocation planned, Task prerequisite, bool usePreparedSnapshot, DateTimeOffset admittedAt, CancellationTokenSource batchCancellation)
+        PlannedToolInvocation planned, Task prerequisite, bool usePreparedSnapshot, DateTimeOffset admittedAt, BatchAdmission admission, CancellationTokenSource batchCancellation)
     {
         var readyRegistration = planned.PreparationError is null ? planned.Registration : null;
         var invocation = usePreparedSnapshot
@@ -450,9 +451,12 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             // Handle cancellation below even if it races a completed or expired prerequisite.
         }
 
-        if (batchCancellation.IsCancellationRequested)
+        var blockedByScriptTimeout = prerequisite.IsCompletedSuccessfully && admission.ScriptTimedOut;
+        if (batchCancellation.IsCancellationRequested || blockedByScriptTimeout)
         {
-            const string reason = "Skipped because the tool batch was cancelled.";
+            var reason = blockedByScriptTimeout
+                ? "Not started because an earlier script timed out and its outcome is unknown."
+                : "Skipped because the tool batch was cancelled.";
             var invocationId = ToolInvocationId.New();
             ToolInvocationResult skipped;
             if (planned.Registration is { Tool.Definition.SideEffect: ToolSideEffect.WritesExternalData } registration)
@@ -485,13 +489,19 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         var result = await InvokeCoreAsync(invocation, planned.PreparationError, usePreparedSnapshot ? readyRegistration : null, returnCancellationResult: true, admittedAt, batchCancellation.Token);
+        if (completion.ScriptDispatched && result.ErrorClassification == ToolErrorClassification.Timeout)
+        {
+            // Script calls are exclusive waves. Set the barrier before their wave completes.
+            admission.ScriptTimedOut = true;
+        }
+
         if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
             && result.Suspension is null && !result.Succeeded && result.ErrorClassification != ToolErrorClassification.Cancelled)
         {
             await batchCancellation.CancelAsync();
         }
 
-        return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, result);
+        return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, result with { ScriptDispatched = completion.ScriptDispatched });
     }
 
     private static DateTimeOffset? AdmissionDeadline(ToolDefinition? definition, DateTimeOffset admittedAt)
@@ -1051,6 +1061,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 executionContext = executionContext with
                 {
                     PreparedScriptSource = prepared,
+                    MarkScriptDispatched = request.Completion is { } scriptCompletion ? () => scriptCompletion.ScriptDispatched = true : null,
                     Invocation = request.Context with { ScriptHandlers = CreateScriptHandlers(request, scriptSources) },
                 };
 
@@ -1255,6 +1266,12 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
                 ToolInvocationId = invocationId,
                 ToolId = tool.Definition.Id,
                 Succeeded = succeeded,
+                ActionFailure = execution.Value switch
+                {
+                    ProcessExecutionResult { TimedOut: true } or ValidationToolResult { TimedOut: true } or TargetedTestResult { TimedOut: true } or SourceEditReceipt { Status: SourceEditStatus.RecoveryRequired } => ToolErrorClassification.Timeout,
+                    SourceEditReceipt { Status: SourceEditStatus.Denied } => ToolErrorClassification.ApprovalDenied,
+                    _ => classification,
+                },
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
                 RetainedEvidenceContent = execution.RetainedEvidenceContent is { Length: <= ConversationReceiptChecks.MaximumEvidenceBytes } retained
@@ -1678,5 +1695,12 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             },
             storageBinding: request.StorageBinding,
             cancellationToken: CancellationToken.None);
+    }
+
+    /// <summary>Admission barrier shared by the prerequisite waves of one batch.</summary>
+    private sealed class BatchAdmission
+    {
+        /// <summary>Gets or sets whether a preceding exclusive script wave timed out after dispatch.</summary>
+        internal bool ScriptTimedOut { get; set; }
     }
 }

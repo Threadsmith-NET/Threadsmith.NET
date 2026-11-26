@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.RegularExpressions;
 using Threadsmith.Core;
+using Threadsmith.Policies.Contracts;
 
 /// <summary>Input for bounded repository file listing.</summary>
 public sealed record ListFilesInput : IConceptToolInput
@@ -1527,7 +1528,8 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024) with { VisibleToScriptingHost = true };
+            256 * 1024) with
+        { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }
@@ -1612,7 +1614,8 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(30),
-            256 * 1024) with { VisibleToScriptingHost = true };
+            256 * 1024) with
+        { VisibleToScriptingHost = true };
         _semanticEngine = semanticEngine;
         _limits = limits ?? ToolLimits.Default;
     }

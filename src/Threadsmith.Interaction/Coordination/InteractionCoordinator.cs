@@ -586,6 +586,9 @@ public sealed partial class InteractionCoordinator
                                     turnStart,
                                     _displayOptions.ShowOperationDurations,
                                     _timeProvider),
+                            GoalAssessmentActivity { Started: true } assessment => new InteractionActivity(
+                                "Checking continuation", _timeProvider.GetTimestamp(), false, _timeProvider)
+                            { GoalAssessmentId = assessment.AttemptId },
                             ActiveTurnCompactionStarted started => new InteractionActivity(
                                 FormatActiveTurnCompactionActivity(started),
                                 _timeProvider.GetTimestamp(),
@@ -711,7 +714,8 @@ public sealed partial class InteractionCoordinator
                         || (domainEvent is ModelReasoningObserved && streamThinking && !retainActivityDuringOutput)
                         || directFetchApprovalRequested
                         || directFetchApprovalDenied
-                        || domainEvent is ActiveTurnCompactionCompleted;
+                        || domainEvent is ActiveTurnCompactionCompleted
+                        || (domainEvent is GoalAssessmentActivity { Started: false } ended && nextActivity?.GoalAssessmentId == ended.AttemptId);
                     if (incomingActivity is not null)
                     {
                         nextActivity = incomingActivity;
@@ -1726,7 +1730,16 @@ public sealed partial class InteractionCoordinator
                     }
                 }
 
-                if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
+                if (TryGetCommandArgument(commandText, "/goal", out var goalArgument))
+                {
+                    if (!await HandleGoalCommandAsync(sessionId, goalArgument, lifetime.Token))
+                    {
+                        continue;
+                    }
+
+                    submittedText = "continue";
+                }
+                else if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
                 {
                     await _surface.WriteAsync(
                         $"Unknown command: {commandText}. Enter /help for commands.\n",
@@ -1830,10 +1843,20 @@ public sealed partial class InteractionCoordinator
                                                 continue;
                                             }
 
+                                            if (TryGetCommandArgument(steeringCommand, "/goal", out var activeGoalArgument))
+                                            {
+                                                if (await HandleGoalCommandAsync(sessionId, activeGoalArgument, operation.Token))
+                                                {
+                                                    break;
+                                                }
+
+                                                continue;
+                                            }
+
                                             if (steeringCommand.StartsWith('/'))
                                             {
                                                 await _surface.WriteAsync(
-                                                    "Only /agents inspection or cancellation is available while steering is paused.\n",
+                                                    "Use /agents or /goal while steering is paused.\n",
                                                     PresentationTextRole.Warning,
                                                     operation.Token);
                                                 continue;
@@ -2339,10 +2362,9 @@ public sealed partial class InteractionCoordinator
         ArgumentNullException.ThrowIfNull(started);
         return string.Format(
             CultureInfo.InvariantCulture,
-            "COMPACTING CONTEXT: {0:N0} tokens; target {1:N0}; profile {2:D}",
+            "COMPACTING CONTEXT: {0:N0} tokens; pressure threshold {1:N0}",
             started.BeforeInputTokens,
-            started.PressureTargetTokens,
-            started.CandidateProfileId.Value);
+            started.PressureTargetTokens);
     }
 
     /// <summary>Formats one bounded active-turn completion notice with no summary or tool content.</summary>
@@ -2387,7 +2409,7 @@ public sealed partial class InteractionCoordinator
             ? string.Empty
             : $"  active-turn {activeTurn.Status}: input {activeTurn.BeforeInputTokens}"
                 + (activeTurn.AfterInputTokens is { } afterTokens ? $" -> {afterTokens}" : string.Empty)
-                + $"; target/max {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
+                + $"; pressure threshold/max input {activeTurn.PressureTargetTokens}/{activeTurn.MaximumInputTokens}; "
                 + $"reserve {activeTurn.OutputReserveTokens}; retention target effective/configured "
                 + $"{activeTurn.EffectiveRetentionTargetTokens}/{activeTurn.ConfiguredRetentionTargetTokens}; "
                 + "groups eligible/compacted/retained "
@@ -2676,6 +2698,31 @@ public sealed partial class InteractionCoordinator
             $"code_explore output inspection is {(snapshot.InspectCodeExploreOutput ? "on" : "off")} for this session.\n",
             PresentationTextRole.Status,
             cancellationToken);
+    }
+
+    private async Task<bool> HandleGoalCommandAsync(SessionId sessionId, string argument, CancellationToken cancellationToken)
+    {
+        var command = GoalCommandParser.Parse(sessionId, argument);
+        if (command is null)
+        {
+            await _surface.WriteAsync($"Usage: {GoalCommandParser.Usage}\n", PresentationTextRole.Warning, cancellationToken);
+            return false;
+        }
+
+        try
+        {
+            var result = await _presenter.ManageGoalAsync(command, cancellationToken);
+            var status = result.DisplayText is { } text
+                ? $"Current goal: {text}"
+                : result.WasCancelled ? "Goal cancelled." : "No active goal.";
+            await _surface.WriteAsync(status + "\n", PresentationTextRole.Status, cancellationToken);
+            return command.Action == SessionGoalAction.Set;
+        }
+        catch (InvalidOperationException exception)
+        {
+            await _surface.WriteAsync(FormatStatusError(exception) + "\n", PresentationTextRole.Error, cancellationToken);
+            return false;
+        }
     }
 
     private static bool TryGetCommandArgument(

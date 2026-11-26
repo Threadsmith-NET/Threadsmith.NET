@@ -6,6 +6,22 @@ internal sealed class RunCancellationLifetime : IDisposable
     private readonly Lock _cancellationGate = new();
     private int _activeCancellations;
     private bool _disposalRequested;
+    private bool _terminalCommitted;
+
+    /// <summary>Commits a terminal result only while cancellation has not been admitted.</summary>
+    public bool TryCommitTerminal(Func<bool> commit)
+    {
+        lock (_cancellationGate)
+        {
+            if (_disposalRequested || _activeCancellations != 0 || Source.IsCancellationRequested || _terminalCommitted || !commit())
+            {
+                return false;
+            }
+
+            _terminalCommitted = true;
+            return true;
+        }
+    }
 
     /// <summary>Initializes a new instance of the <see cref="RunCancellationLifetime"/> class.</summary>
     internal RunCancellationLifetime(CancellationTokenSource source)
@@ -21,7 +37,7 @@ internal sealed class RunCancellationLifetime : IDisposable
     {
         lock (_cancellationGate)
         {
-            if (_disposalRequested)
+            if (_disposalRequested || _terminalCommitted)
             {
                 return false;
             }

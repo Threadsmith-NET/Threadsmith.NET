@@ -56,6 +56,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(RunTransitioned), "runTransitioned")]
 [JsonDerivedType(typeof(RunTransitionFailed), "runTransitionFailed")]
 [JsonDerivedType(typeof(ModelOutputObserved), "modelOutputObserved")]
+[JsonDerivedType(typeof(GoalAssessmentActivity), "goalAssessmentActivity")]
 [JsonDerivedType(typeof(ModelReasoningObserved), "modelReasoningObserved")]
 [JsonDerivedType(typeof(ConversationMessageArchived), "conversationMessageArchived")]
 [JsonDerivedType(typeof(ConversationModeChanged), "conversationModeChanged")]
@@ -209,6 +210,20 @@ public sealed record ModelFallbackSelected(
     string SelectedModelName,
     bool Persisted,
     string? PersistenceDiagnostic = null) : DomainEvent(SessionId, OccurredAt);
+
+/// <summary>Marks the start or end of one tool-free foreground goal assessment.</summary>
+public sealed record GoalAssessmentActivity(SessionId SessionId, DateTimeOffset OccurredAt, RunId RunId, long GoalRevision, Guid AttemptId, bool Started)
+    : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Receiving assessment profile, when resolved.</summary>
+    public ModelProfileId? ProfileId { get; init; }
+
+    /// <summary>Work continuations already admitted for the active run.</summary>
+    public int Continuations { get; init; }
+
+    /// <summary>Validated verdict, Interrupted or Failed; never model-authored free text.</summary>
+    public string? Outcome { get; init; }
+}
 
 /// <summary>An active-turn candidate operation began under host-owned pressure policy.</summary>
 public sealed record ActiveTurnCompactionStarted(
@@ -1038,6 +1053,7 @@ public static class DomainEventJson
             ["runSteeringPauseRequested"] = typeof(RunSteeringPauseRequested),
             ["runSteeringPaused"] = typeof(RunSteeringPaused),
             ["runSteeringSubmitted"] = typeof(RunSteeringSubmitted),
+            ["goalAssessmentActivity"] = typeof(GoalAssessmentActivity),
             ["runCompleted"] = typeof(RunCompleted),
         };
 

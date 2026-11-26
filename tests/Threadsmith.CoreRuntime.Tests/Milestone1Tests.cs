@@ -3729,6 +3729,7 @@ public static partial class Milestone1Tests
             new RunTransitioned(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.EvidenceCollection),
             new RunTransitionFailed(sessionId, occurredAt, RunId.New(), RunPhase.Intake, RunPhase.Testing, "reason"),
             new ModelOutputObserved(sessionId, occurredAt, "text"),
+            new GoalAssessmentActivity(sessionId, occurredAt, RunId.New(), 1, Guid.NewGuid(), true),
             new ModelReasoningObserved(sessionId, occurredAt, "reasoning text"),
             new ConversationMessageArchived(
                 sessionId,

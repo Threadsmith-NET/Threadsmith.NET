@@ -4,6 +4,14 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
+## Scenario SC-GOAL-01 — Continue after a premature answer
+
+1. Set a goal and have the worker reply that it finished all requested work. With the standalone closing sentence `All requested work is complete.`, expect the answer once, a cleared goal, and no further model call. A free-form completion report also clears the goal. The tool-free continuation check sees only the worker's reply, within the receiving profile's budget.
+2. Have the worker say it still has a requested step it can perform now. Expect one continuation notice and another work round in the same run. Repeat with the standalone sentence `Requested work remains.` and confirm it continues directly. An ordinary final answer, an optional follow-up suggestion, or a question requiring user input ends the loop.
+3. Deliver a new actionable edit diagnostic while the worker writes its closing answer. Confirm the worker receives it before the goal can close. If the model-round limit prevents delivery, the goal pauses and the resumed worker receives the diagnostic. Repeat with a clean report and with an analyzer that finishes by repeating a finding the worker already saw. In both cases the closing answer ends the goal.
+4. Hold a free-form status check open. Complete the same goal in another run, or replace it while the old check is settling. The old run must observe the retired revision and discard its obsolete result or failure. Confirm the replacement goal can proceed.
+5. Compact a tool-heavy run and confirm the worker still receives the current user goal and its matching host instructions. Cancel or replace the goal and repeat. The old objective must not return. A cutoff, user stop, or exhausted continuation limit leaves the goal available to resume.
+
 ## Scenario SC-SCRIPT-FILE-01 — Script file input
 
 1. Run inline expression and statement source. Repeat each by returned absolute `ScriptPath` and bare filename, resending the required kind. Each call returns a distinct execution copy without shared variables.

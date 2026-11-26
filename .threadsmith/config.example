@@ -352,11 +352,6 @@
       "recentTurnCount": 12,
       "recentTurnMaximumAge": "7.00:00:00",
       "compactionPressurePercent": 75
-    },
-    // Phase-specific evidence inclusion toggles (plan-09 §14).
-    "phases": {
-      "RepositoryDiscovery": { "includeSemanticFacts": true },
-      "ChangePlanning": { "includeEvidence": true, "includeDiagnostics": false }
     }
   },
 
@@ -661,7 +656,7 @@
         "timeout_ms": "30000",
         "max_output_bytes": "65536",
         "assembly_config_action": "merge",
-        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography"
+        "allowed_assemblies": "System.Linq,System.Collections,System.Collections.Generic,System.Text,System.Text.Json,System.Text.RegularExpressions,System.Security.Cryptography"
       }
     }
   },
@@ -713,6 +708,9 @@
   "execution": {
     // Optional model continuation-round cutoff. 0 disables the separate cutoff.
     "maxModelRounds": 0,
+    // Automatic goal continuations per run. 0 disables them. Repository and session
+    // preferences can only lower the trusted user/machine limit (default: 10).
+    "maxGoalContinuations": 10,
     // Active-turn corrective attempts for recoverable malformed or invalid
     // model-authored requests before the host fails closed.
     "maxCorrectiveTurns": 3,

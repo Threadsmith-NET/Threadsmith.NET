@@ -67,7 +67,7 @@ The model supplies tool names and JSON arguments only. It cannot provide claims,
 }
 ```
 
-The host clamps concurrency to 1–16. `CompleteStarted` lets admitted siblings finish independently. `CancelBatchOnFailure` links sibling cancellation after the first terminal failure. Set `enabled` to false to reproduce sequential execution for diagnosis.
+The host clamps concurrency to 1–16. `CompleteStarted` lets admitted siblings finish independently. `CancelBatchOnFailure` links sibling cancellation after the first terminal failure. Set `enabled` to false to reproduce sequential execution for diagnosis. In either mode, if a script times out after it may have reached the worker, tools still waiting behind it are not started. The script's effects are not rolled back.
 
 ## Watching a batch
 

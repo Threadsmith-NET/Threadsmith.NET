@@ -97,6 +97,10 @@ public sealed record ModelStreamRequest
     [JsonIgnore]
     public Action? SubmissionObserver { get; init; }
 
+    /// <summary>Yield rather than retry or repair an unconfirmed tool stream during automatic goal work.</summary>
+    [JsonIgnore]
+    public bool StopOnUnconfirmedToolStream { get; init; }
+
     /// <summary>Host preference for displayable reasoning on this request; null retains legacy behavior.</summary>
     [JsonIgnore]
     public bool? IncludeReasoningText { get; init; }
@@ -531,6 +535,9 @@ public sealed class MalformedInvocationException : MalformedModelOutputException
 /// <summary>Exception representing a non-transient model-provider rejection.</summary>
 public sealed class ModelProviderException : Exception
 {
+    /// <summary>True only for a confirmed output limit with no pending tool action.</summary>
+    public bool IsTextOutputLimit { get; init; }
+
     /// <summary>Initializes a new instance of the <see cref="ModelProviderException"/> class.</summary>
     public ModelProviderException()
     {

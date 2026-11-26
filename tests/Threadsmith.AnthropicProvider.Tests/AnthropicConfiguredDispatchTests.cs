@@ -8,9 +8,12 @@ public sealed class AnthropicConfiguredDispatchTests
 {
     /// <summary>Only the request admitted by preparation can activate credentials and submit through the SDK.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task StreamAsync_PreparedRequest_ChecksDigestBeforeSecretAndSubmission(bool changeRequest)
+    [InlineData(false, null)]
+    [InlineData(true, null)]
+    [InlineData(false, "text-limit")]
+    [InlineData(false, "tool-limit")]
+    [InlineData(false, "interrupted-tool")]
+    public async Task StreamAsync_PreparedRequest_ChecksAdmissionAndFinishClassification(bool changeRequest, string? cutoff)
     {
         var profile = TestAnthropic.Profile();
         var configuration = new AnthropicProviderConfiguration
@@ -39,7 +42,13 @@ public sealed class AnthropicConfiguredDispatchTests
         var catalog = new EffectiveModelProviderCatalog(
             new ModelProviderCatalogConfiguration { Providers = [configuration], DefaultProviderId = configuration.Id, DefaultModelId = profile.Id },
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
-        var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
+        var handler = new TestAnthropicHandler(cutoff switch
+        {
+            "interrupted-tool" => TestAnthropic.ToolStream(messageStop: false),
+            "tool-limit" => TestAnthropic.ToolStream("{", stopReason: "max_tokens"),
+            "text-limit" => TestAnthropic.TextStream().Replace("end_turn", "max_tokens", StringComparison.Ordinal),
+            _ => TestAnthropic.TextStream(),
+        });
         using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
         var secretResolutions = 0;
         var submissions = 0;
@@ -52,7 +61,7 @@ public sealed class AnthropicConfiguredDispatchTests
             return Task.FromResult<string?>("resolved-fixture-key");
         },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
-        var admitted = provider.Prepare(TestAnthropic.Request() with { SubmissionObserver = () => submissions++ });
+        var admitted = provider.Prepare(TestAnthropic.Request() with { StopOnUnconfirmedToolStream = cutoff is not null, SubmissionObserver = () => submissions++, Tools = [TestAnthropic.Tool()] });
         Assert.NotNull(admitted.Preparation);
         Assert.True(admitted.Preparation.RequiresInitialInstructionPrefix);
         var digest = admitted.Preparation.WireDigest;
@@ -63,6 +72,13 @@ public sealed class AnthropicConfiguredDispatchTests
             Assert.Equal(0, secretResolutions);
             Assert.Equal(0, submissions);
             Assert.Empty(handler.Requests);
+        }
+        else if (cutoff is not null)
+        {
+            var error = await Assert.ThrowsAsync<ModelProviderException>(() => TestAnthropic.CollectAsync(provider, admitted, TestContext.Current.CancellationToken));
+            Assert.Equal(cutoff == "text-limit", error.IsTextOutputLimit);
+            Assert.Equal(1, submissions);
+            Assert.Single(handler.Requests);
         }
         else
         {

@@ -41,6 +41,41 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
+    /// <summary>Catalog support alone must not select priority on the wire.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ServiceTierRequiresOptInEvenWhenAdvertised(bool requestPriority)
+    {
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("data: {\"type\":\"response.completed\",\"response\":{}}\n", Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token", requestPriority: requestPriority, advertisedTier: "priority");
+        var cancellationToken = TestContext.Current.CancellationToken;
+
+        await provider.StreamAsync(CreateStreamRequest(), cancellationToken).ToListAsync(cancellationToken);
+
+        using var payload = JsonDocument.Parse(handler.RequestBody!);
+        Assert.Equal(requestPriority, payload.RootElement.TryGetProperty("service_tier", out var tier));
+        if (requestPriority)
+        {
+            Assert.Equal("priority", tier.GetString());
+        }
+    }
+
+    /// <summary>An unsupported opt-in must not submit a normal request instead.</summary>
+    [Fact]
+    public async Task Provider_ServiceTierRejectsUnsupportedPriorityBeforeSending()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("Unexpected submission."));
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(() => CreateProviderAsync(handler, "token", requestPriority: true));
+
+        Assert.Contains("does not advertise priority", error.Message, StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
     /// <summary>Response body timeout failures remain distinct from explicit caller cancellation.</summary>
     [Theory]
     [InlineData(false)]
@@ -190,7 +225,7 @@ public sealed class Plan50OpenAiCodexTests
         var cache = new OpenAiCodexCatalogCache(path);
         var configuration = await new OpenAiCodexCatalogClient(
             new HttpClient(new RecordingHandler(_ => JsonResponse(
-                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000}]}")))
+                "{\"models\":[{\"slug\":\"dynamic\",\"display_name\":\"Dynamic\",\"context_window\":128000,\"service_tiers\":[{\"id\":\"priority\"}]}]}")))
             { Timeout = Timeout.InfiniteTimeSpan },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
@@ -200,15 +235,21 @@ public sealed class Plan50OpenAiCodexTests
             await cache.SaveAsync(configuration, TestContext.Current.CancellationToken);
             var loaded = await cache.LoadAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal("dynamic", Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(loaded?.Models ?? [])).ModelId);
+            var discovered = Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(loaded?.Models ?? []));
+            Assert.Equal("dynamic", discovered.ModelId);
+            Assert.True(discovered.SupportsPriorityTier);
             Assert.DoesNotContain("not-a-jwt", await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), StringComparison.Ordinal);
             using var payload = JsonDocument.Parse(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
             Assert.Equal(3, payload.RootElement.GetProperty("SchemaVersion").GetInt32());
             Assert.Equal("dynamic", payload.RootElement.GetProperty("Models")[0].GetProperty("ModelId").GetString());
 
-            var replacement = configuration with { Models = [configuration.Models[0] with { Name = "Replacement" }] };
+            var replacement = configuration with { Models = [discovered with { Name = "Replacement", SupportsPriorityTier = false }] };
             await cache.SaveAsync(replacement, TestContext.Current.CancellationToken);
-            Assert.Equal("Replacement", Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models).Name);
+            var refreshed = Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models));
+            Assert.Equal("Replacement", refreshed.Name);
+            Assert.False(refreshed.SupportsPriorityTier);
+            await cache.SaveAsync(configuration, TestContext.Current.CancellationToken);
+            Assert.True(Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single((await cache.LoadAsync(TestContext.Current.CancellationToken))!.Models)).SupportsPriorityTier);
 
             var previous = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
             using var canceled = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
@@ -618,6 +659,35 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("Capacity detail for [REDACTED]" + Environment.NewLine + "Code: invalid_request · Parameter: input", exception.Message);
     }
 
+    /// <summary>Distinguishes a confirmed text cutoff from an uncertain tool response.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("response.function_call_arguments.delta")]
+    [InlineData("response.custom_tool_call_input.delta")]
+    public async Task IncompleteOutputLimitClassifiesOnlyText(string? pendingToolEvent)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var stream = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n"
+            + (pendingToolEvent is null ? string.Empty : $"data: {JsonSerializer.Serialize(new { type = pendingToolEvent, delta = "{" })}\n\n")
+            + "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "fixture");
+        var chunks = new List<ModelChunk>();
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), token))
+            {
+                chunks.Add(chunk);
+            }
+        });
+        Assert.Equal(pendingToolEvent is null, error.IsTextOutputLimit);
+        Assert.Contains(chunks, chunk => chunk.Text == "partial");
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null);
+    }
+
     /// <summary>A configured byte limit rejects oversized output independently of the model token ceiling.</summary>
     [Fact]
     public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
@@ -662,10 +732,16 @@ public sealed class Plan50OpenAiCodexTests
     }
 
     /// <summary>Rejected output still reports consumed tokens before enforcing the configured profile maximum.</summary>
-    [Fact]
-    public async Task Provider_ReportedOutputTokensRespectProfileMaximum()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ReportedOutputTokensRespectProfileMaximum(bool incomplete)
     {
-        const string stream = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":5}}}\n\n";
+        const string text = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+        const string usageJson = "\"usage\":{\"input_tokens\":3,\"output_tokens\":5}";
+        var stream = incomplete
+            ? text + "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}," + usageJson + "}}\n\n"
+            : "data: {\"type\":\"response.completed\",\"response\":{" + usageJson + "}}\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
@@ -687,7 +763,10 @@ public sealed class Plan50OpenAiCodexTests
         });
 
         Assert.Contains("profile output-token maximum", exception.Message, StringComparison.Ordinal);
-        var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks).Usage);
+        Assert.False(exception.IsTextOutputLimit);
+        var usageChunk = Assert.Single(chunks, chunk => chunk.Usage is not null);
+        Assert.Equal(incomplete, usageChunk.IsInterruptedUsage);
+        var usage = Assert.IsType<ModelUsage>(usageChunk.Usage);
         Assert.Equal(3, usage.InputTokens);
         Assert.Equal(5, usage.OutputTokens);
     }
@@ -1255,6 +1334,47 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(attempts, submissions);
     }
 
+    /// <summary>Tool fragments fence an attempt before the provider can release an invocation.</summary>
+    [Theory]
+    [InlineData("eof")]
+    [InlineData("transport")]
+    [InlineData("overloaded")]
+    public async Task Provider_UnconfirmedToolStopsRetryBeforeVisibleOutput(string failure)
+    {
+        const string partial = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"inspect_file\",\"arguments\":\"{}\"}}\n\n";
+        const string overloaded = "data: {\"type\":\"error\",\"error\":{\"code\":\"overloaded_error\",\"message\":\"retry later\"}}\n\n";
+        var attempts = 0;
+        var handler = new RecordingHandler(_ => ++attempts == 1
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = failure switch
+                {
+                    "transport" => new StreamContent(new InterruptedResponseStream(Encoding.UTF8.GetBytes(partial))),
+                    "overloaded" => new StringContent(partial + overloaded),
+                    _ => new StringContent(partial),
+                },
+            }
+            : StreamingResponse());
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 2, Delay = TimeSpan.Zero, BusyTimeout = TimeSpan.FromSeconds(2) },
+        });
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var request = CreateStreamRequest() with { StopOnUnconfirmedToolStream = true };
+        var observed = new List<ModelChunk>();
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(request, cancellationToken))
+            {
+                observed.Add(chunk);
+            }
+        });
+        Assert.Contains("unconfirmed tool batch", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.RequestCount);
+        Assert.DoesNotContain(observed, chunk => chunk.Output is not null);
+    }
+
     /// <summary>A partial response cannot be accepted or replayed into the same consumer.</summary>
     [Theory]
     [InlineData(false)]
@@ -1403,7 +1523,9 @@ public sealed class Plan50OpenAiCodexTests
         string accessToken,
         Func<string, CancellationToken, Task<string?>>? refreshAccessTokenAsync = null,
         int contextWindow = 128_000,
-        Func<ModelProfile, ModelProfile>? configureProfile = null)
+        Func<ModelProfile, ModelProfile>? configureProfile = null,
+        bool requestPriority = false,
+        string advertisedTier = "default")
     {
         var catalogJson = JsonSerializer.Serialize(new
         {
@@ -1414,6 +1536,7 @@ public sealed class Plan50OpenAiCodexTests
                     slug = "dynamic",
                     display_name = "Dynamic",
                     context_window = contextWindow,
+                    service_tiers = new[] { new { id = advertisedTier } },
                 },
             },
         });
@@ -1421,7 +1544,7 @@ public sealed class Plan50OpenAiCodexTests
             new HttpClient(new RecordingHandler(_ => JsonResponse(catalogJson))) { Timeout = Timeout.InfiniteTimeSpan },
             timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
-        var registration = new OpenAiCodexProviderRegistration();
+        var registration = new OpenAiCodexProviderRegistration { RequestPriorityTier = requestPriority };
         var profile = Assert.Single(registration.CreateProfiles(configuration)) with
         {
             Timeout = TimeSpan.Zero,

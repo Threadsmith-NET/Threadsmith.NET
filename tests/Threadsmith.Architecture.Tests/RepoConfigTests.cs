@@ -127,7 +127,7 @@ public static class RepoConfigTests
         Assert.Equal(30000, config.GetValue("tools:config:csharp_script:timeout_ms", 0));
         Assert.Equal(65536, config.GetValue("tools:config:csharp_script:max_output_bytes", 0));
         Assert.Equal(
-            "System.Linq,System.Collections,System.Collections.Generic,System.Text.Json,System.Security.Cryptography",
+            PermissionConfiguration.ToolsConfigCsharpScriptSettings.DefaultAllowedAssemblies,
             config["tools:config:csharp_script:allowed_assemblies"]);
     }
 
@@ -146,6 +146,7 @@ public static class RepoConfigTests
     {
         var config = LoadConfigExample();
         Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, config.GetValue("execution:maxModelRounds", 0));
+        Assert.Equal(ExecutionLimits.DefaultMaxGoalContinuations, config.GetValue("execution:maxGoalContinuations", 0));
         Assert.Null(config["execution:maxPlanningToolRounds"]);
         Assert.Equal(3, config.GetValue("execution:maxCorrectiveTurns", 0));
         Assert.Equal(32, config.GetValue("agents:queueCapacity", 0));
@@ -247,6 +248,7 @@ public static class RepoConfigTests
                 .Build();
             // The scaffold carries the documented defaults, so the catalog keys bind.
             Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, scaffolded.GetValue("execution:maxModelRounds", 0));
+            Assert.Equal(ExecutionLimits.DefaultMaxGoalContinuations, scaffolded.GetValue("execution:maxGoalContinuations", 0));
             Assert.Null(scaffolded["execution:maxPlanningToolRounds"]);
             Assert.Null(scaffolded["execution:mutationBatching:targetMutations"]);
             Assert.Null(scaffolded["execution:mutationBatching:targetFiles"]);

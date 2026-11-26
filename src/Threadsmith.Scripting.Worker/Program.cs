@@ -15,6 +15,7 @@ using Threadsmith.Core;
 /// <summary>Reads one bounded script request from standard input and writes one JSON result.</summary>
 public static class Program
 {
+    private const string _textNamespace = "System.Text";
     private const string _cryptographyNamespace = "System.Security.Cryptography";
     private static readonly JsonSerializerOptions RequestJsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly string[] _prohibitedNamespacePrefixes =
@@ -64,6 +65,7 @@ public static class Program
         ScriptTools? tools = null;
         var maximumFinalBytes = 4096;
         ScriptWorkerResult result;
+        var deadlineToken = CancellationToken.None;
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -83,6 +85,7 @@ public static class Program
 
             var scope = request.FileScope ?? throw new InvalidOperationException("Scratchpad file authority is required.");
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(request.TimeoutMilliseconds));
+            deadlineToken = deadline.Token;
             maximumFinalBytes = checked((request.MaximumOutputBytes * 6) + 4096);
             tools = new ScriptTools(request.Available, input, outputPipe, deadline.Token);
             var globals = new ScriptGlobals(scope, tools, deadline.Token);
@@ -172,7 +175,7 @@ public static class Program
 
                     if (namespaceName.StartsWith("System.", StringComparison.Ordinal)
                         && !request.AllowedAssemblies.Any(allowed => namespaceName.Equals(allowed, StringComparison.Ordinal)
-                            || namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal)
+                            || (allowed != _textNamespace && namespaceName.StartsWith(allowed + ".", StringComparison.Ordinal))
                             || (symbol is INamespaceSymbol && allowed.StartsWith(namespaceName + ".", StringComparison.Ordinal))))
                     {
                         throw new InvalidOperationException(
@@ -212,6 +215,13 @@ public static class Program
                 null,
                 (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue),
                 truncated);
+        }
+        catch (OperationCanceledException) when (deadlineToken.IsCancellationRequested)
+        {
+            result = new ScriptWorkerResult(false, null, "The script execution deadline expired.", (int)Math.Min(stopwatch.ElapsedMilliseconds, int.MaxValue), false)
+            {
+                TimedOut = true,
+            };
         }
         catch (CompilationErrorException exception)
         {
@@ -287,6 +297,12 @@ public static class Program
                 throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
             }
 
+            // System.Text is an exact namespace import from the core library, not a separate assembly.
+            if (assemblyName == _textNamespace)
+            {
+                continue;
+            }
+
             var referenceName = assemblyName;
             string? assemblyPath;
             while (!platformAssemblies.TryGetValue(referenceName, out assemblyPath))
@@ -332,5 +348,8 @@ public static class Program
         string? Output,
         string? Error,
         int ExecutionMs,
-        bool IsTruncated);
+        bool IsTruncated)
+    {
+        public bool TimedOut { get; init; }
+    }
 }

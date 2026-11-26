@@ -143,6 +143,8 @@ The lead reads the joined specialist results and writes the report using the mod
 
 ## What to expect in the report
 
+The main prompt requests a **Generated at:** line above the Summary in both saved and inline reports. It shows the current UTC date and time from `datetime` just before delivery, or **Unavailable** if the tool cannot supply it.
+
 The shipped main prompt requests these seven sections:
 
 | Section | Expected content |
@@ -159,7 +161,7 @@ A failed specialist should be identified along with the missing coverage; an inc
 
 ### Where the report goes
 
-If the invoking repository already contains an `.inbox` directory and `write_file` is available, the prompt directs the lead to save the full Markdown as a unique `.inbox/review-<timestamp>.md` file. Create `.inbox` before starting if you want file output, and ensure the ordinary write-tool configuration allows it. The response should include the verdict, coverage/failure summary, and a link to the saved report.
+If the invoking repository already contains an `.inbox` directory and `write_file` is available, the prompt directs the lead to save the full Markdown as a unique `.inbox/review-<timestamp>.md` file, using a unique non-time suffix if the timestamp is unavailable. Create `.inbox` before starting if you want file output, and ensure the ordinary write-tool configuration allows it. The response should include the verdict, coverage/failure summary, and a link to the saved report.
 
 Otherwise, the full report is returned to the window. A failed save should also fall back to the window and explain the failure. Manual invocation displays the skill response; natural-language invocation returns it to the calling model as a tool result for its answer.
 

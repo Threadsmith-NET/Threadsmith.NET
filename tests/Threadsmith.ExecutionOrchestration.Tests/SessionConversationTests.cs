@@ -33,13 +33,14 @@ public sealed partial class SessionConversationTests
 
         public ConceptMemory Memory { get; }
 
-        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches, bool intelligenceOnly = false, IHookCoordinator? hooks = null)
+        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches, bool intelligenceOnly = false, IHookCoordinator? hooks = null, SessionModelPreferences? preferences = null)
         {
             var ct = TestContext.Current.CancellationToken;
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(directory);
             var connectionString = $"Data Source={Path.Combine(directory, "state.db")};Pooling=False";
-            var events = new DomainEventStream();
+            var clock = new FakeTimeProvider();
+            var events = new DomainEventStream(timeProvider: clock);
             var sanitizer = new SecretOutputSanitizer();
             await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(ct);
             var artifacts = new ArtifactStore(connectionString, Path.Combine(directory, "artifacts"), sanitizer);
@@ -70,7 +71,7 @@ public sealed partial class SessionConversationTests
                 events,
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
-                timeProvider: new FakeTimeProvider(DateTimeOffset.UtcNow));
+                timeProvider: clock);
             var application = new SessionApplication(
                 events,
                 provider,
@@ -91,13 +92,15 @@ public sealed partial class SessionConversationTests
                 contextAssembler: assembler,
                 evidenceStore: evidence,
                 toolRegistry: registry,
+                sessionPreferences: preferences,
                 conversationStore: store,
                 hooks: hooks,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance,
                 repositoryMemories: memory,
                 repositoryMemoryOptions: memory,
-                repositoryIntelligence: memory);
+                repositoryIntelligence: memory,
+                outputClock: clock);
             var dispatcher = new CommandDispatcher([application]);
             var session = await dispatcher.DispatchAsync(new CreateSessionCommand("memory replay"), ct);
             return new(directory, events, dispatcher, session, memory);

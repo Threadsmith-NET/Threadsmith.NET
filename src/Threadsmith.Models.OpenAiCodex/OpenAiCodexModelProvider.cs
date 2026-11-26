@@ -576,10 +576,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     {
                         // Completed requests consume tokens even when their output is rejected.
                         yield return new ModelChunk { Usage = usage };
-                        if (usage.OutputTokens > maximumOutputTokens)
-                        {
-                            throw new ModelProviderException("The Codex response usage exceeded the configured profile output-token maximum.");
-                        }
+                        EnforceProfileOutputLimit(usage);
                     }
 
                     // Completed response output is authoritative when supplied; added/delta events
@@ -648,7 +645,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 case "error":
                     {
                         var errorRoot = root.TryGetProperty("response", out var failedResponse) && failedResponse.ValueKind == JsonValueKind.Object ? failedResponse : root;
-                        if (TryReadFailedUsage(root) is { } failedUsage)
+                        var failedUsage = TryReadFailedUsage(root);
+                        if (failedUsage is not null)
                         {
                             yield return new ModelChunk { Usage = failedUsage, IsInterruptedUsage = true };
                         }
@@ -664,6 +662,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                             && GetString(details, "reason") == "max_output_tokens"
                             && (output.ValueKind is JsonValueKind.Undefined or JsonValueKind.Array))
                         {
+                            EnforceProfileOutputLimit(failedUsage);
                             throw new ModelProviderException("Codex reached the text output limit.") { IsTextOutputLimit = true };
                         }
 
@@ -677,6 +676,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
                         throw new ModelProviderException(ProviderErrorDetails.PreferMessage(ProviderErrorDetails.Format(errorRoot, accessToken), "The Codex Responses stream reported a provider error."));
                     }
+            }
+        }
+
+        void EnforceProfileOutputLimit(ModelUsage? usage)
+        {
+            if (usage?.OutputTokens > maximumOutputTokens)
+            {
+                throw new ModelProviderException("The Codex response usage exceeded the configured profile output-token maximum.");
             }
         }
 

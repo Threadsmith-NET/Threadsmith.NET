@@ -258,13 +258,18 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
         };
         var requestJson = JsonSerializer.Serialize(workerRequest);
         var launch = CreateLaunchRequest();
+        var scriptDispatched = false;
         var result = await _processManager.RunAsync(
             launch with
             {
                 ToolInvocationId = context.ToolInvocationId,
                 RunId = context.RunId,
                 ScriptWorker = worker,
-                MarkScriptDispatched = context.MarkScriptDispatched,
+                MarkScriptDispatched = () =>
+                {
+                    scriptDispatched = true;
+                    context.MarkScriptDispatched?.Invoke();
+                },
                 ScriptHandlers = context.Invocation.ScriptHandlers ?? new Dictionary<string, Func<string, CancellationToken, Task<ScriptToolReply>>>(),
                 WorkingDirectory = scope.ScratchpadPath,
                 EnvironmentVariables = ScriptFilePolicy.TemporaryEnvironment(scope.ScratchpadPath, scope.RepositoryPath),
@@ -276,10 +281,13 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine, IAsyncDisposable
             cancellationToken);
         if (result.TimedOut)
         {
+            var error = scriptDispatched
+                ? $"Script execution exceeded {timeoutMilliseconds} ms and the worker was terminated."
+                : "The worker timed out before the script was dispatched.";
             return new CSharpScriptOutput(
                 false,
                 null,
-                $"Script execution exceeded {timeoutMilliseconds} ms and the worker was terminated.",
+                error,
                 (int)Math.Min(result.Duration.TotalMilliseconds, int.MaxValue),
                 false)
             { ScriptPath = scriptPath, TimedOut = true };
@@ -428,10 +436,6 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
 
         var kind = Enum.Parse<ScriptKind>(input.Kind, ignoreCase: true);
         var output = await _engine.ExecuteAsync(source.Code, kind, context, cancellationToken);
-        if (output.TimedOut)
-        {
-            context.MarkScriptDispatched?.Invoke();
-        }
 
         var sources = new List<ToolProvenanceSource>();
         if (source.SourcePath is { } original)

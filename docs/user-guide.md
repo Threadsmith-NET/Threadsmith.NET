@@ -301,7 +301,7 @@ After required startup choices, the TUI paints the startup modal before loading 
 
 ### Session goals
 
-Use `/goal set "Describe the parser and identify its tests"` to set a goal and start work. The quotes are required. Use `\"` for a literal quote. Setting another goal replaces the first. `/goal` shows the current goal; `/goal cancel` clears it. Neither command calls a model.
+Use `/goal set "Describe the parser and identify its tests"` to set a goal and start work. The quotes are required. Use `\"` for a literal quote and `\\` for a literal backslash, including at the end of the goal. A single backslash before any other character stays literal. Setting another goal replaces the first. `/goal` shows the current goal; `/goal cancel` clears it. Neither command calls a model.
 
 If you stop the turn, the goal stays active. Use `/goal` to check it, then submit `continue` as ordinary input. All three goal commands also work in the steering composer. A successful `/goal set` there resumes the same run with the new objective; it does not submit steering text. URLs in a goal use the normal inline approval path. A goal belongs to this live session, not to a clone or an application restart.
 

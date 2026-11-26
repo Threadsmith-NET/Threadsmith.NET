@@ -13,12 +13,13 @@ using Xunit;
 /// <summary>Checks the result classification consumed by the conversation loop.</summary>
 public static class CSharpScriptToolOutcomeTests
 {
-    /// <summary>A worker timeout is an unknown action outcome, not an ordinary script error.</summary>
+    /// <summary>Timeouts pause the goal, but only a dispatched script can have unknown effects.</summary>
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    [InlineData(false, false)]
-    public static async Task GoalPausesOnlyForUnconfirmedScriptOutcome(bool timedOut, bool parallel)
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    public static async Task GoalDistinguishesScriptTimeoutsBeforeAndAfterDispatch(bool timedOut, bool dispatched, bool parallel)
     {
         var ct = TestContext.Current.CancellationToken;
         var clock = new FakeTimeProvider();
@@ -26,7 +27,7 @@ public static class CSharpScriptToolOutcomeTests
         var prompts = TestPromptLoader.Instance;
         var sanitizer = new SecretOutputSanitizer();
         var sibling = new SiblingEdit();
-        var registry = new ToolRegistry([new CSharpScriptTool(new FailedWorker(timedOut), prompts), sibling]);
+        var registry = new ToolRegistry([new CSharpScriptTool(new FailedWorker(timedOut, dispatched), prompts), sibling]);
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, timeProvider: clock, parallelOptions: new ToolParallelOptions { Enabled = parallel });
         var repository = Path.GetTempPath();
         var context = new ToolInvocationContext
@@ -63,8 +64,16 @@ public static class CSharpScriptToolOutcomeTests
         if (timedOut)
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => done.WaitAsync(ct));
-            Assert.Contains("the outcome of csharp_script", error.Message, StringComparison.Ordinal);
-            Assert.Contains("is unknown", error.Message, StringComparison.Ordinal);
+            Assert.Contains("csharp_script", error.Message, StringComparison.Ordinal);
+            if (dispatched)
+            {
+                Assert.Contains("is unknown", error.Message, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("no script was dispatched", error.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("Inspect its effects", error.Message, StringComparison.Ordinal);
+            }
         }
         else
         {
@@ -72,7 +81,7 @@ public static class CSharpScriptToolOutcomeTests
         }
 
         Assert.Equal(timedOut ? 1 : 2, model.Requests);
-        Assert.Equal(timedOut ? 0 : 1, sibling.Executions);
+        Assert.Equal(timedOut && dispatched ? 0 : 1, sibling.Executions);
         var status = await dispatcher.DispatchAsync(new SessionGoalCommand(session, SessionGoalAction.Show), ct);
         Assert.Equal(timedOut ? goal : null, status.DisplayText);
     }
@@ -120,15 +129,26 @@ public static class CSharpScriptToolOutcomeTests
     private sealed class FailedWorker : ICSharpScriptEngine
     {
         private readonly bool _timedOut;
+        private readonly bool _dispatched;
 
-        internal FailedWorker(bool timedOut)
+        internal FailedWorker(bool timedOut, bool dispatched)
         {
             _timedOut = timedOut;
+            _dispatched = dispatched;
         }
 
         public Task<CSharpScriptOutput> ExecuteAsync(string code, ScriptKind kind, ToolExecutionContext context, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (_dispatched)
+            {
+                context.MarkScriptDispatched?.Invoke();
+            }
+            else
+            {
+                throw new TimeoutException("No fresh scripting worker became available.");
+            }
+
             return Task.FromResult(new CSharpScriptOutput(false, null, "Script failed.", 0, false) { TimedOut = _timedOut });
         }
     }

@@ -637,6 +637,10 @@ public sealed record ToolInvocationResult
     [JsonIgnore]
     internal ToolErrorClassification ActionFailure { get; init; }
 
+    /// <summary>Whether a batch invocation began sending the script to its worker.</summary>
+    [JsonIgnore]
+    internal bool ScriptDispatched { get; init; }
+
     /// <summary>Conservative host observation boundary, before execution and its lifecycle notifications.</summary>
     [JsonIgnore]
     internal DateTimeOffset? ObservationStartedAt { get; init; }

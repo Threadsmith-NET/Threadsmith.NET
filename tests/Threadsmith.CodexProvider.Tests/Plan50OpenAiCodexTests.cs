@@ -732,10 +732,16 @@ public sealed class Plan50OpenAiCodexTests
     }
 
     /// <summary>Rejected output still reports consumed tokens before enforcing the configured profile maximum.</summary>
-    [Fact]
-    public async Task Provider_ReportedOutputTokensRespectProfileMaximum()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ReportedOutputTokensRespectProfileMaximum(bool incomplete)
     {
-        const string stream = "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":3,\"output_tokens\":5}}}\n\n";
+        const string text = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n";
+        const string usageJson = "\"usage\":{\"input_tokens\":3,\"output_tokens\":5}";
+        var stream = incomplete
+            ? text + "data: {\"type\":\"response.incomplete\",\"response\":{\"incomplete_details\":{\"reason\":\"max_output_tokens\"}," + usageJson + "}}\n\n"
+            : "data: {\"type\":\"response.completed\",\"response\":{" + usageJson + "}}\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
@@ -757,7 +763,10 @@ public sealed class Plan50OpenAiCodexTests
         });
 
         Assert.Contains("profile output-token maximum", exception.Message, StringComparison.Ordinal);
-        var usage = Assert.IsType<ModelUsage>(Assert.Single(chunks).Usage);
+        Assert.False(exception.IsTextOutputLimit);
+        var usageChunk = Assert.Single(chunks, chunk => chunk.Usage is not null);
+        Assert.Equal(incomplete, usageChunk.IsInterruptedUsage);
+        var usage = Assert.IsType<ModelUsage>(usageChunk.Usage);
         Assert.Equal(3, usage.InputTokens);
         Assert.Equal(5, usage.OutputTokens);
     }

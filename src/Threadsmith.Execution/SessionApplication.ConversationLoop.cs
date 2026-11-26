@@ -1745,6 +1745,7 @@ public sealed partial class SessionApplication
                 streamState.PolicyBlocked |= failure == ToolErrorClassification.PolicyDenied;
                 pauseReason ??= failure switch
                 {
+                    ToolErrorClassification.Timeout or ToolErrorClassification.Cancelled when result.ToolId == "csharp_script" && !result.ScriptDispatched => $"Goal paused: {result.ToolId} ({result.ToolInvocationId.Value}) did not start; no script was dispatched. The goal remains active.",
                     ToolErrorClassification.Timeout or ToolErrorClassification.Cancelled => $"Goal paused: the outcome of {result.ToolId} ({result.ToolInvocationId.Value}) is unknown. Inspect its effects before resuming.",
                     ToolErrorClassification.ApprovalDenied or ToolErrorClassification.DirectAuthorizationRequired => $"Goal paused: {result.ToolId} was not authorized. The goal remains active.",
                     _ => null,

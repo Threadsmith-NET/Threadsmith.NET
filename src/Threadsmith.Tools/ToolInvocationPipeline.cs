@@ -501,7 +501,7 @@ public sealed partial class ToolInvocationPipeline : IToolInvocationPipeline
             await batchCancellation.CancelAsync();
         }
 
-        return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, result);
+        return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, result with { ScriptDispatched = completion.ScriptDispatched });
     }
 
     private static DateTimeOffset? AdmissionDeadline(ToolDefinition? definition, DateTimeOffset admittedAt)

@@ -62,6 +62,18 @@ public static class SessionGoalCommandTests
         Assert.Null(GoalCommandParser.Parse(SessionId.New(), argument));
     }
 
+    /// <summary>A trailing escaped backslash is literal and does not consume the closing quote.</summary>
+    [Fact]
+    public static void QuotedGoalAcceptsTrailingBackslash()
+    {
+        const string input = """
+            /goal set "Inspect C:\src\\"
+            """;
+        Assert.True(InteractiveCommandRouter.TryParse(input, out var invocation));
+        var command = GoalCommandParser.Parse(SessionId.New(), invocation!.Argument);
+        Assert.Equal(@"Inspect C:\src\", command?.Text);
+    }
+
     /// <summary>Escaped quotes count once against the decoded input limit.</summary>
     [Fact]
     public static void LengthLimitAppliesToDecodedTextWithoutTruncation()

@@ -5,6 +5,7 @@ using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Themes;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
+using TUIKit.Input;
 using TUIKit.Testing;
 using Xunit;
 
@@ -69,6 +70,13 @@ public static class GoalIndicatorTests
         var rows = Snapshot.ToText(cells).Split('\n');
         Assert.Equal("Answer", rows[0].Trim());
         Assert.Equal("| Checking continuation", rows[1].Trim());
+
+        view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 0, 0, KeyModifiers.None, 1));
+        view.HandleMouse(new(MouseEventKind.Release, MouseButton.Left, 6, 0, KeyModifiers.None, 1));
+        Assert.Equal("Answer", view.SelectedText());
+        view.HandleMouse(new(MouseEventKind.Press, MouseButton.Left, 0, 1, KeyModifiers.None, 1));
+        Assert.Equal("Answer", view.SelectedText());
+
         view.GoalActivityFrame = null;
         view.Render(surface);
         Assert.Contains("Older visible output omitted", Snapshot.ToText(cells), StringComparison.Ordinal);

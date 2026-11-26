@@ -48,7 +48,7 @@ internal static class GoalCommandParser
                 return string.IsNullOrWhiteSpace(goal) ? null : new(sessionId, SessionGoalAction.Set, goal);
             }
 
-            if (value == '\\' && quoted[i + 1] == '"')
+            if (value == '\\' && quoted[i + 1] is '"' or '\\')
             {
                 value = quoted[++i];
             }

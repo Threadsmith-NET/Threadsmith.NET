@@ -153,18 +153,19 @@ public static class AnthropicConversationLoopTests
         AssertSignedReplay(harness.Handler.Requests[1]);
     }
 
-    /// <summary>Goal-only steering retires queued work and preserves native replay when a replacement continues.</summary>
+    /// <summary>Changing the goal retires queued tools and invalidates replay from the superseded objective.</summary>
     [Theory]
     [InlineData(null)]
     [InlineData("Inspect the parser instead.")]
     public static async Task GoalChangeBeforeToolsDiscardsNativeBatchWithoutSteering(string? replacement)
     {
         const string commentary = "Starting the inspection.";
-        const string callId = "wire_retired";
+        const string originalGoal = "Inspect the repository.";
+        const string wireCallId = "wire_retired";
         var ct = TestContext.Current.CancellationToken;
         await using var harness = new NativeLoopHarness(
-            ToolStream([(callId, "deterministic_output", "{\"sequence\":1}")], commentary),
-            TextStream("All requested work is complete.")) { Goal = "Inspect the repository." };
+            ToolStream([(wireCallId, "deterministic_output", "{\"sequence\":1}")], commentary),
+            TextStream("All requested work is complete.")) { Goal = originalGoal };
         var paused = new TaskCompletionSource<RunSteeringPauseRequestResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.OnEvent = item =>
         {
@@ -198,15 +199,26 @@ public static class AnthropicConversationLoopTests
             return;
         }
 
-        var replay = Assert.Single(harness.Model.Requests.Skip(1));
-        Assert.Single(replay.Messages, message => message.GetModelVisibleContent() == commentary);
-        Assert.DoesNotContain(replay.Messages, message => message.SectionId == "run-user-steering");
-        Assert.Contains(replay.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(replacement, StringComparison.Ordinal));
-        var result = Assert.Single(replay.Messages, message => message.Role == ModelMessageRole.Tool);
+        var continuation = Assert.Single(harness.Model.Requests.Skip(1));
+        Assert.Single(continuation.Messages, message => message.GetModelVisibleContent() == commentary);
+        Assert.DoesNotContain(continuation.Messages, message => message.SectionId == "run-user-steering");
+        Assert.Contains(continuation.Messages, message => message.SectionId == "session-goal" && message.GetModelVisibleContent().Contains(replacement, StringComparison.Ordinal));
+        var result = Assert.Single(continuation.Messages, message => message.Role == ModelMessageRole.Tool);
         Assert.True(result.IsError);
         Assert.Contains("cancelledByGoalChange", result.GetModelVisibleContent(), StringComparison.Ordinal);
-        AssertRejectedResults(harness.Handler.Requests[1], [callId]);
-        AssertSignedReplay(harness.Handler.Requests[1]);
+
+        // Removing the delivered goal invalidates its signed prefix. The historical exchange uses host IDs on both sides.
+        Assert.False(harness.Model.HadReplay[1]);
+        var wireRequest = harness.Handler.Requests[1];
+        Assert.DoesNotContain(originalGoal, wireRequest.GetRawText(), StringComparison.Ordinal);
+        var blocks = wireRequest.GetProperty("messages").EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray()).ToArray();
+        Assert.DoesNotContain(blocks, block => block.GetProperty("type").GetString() is "thinking" or "redacted_thinking");
+        var toolUse = Assert.Single(blocks, block => block.GetProperty("type").GetString() == "tool_use");
+        var hostCallId = Assert.IsType<string>(result.ToolCallId);
+        Assert.NotEqual(wireCallId, hostCallId);
+        Assert.Equal(hostCallId, toolUse.GetProperty("id").GetString());
+        AssertRejectedResults(wireRequest, [hostCallId]);
     }
 
     /// <summary>Canonical commentary participates in native history binding but is emitted only once on the wire.</summary>

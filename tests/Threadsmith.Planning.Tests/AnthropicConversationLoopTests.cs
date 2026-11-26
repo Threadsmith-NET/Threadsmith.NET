@@ -165,7 +165,10 @@ public static class AnthropicConversationLoopTests
         var ct = TestContext.Current.CancellationToken;
         await using var harness = new NativeLoopHarness(
             ToolStream([(wireCallId, "deterministic_output", "{\"sequence\":1}")], commentary),
-            TextStream("All requested work is complete.")) { Goal = originalGoal };
+            TextStream("All requested work is complete."))
+        {
+            Goal = originalGoal,
+        };
         var paused = new TaskCompletionSource<RunSteeringPauseRequestResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         harness.OnEvent = item =>
         {

@@ -15,7 +15,7 @@ Threadsmith.NET has adopted the Contributor Covenant. Contributors, maintainers,
 3. For a feature, explain the user problem, the proposed behavior, important safety or compatibility constraints, and any alternatives considered.
 4. Never include credentials, access tokens, private repository content, or other secrets in an issue, log, fixture, or screenshot.
 
-Threadsmith is a governed coding harness: the host owns trust, approval, mutation, validation, and durable-state boundaries. Proposals should preserve those boundaries and the dependency rules documented in the source repository's [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
+Threadsmith is a governed coding harness: the host owns trust, approval, mutation, validation, and durable-state boundaries. Asynchronous compiler and analyzer feedback is a core, differentiating feature. Proposals should preserve those boundaries and the dependency rules documented in the source repository's [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md).
 
 ## Local development
 
@@ -116,7 +116,7 @@ Use small, isolated unit tests for business rules, validation, mapping, and stat
 
 Every test case must finish in under 60 seconds. CI fails when a completed test reaches that limit in its xUnit report. Rework or remove slow tests. Keep live provider checks and other integration scenarios out of automated test discovery.
 
-Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test.
+Tests must follow [G-24](docs/guardrails/portable-csharp-guardrails.md#g-24-arrange-act-assert): no runner-speed-dependent outcomes, arbitrary wall-clock budgets, or sleeps for ordering. Check inherited service/SDK deadlines as well as explicit waits. Use completion signals, barriers, and controllable clocks; take snapshots only at a safe ownership boundary. Increasing timeouts or retrying until green does not resolve a flaky test. Prefer focused, high-signal tests and shun fragile, complex fixtures. 
 
 Before submitting new or changed tests, review these sources of local/CI differences:
 
@@ -189,7 +189,7 @@ Maintainers may request changes to preserve host authority, repository containme
 
 AI-assisted contributions are welcome, but the person submitting a change remains responsible for it. Review and understand all submitted code, documentation, tests, and generated artifacts, and be prepared to explain the design and implementation choices during review.
 
-Do not submit unattended, entirely model-generated pull requests that you have not examined and validated. AI tools should accelerate informed engineering rather than replace contributor ownership. Contributors without the experience needed to assess a generated code change are still welcome to submit bug reports and feature ideas.
+Do not submit unattended, entirely model-generated pull requests that you have not examined and validated. AI tools should accelerate, extend and enhance informed engineering rather than replace contributor ownership. Contributors without the experience needed to assess a generated code change are still welcome to submit bug reports and feature ideas.
 
 ## License
 

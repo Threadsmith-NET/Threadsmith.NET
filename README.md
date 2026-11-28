@@ -18,16 +18,18 @@ Threadsmith is designed for unfamiliar or large C# solutions, multi-project chan
 - **Transactional mutation** — proposed changes are confined to permitted paths, staged, shown as exact diffs, authorized under host policy, and applied transactionally with source preconditions and committed-byte verification.
 - **Asynchronous compiler and analyzer feedback** — Roslyn, MSBuild, and. NET analyzers are integrated into the loop, providing as much or as little feedback to the model as you want, as early as possible. Many issues are detected and corrected before the first build. Uses analyzer and .editorconfig setting directly from your project, so the model receives the same feedback you receive in the IDE. Amazing! 
 - **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
-- **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts. Interface with remote or local models. Full-featuted Codex, Anthropic, Open Router, and generic OpenAI-compatible providers already integrated, including full Codex auth flow. Ollama, vLLM, sglang, llama.cpp all supported. 
+- **Replaceable integrations** — model providers, extensions, MCP, hooks, embeddings generation, Roslyn, and terminal libraries remain behind host-owned contracts. Interface with remote or local models. Full-featuted Codex, Anthropic, Open Router, and generic OpenAI-compatible providers already integrated, including full Codex auth flow. Ollama, vLLM, sglang, llama.cpp all supported. 
 - **Advanced Context Management** — context is aggressively managed to avoid unnecessary growth, allowing for long work sessions without ever having to compact the context window. Prior-turn tool result receipts and cross-turn, session-scoped recall ability of tool results keep old information out of the context but make it available on request to the model if needed. Enjoy a visual context viewer to easy see what's taking up space, in detail. 
 - **Private** — Use any model provider you want or run completely local. No external logging or telemetry, ever.
 - **Native Skills** — Next-level skills! Create native Threadsmith skills that run in a clean context with host-enforced input and output schemas, as well as access to skill-specific tools, packaged C# scripts, and more!
 - **Advanced C# Scripting Host Tool** Models can leverage high-performance pools of scripting hosts that provide bounded, in memory sub-second scripting capabilities. Scripts are saved in the scratchpad for the session duration and can reused by the model. Or shipped in your repo. Or packaged with a native skill. Even better - scripts have access to whatever tools you want to enable for them, allowing for powerful scripts that can chain multiple tool invocations in code, on the fly - avoiding unnecessary round trips and token burn. True next-level capability!
 - **Advanced Command Policy System** authorize explicitly in as much or as little detail as you want, which commands you want to be available via the run_process tool. Threadsmith even includes a native skill that will help you create the validated policy JSON to put into your user configuration. Everything from "allow nothing" to "YOLO" and everything in between. It's your workstation and it's completely up to you.
 - **It's Good to Have Goals** The /goal command to set a goal for a turn and the host will check that the goal is achieved - and if not, instruct the model to continue working until the goal is reached or definitively cannot be met. Very helpful for pesky models that just stop working for no discernible reason, despite specific instructions to the contrary.
-- **It's Good to Have Goals** Mem
+- ** Memories ** Memory tool allows the model to remember and recall both repository preferences and situational memories. Memories are reconciled before addition to update existing memories if the addition replaces or modifies an existing memory. Threadsmith ships with high-performance embeddings model and cross encoding model (for reranking), and uses semantic/lexical hybrid retrieval as well as innovative "concepts" to improve memory relevance. "Repository Intelligence" can scan your repository and pre-populate memories reflecting design decisions already in an established code base. 
 
-Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations. Leverage the command policy editor and other in-depth configuration options to allow or deny specific shell commands. The best cross-platform way to run Threadsmith in isolation is through a container. I'm not going to try to come up with sandbox strategies for all three platforms when containers are easy and work fine. (Instructions coming soon!)
+Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations. Leverage the command policy editor and other in-depth configuration options to allow or deny specific shell commands and other tool access. The best cross-platform way to run Threadsmith in isolation is through a container. I'm not going to try to come up with sandbox strategies for all three platforms when containers are easy and work fine. (Instructions coming soon!)
+
+## Policy-based Shell Control
 
 If you spend the time to properly configure the command policies, you can really lock the system down and only allow the specific behaviors that you need. In my opinion, in most cases a sandbox isn't needed. I've personally tested this with an abliterated model with instructions to pretend that it was on an episode of "Agents Gone Wild" and the model wasn't able to "escape". 
 
@@ -74,11 +76,7 @@ The current directory is the default repository. Interactive startup guides trus
 ## Releases
 Packaged releases are available on the [releases](https://github.com/Threadsmith-NET/Threadsmith.NET/releases) page. Note that the latest release is not necessarily the latest commit on the main branch. The main branch is under active development and may be unstable.
 
-## Capabilities
-
-Threadsmith provides governed repository inspection, local Git evidence, .NET inventory and validation, Roslyn-backed code exploration, transactional changes, resumable sessions, parallel tools and agents, model-provider selection, declarative skills, lifecycle hooks, extensions, MCP connections, and optional web, pull-request, and Jira integrations.
-
-Tool availability is determined by repository trust, configuration, policy, semantic-workspace state, and approval. Loaded extensions and configured MCP servers can contribute capabilities through the same host-owned policy pipeline. See:
+## Docs First-Reads
 
 - [Tools and tool availability](docs/user-guide.md#tools-and-tool-availability)
 - [How repository changes are governed](docs/user-guide.md#how-repository-changes-are-governed)
@@ -94,12 +92,14 @@ Threadsmith/
 │   ├── Threadsmith.App/                  # composition root and executable host
 │   ├── Threadsmith.Core/                 # commands, events, projections, and core contracts
 │   ├── Threadsmith.Execution/            # governed turn and run orchestration
+│   ├── Threadsmith.Extensions/           # packaged extensions
 │   ├── Threadsmith.Context/              # evidence, conversation context, prompts, and model resolution
 │   ├── Threadsmith.Models/               # provider-neutral model contracts and adapters
 │   ├── Threadsmith.Tools/                # tool registry, policy, and built-ins
 │   ├── Threadsmith.DotNet/               # Roslyn/MSBuild discovery and semantic operations
 │   ├── Threadsmith.Workspaces/            # repository lifecycle and transactional mutation
 │   ├── Threadsmith.Validation/            # build, diagnostic, and test validation
+│   ├── Threadsmith.Skills/                # native skills support and shipped, maintained skills
 │   ├── Threadsmith.Persistence/           # durable events, artifacts, and migrations
 │   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination
 │   ├── Threadsmith.Tui.TuiKit/            # default terminal frontend
@@ -122,8 +122,6 @@ Areas where additional testing is especially useful include provider authenticat
 - [Operations references](docs/operations/README.md) — focused subsystem configuration and workflows.
 - [Contributing guide](CONTRIBUTING.md) — development setup, repository standards, tests, commits, and pull requests.
 - [Architecture decisions](docs/architecture/README.md) — accepted decisions and subsystem contracts.
-
-Implementation plans and release-readiness material can describe future or provisional behavior and are therefore maintained separately from installed product documentation.
 
 ## License
 
